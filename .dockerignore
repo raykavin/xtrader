@@ -1,0 +1,9 @@
+# The context of deploy/docker/build.sh is the repository: what the images
+# build themselves (the dashboard's dependencies and bundle) and what is local
+# to a machine stays out of it.
+.git
+web/node_modules
+web/dist
+data
+configs/config.yml
+**/.env
