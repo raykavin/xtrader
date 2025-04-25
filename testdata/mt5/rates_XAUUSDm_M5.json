@@ -1,0 +1,122 @@
+[
+ {
+  "time": 1790366400,
+  "open": 4291.029,
+  "high": 4292.164,
+  "low": 4290.946,
+  "close": 4291.375,
+  "tick_volume": 509,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790366700,
+  "open": 4291.323,
+  "high": 4291.772,
+  "low": 4289.805,
+  "close": 4291.553,
+  "tick_volume": 386,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790367000,
+  "open": 4291.688,
+  "high": 4292.005,
+  "low": 4290.297,
+  "close": 4290.556,
+  "tick_volume": 330,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790367300,
+  "open": 4290.559,
+  "high": 4291.021,
+  "low": 4289.532,
+  "close": 4290.022,
+  "tick_volume": 255,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790367600,
+  "open": 4290.02,
+  "high": 4290.232,
+  "low": 4288.006,
+  "close": 4288.639,
+  "tick_volume": 358,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790367900,
+  "open": 4288.607,
+  "high": 4288.842,
+  "low": 4286.718,
+  "close": 4287.51,
+  "tick_volume": 358,
+  "spread": 260,
+  "real_volume": 0
+ },
+ {
+  "time": 1790368200,
+  "open": 4287.498,
+  "high": 4287.627,
+  "low": 4285.947,
+  "close": 4286.387,
+  "tick_volume": 399,
+  "spread": 260,
+  "real_volume": 0
+ },
+ {
+  "time": 1790368500,
+  "open": 4286.298,
+  "high": 4286.826,
+  "low": 4285.198,
+  "close": 4285.855,
+  "tick_volume": 369,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790368800,
+  "open": 4285.854,
+  "high": 4286.287,
+  "low": 4284.814,
+  "close": 4284.917,
+  "tick_volume": 273,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790369100,
+  "open": 4284.914,
+  "high": 4286.728,
+  "low": 4284.14,
+  "close": 4285.353,
+  "tick_volume": 368,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790369400,
+  "open": 4285.324,
+  "high": 4287.122,
+  "low": 4284.941,
+  "close": 4285.275,
+  "tick_volume": 380,
+  "spread": 240,
+  "real_volume": 0
+ },
+ {
+  "time": 1790369700,
+  "open": 4285.206,
+  "high": 4287.075,
+  "low": 4284.616,
+  "close": 4285.897,
+  "tick_volume": 658,
+  "spread": 260,
+  "real_volume": 0
+ }
+]
