@@ -1,0 +1,293 @@
+// Package config is config.yml, the configuration of the controller
+// (cmd/controller) and of the migrations (cmd/migrator): what they need to
+// start and to reach PostgreSQL. Every other setting, the agents, the users,
+// Telegram and the prompts, is in the database.
+//
+// The file is read once, at the start, with the ${VAR} of the environment
+// expanded anywhere in it, eg: the password of the database and the key of the
+// secrets, which stay out of the file (see configs/config.example.yml). The
+// text is expanded before the YAML is read (gobox/config), so a ${VAR} stays
+// between single quotes, eg: a password starting with @ or holding " #".
+package config
+
+import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+
+	gobox "github.com/raykavin/gobox/config"
+)
+
+// Kinds are the kinds of agents, of the binaries the controller launches.
+var Kinds = []string{"llm", "trend", "momentum", "breakout", "intraday"}
+
+// ErrInvalid is the error of a configuration that can't be used.
+var ErrInvalid = errors.New("config: invalid")
+
+// Config is the configuration of config.yml.
+type Config struct {
+	// Listen is the address of the web dashboard, eg: 0.0.0.0:8080.
+	Listen     string     `mapstructure:"listen"`
+	Database   Database   `mapstructure:"database"`
+	Migrations Migrations `mapstructure:"migrations"`
+
+	// SecretsKey is the key of the secrets kept in the database, the API keys
+	// and the tokens, encrypted with AES-256-GCM: 32 bytes in standard base64,
+	// eg: from `head -c 32 /dev/urandom | base64`. Lost, the secrets have to be
+	// set again.
+	SecretsKey string `mapstructure:"secrets_key"`
+
+	Bootstrap Bootstrap `mapstructure:"bootstrap"`
+	UI        UI        `mapstructure:"ui"`
+	Agents    Agents    `mapstructure:"agents"`
+	Services  []Service `mapstructure:"services"`
+	Log       Log       `mapstructure:"log"`
+}
+
+// Database is the connection to PostgreSQL.
+type Database struct {
+	// DSN is the URL of the database, eg:
+	// postgres://xtrader:${XTRADER_DB_PASSWORD}@localhost:5432/xtrader?sslmode=disable
+	DSN             string        `mapstructure:"dsn"`
+	MaxOpenConns    int           `mapstructure:"max_open_conns"`
+	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+
+	// LogLevel is the one of the queries logged: silent, error or warn (the
+	// slow ones), their values left out.
+	LogLevel string `mapstructure:"log_level"`
+}
+
+// Migrations are the directories of the SQL files of cmd/migrator.
+type Migrations struct {
+	Path  string `mapstructure:"path"`
+	Seeds string `mapstructure:"seeds"`
+}
+
+// Bootstrap is the first user of the dashboard, created by the controller
+// while the database has none: its password hashed, then unused. Remove the
+// variables of the password once in.
+type Bootstrap struct {
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+}
+
+// UI is the bundle of the web dashboard: a local build, eg: web/dist, or else
+// a release, latest by default.
+type UI struct {
+	Dir     string `mapstructure:"dir"`
+	Version string `mapstructure:"version"`
+}
+
+// Agents is how the controller runs the agents of the database.
+type Agents struct {
+	// API is the address of the internal API the agents fetch their settings
+	// from and persist through, on the loopback: never published.
+	API string `mapstructure:"api"`
+
+	// Dir is the working directory of the agents, eg: the root of the
+	// repository for go run.
+	Dir string `mapstructure:"dir"`
+
+	// Commands is the command of each kind, eg: go run ./agents/llm/llmagent,
+	// or /app/bin/llmagent in the container.
+	Commands map[string]string `mapstructure:"commands"`
+
+	// Env holds the variables of their environment besides PATH, HOME, TZ and
+	// LANG, eg: GOCACHE=/tmp/go-cache for go run: never a secret, they get
+	// theirs from the controller.
+	Env Env `mapstructure:"env"`
+
+	// StopTimeout is how long an agent stopped has before it is killed.
+	StopTimeout time.Duration `mapstructure:"stop_timeout"`
+}
+
+// Service is a process the agents need, eg: tools/mt5bridge on the host,
+// launched before them from Dir of Agents and stopped after them: once
+// Health, a URL, answers, whatever its status, it is up, or after Wait at most
+// (3 minutes by default). One answering already isn't launched, nor stopped.
+type Service struct {
+	Name    string        `mapstructure:"name"`
+	Exec    string        `mapstructure:"exec"`
+	Args    []string      `mapstructure:"args"`
+	Env     Env           `mapstructure:"env"`
+	Restart bool          `mapstructure:"restart"`
+	Health  string        `mapstructure:"health"`
+	Wait    time.Duration `mapstructure:"wait"`
+}
+
+// Env is the environment of a process of config.yml, NAME=value each: a list,
+// as the names of the variables keep their case there, not as the keys of a
+// map.
+type Env []string
+
+// envNameRegexp is the rule of the names of the variables of an Env.
+var envNameRegexp = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Map returns the variables of e by name, the last one of a name kept.
+func (e Env) Map() map[string]string {
+	vars := make(map[string]string, len(e))
+	for _, entry := range e {
+		name, value, _ := strings.Cut(entry, "=")
+		vars[name] = value
+	}
+	return vars
+}
+
+// check fails on an entry that isn't NAME=value.
+func (e Env) check(owner string) error {
+	for _, entry := range e {
+		if name, _, ok := strings.Cut(entry, "="); !ok || !envNameRegexp.MatchString(name) {
+			return fmt.Errorf("%s: %q isn't NAME=value", owner, entry)
+		}
+	}
+	return nil
+}
+
+// Log is the logging of the controller.
+type Log struct {
+	Level string `mapstructure:"level"`
+}
+
+// Load reads the configuration of file, fills its defaults and checks it.
+func Load(file string) (*Config, error) {
+	ext := strings.TrimPrefix(filepath.Ext(file), ".")
+	if ext == "yml" {
+		ext = "yaml"
+	}
+	loader := gobox.NewViper[Config](&gobox.LoaderOptions[Config]{ConfigType: ext})
+	loader.GetViper().SetConfigFile(file) // this file: a missing one fails
+	cfg, err := loader.Load()
+	if err != nil {
+		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	cfg.defaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	return cfg, nil
+}
+
+// defaults fills the settings left out.
+func (c *Config) defaults() {
+	if c.Listen == "" {
+		c.Listen = "localhost:8080"
+	}
+	if c.Database.MaxOpenConns == 0 {
+		c.Database.MaxOpenConns = 10
+	}
+	if c.Database.MaxIdleConns == 0 {
+		c.Database.MaxIdleConns = c.Database.MaxOpenConns
+	}
+	if c.Database.ConnMaxLifetime == 0 {
+		c.Database.ConnMaxLifetime = time.Hour
+	}
+	if c.Database.LogLevel == "" {
+		c.Database.LogLevel = "warn"
+	}
+	if c.Migrations.Path == "" {
+		c.Migrations.Path = "sql/migrations"
+	}
+	if c.Agents.API == "" {
+		c.Agents.API = "127.0.0.1:8090"
+	}
+	if c.Agents.Dir == "" {
+		c.Agents.Dir = "."
+	}
+	if c.Agents.StopTimeout == 0 {
+		c.Agents.StopTimeout = 20 * time.Second
+	}
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
+	for i := range c.Services {
+		if c.Services[i].Wait == 0 {
+			c.Services[i].Wait = 3 * time.Minute
+		}
+	}
+}
+
+// Validate checks the configuration, the secrets key included.
+func (c *Config) Validate() error {
+	var errs []error
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		errs = append(errs, fmt.Errorf("listen %q: %w", c.Listen, err))
+	}
+	if dsn, err := url.Parse(c.Database.DSN); err != nil || (dsn.Scheme != "postgres" && dsn.Scheme != "postgresql") {
+		errs = append(errs, errors.New("database.dsn: a postgres:// URL is required"))
+	}
+	if !slices.Contains([]string{"silent", "error", "warn"}, c.Database.LogLevel) {
+		errs = append(errs, fmt.Errorf("database.log_level %q: silent, error or warn", c.Database.LogLevel))
+	}
+	if _, err := c.Key(); err != nil {
+		errs = append(errs, err)
+	}
+	if host, _, err := net.SplitHostPort(c.Agents.API); err != nil {
+		errs = append(errs, fmt.Errorf("agents.api %q: %w", c.Agents.API, err))
+	} else if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		errs = append(errs, fmt.Errorf("agents.api %q: the internal API listens on the loopback only", c.Agents.API))
+	}
+	for kind := range c.Agents.Commands {
+		if !slices.Contains(Kinds, kind) {
+			errs = append(errs, fmt.Errorf("agents.commands: unknown kind %q, of %s", kind, strings.Join(Kinds, ", ")))
+		}
+	}
+	if err := c.Agents.Env.check("agents.env"); err != nil {
+		errs = append(errs, err)
+	}
+	for name := range c.Agents.Env.Map() {
+		if strings.HasPrefix(name, "XTRADER_") {
+			errs = append(errs, fmt.Errorf("agents.env: %s is set by the controller", name))
+		}
+	}
+	for i, s := range c.Services {
+		switch {
+		case s.Name == "" || s.Exec == "":
+			errs = append(errs, fmt.Errorf("services[%d]: name and exec are required", i))
+		case s.Health != "" && !strings.HasPrefix(s.Health, "http://") && !strings.HasPrefix(s.Health, "https://"):
+			errs = append(errs, fmt.Errorf("service %s: health %q is not an http(s) URL", s.Name, s.Health))
+		case s.Wait < 0:
+			errs = append(errs, fmt.Errorf("service %s: wait %v is negative", s.Name, s.Wait))
+		}
+		if err := s.Env.check("service " + s.Name + ": env"); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if (c.Bootstrap.Username == "") != (c.Bootstrap.Password == "") {
+		errs = append(errs, errors.New("bootstrap: the username and the password go together"))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(errs...))
+	}
+	return nil
+}
+
+// Key returns the key of the secrets, its 32 bytes.
+func (c *Config) Key() ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(c.SecretsKey))
+	switch {
+	case c.SecretsKey == "":
+		return nil, errors.New("secrets_key: required, 32 bytes in base64 (eg: ${XTRADER_SECRETS_KEY})")
+	case err != nil:
+		return nil, errors.New("secrets_key: not standard base64")
+	case len(key) != 32:
+		return nil, fmt.Errorf("secrets_key: %d bytes, 32 required", len(key))
+	}
+	return key, nil
+}
+
+// Command returns the command of the agents of kind: the one of Commands, else
+// the binary of the kind next to the controller's, eg: bin/llmagent.
+func (a Agents) Command(kind string) string {
+	if command := strings.TrimSpace(a.Commands[kind]); command != "" {
+		return command
+	}
+	return filepath.Join("bin", kind+"agent")
+}
