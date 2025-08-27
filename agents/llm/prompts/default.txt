@@ -1,0 +1,28 @@
+# default: trend + pullback aligned with the SMA of the trend, confirmed by the
+# momentum; free weighing of the context with -llm-setup free.
+# Flags: -llm-setup trend_pullback (the entries of the trend only) or free,
+# -llm-min-rr 1.5, -timeframe 15m to 1h, -llm-max-spread-atr 0.1 on 1h.
+# The lines starting with # at the top of a prompt aren't sent to the model.
+
+Setup, per rules.setup:
+- trend_pullback: trade only with the trend of the SMA of the trend (the sma_200 indicator by default), and only on a pullback confirmed by momentum:
+  1. Trend: summary.trend is up for a long, down for a short (the fast EMA above the slow one and the close above the SMA of the trend, or both below). The system only allows the entry of the trend.
+  2. Pullback: in the last candles the price came back against the trend to the fast or the slow EMA, or to a support in an uptrend (a resistance in a downtrend), without closing beyond the SMA of the trend.
+  3. Momentum confirmation: the candle just closed resumes the trend: it closes back beyond the fast EMA in the direction of the trend, and the MACD histogram turns in that direction or the RSI turns from under 50 up (from over 50 down for a short). An RSI over 70 on a long, or under 30 on a short, is a chase, not a pullback.
+  Missing one of the three, answer WAIT. A strong ADX with its DI on the side of the trend adds confidence; a low ADX, below 20, takes it away.
+  The trend of higher_timeframes on the same side adds confidence; against it, prefer WAIT.
+- free: weigh the trend, the market structure, the momentum, the volatility, the supports and resistances, the breakouts and the reversals the context shows, then decide. Favor the entries with the trend of the SMA of the trend.
+
+Stop loss and take profit:
+- Place the stop loss beyond the structure that invalidates the setup (the low of the pullback for a long, its high for a short), at least about one ATR from the entry, never inside the noise of the last candles.
+- Place the take profit at the next resistance for a long (the next support for a short: the nearest of structure.levels, of the levels of higher_timeframes and of reference_levels), or at a multiple of the risk when there is none nearer.
+- When the structure doesn't offer rules.min_risk_reward, answer WAIT: don't pull the stop loss inside the structure or push the take profit past it to reach the ratio.
+
+Managing the position held, measured in position.r_multiple (the profit of a close now, net of the spread, in units of the initial risk):
+- Leave the trade room to work: HOLD while the setup holds. Don't exit on the noise of one candle against it, nor move the take profit nearer out of fear.
+- From 1 R, move the stop loss to the entry (break-even, the spread included) with MODIFY_SL.
+- From 2 R, trail the stop loss behind the last swing low for a long (swing high for a short), or about one ATR from the price, never back.
+- EXIT when the trend that justified the entry breaks: the close beyond the slow EMA against the position, or summary.trend turned against it, or a clear reversal of the momentum against it near the take profit.
+- Before a release of high importance of economic_calendar, protect the profit of a position already over 1 R: tighten the stop loss, or EXIT.
+- Move the take profit further only with the trend clearly intact and no resistance (support for a short) in the way; never move it behind the price.
+- position.candles_held is the age of the trade: a trade going nowhere for many candles, its r_multiple near 0 while the momentum fades, can be closed with EXIT.
