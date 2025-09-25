@@ -1,0 +1,207 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/raykavin/xtrader/exchange"
+	"github.com/raykavin/xtrader/service"
+	"github.com/raykavin/xtrader/tools/log"
+)
+
+// venue is the exchange of the paper and live modes: MetaTrader 5.
+type venue struct {
+	leverage float64            // of the positions, 1 for none
+	lots     map[string]float64 // the fixed sizes of the positions, by pair, if any
+	mt5      mt5Venue
+}
+
+// mt5Venue holds the options of MetaTrader 5 in the paper and live modes.
+type mt5Venue struct {
+	bridge  string        // address of tools/mt5bridge
+	token   string        // X-Bridge-Token of the bridge, if any
+	magic   int64         // magic number of the bot's orders and positions
+	comment string        // comment of the bot's orders
+	live    bool          // a real account is allowed
+	inLots  bool          // -lot is in MT5 lots, converted into units once connected
+	poll    time.Duration // interval of the polls of the account and of the candles, the default when 0
+}
+
+// connect connects to MT5, authenticated when trading on it: the paper mode
+// only needs its candles, so MT5 reads the market data only
+// (exchange.WithMT5DataOnly) and never touches the positions of a live agent
+// of the same magic number.
+func (v venue) connect(ctx context.Context, pairs []string, trading bool) (service.Exchange, error) {
+	options := []exchange.MT5Option{
+		exchange.WithMT5BaseURL(v.mt5.bridge),
+		exchange.WithMT5Symbols(pairs...),
+		exchange.WithMT5Magic(v.mt5.magic),
+		exchange.WithMT5Comment(v.mt5.comment),
+	}
+	if v.mt5.token != "" {
+		options = append(options, exchange.WithMT5Token(v.mt5.token))
+	}
+	if v.mt5.live {
+		options = append(options, exchange.WithMT5Real())
+	}
+	if v.mt5.poll > 0 {
+		options = append(options, exchange.WithMT5PollInterval(v.mt5.poll))
+	}
+	if !trading {
+		options = append(options, exchange.WithMT5DataOnly())
+	}
+	if v.leverage > 1 {
+		options = append(options, exchange.WithMT5Leverage())
+	}
+
+	mt5, err := exchange.NewMT5(ctx, options...)
+	if err != nil {
+		return nil, err
+	}
+	// a position worth more than its margin allows would be rejected
+	for _, pair := range pairs {
+		if account := mt5.Leverage(pair); v.leverage > account {
+			return nil, fmt.Errorf("mt5: the account trades %s at 1:%g at most, not 1:%g", pair, account,
+				v.leverage)
+		}
+	}
+	return mt5, nil
+}
+
+// backtestPairs registers the symbols of a backtest, which the adapter
+// registers when connecting, and converts the MT5 lots into units with the
+// contract sizes the package knows.
+func (v venue) backtestPairs(pairs []string, currency string) error {
+	for _, pair := range pairs {
+		exchange.RegisterMT5Pair(pair, "", currency)
+	}
+	if v.lots == nil || !v.mt5.inLots {
+		return nil
+	}
+	contracts := make(map[string]float64, len(pairs))
+	for _, pair := range pairs {
+		size, ok := exchange.MT5ContractSize(pair)
+		if !ok {
+			return fmt.Errorf("-lot: the contract size of %s is unknown, pass -lot in units with "+
+				"-mt5-size unit", pair)
+		}
+		contracts[pair] = size
+	}
+	return lotsToUnits(v.lots, contracts)
+}
+
+// checkSizes converts the sizes of -lot read in MT5 lots into units of the
+// base asset, with the contract sizes of the account, then checks them against
+// the markets of exch. The strategy shares the map of the sizes, so it must run
+// before the bot starts.
+func (v venue) checkSizes(exch service.Exchange) error {
+	if mt5, ok := exch.(*exchange.MT5); ok && v.lots != nil && v.mt5.inLots {
+		contracts := make(map[string]float64, len(v.lots))
+		for pair := range v.lots {
+			contracts[pair] = mt5.ContractSize(pair)
+		}
+		if err := lotsToUnits(v.lots, contracts); err != nil {
+			return err
+		}
+	}
+
+	for pair, lot := range v.lots {
+		info := exch.AssetsInfo(pair)
+		switch {
+		case lot < info.MinQuantity:
+			return fmt.Errorf("-lot: %s takes positions of %g at least, not %g", pair, info.MinQuantity, lot)
+		case info.MaxQuantity > 0 && lot > info.MaxQuantity:
+			return fmt.Errorf("-lot: %s takes positions of %g at most, not %g", pair, info.MaxQuantity, lot)
+		case info.StepSize > 0 && math.Abs(lot/info.StepSize-math.Round(lot/info.StepSize)) > 1e-6:
+			return fmt.Errorf("-lot: %s takes positions in steps of %g, not %g", pair, info.StepSize, lot)
+		}
+		log.Infof("[SETUP] %s: positions of %g (min %g, step %g)", pair, lot, info.MinQuantity, info.StepSize)
+	}
+	return nil
+}
+
+// lotsToUnits converts in place the sizes of lots, in MT5 lots, into units
+// of the base asset: units = lots x contract size.
+func lotsToUnits(lots, contracts map[string]float64) error {
+	for pair, lot := range lots {
+		contract := contracts[pair]
+		if contract <= 0 || math.IsNaN(contract) || math.IsInf(contract, 0) {
+			return fmt.Errorf("-lot: the contract size of %s is unknown, so its lots can't be converted", pair)
+		}
+		lots[pair] = math.Round(lot*contract*1e9) / 1e9 // without the float noise, eg: 0.07 x 100
+	}
+	return nil
+}
+
+// sizesByPair maps the positive sizes of the flag name to the pairs: one for
+// all of them, or one per pair in the same order. It returns nil without any.
+func sizesByPair(name string, pairs, sizes []string) (map[string]float64, error) {
+	if len(sizes) == 0 {
+		return nil, nil
+	}
+	if len(sizes) != 1 && len(sizes) != len(pairs) {
+		return nil, fmt.Errorf("%s: one size for all the pairs or one per pair, not %d for %d pairs", name,
+			len(sizes), len(pairs))
+	}
+
+	values := make(map[string]float64, len(pairs))
+	for i, pair := range pairs {
+		size := sizes[0]
+		if len(sizes) > 1 {
+			size = sizes[i]
+		}
+		value, err := strconv.ParseFloat(size, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return nil, fmt.Errorf("%s: invalid size %q for %s", name, size, pair)
+		}
+		values[pair] = value
+	}
+	return values, nil
+}
+
+// parseMT5Size reads -mt5-size: how -lot is read on MT5, in lots (converted
+// into units of the base asset with the contract size of the pair) or in units
+// of the base asset.
+func parseMT5Size(value string) (inLots bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "lot", "lots":
+		return true, nil
+	case "unit", "units":
+		return false, nil
+	}
+	return false, fmt.Errorf("-mt5-size: %q is neither lot nor unit", value)
+}
+
+// mt5TokenEnv is the environment variable of the token of the bridge, read
+// when -mt5-token is not set.
+const mt5TokenEnv = "MT5_BRIDGE_TOKEN"
+
+// mt5Token returns the token of the bridge: the one of -mt5-token, or else the
+// one of MT5_BRIDGE_TOKEN.
+func mt5Token(token string) string {
+	if token = strings.TrimSpace(token); token != "" {
+		return token
+	}
+	return strings.TrimSpace(os.Getenv(mt5TokenEnv))
+}
+
+// mt5Magic returns the magic number of the bot: the one of -mt5-magic, or a
+// stable hash of the comment, a positive int32, so that the bot finds its
+// positions again after a restart.
+func mt5Magic(magic int64, comment string) int64 {
+	if magic > 0 {
+		return magic
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(comment))
+	if value := int64(hash.Sum32() & math.MaxInt32); value > 0 {
+		return value
+	}
+	return 1
+}
