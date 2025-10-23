@@ -1,0 +1,303 @@
+// Package controller runs the bots of xtrader as agents: each bot serves the
+// API of its chart (see ui.Chart) and the controller serves them to the users,
+// on the web dashboard and on Telegram, reaching the agents through their API.
+package controller
+
+import (
+	"context"
+	"embed"
+	"errors"
+	"fmt"
+	"html/template"
+	"io"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	log "github.com/sirupsen/logrus"
+
+	"github.com/raykavin/xtrader/ui"
+)
+
+//go:embed templates/*.html
+var templateFiles embed.FS
+
+var (
+	indexTemplate = template.Must(template.ParseFS(templateFiles, "templates/index.html"))
+	errorTemplate = template.Must(template.ParseFS(templateFiles, "templates/error.html"))
+
+	// agentNameRe keeps the name of an agent a plain segment of the URL path.
+	agentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+)
+
+// probeTimeout is how long the list of agents waits for the API of each one.
+const probeTimeout = 2 * time.Second
+
+// Agent is a bot of the controller: Address is where its chart serves the API,
+// host:port or an http(s) URL, eg: localhost:5555.
+type Agent struct {
+	Name    string `yaml:"name"`
+	Address string `yaml:"address"`
+}
+
+// agent is an Agent with the proxy to its API.
+type agent struct {
+	Agent
+	api   *url.URL
+	proxy *httputil.ReverseProxy
+}
+
+// Dashboard serves the web dashboard of the agents: the bundle, the list of
+// agents and a proxy to the API of each one, so that the browser talks to a
+// single server, and the settings of the controller (see WithSettings).
+// cmd/controller runs it.
+//
+// Only the users logged in reach it, the users of the database (see
+// WithUsers): without any, it is closed. Any of them can operate the agents
+// with the control panel enabled, and change the settings.
+type Dashboard struct {
+	agents   *registry
+	probe    *http.Client // lists the agents online
+	client   *http.Client // calls their API, see call
+	stream   *http.Client // follows their events, see events
+	bundle   bundleConfig
+	auth     *auth
+	settings *settings
+}
+
+// DashboardOption configures a Dashboard.
+type DashboardOption func(*Dashboard)
+
+// WithUIDir serves the dashboard from a local directory (the output of
+// `bun run build` in web/) instead of downloading the release bundle: ui.dir
+// of config.yml.
+func WithUIDir(dir string) DashboardOption {
+	return func(d *Dashboard) { d.bundle.dir = dir }
+}
+
+// WithUIVersion forces the release tag of the bundle to download
+// (e.g. "v1.4.0" or "latest"): ui.version of config.yml. By default the
+// version of the xtrader module compiled into the binary is used.
+func WithUIVersion(version string) DashboardOption {
+	return func(d *Dashboard) { d.bundle.version = version }
+}
+
+// WithCacheDir overrides where downloaded bundles are stored
+// (default: os.UserCacheDir()/xtrader/ui).
+func WithCacheDir(dir string) DashboardOption {
+	return func(d *Dashboard) { d.bundle.cacheDir = dir }
+}
+
+// WithUsers sets the users who log in the dashboard, see store.Store:
+// without any, the dashboard is closed.
+func WithUsers(users Users) DashboardOption {
+	return func(d *Dashboard) { d.auth = newAuth(users) }
+}
+
+// WithHTTPClient sets the client used to download the bundle.
+func WithHTTPClient(client *http.Client) DashboardOption {
+	return func(d *Dashboard) { d.bundle.client = client }
+}
+
+// withReleaseURL points the downloader to another host (tests).
+func withReleaseURL(url string) DashboardOption {
+	return func(d *Dashboard) { d.bundle.releaseURL = url }
+}
+
+// NewDashboard creates the dashboard of the agents, each with its own name,
+// replaced later with SetAgents. Call Handler to serve it.
+func NewDashboard(agents []Agent, options ...DashboardOption) (*Dashboard, error) {
+	d := &Dashboard{
+		agents: newRegistry(),
+		probe:  &http.Client{Timeout: probeTimeout},
+		client: &http.Client{Timeout: apiTimeout},
+		stream: &http.Client{},
+		bundle: defaultBundleConfig(),
+		auth:   newAuth(nil),
+	}
+	if err := d.agents.replace(agents); err != nil {
+		return nil, err // the agents of a program checked at once
+	}
+	for _, option := range options {
+		option(d)
+	}
+	return d, nil
+}
+
+// SetAgents makes agents the ones of the dashboard, in their order: the
+// invalid ones left out, told by the error.
+func (d *Dashboard) SetAgents(agents []Agent) error {
+	return d.agents.replace(agents)
+}
+
+// agentAPI returns the URL of the API of an agent at address, host:port served
+// over HTTP or an http(s) URL.
+func agentAPI(address string) (*url.URL, error) {
+	if address == "" {
+		return nil, errors.New("no address")
+	}
+	raw := address
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	base, err := url.Parse(raw)
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		return nil, fmt.Errorf("invalid address %q: host:port or an http(s) URL", address)
+	}
+	// JoinPath keeps an empty path relative, which would be requested as api/...
+	if base.Path == "" {
+		base.Path = "/"
+	}
+	return base.JoinPath("api"), nil
+}
+
+// newAgentProxy proxies the requests to the API of an agent, their path
+// relative to it, from the trade panel of the web dashboard, whatever channel
+// the browser tells. The events stream is flushed as it comes, as ReverseProxy
+// does with any text/event-stream.
+func newAgentProxy(a Agent, api *url.URL) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(api)
+			r.Out.Header.Set(ui.ChannelHeader, string(ui.ChannelWeb))
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Debugf("ui: agent %s: %v", a.Name, err)
+			writeJSONError(w, http.StatusBadGateway, offline(a).Error())
+		},
+	}
+}
+
+// Handler resolves the dashboard bundle and returns the HTTP handler: the
+// static files, the login, and to the users logged in the list of agents and
+// the proxy to their API. When the bundle cannot be resolved the API still
+// works and the index page explains the failure.
+func (d *Dashboard) Handler(ctx context.Context) http.Handler {
+	bundle, err := resolveBundle(ctx, d.bundle)
+	if err != nil {
+		log.Warnf("ui: dashboard bundle unavailable, serving API only: %v", err)
+	}
+	return d.auth.protect(d.router(bundle, err))
+}
+
+// router wires the API, the bundle static files and the index page, which the
+// login page is too: see auth.protect for who reaches them.
+func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/agents", d.handleAgents)
+		r.HandleFunc("/agents/{agent}/*", d.handleAgent)
+		if d.settings != nil {
+			d.settings.routes(r)
+		}
+	})
+
+	if bundleErr == nil {
+		fs := http.FileServer(http.Dir(b.dir))
+		r.Handle("/ui/{version}/*", http.StripPrefix("/ui/"+b.version, bundleCacheHeaders(b, fs)))
+		index := func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := indexTemplate.Execute(w, map[string]string{"Version": b.version}); err != nil {
+				log.Error(err)
+			}
+		}
+		r.Get("/", index)
+		r.Get("/login", index)    // the app shows its login
+		r.Get("/settings", index) // and the settings
+	} else {
+		unavailable := func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if err := errorTemplate.Execute(w, map[string]string{
+				"Error":      bundleErr.Error(),
+				"DirKey":     uiDirKey,
+				"VersionKey": uiVersionKey,
+			}); err != nil {
+				log.Error(err)
+			}
+		}
+		r.Get("/", unavailable)
+		r.Get("/login", unavailable)
+		r.Get("/settings", unavailable)
+	}
+
+	return r
+}
+
+// bundleCacheHeaders makes versioned assets immutable and local (dev)
+// assets uncached.
+func bundleCacheHeaders(b bundle, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if b.version == versionLocal {
+			w.Header().Set("Cache-Control", "no-cache")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleAgents lists the agents.
+func (d *Dashboard) handleAgents(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, ui.AgentsResponse{Agents: d.statuses(r.Context())})
+}
+
+// statuses returns the agents, in the order of the configuration, probing their
+// API at once.
+func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
+	agents := d.agents.list()
+	statuses := make([]ui.AgentStatus, len(agents))
+
+	var wg sync.WaitGroup
+	for i, a := range agents {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses[i] = ui.AgentStatus{Name: a.Name, Address: a.Address, Online: d.online(ctx, a)}
+		}()
+	}
+	wg.Wait()
+	return statuses
+}
+
+// Online tells whether the API of the agent of that name answers.
+func (d *Dashboard) Online(ctx context.Context, name string) bool {
+	a, ok := d.agents.get(name)
+	return ok && d.online(ctx, a)
+}
+
+// online tells whether the API of the agent answers. The health endpoint
+// doesn't: it fails without recent candles, such as once a backtest ends.
+func (d *Dashboard) online(ctx context.Context, a *agent) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.api.JoinPath("pairs").String(), nil)
+	if err != nil {
+		return false
+	}
+	resp, err := d.probe.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode == http.StatusOK
+}
+
+// handleAgent proxies a request under /api/agents/{agent} to the API of the
+// agent.
+func (d *Dashboard) handleAgent(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "agent")
+	a, ok := d.agents.get(name)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "unknown agent")
+		return
+	}
+	http.StripPrefix("/api/agents/"+name, a.proxy).ServeHTTP(w, r)
+}

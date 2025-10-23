@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XTrader — painel indisponível</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 48px 24px; }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      p { line-height: 1.5; color: #b3b3b3; }
+      pre { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 6px; padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: #f3f3f3; }
+      code { background: #1a1d24; padding: 1px 5px; border-radius: 4px; }
+      ul { padding-left: 20px; }
+      li { margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" style="vertical-align:-3px;margin-right:6px"><defs><mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="32"><rect width="32" height="32" fill="#fff"/><rect x="11.6" y="4.6" width="8.8" height="22.8" rx="2.4" transform="rotate(45 16 16)" fill="#000"/></mask></defs><g mask="url(#cut)"><g transform="rotate(-45 16 16)" fill="#fb7185" stroke="#fb7185"><line x1="16" y1="1.5" x2="16" y2="30.5" stroke-width="2.2" stroke-linecap="round"/><rect x="13" y="6" width="6" height="20" rx="1.4" stroke="none"/></g></g><g transform="rotate(45 16 16)" fill="#2dd4bf" stroke="#2dd4bf"><line x1="16" y1="1.5" x2="16" y2="30.5" stroke-width="2.2" stroke-linecap="round"/><rect x="13" y="6" width="6" height="20" rx="1.4" stroke="none"/></g></svg>Painel indisponível</h1>
+      <p>O painel está rodando e a API dos agentes está no ar, mas não foi possível carregar o pacote do painel:</p>
+      <pre>{{.Error}}</pre>
+      <p>Como resolver:</p>
+      <ul>
+        <li><strong>Sem internet?</strong> O pacote é baixado uma vez das GitHub Releases e fica em cache local. Conecte-se e reinicie, ou rode uma vez numa máquina com internet.</li>
+        <li><strong>Build de desenvolvimento?</strong> Gere o painel localmente (<code>cd web && bun install && bun run build</code>, ou <code>npm install && npm run build</code>) e inicie o painel com <code>{{.DirKey}}: web/dist</code> no <code>config.yml</code> do controller, ou <code>controller.WithUIDir("web/dist")</code>.</li>
+        <li><strong>Fixe uma versão</strong> com <code>{{.VersionKey}}: vX.Y.Z</code> no <code>config.yml</code>, ou <code>controller.WithUIVersion("vX.Y.Z")</code>.</li>
+      </ul>
+      <p>A API JSON continua funcionando: <a href="/api/agents" style="color:#7aa2f7">/api/agents</a> e a de cada agente em <code>/api/agents/{agente}/pairs</code>, <code>/api/agents/{agente}/{pair}/snapshot</code>, <code>/api/agents/{agente}/events</code>.</p>
+    </main>
+  </body>
+</html>
