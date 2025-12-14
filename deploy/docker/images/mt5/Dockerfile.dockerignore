@@ -1,0 +1,5 @@
+# the context of the image of MT5 (the repository): the bridge and this image only
+*
+!tools/mt5bridge/mt5bridge.py
+!tools/mt5bridge/run.sh
+!deploy/docker/images/mt5/entrypoint.sh

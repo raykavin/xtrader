@@ -1,0 +1,16 @@
+# the context of the image of the controller (the repository), without what
+# the build doesn't need: the data and the keys of a checkout, the fixtures of
+# the tests, the dependencies and the builds of the dashboard
+.git
+.env
+.env.*
+data
+testdata
+tools/mt5bridge
+deploy/docker/services
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+**/*.test
+**/*.db
+**/*.jsonl
