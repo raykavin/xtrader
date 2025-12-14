@@ -1,0 +1,83 @@
+# The configuration of the controller (cmd/controller) and of the migrations
+# (cmd/migrator) on the host: only what they need to start and to reach
+# PostgreSQL. The agents, their accounts, their language models and prompts,
+# the users of the dashboard and Telegram are in the database, changed on the
+# page of the settings of the dashboard (or imported once from the previous
+# version, see cmd/migrator).
+#
+# Copy it to configs/config.yml, which git ignores. The ${VAR} are read from the
+# environment of the controller, the secrets never written here. They replace
+# the text before the YAML is read, so each stays between single quotes, which
+# take a value of any character but ':
+#
+#	export XTRADER_DB_PASSWORD='...'                           # of the user xtrader of PostgreSQL
+#	export XTRADER_SECRETS_KEY="$(head -c 32 /dev/urandom | base64)"  # once, kept: it encrypts the secrets
+#	go run ./cmd/migrator -config configs/config.yml up        # the schema and the seeds
+#	go run ./cmd/controller -config configs/config.yml
+
+# the web dashboard, behind a reverse proxy with HTTPS for access from outside
+listen: localhost:8082
+
+database:
+  dsn: 'postgres://xtrader:${XTRADER_DB_PASSWORD}@localhost:5432/xtrader?sslmode=disable'
+  max_open_conns: 10
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+  # the queries logged: silent, error or warn (the slow ones), never their values
+  log_level: warn
+
+# the key of the secrets of the database (the API keys and the tokens,
+# AES-256-GCM): 32 bytes in base64. Lost, the secrets have to be set again.
+secrets_key: '${XTRADER_SECRETS_KEY}'
+
+# the SQL of cmd/migrator
+migrations:
+  path: sql/migrations
+  seeds: sql/seeds
+
+# the first user of the dashboard, created while the database has none: remove
+# the variables once logged in, the other users are made on the settings
+bootstrap:
+  username: '${XTRADER_BOOTSTRAP_USERNAME}'
+  password: '${XTRADER_BOOTSTRAP_PASSWORD}'
+
+# the dashboard: the local build of web/ (cd web && bun run build), or else a
+# release, the one of the binary by default (version: vX.Y.Z or latest)
+ui:
+  dir: web/dist
+  # version: latest
+
+agents:
+  # the internal API the agents take their settings from and keep their
+  # records through: on the loopback only, never published
+  api: 127.0.0.1:8090
+  # the working directory of the agents: their outboxes in data/outbox
+  dir: .
+  # the command of each kind of agent, bin/<kind>agent by default
+  commands:
+    llm: go run ./agents/llm/llmagent
+    trend: go run ./agents/trendagent
+    momentum: go run ./agents/momentumagent
+    breakout: go run ./agents/breakoutagent
+    intraday: go run ./agents/intradayagent
+  # the environment of the agents is PATH, HOME, USER, LOGNAME, TZ, LANG,
+  # LC_ALL and TMPDIR, plus these, never a secret: they get theirs from the
+  # controller
+  # env:
+  #   - GOFLAGS=-mod=mod
+  # how long an agent stopped has before it is killed
+  stop_timeout: 20s
+
+# the processes the agents need, launched before them and stopped after them,
+# with the same environment as the agents plus theirs: the bridge of MT5 on the
+# host, the token it requires (the agents have theirs in the database)
+services:
+  - name: mt5bridge
+    exec: tools/mt5bridge/run.sh
+    health: http://127.0.0.1:18812/health
+    restart: true
+    env:
+      - 'MT5_BRIDGE_TOKEN=${MT5_BRIDGE_TOKEN}'
+
+log:
+  level: info
