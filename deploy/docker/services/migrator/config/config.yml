@@ -1,0 +1,16 @@
+# The configuration of the migrations in the container, mounted at
+# /app/config/config.yml: the database (the service postgres), the SQL of the
+# image and the key of the secrets, for an import. The ${VAR} come from
+# services/migrator/.env, which install.sh fills: never a secret here. They
+# replace the text before the YAML is read, so each stays between single
+# quotes, which take a value of any character but '.
+database:
+  dsn: 'postgres://xtrader:${XTRADER_DB_PASSWORD}@postgres:5432/xtrader?sslmode=disable'
+  log_level: warn
+
+# the same as the controller's, which reads what an import encrypts
+secrets_key: '${XTRADER_SECRETS_KEY}'
+
+migrations:
+  path: /app/sql/migrations
+  seeds: /app/sql/seeds
