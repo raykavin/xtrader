@@ -1,0 +1,126 @@
+name: xtrader
+
+services:
+  controller:
+    depends_on:
+      migrator:
+        required: true
+        condition: service_completed_successfully
+      mt5:
+        required: true
+        condition: service_healthy
+      postgres:
+        required: true
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "-o",
+          "/dev/null",
+          "http://127.0.0.1:8080/login",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    env_file: ./services/controller/.env
+    command: ["-config", "/app/config/config.yml"]
+    image: xtrader-controller:1.1.0
+    labels:
+      app.description: painel web, telegram e agentes de trading do xtrader
+      app.main.description: painel web, telegram e agentes de trading do xtrader
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      xtrader:
+    ports:
+      - "8082:8080" # WEB_UI
+      # - "8090:8090" # INTERNAL AGENTS API
+      # - "5580:5580" # LLM AGENT API
+    restart: always
+    volumes:
+      - ./services/controller/data:/app/data
+      - ./services/controller/config:/app/config:ro
+
+  migrator:
+    depends_on:
+      postgres:
+        required: true
+        condition: service_healthy
+    env_file: ./services/migrator/.env
+    command: ["migrator", "-config", "/app/config/config.yml", "up"]
+    image: xtrader-controller:1.1.0
+    labels:
+      app.description: migrações e seeds do banco do xtrader, antes do controller
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      xtrader:
+    restart: "no"
+    volumes:
+      - ./services/migrator/config:/app/config:ro
+
+  mt5:
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -fsS -o /dev/null -H "X-Bridge-Token: $${MT5_BRIDGE_TOKEN}" http://127.0.0.1:18812/health',
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20m
+    env_file: ./services/mt5/.env
+    image: xtrader-mt5:1.0.0
+    labels:
+      app.description: terminal metatrader 5 no wine e bridge http para os agentes
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      xtrader:
+    ports:
+      # - "18812:18812" # BRIDGE
+      # - "22347:22347" # MCP SERVER
+      - "5900:5900" # VNC
+    restart: always
+    volumes:
+      - ./services/mt5/data:/data
+
+  postgres:
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    env_file: ./services/postgres/.env
+    image: postgres:18.6-trixie
+    labels:
+      app.description: banco postgresql do xtrader, configurações e registros dos agentes
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      xtrader:
+    ports:
+      - "5432:5432" # POSTGRES
+    restart: always
+    volumes:
+      - ./services/postgres/data:/var/lib/postgresql
+
+networks:
+  xtrader:
+    name: xtrader
+    driver: bridge
