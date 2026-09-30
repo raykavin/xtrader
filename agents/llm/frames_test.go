@@ -54,7 +54,7 @@ func TestDefaultHigherTimeframes(t *testing.T) {
 }
 
 func TestTrader_HigherTimeframes(t *testing.T) {
-	r := newTraderRunner(t, func(c *Config) { c.Correlated = []string{"USTECm", testPair, "XAUUSDm"} }, 0)
+	r := newTraderRunner(t, func(c *Config) { c.Correlated = map[string][]string{testPair: {"USTECm", testPair, "XAUUSDm"}} }, 0)
 	for range 4 {
 		r.add(100) // the next close at 04:45, in the middle of a candle of 4h
 	}

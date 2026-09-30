@@ -464,6 +464,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
             <>
               As flags do agente sem campo próprio, pelo nome sem o traço, ex.:{" "}
               <code>pair = XAUUSDm</code>, <code>lot = 0.01</code>, <code>timeframe = 15m</code>.
+              Com vários pares, o lote de cada um: <code>lot = BTCUSDm=0.03,XAUUSDm=0.01</code>.
             </>
           }
         >

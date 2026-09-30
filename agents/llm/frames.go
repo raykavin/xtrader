@@ -263,7 +263,8 @@ func (t *Trader) reference(df *model.Dataframe, at time.Time) *Reference {
 // correlated returns the correlated markets of the pair of df, on its
 // timeframe, the pair itself left out: one list for all the pairs traded.
 func (t *Trader) correlated(df *model.Dataframe) []Correlated {
-	if len(t.cfg.Correlated) == 0 {
+	symbols := t.cfg.Correlated[df.Pair]
+	if len(symbols) == 0 {
 		return nil
 	}
 	period, err := timeframeDuration(t.cfg.Timeframe)
@@ -272,7 +273,7 @@ func (t *Trader) correlated(df *model.Dataframe) []Correlated {
 	}
 	pair := returnsByTime(df.Time, df.Close)
 	var list []Correlated
-	for _, symbol := range t.cfg.Correlated {
+	for _, symbol := range symbols {
 		if symbol == df.Pair {
 			continue
 		}

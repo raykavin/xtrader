@@ -24,6 +24,7 @@ const triggers: Record<string, string> = {
   candle: "Fechamento do candle",
   start: "Início do bot",
   reanalysis: "Reanálise",
+  interval: "Intervalo de consulta",
 };
 
 const channels: Record<string, string> = { web: "painel", telegram: "Telegram" };

@@ -98,6 +98,14 @@ type Config struct {
 	// Timeout bounds each decision: the request to the provider.
 	Timeout time.Duration
 
+	// ConsultInterval is the time between the consultations of the model
+	// about each pair, on a schedule of the clock (eg: 10m at :00, :10,
+	// :20...), 0 for one at each close of Timeframe. A consultation falling
+	// on the close of a candle is the one of the close; the others, live
+	// only, are asked on the candle in progress (see Input.Scheduled); the
+	// closes between two consultations are left out. 10s at least.
+	ConsultInterval time.Duration
+
 	// Direction, MinPositionValue, PositionFraction, Leverage and PositionSize
 	// work as in strategies.BracketConfig: the size of the entries, the
 	// decision giving their stop loss and take profit.
@@ -187,10 +195,10 @@ type Config struct {
 	HigherTimeframes []string
 	HigherCandles    int
 
-	// Correlated are the markets correlated with the pairs, read with the
+	// Correlated are the markets correlated with each pair, read with the
 	// feeder on Timeframe, eg: USTECm, XAUUSDm and DXYm for BTCUSDm on MT5;
-	// each pair leaves itself out.
-	Correlated []string
+	// a pair among its own is left out.
+	Correlated map[string][]string
 
 	// Memory are the last decisions and trades closed of the pair sent, the
 	// trades read from the order source (see SetOrderSource). 0 leaves it out.
@@ -218,6 +226,10 @@ type Config struct {
 	NewsBlockAfter      time.Duration
 	NewsBlockImportance Importance
 }
+
+// minConsultInterval is the least time between two consultations of the model
+// about a pair, see Config.ConsultInterval: each request is billed.
+const minConsultInterval = 10 * time.Second
 
 // DefaultConfig returns the defaults of the Trader, on the 15m timeframe.
 func DefaultConfig() Config {
@@ -302,6 +314,8 @@ func (c Config) validate() error {
 		return errors.New("the language of the reasons is required")
 	case c.Timeout <= 0:
 		return errors.New("timeout must be positive")
+	case c.ConsultInterval < 0 || (c.ConsultInterval > 0 && c.ConsultInterval < minConsultInterval):
+		return fmt.Errorf("the consult interval must be 0 (at each close) or at least %s", minConsultInterval)
 	case c.MinPositionValue <= 0:
 		return errors.New("min position value must be positive")
 	case c.PositionFraction <= 0 || c.PositionFraction > 1:
@@ -365,7 +379,9 @@ type Trader struct {
 	warmup   int                  // the candles kept, the room of the prompts, see Config.Warmup
 	trades   map[string]*trade    // the positions followed, by pair
 	handled  map[string]time.Time // the last candle handled, by pair: one request per candle at most
-	history  map[string]int       // the candles of history skipped in a row, by pair, see Config.Live
+	// the slot of ConsultInterval consulted last, by pair: one consultation per slot
+	consulted map[string]time.Time
+	history   map[string]int // the candles of history skipped in a row, by pair, see Config.Live
 
 	orders func(pair string) ([]model.Order, error) // the stored orders of a pair, see SetOrderSource
 
@@ -498,11 +514,12 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 			{"llm_bb_lower", fmt.Sprintf("bb_lower_%d_%g", cfg.BBLen, cfg.BBDev), "bb"},
 			{"llm_volume_sma", fmt.Sprintf("volume_sma_%d", cfg.VolumeLen), "volume"},
 		},
-		trades:  make(map[string]*trade),
-		handled: make(map[string]time.Time),
-		history: make(map[string]int),
-		levels:  make(map[string][]Level),
-		now:     time.Now,
+		trades:    make(map[string]*trade),
+		handled:   make(map[string]time.Time),
+		consulted: make(map[string]time.Time),
+		history:   make(map[string]int),
+		levels:    make(map[string][]Level),
+		now:       time.Now,
 
 		fetched:    make(map[string]fetched),
 		higher:     higher,
@@ -675,6 +692,16 @@ func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger str
 				delete(t.history, df.Pair)
 			}
 		}
+		if interval := t.cfg.ConsultInterval; interval > 0 && trigger == TriggerCandle && t.period > 0 {
+			// the close consulted when it falls on the schedule, else left out
+			closed := at.Add(t.period)
+			if !closed.Truncate(interval).Equal(closed) {
+				log.Debugf("[LLM] %s %s | the close of %s off the consult interval of %s: not asked", df.Pair,
+					t.cfg.Timeframe, closed.UTC().Format(time.DateTime), interval)
+				return
+			}
+			t.consulted[df.Pair] = closed
+		}
 	}
 	t.analyze(df, broker, analysis{trigger: trigger, market: df})
 }
@@ -707,7 +734,7 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 		return
 	}
 
-	trade := t.follow(df.Pair, heldSide(asset*price, t.cfg.MinPositionValue), run.trigger != TriggerReanalysis)
+	trade := t.follow(df.Pair, heldSide(asset*price, t.cfg.MinPositionValue), !run.inProgress)
 	if trade != nil && trade.exiting {
 		// a close that failed, the position left without its legs
 		log.Infof("[LLM] %s %s | RETRY | close %f", df.Pair, t.cfg.Timeframe, price)
@@ -735,7 +762,8 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 	}
 	if run.inProgress {
 		last := len(run.market.Close) - 1
-		input.Reanalysis = true
+		input.Reanalysis = run.trigger == TriggerReanalysis
+		input.Scheduled = run.trigger == TriggerInterval
 		input.CandleInProgress = &CandleInProgress{Open: number(run.market.Open[last]),
 			High: number(run.market.High[last]), Low: number(run.market.Low[last]), Close: number(price),
 			Volume: number(run.market.Volume[last])}
@@ -775,9 +803,10 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 // OnPartialCandle asks the model on the candles in progress, live only: once
 // on the first one after the start, about the candle closed before it, the
 // decision (and the levels on the chart) of the start rather than at the next
-// close, a whole period later; and on the one after a reanalysis is asked, at
-// its price, see Reanalyze. The candles in progress are otherwise left to their
-// close.
+// close, a whole period later; on the one after a reanalysis is asked, at its
+// price, see Reanalyze; and on the first one of each slot of ConsultInterval
+// starting within the candle in progress, its slots at the closes left to
+// them. The candles in progress are otherwise left to their close.
 func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 	if !t.cfg.Live || len(df.Close) < 2 {
 		return
@@ -788,6 +817,14 @@ func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 	}
 	if t.reanalysisPending(df.Pair) {
 		t.analyze(closed(df), broker, analysis{trigger: TriggerReanalysis, market: df, inProgress: true})
+		return
+	}
+	if interval := t.cfg.ConsultInterval; interval > 0 && len(df.Time) == len(df.Close) {
+		slot := t.now().Truncate(interval)
+		if opened := df.Time[len(df.Time)-1]; slot.After(opened) && t.consulted[df.Pair].Before(slot) {
+			t.consulted[df.Pair] = slot
+			t.analyze(closed(df), broker, analysis{trigger: TriggerInterval, market: df, inProgress: true})
+		}
 	}
 }
 

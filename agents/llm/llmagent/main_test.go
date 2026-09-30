@@ -30,6 +30,56 @@ func TestSizesByPair(t *testing.T) {
 		_, err = sizesByPair("-lot", []string{"GOLD"}, []string{invalid})
 		require.ErrorContains(t, err, "invalid size", invalid)
 	}
+
+	// by pair, in any order
+	sizes, err = sizesByPair("-lot", []string{"BTCUSDm", "XAUUSDm"}, []string{"XAUUSDm=0.01", " BTCUSDm = 0.03 "})
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"BTCUSDm": 0.03, "XAUUSDm": 0.01}, sizes)
+	for sizes, want := range map[string]string{
+		"BTCUSDm=0.03":              "no size for XAUUSDm",
+		"BTCUSDm=0.03,0.01":         "every size by its pair",
+		"BTCUSDm=0.03,EURUSDm=0.01": `"EURUSDm" isn't a pair of -pair (BTCUSDm,XAUUSDm)`,
+		"BTCUSDm=0.03,BTCUSDm=0.02": "BTCUSDm twice",
+		"BTCUSDm=0,XAUUSDm=0.01":    `invalid size "0" for BTCUSDm`,
+	} {
+		_, err = sizesByPair("-lot", []string{"BTCUSDm", "XAUUSDm"}, list(sizes))
+		require.ErrorContains(t, err, want, sizes)
+	}
+}
+
+func TestCorrelatedByPair(t *testing.T) {
+	pairs := []string{"BTCUSDm", "XAUUSDm"}
+	byPair, err := correlatedByPair(pairs, "")
+	require.NoError(t, err)
+	require.Nil(t, byPair)
+
+	// the same markets for all, each pair leaving itself out
+	byPair, err = correlatedByPair(pairs, "USTECm, XAUUSDm,DXYm")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"BTCUSDm": {"USTECm", "XAUUSDm", "DXYm"}, "XAUUSDm": {"USTECm", "DXYm"}},
+		byPair)
+
+	// the ones of each pair, a pair without any left out
+	byPair, err = correlatedByPair(pairs, "XAUUSDm=USTECm+DXYm; BTCUSDm = XAUUSDm + DXYm + USTECm ;")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"XAUUSDm": {"USTECm", "DXYm"}, "BTCUSDm": {"XAUUSDm", "DXYm", "USTECm"}},
+		byPair)
+	byPair, err = correlatedByPair(pairs, "XAUUSDm=DXYm")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"XAUUSDm": {"DXYm"}}, byPair)
+
+	for value, want := range map[string]string{
+		"EURUSDm=DXYm":               `"EURUSDm" isn't a pair of -pair (BTCUSDm,XAUUSDm)`,
+		"XAUUSDm=DXYm;XAUUSDm=USTEC": "XAUUSDm twice",
+		"XAUUSDm=XAUUSDm+DXYm":       "XAUUSDm among its own markets",
+		"XAUUSDm=":                   "no market for XAUUSDm",
+		"XAUUSDm=DXYm,USTECm":        "joined by +",
+		"XAUUSDm=DXYm=USTECm":        "isn't PAIR=MARKET+MARKET",
+		"=DXYm":                      "isn't PAIR=MARKET+MARKET",
+	} {
+		_, err = correlatedByPair(pairs, value)
+		require.ErrorContains(t, err, want, value)
+	}
 }
 
 func TestParseMT5Size(t *testing.T) {

@@ -89,6 +89,7 @@ func run() error {
 		maxTokens     = flag.Int("llm-max-tokens", 0, "tokens of an answer at most, the reasoning included (default 4096)")
 		reasoning     = flag.String("llm-reasoning", "", "effort of the models that reason, eg: gpt-5: minimal, low, medium or high; less spends fewer output tokens (default: the model's; ignored by anthropic)")
 		timeout       = flag.Duration("llm-timeout", cfg.Timeout, "time a decision may take, the request to the provider")
+		consult       = flag.Duration("llm-consult-interval", 0, "time between the consultations of the model about each pair, eg: 10m or 2h, 10s at least, on a schedule of the clock (10m: at :00, :10, :20...): one falling on the close of a candle is the one of the close, the others, live only, on the candle in progress, the closes between them left out; each consultation is a billed request (default: one at each close of -timeframe)")
 		candles       = flag.Int("llm-candles", cfg.Candles, "candles of the context of the model, the last ones")
 		confidence    = flag.Float64("llm-min-confidence", cfg.MinConfidence, "confidence, from 0 to 1, under which the entries, exits and moves are ignored")
 		maxEntryATR   = flag.Float64("llm-max-entry-atr", cfg.MaxEntryATR, "how far the entry of a decision may be from the close, in ATR, as it is filled at the market (0: no limit)")
@@ -99,7 +100,7 @@ func run() error {
 		structure     = flag.Int("llm-structure", cfg.StructureCandles, "candles the price structure of the context is computed on: its swings, levels, round numbers and candle patterns (0: none)")
 		higherTFs     = flag.String("llm-higher-timeframes", "", "higher timeframes of the context, comma separated, eg: 1h,4h, read from the exchange with the levels of the previous day and week (default: the two above -timeframe; none: none)")
 		higherRows    = flag.Int("llm-higher-candles", cfg.HigherCandles, "candles of each higher timeframe sent as rows, their levels computed on 200")
-		correlated    = flag.String("llm-correlated", "", "markets correlated with the pairs, comma separated, read from the exchange on -timeframe, each pair leaving itself out, eg: USTECm,XAUUSDm,DXYm on MT5")
+		correlated    = flag.String("llm-correlated", "", "markets correlated with the pairs, read from the exchange on -timeframe: the same for all, comma separated, each pair leaving itself out, eg: USTECm,XAUUSDm,DXYm on MT5; or the ones of each pair, eg: XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm")
 		memory        = flag.Int("llm-memory", cfg.Memory, "last decisions and trades closed of the pair recalled in the context (0: none)")
 		warmup        = flag.Int("llm-warmup", 0, "candles kept at least: the room of the prompts switched while the agent runs, whose indicators may need more history than its first one (default: 1000 launched by the controller, else what the prompt needs)")
 		indicators    = flag.String("llm-indicators", "", "indicators drawn on the chart and sent to the model, comma separated: groups alone, of "+strings.Join(llm.IndicatorGroups, ", ")+", or kinds with their parameters joined by spaces or +, eg: ema+20+50,supertrend+10+3, of: "+strings.Join(llm.IndicatorKinds, "; ")+" (default: the '# Indicators:' of the prompt, else all the groups)")
@@ -117,7 +118,7 @@ func run() error {
 		pairList      = flag.String("pair", "XAUUSDm", "pairs to trade, comma separated, eg: XAUUSDm,BTCUSDm")
 		timeframe     = flag.String("timeframe", cfg.Timeframe, "timeframe of the candles, one decision per candle close")
 		direction     = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
-		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, or one per pair, comma separated in the order of -pair")
+		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, one per pair, comma separated in the order of -pair, or one by pair, eg: BTCUSDm=0.03,XAUUSDm=0.01")
 		fraction      = flag.Float64("position-fraction", cfg.PositionFraction, "share of the free balance each position commits (0-1], without -lot")
 		leverage      = flag.Float64("leverage", cfg.Leverage, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
 		minValue      = flag.Float64("min-position-value", cfg.MinPositionValue, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
@@ -259,7 +260,9 @@ func run() error {
 	cfg.StructureCandles = *structure
 	cfg.HigherCandles = *higherRows
 	cfg.Memory = *memory
-	cfg.Correlated = list(*correlated)
+	if cfg.Correlated, err = correlatedByPair(pairs, *correlated); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(*higherTFs)) {
 	case "":
 		cfg.HigherTimeframes = nil // the ones of the timeframe
@@ -276,6 +279,7 @@ func run() error {
 	cfg.HigherTrendRequired = *higherTrendIn
 	cfg.Language = *language
 	cfg.Timeout = *timeout
+	cfg.ConsultInterval = *consult
 	cfg.Direction = strategies.RKDirection(*direction)
 	cfg.MinPositionValue = *minValue
 	cfg.PositionFraction = *fraction
@@ -302,8 +306,12 @@ func run() error {
 	if err := checkVenue(*exchangeName, *mode, *leverage); err != nil {
 		return err
 	}
-	log.Infof("[SETUP] LLM: %v, a decision per %s candle close, prompt %s, %d candles kept", provider,
-		cfg.Timeframe, describePrompt(prompt), trader.WarmupPeriod())
+	cadence := "a decision per " + cfg.Timeframe + " candle close"
+	if cfg.ConsultInterval > 0 {
+		cadence = fmt.Sprintf("a decision every %s on %s candles", cfg.ConsultInterval, cfg.Timeframe)
+	}
+	log.Infof("[SETUP] LLM: %v, %s, prompt %s, %d candles kept", provider, cadence, describePrompt(prompt),
+		trader.WarmupPeriod())
 
 	settings := xtrader.Settings{Pairs: pairs}
 	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl}
@@ -694,6 +702,59 @@ func calendarConfig(cfg *llm.Config, set map[string]bool, url, token string, cur
 	log.Infof("[SETUP] economic calendar: %v, news block %s before and %s after the %s releases", calendar,
 		before, after, cfg.NewsBlockImportance)
 	return nil
+}
+
+// correlatedByPair reads -llm-correlated: the markets of every pair, comma
+// separated, each pair leaving itself out, eg: USTECm,XAUUSDm,DXYm; or the
+// ones of each pair, eg: XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm, a
+// pair left out without any. It returns nil without any.
+func correlatedByPair(pairs []string, value string) (map[string][]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	byPair := make(map[string][]string, len(pairs))
+	if !strings.Contains(value, "=") {
+		markets := list(value)
+		for _, pair := range pairs {
+			for _, market := range markets {
+				if market != pair {
+					byPair[pair] = append(byPair[pair], market)
+				}
+			}
+		}
+		return byPair, nil
+	}
+	for _, entry := range strings.Split(value, ";") {
+		if entry = strings.TrimSpace(entry); entry == "" {
+			continue
+		}
+		pair, markets, ok := strings.Cut(entry, "=")
+		pair = strings.TrimSpace(pair)
+		switch _, seen := byPair[pair]; {
+		case !ok || pair == "" || strings.Contains(markets, "="):
+			return nil, fmt.Errorf("-llm-correlated: %q isn't PAIR=MARKET+MARKET", entry)
+		case !slices.Contains(pairs, pair):
+			return nil, fmt.Errorf("-llm-correlated: %q isn't a pair of -pair (%s)", pair, strings.Join(pairs, ","))
+		case seen:
+			return nil, fmt.Errorf("-llm-correlated: %s twice", pair)
+		}
+		for _, market := range strings.Split(markets, "+") {
+			switch market = strings.TrimSpace(market); {
+			case market == "":
+				continue
+			case market == pair:
+				return nil, fmt.Errorf("-llm-correlated: %s among its own markets", pair)
+			case strings.Contains(market, ","):
+				return nil, fmt.Errorf("-llm-correlated: %q: the markets of a pair are joined by +", market)
+			}
+			byPair[pair] = append(byPair[pair], market)
+		}
+		if len(byPair[pair]) == 0 {
+			return nil, fmt.Errorf("-llm-correlated: no market for %s", pair)
+		}
+	}
+	return byPair, nil
 }
 
 // list splits a comma separated flag, dropping the blanks.

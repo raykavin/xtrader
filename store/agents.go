@@ -435,6 +435,9 @@ func checkParams(a Agent) error {
 		case len(value) > maxParamValue || !oneLine(value):
 			return fmt.Errorf("%w: agent %s: param %s, a line of text of %d bytes at most", ErrInvalid, a.Name, name,
 				maxParamValue)
+		case repeatsName(name, value):
+			return fmt.Errorf("%w: agent %s: param %s: its value repeats its name, only what follows the = is its value",
+				ErrInvalid, a.Name, name)
 		case llmParam(name) && a.Kind != "llm":
 			return fmt.Errorf("%w: agent %s: param %s of a language model, for an LLM agent only", ErrInvalid,
 				a.Name, name)
@@ -444,6 +447,13 @@ func checkParams(a Agent) error {
 		}
 	}
 	return nil
+}
+
+// repeatsName reports whether the value of the param name starts with its name
+// and =, eg: "lot = 0.01" for lot: the line of the param pasted whole.
+func repeatsName(name, value string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimPrefix(strings.TrimSpace(value), "-"), name)
+	return ok && strings.HasPrefix(strings.TrimSpace(rest), "=")
 }
 
 // checkSecrets fails on a secret of the agent a without the record keeping
