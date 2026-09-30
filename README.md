@@ -16,8 +16,6 @@ Plataforma de trading automatizado em Go para símbolos do **MetaTrader 5** (Exn
 
 O controller também serve o **painel web** e o **bot do Telegram**. Toda a configuração operacional e os registros ficam no **PostgreSQL**.
 
-Fork do [ninjabot](https://github.com/rodrigo-brito/ninjabot).
-
 > [!WARNING]
 > Trading automatizado envolve risco real de perda. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente.
 
