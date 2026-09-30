@@ -202,7 +202,7 @@ func run(agent Agent) error {
 		mt5CommentAr = flag.String("mt5-comment", "", "mt5: comment of the bot's orders, at most 31 characters, whose hash is the default magic number (default \"nb:\" and the strategy name)")
 		mt5Live      = flag.Bool("mt5-live", false, "mt5: allow a real account, refused otherwise")
 		mt5Size      = flag.String("mt5-size", "lot", "mt5: how -lot is read, lot (MT5 lots, converted into units of the base asset with the contract size of the pair) or unit")
-		mt5CSize     = flag.String("mt5-contract-size", "", "mt5 backtest: units of the base asset in a lot, to convert -lot, eg: 100 for XAUUSDm; one for all the pairs, or one per pair in the order of -pair (default: the ones the package knows)")
+		mt5CSize     = flag.String("mt5-contract-size", "", "mt5 backtest: units of the base asset in a lot, to convert -lot, eg: 100 for XAUUSDm; one for all the pairs, one per pair in the order of -pair, or one by pair, eg: XAUUSDm=100 (default: the ones the package knows)")
 		mt5Poll      = flag.Duration("mt5-poll", 0, "mt5: how often the account and the candles are polled (default 1s)")
 		pairList     = flag.String("pair", "XAUUSDm", "pairs to trade, comma separated, eg: XAUUSDm,BTCUSDm")
 		timeframe    = flag.String("timeframe", "1h", "strategy timeframe (the strategies with a stop loss and a take profit at the broker: default the strategy's)")
@@ -217,7 +217,7 @@ func run(agent Agent) error {
 		minValue     = flag.Float64("min-position-value", 10, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
 		fee          = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value; MT5 CFDs charge the spread instead: half of it over the price, eg: 0.0003")
 		fraction     = flag.Float64("position-fraction", 1, "share of the free balance each position commits (0-1]")
-		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, or one per pair, comma separated in the order of -pair")
+		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, comma separated in the order of -pair, or one by pair, eg: BTCUSDm=0.03,XAUUSDm=0.01")
 		leverage     = flag.Float64("leverage", 1, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, comma separated in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
@@ -596,25 +596,67 @@ func lotsByPair(pairs, sizes []string) (map[string]float64, error) {
 }
 
 // sizesByPair maps the positive sizes of the flag name to the pairs: one for
-// all of them, or one per pair in the same order. It returns nil without any.
+// all of them, one per pair in the same order, or one by pair, each PAIR=SIZE,
+// eg: BTCUSDm=0.03,XAUUSDm=0.01, every pair with its own. It returns nil
+// without any.
 func sizesByPair(name string, pairs, sizes []string) (map[string]float64, error) {
 	if len(sizes) == 0 {
 		return nil, nil
 	}
+	parse := func(pair, size string) (float64, error) {
+		value, err := strconv.ParseFloat(strings.TrimSpace(size), 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return 0, fmt.Errorf("%s: invalid size %q for %s", name, size, pair)
+		}
+		return value, nil
+	}
+
+	values := make(map[string]float64, len(pairs))
+	named := 0
+	for _, size := range sizes {
+		if strings.Contains(size, "=") {
+			named++
+		}
+	}
+	if named > 0 {
+		if named != len(sizes) {
+			return nil, fmt.Errorf("%s: every size by its pair, PAIR=SIZE, or none", name)
+		}
+		for _, item := range sizes {
+			pair, size, _ := strings.Cut(item, "=")
+			pair = strings.TrimSpace(pair)
+			switch _, seen := values[pair]; {
+			case !slices.Contains(pairs, pair):
+				return nil, fmt.Errorf("%s: %q isn't a pair of -pair (%s)", name, pair, strings.Join(pairs, ","))
+			case seen:
+				return nil, fmt.Errorf("%s: %s twice", name, pair)
+			}
+			value, err := parse(pair, size)
+			if err != nil {
+				return nil, err
+			}
+			values[pair] = value
+		}
+		for _, pair := range pairs {
+			if _, ok := values[pair]; !ok {
+				return nil, fmt.Errorf("%s: no size for %s", name, pair)
+			}
+		}
+		return values, nil
+	}
+
 	if len(sizes) != 1 && len(sizes) != len(pairs) {
 		return nil, fmt.Errorf("%s: one size for all the pairs or one per pair, not %d for %d pairs", name,
 			len(sizes), len(pairs))
 	}
-
-	values := make(map[string]float64, len(pairs))
 	for i, pair := range pairs {
 		size := sizes[0]
 		if len(sizes) > 1 {
 			size = sizes[i]
 		}
-		value, err := strconv.ParseFloat(size, 64)
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
-			return nil, fmt.Errorf("%s: invalid size %q for %s", name, size, pair)
+		value, err := parse(pair, size)
+		if err != nil {
+			return nil, err
 		}
 		values[pair] = value
 	}

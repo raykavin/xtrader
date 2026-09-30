@@ -54,6 +54,11 @@ type Input struct {
 	Reanalysis       bool              `json:"reanalysis,omitempty"`
 	CandleInProgress *CandleInProgress `json:"candle_in_progress,omitempty"`
 
+	// Scheduled tells that the decision is asked on the consult interval
+	// between the closes, see Config.ConsultInterval, CandleInProgress as for
+	// a reanalysis, which the trader didn't ask.
+	Scheduled bool `json:"scheduled,omitempty"`
+
 	// ReanalysisNote is the note the trader sent with the reanalysis the
 	// decision answers, if any: their view, their question or their request;
 	// the requests reducing the risk of the position held are followed, the

@@ -34,6 +34,15 @@ func TestLotsByPair(t *testing.T) {
 		_, err := lotsByPair(pairs, sizes)
 		require.Error(t, err, sizes)
 	}
+
+	lots, err = lotsByPair(pairs, []string{"BTCUSD=0.03", "GOLD=0.01"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"GOLD": 0.01, "BTCUSD": 0.03}, lots, "one by pair, in any order")
+	for _, sizes := range [][]string{{"GOLD=0.01"}, {"GOLD=0.01", "0.03"}, {"GOLD=0.01", "EURUSD=0.1"},
+		{"GOLD=0.01", "GOLD=0.02"}, {"GOLD=0.01", "BTCUSD=x"}} {
+		_, err := lotsByPair(pairs, sizes)
+		require.Error(t, err, sizes)
+	}
 }
 
 // rulesExchange is an exchange whose markets take the sizes of info.

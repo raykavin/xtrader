@@ -17,12 +17,14 @@ import (
 )
 
 // The triggers of a decision, see ui.Decision: at the close of a candle, on
-// the first candle after the start, or asked again between the closes, see
-// Trader.Reanalyze.
+// the first candle after the start, asked again between the closes (see
+// Trader.Reanalyze), or on the consult interval between the closes (see
+// Config.ConsultInterval).
 const (
 	TriggerCandle     = "candle"
 	TriggerStart      = "start"
 	TriggerReanalysis = "reanalysis"
+	TriggerInterval   = "interval"
 )
 
 // The outcomes of a decision, see ui.Decision: applied (WAIT and HOLD

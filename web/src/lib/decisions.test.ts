@@ -65,6 +65,7 @@ describe("labels", () => {
     expect(
       decisionTriggerLabel(decision({ trigger: "reanalysis", requested_by: "telegram" })),
     ).toBe("Reanálise (via Telegram)");
+    expect(decisionTriggerLabel(decision({ trigger: "interval" }))).toBe("Intervalo de consulta");
     expect(decisionTriggerLabel(decision({ trigger: "candle", requested_by: "web" }))).toBe(
       "Fechamento do candle (via painel)",
     );

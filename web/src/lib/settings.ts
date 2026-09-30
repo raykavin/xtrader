@@ -347,12 +347,22 @@ export function paramKeyError(key: string, kind: string): string | null {
 }
 
 /**
- * Why the value of a param is refused, as the controller refuses it, null when
- * taken: a line of text of 1024 bytes at most, trimmed.
+ * Why the value of the param name is refused, as the controller refuses it,
+ * null when taken: a line of text of 1024 bytes at most, trimmed, not starting
+ * with the name and =, eg: "lot = 0.01" for lot, the line of the param pasted
+ * whole.
  */
-export function paramValueError(value: string): string | null {
+export function paramValueError(value: string, name = ""): string | null {
   const text = value.trim();
   if (hasControl(text)) return "Use uma linha de texto, sem caracteres de controle.";
+  const unnamed = text.replace(/^-/, "");
+  if (
+    name !== "" &&
+    unnamed.startsWith(name) &&
+    unnamed.slice(name.length).trim().startsWith("=")
+  ) {
+    return "O valor repete o nome do parâmetro: preencha só o que vem depois do =.";
+  }
   if (new TextEncoder().encode(text).length > maxParamValue) {
     return `Use até ${maxParamValue} bytes.`;
   }
@@ -503,7 +513,7 @@ export function agentFormErrors(values: AgentFormValues, creating: boolean): Age
     const key = row.key.trim();
     const error =
       paramKeyError(key, values.kind) ??
-      paramValueError(row.value) ??
+      paramValueError(row.value, row.key.trim()) ??
       (seen.has(key) ? "Parâmetro repetido." : null);
     if (error) params[row.id] = error;
     seen.add(key);

@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -140,25 +141,67 @@ func lotsToUnits(lots, contracts map[string]float64) error {
 }
 
 // sizesByPair maps the positive sizes of the flag name to the pairs: one for
-// all of them, or one per pair in the same order. It returns nil without any.
+// all of them, one per pair in the same order, or one by pair, each PAIR=SIZE,
+// eg: BTCUSDm=0.03,XAUUSDm=0.01, every pair with its own. It returns nil
+// without any.
 func sizesByPair(name string, pairs, sizes []string) (map[string]float64, error) {
 	if len(sizes) == 0 {
 		return nil, nil
 	}
+	parse := func(pair, size string) (float64, error) {
+		value, err := strconv.ParseFloat(strings.TrimSpace(size), 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return 0, fmt.Errorf("%s: invalid size %q for %s", name, size, pair)
+		}
+		return value, nil
+	}
+
+	values := make(map[string]float64, len(pairs))
+	named := 0
+	for _, size := range sizes {
+		if strings.Contains(size, "=") {
+			named++
+		}
+	}
+	if named > 0 {
+		if named != len(sizes) {
+			return nil, fmt.Errorf("%s: every size by its pair, PAIR=SIZE, or none", name)
+		}
+		for _, item := range sizes {
+			pair, size, _ := strings.Cut(item, "=")
+			pair = strings.TrimSpace(pair)
+			switch _, seen := values[pair]; {
+			case !slices.Contains(pairs, pair):
+				return nil, fmt.Errorf("%s: %q isn't a pair of -pair (%s)", name, pair, strings.Join(pairs, ","))
+			case seen:
+				return nil, fmt.Errorf("%s: %s twice", name, pair)
+			}
+			value, err := parse(pair, size)
+			if err != nil {
+				return nil, err
+			}
+			values[pair] = value
+		}
+		for _, pair := range pairs {
+			if _, ok := values[pair]; !ok {
+				return nil, fmt.Errorf("%s: no size for %s", name, pair)
+			}
+		}
+		return values, nil
+	}
+
 	if len(sizes) != 1 && len(sizes) != len(pairs) {
 		return nil, fmt.Errorf("%s: one size for all the pairs or one per pair, not %d for %d pairs", name,
 			len(sizes), len(pairs))
 	}
-
-	values := make(map[string]float64, len(pairs))
 	for i, pair := range pairs {
 		size := sizes[0]
 		if len(sizes) > 1 {
 			size = sizes[i]
 		}
-		value, err := strconv.ParseFloat(size, 64)
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
-			return nil, fmt.Errorf("%s: invalid size %q for %s", name, size, pair)
+		value, err := parse(pair, size)
+		if err != nil {
+			return nil, err
 		}
 		values[pair] = value
 	}

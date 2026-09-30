@@ -410,6 +410,8 @@ func TestUpdateAgent_RefusesTheInvalidOnes(t *testing.T) {
 		{"address taken", AgentUpdate{APIAddress: ptr(other.APIAddress)}, ErrConflict, "the one of the agent other"},
 		{"param of a field", AgentUpdate{Params: Params{"mt5-magic": "7"}}, ErrInvalid, "a setting of its own"},
 		{"param value", AgentUpdate{Params: Params{"pair": "a\r\nb"}}, ErrInvalid, "a line of text"},
+		{"param value with its name", AgentUpdate{Params: Params{"lot": "lot = BTCUSDm=0.03,XAUUSDm=0.01"}},
+			ErrInvalid, "its value repeats its name"},
 		{"bridge URL removed", AgentUpdate{Account: &AccountUpdate{BridgeURL: ptr("")}}, ErrInvalid,
 			"the URL of its bridge is required"},
 		{"magic", AgentUpdate{Account: &AccountUpdate{Magic: ptr(int64(-1))}}, ErrInvalid, "magic number -1"},

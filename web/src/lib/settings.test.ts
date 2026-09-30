@@ -337,6 +337,22 @@ describe("the fields of an agent", () => {
       expect(paramValueError(value), value).toBeNull();
     }
     expect(paramValueError("x".repeat(1025))).toBe("Use até 1024 bytes.");
+    for (const [value, name] of [
+      ["llm-correlated = XAUUSDm=USTECm+DXYm", "llm-correlated"],
+      ["lot=0.01", "lot"],
+      ["-lot = 0.01", "lot"],
+    ] as [string, string][]) {
+      expect(paramValueError(value, name), value).toBe(
+        "O valor repete o nome do parâmetro: preencha só o que vem depois do =.",
+      );
+    }
+    for (const [value, name] of [
+      ["BTCUSDm=0.03,XAUUSDm=0.01", "lot"],
+      ["XAUUSDm=USTECm+DXYm", "llm-correlated"],
+      ["lottery", "lot"],
+    ] as [string, string][]) {
+      expect(paramValueError(value, name), value).toBeNull();
+    }
     expect(paramValueError("é".repeat(513))).toBe("Use até 1024 bytes.");
     for (const value of ["XAUUSDm\n-mode=paper", "a\u0085b", "a\u007fb", "a\tb"]) {
       expect(paramValueError(value), value).toBe(
