@@ -243,7 +243,7 @@ func run(agent Agent) error {
 	}
 	var token string
 	if remoteAgent != nil {
-		// stopped by the controller, it sends its records before it exits
+		// stopped by the controller, it stops trading, then sends its records (see remote.Agent.Serve)
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()

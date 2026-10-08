@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +25,13 @@ import (
 )
 
 // ErrBotStopped is returned by CreateOrder* when the controller has been stopped.
-// Cancel is intentionally not gated, so open orders can still be cleaned up.
+// Cancel is intentionally not gated, so open orders can still be cleaned up,
+// nor are the protections of the positions: they are refused, ErrBotStopped
+// too, only once the controller is closed, see Close.
 var ErrBotStopped = errors.New("bot is stopped")
+
+// errClosed refuses every call to the exchange of a closed controller.
+var errClosed = fmt.Errorf("%w for good, as it exits", ErrBotStopped)
 
 type summary struct {
 	Pair             string
@@ -351,8 +357,10 @@ type Controller struct {
 	updateMtx      sync.Mutex   // serializes UpdateOrders, so a fill is never settled twice
 	pairsMtx       sync.Mutex
 	pairs          map[string]*sync.Mutex // serialize the orders of each pair, see lockPair
-	inflight       int                    // orders begun and not recorded yet, under mtx, see beginOrder
+	inflight       int                    // calls begun and not recorded yet, under mtx, see begin
 	idle           *sync.Cond             // on mtx, broadcast when inflight drops to 0
+	closed         bool                   // under mtx: nothing reaches the exchange any more, see Close
+	updatesClosed  bool                   // under updateMtx: UpdateOrders does nothing, see Close
 	ctx            context.Context
 	exchange       service.Exchange
 	storage        storage.Storage
@@ -789,7 +797,14 @@ func (c *Controller) loadPendingOrders() {
 func (c *Controller) UpdateOrders() {
 	c.updateMtx.Lock()
 	defer c.updateMtx.Unlock()
+	if c.updatesClosed {
+		return
+	}
+	c.updateOrders()
+}
 
+// updateOrders is UpdateOrders. Must be called while holding c.updateMtx.
+func (c *Controller) updateOrders() {
 	c.storeAgain()
 
 	c.mtx.RLock()
@@ -910,13 +925,44 @@ func (c *Controller) lockPair(pair string) func() {
 	return mtx.Unlock
 }
 
-// beginOrder begins an order of pair, under the lock of the pair (see
-// lockPair), refused on a stopped bot (ErrBotStopped): Stop waits for the
-// orders begun to end. It returns the end of the order.
+// beginOrder begins an order of pair, see begin, refused on a stopped bot
+// (ErrBotStopped). It returns the end of the order.
 func (c *Controller) beginOrder(pair string) (func(), error) {
+	return c.begin(pair, true)
+}
+
+// beginProtection begins a call protecting a position of pair, or cleaning
+// its orders up (see Protect, UpdateProtection and Cancel), see begin: taken
+// on a stopped bot, refused only once the controller is closed. It returns
+// the end of the call.
+func (c *Controller) beginProtection(pair string) (func(), error) {
+	return c.begin(pair, false)
+}
+
+// begin begins a call to the exchange about pair, an order when order, under
+// the lock of the pair (see lockPair), refused once the controller is closed
+// (see Close), and an order on a stopped bot: at once, without waiting for the
+// lock of the pair, and again once it is taken. Stop and Close wait for the
+// calls begun to end. It returns the end of the call.
+func (c *Controller) begin(pair string, order bool) (func(), error) {
+	refused := func() error {
+		switch {
+		case c.closed:
+			return errClosed
+		case order:
+			return c.requireRunning()
+		}
+		return nil
+	}
+	c.mtx.RLock()
+	err := refused()
+	c.mtx.RUnlock()
+	if err != nil {
+		return nil, err
+	}
 	unlock := c.lockPair(pair)
 	c.mtx.Lock()
-	if err := c.requireRunning(); err != nil {
+	if err := refused(); err != nil {
 		c.mtx.Unlock()
 		unlock()
 		return nil, err
@@ -934,7 +980,7 @@ func (c *Controller) beginOrder(pair string) (func(), error) {
 }
 
 // idleCond returns the condition the orders begun ending signal, see
-// beginOrder. Must be called while holding c.mtx.
+// begin. Must be called while holding c.mtx.
 func (c *Controller) idleCond() *sync.Cond {
 	if c.idle == nil {
 		c.idle = sync.NewCond(&c.mtx)
@@ -946,6 +992,11 @@ func (c *Controller) Start() {
 	c.mtx.Lock()
 	if c.status == StatusRunning {
 		c.mtx.Unlock()
+		return
+	}
+	if c.closed {
+		c.mtx.Unlock()
+		log.Warn("order controller: closed as the bot exits, never started again")
 		return
 	}
 	c.status = StatusRunning
@@ -969,7 +1020,7 @@ func (c *Controller) Start() {
 }
 
 // Stop stops the controller: no order begins any more (ErrBotStopped), and
-// once the ones begun are recorded, the pending orders are updated a last time.
+// once the calls begun are recorded, the pending orders are updated a last time.
 func (c *Controller) Stop() {
 	c.mtx.Lock()
 	if c.status != StatusRunning {
@@ -985,6 +1036,32 @@ func (c *Controller) Stop() {
 	c.UpdateOrders()
 	c.finish <- true
 	log.Info("Bot stopped.")
+}
+
+// Close stops the controller for good, as the bot exits (see XTrader.Run): it
+// stops (see Stop), then nothing reaches the exchange any more, the
+// protections of the positions, their moves and the cancels refused too
+// (ErrBotStopped), once the calls begun are recorded; the pending orders are
+// updated a last time, and never after. What the exchange did is then all
+// handed to the storage, eg: an outbox about to be closed. Start never starts
+// it again.
+func (c *Controller) Close() {
+	c.Stop()
+	c.mtx.Lock()
+	if c.closed {
+		c.mtx.Unlock()
+		return
+	}
+	c.closed, c.status = true, StatusStopped
+	for c.inflight > 0 {
+		c.idleCond().Wait()
+	}
+	c.mtx.Unlock()
+
+	c.updateMtx.Lock()
+	defer c.updateMtx.Unlock()
+	c.updateOrders()
+	c.updatesClosed = true
 }
 
 func (c *Controller) Account() (model.Account, error) {
@@ -1122,13 +1199,90 @@ func (c *Controller) ClosesProtected() bool {
 	return ok && closer.ClosesProtected()
 }
 
+// HeldLegs returns the open legs of the position held on side of pair, and when
+// it opened, zero when unknown, see service.PositionLegs: from the orders the
+// controller stores, in the state it follows them, a restart included (the
+// positions replayed from the stored fills, see restore). A leg is an open
+// order of a group on the other side, protecting the entry of the position:
+// as the exchange tells it, when it knows both (see fillPositions), else
+// placed after it, never one of an older entry, eg: of a position closed by
+// its stop loss whose exit isn't booked yet. Any, with the entry unknown.
+func (c *Controller) HeldLegs(pair string, side model.SideType) ([]model.Order, time.Time, error) {
+	open := make(map[int64]model.Order)
+	if c.storage != nil {
+		stored, err := c.storage.Orders(storage.WithPair(pair), storage.WithStatusIn(model.OrderStatusTypeNew,
+			model.OrderStatusTypePartiallyFilled))
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("the open orders of %s: %w", pair, err)
+		}
+		for _, order := range stored {
+			open[order.ID] = *order
+		}
+	}
+
+	c.mtx.RLock()
+	// the state followed is newer than the stored one, or the only one
+	for _, orders := range []map[int64]model.Order{c.unstored, c.pending} {
+		for id, order := range orders {
+			if order.Pair == pair {
+				open[id] = order
+			}
+		}
+	}
+	var entry *model.Order
+	var opened time.Time
+	if position, ok := c.position[pair]; ok && position.Side == side {
+		held := position.Entry
+		entry, opened = &held, position.CreatedAt
+	}
+	c.mtx.RUnlock()
+
+	var legs []model.Order
+	for _, order := range open {
+		if order.GroupID == nil || order.Side == side || order.Status != model.OrderStatusTypeNew &&
+			order.Status != model.OrderStatusTypePartiallyFilled {
+			continue
+		}
+		if entry != nil && !c.legOf(order, *entry) {
+			continue
+		}
+		legs = append(legs, order)
+	}
+	sort.Slice(legs, func(i, j int) bool { return legs[i].ID < legs[j].ID })
+	return legs, opened, nil
+}
+
+// fillPositions is implemented by the exchanges that tell the positions a fill
+// opened and closed, eg: MT5, by their tickets.
+type fillPositions interface {
+	FillPositions(fill model.Order) (opened int64, closed []int64, ok bool)
+}
+
+// legOf reports whether leg protects the position entry opened, see HeldLegs.
+func (c *Controller) legOf(leg, entry model.Order) bool {
+	if positions, ok := c.exchange.(fillPositions); ok {
+		opened, _, known := positions.FillPositions(entry)
+		_, protected, legKnown := positions.FillPositions(leg)
+		if known && opened != 0 && legKnown {
+			return slices.Contains(protected, opened)
+		}
+	}
+	if leg.ID > 0 && entry.ID > 0 {
+		return leg.ID > entry.ID
+	}
+	return !leg.CreatedAt.Before(entry.CreatedAt)
+}
+
 // Protect protects the position held on side of pair with a stop loss and a
 // take profit, see service.PositionProtector, and stores the legs, followed as
 // any other order. Like UpdateProtection, it works on a stopped bot too: it
-// only protects a position.
+// only protects a position; not once the controller is closed (see Close).
 func (c *Controller) Protect(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error) {
-	unlock := c.lockPair(pair)
-	defer unlock()
+	end, err := c.beginProtection(pair)
+	if err != nil {
+		return nil, err
+	}
+	defer end()
 
 	protector, ok := c.exchange.(service.PositionProtector)
 	if !ok {
@@ -1150,10 +1304,14 @@ func (c *Controller) Protect(side model.SideType, pair string, size, stop, profi
 
 // UpdateProtection moves a stop loss or take profit leg to level, see
 // service.ProtectionBroker, and stores it moved. Like Cancel, it works on a
-// stopped bot too: it only protects a position.
+// stopped bot too: it only protects a position; not once the controller is
+// closed (see Close).
 func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
-	unlock := c.lockPair(leg.Pair)
-	defer unlock()
+	end, err := c.beginProtection(leg.Pair)
+	if err != nil {
+		return model.Order{}, err
+	}
+	defer end()
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -1315,13 +1473,17 @@ func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (
 	return order, nil
 }
 
+// Cancel cancels an order, on a stopped bot too, not once the controller is
+// closed (see Close).
 func (c *Controller) Cancel(order model.Order) error {
-	unlock := c.lockPair(order.Pair)
-	defer unlock()
+	end, err := c.beginProtection(order.Pair)
+	if err != nil {
+		return err
+	}
+	defer end()
 
 	log.Infof("[ORDER] Cancelling order for %s", order.Pair)
-	err := c.exchange.Cancel(order)
-	if err != nil {
+	if err := c.exchange.Cancel(order); err != nil {
 		return err
 	}
 

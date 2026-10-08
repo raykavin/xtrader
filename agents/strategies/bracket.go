@@ -137,9 +137,8 @@ func (b *bracket) manage(df *model.Dataframe, broker service.Broker, exit bracke
 
 	trade, ok := b.trades[df.Pair]
 	if !ok || trade.side != held {
-		// a position opened before a restart, or by someone else: it is
-		// followed from this candle on, without legs known
-		trade = &scalpTrade{side: held}
+		// a position opened before a restart, or by someone else
+		trade = adoptTrade(df, broker, b.name, b.timeframe, held)
 		b.trades[df.Pair] = trade
 	}
 	trade.bars++
@@ -147,7 +146,7 @@ func (b *bracket) manage(df *model.Dataframe, broker service.Broker, exit bracke
 	reason := ""
 	switch {
 	case trade.exiting:
-		reason = "RETRY" // a close that failed, the position left without its legs
+		reason = "RETRY" // a close that failed, the position protected meanwhile
 	default:
 		reason = exit(df, held)
 		if reason == "" && b.cfg.MaxBars > 0 && trade.bars >= b.cfg.MaxBars {
@@ -231,18 +230,10 @@ func (b *bracket) position(df *model.Dataframe, broker service.Broker) (float64,
 	return asset, rkHeld(asset*df.Close.Last(0), b.cfg.MinPositionValue), nil
 }
 
-// close closes the position of trade at the market once its legs are
-// canceled, and reports whether the pair is flat now, as Scalp.close does.
+// close closes the position of trade at the market, and reports whether the
+// pair is flat now, as Scalp.close does.
 func (b *bracket) close(df *model.Dataframe, broker service.Broker, trade *scalpTrade) bool {
-	trade.exiting = true
-	for _, leg := range trade.legs {
-		if err := broker.Cancel(leg); err != nil {
-			log.Debugf("[%s] %s | %s: %v", b.name, df.Pair, leg.Type, err) // already filled or canceled
-		}
-	}
-	trade.legs = nil
-
-	if !rkClose(df, broker, trade.side, b.cfg.MinPositionValue) {
+	if !trade.close(df, broker, b.name, b.cfg.MinPositionValue) {
 		return false
 	}
 	delete(b.trades, df.Pair)

@@ -77,17 +77,19 @@ func (m *Manager) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// handleConfig answers the settings of the agent, its secrets included,
-// unless it would trade on MT5 the positions of another agent running (409,
-// see Manager.admit).
+// handleConfig answers the settings of the agent, its secrets included: the
+// ones of its launch, on each start of it until it is restarted (see
+// Manager.launchedAs), unless it would trade on MT5 the positions of another
+// agent running (409, see Manager.admit).
 func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	a, err := m.store.Agent(ctx, agentOf(r))
+	current, err := m.store.Agent(ctx, agentOf(r))
 	if err != nil {
 		m.fail(w, err)
 		return
 	}
-	secrets, err := m.store.AgentSecrets(ctx, a.ID)
+	a := m.launchedAs(current)
+	secrets, err := m.store.SecretsOf(a)
 	if err != nil {
 		m.fail(w, err)
 		return

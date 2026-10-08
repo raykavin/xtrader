@@ -38,7 +38,8 @@ ui:
 agents:
   # the internal API of the agents, on the loopback of the container
   api: 127.0.0.1:8090
-  # their data in /app/data (the volume services/controller/data): their outboxes
+  # their data in /app/data (the volume services/controller/data): their
+  # outboxes, and the pidfiles of the controller in data/pids
   dir: /app
   commands:
     llm: /app/bin/llmagent
@@ -46,7 +47,14 @@ agents:
     momentum: /app/bin/momentumagent
     breakout: /app/bin/breakoutagent
     intraday: /app/bin/intradayagent
+  # how long an agent stopped has before it is killed
   stop_timeout: 20s
+
+# the whole stop of the controller, its agents (stop_timeout) included: past
+# it, whatever still runs is killed. Under the stop_grace_period of the
+# compose (45s), after which Docker kills the container; at least
+# agents.stop_timeout + 3s (the agents, the wait of their output, a margin)
+shutdown_timeout: 30s
 
 log:
   level: info

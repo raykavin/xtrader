@@ -38,6 +38,7 @@ type ivRunner struct {
 	s      strategy.Strategy
 	wallet *exchange.PaperWallet
 	broker service.Broker // the wallet, unless a test wraps it
+	settle func()         // settles the fills of each candle before the strategy runs, if set, see tradingBot
 	df     *model.Dataframe
 	day    time.Time
 	step   time.Duration
@@ -87,6 +88,9 @@ func (r *ivRunner) feed(candles ...ivCandle) {
 
 		r.wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: at, Open: candle.open, Close: candle.close,
 			High: candle.high, Low: candle.low, Volume: candle.volume, Complete: true})
+		if r.settle != nil {
+			r.settle()
+		}
 
 		df := r.df
 		df.Time = append(df.Time, at)

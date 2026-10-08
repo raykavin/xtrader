@@ -17,7 +17,10 @@ var healthTimeout = 2 * time.Second
 // StartServices launches the services of the host the agents need, eg: the
 // bridge of MT5, from dir, but the ones up already, and waits for the health
 // of each one: a service not up after its wait only warns, as the agents
-// retry. It returns the names of the ones launched, to stop after the agents.
+// retry. It returns the names of the ones launched, to stop after the agents,
+// each with its stop timeout. One a controller before launched and left
+// running as it died isn't up already: the controller stops it before (see
+// Supervisor.StopLeftovers).
 func StartServices(ctx context.Context, sup *Supervisor, services []config.Service, dir string) ([]string, error) {
 	var launched []string
 	for _, service := range services {
@@ -31,7 +34,7 @@ func StartServices(ctx context.Context, sup *Supervisor, services []config.Servi
 			command = append(command, strings.Fields(arg)...)
 		}
 		spec := ProcessSpec{Name: service.Name, Command: command, Dir: dir, Env: service.Env.Map(),
-			Restart: service.Restart}
+			Restart: service.Restart, StopTimeout: service.StopTimeout}
 		if err := sup.Start(spec, nil); err != nil {
 			for _, name := range launched {
 				sup.Stop(name)

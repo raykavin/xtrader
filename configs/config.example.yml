@@ -64,7 +64,9 @@ agents:
   # the internal API the agents take their settings from and keep their
   # records through: on the loopback only, never published
   api: 127.0.0.1:8090
-  # the working directory of the agents: their outboxes in data/outbox
+  # the working directory of the agents: their outboxes in data/outbox, and
+  # the pidfiles of the processes of the controller in data/pids (one
+  # controller per dir: a second one doesn't start)
   dir: .
   # the command of each kind of agent, bin/<kind>agent by default
   commands:
@@ -89,8 +91,24 @@ services:
     exec: tools/mt5bridge/run.sh
     health: http://127.0.0.1:18812/health
     restart: true
+    # how long it has to stop once interrupted before it is killed, 10s by
+    # default
+    # stop_timeout: 10s
     env:
       - 'MT5_BRIDGE_TOKEN=${MT5_BRIDGE_TOKEN}'
+
+# the whole stop of the controller (SIGINT or SIGTERM): the agents (their
+# stop_timeout), then the services (theirs); past it, whatever still runs is
+# killed. By default agents.stop_timeout + the longest stop_timeout of the
+# services + 10s (40s here), never under that sum + 3s: each phase, the agents
+# then the services, may wait 1s more for the output of a process killed, eg:
+# held by the X server the script of the bridge starts. Who stops the
+# controller waits for it longer: tools/automator.sh (AUTOMATOR_STOP_TIMEOUT,
+# 300s by default), the stop_grace_period of a compose, the TimeoutStopSec of
+# a systemd unit. On Linux the agents and the services stop with the
+# controller even when it is killed, and the next start stops what was left
+# running before it launches anything (data/pids of agents.dir)
+# shutdown_timeout: 40s
 
 log:
   level: info

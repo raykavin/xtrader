@@ -55,6 +55,8 @@ services:
 	require.Equal(t, "127.0.0.1:8090", cfg.Agents.API)
 	require.Equal(t, 20*time.Second, cfg.Agents.StopTimeout)
 	require.Equal(t, 3*time.Minute, cfg.Services[0].Wait)
+	require.Equal(t, 10*time.Second, cfg.Services[0].StopTimeout)
+	require.Equal(t, 40*time.Second, cfg.ShutdownTimeout, "the agents, then the services, and a margin")
 	require.True(t, cfg.Services[0].Restart)
 	require.Equal(t, "go run ./agents/llm/llmagent", cfg.Agents.Command("llm"))
 	require.Equal(t, filepath.Join("bin", "trendagent"), cfg.Agents.Command("trend"), "the binary of the kind")
@@ -107,6 +109,21 @@ func TestValidate_RefusesWhatCantBeUsed(t *testing.T) {
 			`"proxy.local" is neither an IP nor a CIDR`},
 		{"every address trusted", func(c *Config) { c.UI.TrustedProxies = []string{"0.0.0.0/0"} },
 			"trusts every address"},
+		{"stop of a service", func(c *Config) { c.Services = []Service{{Name: "x", Exec: "y", StopTimeout: -1}} },
+			"service x: stop_timeout -1ns is negative"},
+		{"stop of the agents", func(c *Config) { c.Agents.StopTimeout = -time.Second },
+			"agents.stop_timeout -1s is negative"},
+		{"shutdown under the stops", func(c *Config) {
+			c.Services = []Service{{Name: "x", Exec: "y", StopTimeout: 10 * time.Second}}
+			c.ShutdownTimeout = 31 * time.Second
+		}, "shutdown_timeout 31s: under the stops of the agents and of the services"},
+		// R9: each phase, the agents then the services, may wait OutputWait for
+		// the output of a process killed beyond its stop_timeout
+		{"shutdown without the wait of the output", func(c *Config) {
+			c.Services = []Service{{Name: "x", Exec: "y", StopTimeout: 10 * time.Second}}
+			c.ShutdownTimeout = 32 * time.Second
+		}, "shutdown_timeout 32s: under the stops of the agents and of the services, agents.stop_timeout plus " +
+			"the longest stop_timeout of the services, plus 3s (33s)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := valid()
@@ -116,6 +133,62 @@ func TestValidate_RefusesWhatCantBeUsed(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+// The whole stop of the controller fits the time of who stops it: the agents,
+// then the services, each with its own stop timeout (R9).
+func TestLoad_TheTimesOfTheStop(t *testing.T) {
+	t.Setenv("TEST_SECRETS_KEY", key)
+	base := `
+database:
+  dsn: postgres://localhost/xtrader
+secrets_key: ${TEST_SECRETS_KEY}
+`
+	cfg, err := Load(write(t, base))
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, cfg.ShutdownTimeout, "the agents, without services, and a margin")
+
+	cfg, err = Load(write(t, base+`
+agents:
+  stop_timeout: 30s
+services:
+  - name: mt5bridge
+    exec: tools/mt5bridge/run.sh
+    stop_timeout: 5s
+  - name: other
+    exec: other
+    stop_timeout: 15s
+shutdown_timeout: 50s
+`))
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, cfg.Services[0].StopTimeout)
+	require.Equal(t, 45*time.Second, cfg.StopTimeouts(), "the agents, then the longest of the services")
+	require.Equal(t, 50*time.Second, cfg.ShutdownTimeout)
+
+	cfg, err = Load(write(t, base+`
+agents:
+  stop_timeout: 1m
+`))
+	require.NoError(t, err)
+	require.Equal(t, 70*time.Second, cfg.ShutdownTimeout, "a longer stop of the agents, a longer one")
+
+	_, err = Load(write(t, base+`
+shutdown_timeout: 20s
+`))
+	require.ErrorIs(t, err, ErrInvalid)
+	require.ErrorContains(t, err, "shutdown_timeout 20s: under the stops of the agents and of the services")
+
+	// the least: the stops, and the wait of the output of each phase, plus a
+	// second
+	_, err = Load(write(t, base+`
+shutdown_timeout: 22s
+`))
+	require.ErrorContains(t, err, "shutdown_timeout 22s: under the stops")
+	cfg, err = Load(write(t, base+`
+shutdown_timeout: 23s
+`))
+	require.NoError(t, err)
+	require.Equal(t, 23*time.Second, cfg.ShutdownTimeout)
 }
 
 func TestValidate_KeepsTheSecretsOutOfTheErrors(t *testing.T) {

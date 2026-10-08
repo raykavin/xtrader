@@ -338,10 +338,17 @@ func (n *XTrader) processCandle(candle model.Candle) {
 	}
 }
 
-// Process pending candles in buffer
-func (n *XTrader) processCandles() {
-	for item := range n.priorityQueueCandle.PopLock() {
-		n.processCandle(item.(model.Candle))
+// processCandles processes the candles of the buffer as they come, from items
+// (see PriorityQueue.PopLock), until ctx is done: the candle in progress then
+// processed to its end, no other after.
+func (n *XTrader) processCandles(ctx context.Context, items <-chan model.Item) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case item := <-items:
+			n.processCandle(item.(model.Candle))
+		}
 	}
 }
 
@@ -396,7 +403,13 @@ func (n *XTrader) preload(ctx context.Context, pair string) error {
 	return nil
 }
 
-// Run will initialize the strategy controller, order controller, preload data and start the bot
+// Run will initialize the strategy controller, order controller, preload data and start the bot.
+//
+// Live, it runs until ctx is done, then stops trading before it returns: no
+// order begins any more (order.ErrBotStopped), the strategy ends the candle in
+// progress, its orders refused, and the order controller is closed (see
+// order.Controller.Close), once the calls begun to the exchange are recorded in
+// the storage, which nothing writes to after Run returns.
 func (n *XTrader) Run(ctx context.Context) error {
 	for _, pair := range n.settings.Pairs {
 		// setup and subscribe strategy to data feed (candles)
@@ -423,15 +436,32 @@ func (n *XTrader) Run(ctx context.Context) error {
 		n.telegram.Start()
 	}
 
+	// the candles of the buffer taken as they come from the first one of the
+	// feed on, see processCandles
+	var items <-chan model.Item
+	if !n.backtest {
+		items = n.priorityQueueCandle.PopLock()
+	}
+
 	// start data feed and receives new candles
 	n.dataFeed.Start(n.backtest)
 
 	// start processing new candles for production or backtesting environment
 	if n.backtest {
 		n.backtestCandles()
-	} else {
-		n.processCandles()
+		return nil
 	}
 
+	processed := make(chan struct{})
+	go func() {
+		defer close(processed)
+		n.processCandles(ctx, items)
+	}()
+	<-ctx.Done()
+	log.Info("[SHUTDOWN] stopping the bot: no new order")
+	n.orderController.Stop() // first: the candle in progress may go on for a while, eg: asking an LLM
+	<-processed
+	n.orderController.Close()
+	log.Info("[SHUTDOWN] the bot stopped, its orders recorded")
 	return nil
 }

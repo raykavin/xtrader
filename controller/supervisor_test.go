@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,6 +60,20 @@ func TestMain(m *testing.M) {
 		}
 		fmt.Printf("program %d\n", program.Process.Pid)
 		_ = program.Wait()
+		os.Exit(1)
+	case "controller": // a controller of its own, see startController
+		controllerMain()
+	case "leave": // leaves a process in its group, then fails: of its start with FAKE_BOT_MARKED, else of another program
+		env := os.Environ()
+		if os.Getenv("FAKE_BOT_MARKED") == "" {
+			env = slices.DeleteFunc(env, func(v string) bool { return strings.HasPrefix(v, envLaunch+"=") })
+		}
+		left := exec.Command(os.Args[0], fakeBotPrefix+"bot")
+		left.Env = env
+		if err := left.Start(); err != nil {
+			os.Exit(2)
+		}
+		fmt.Printf("left %d\n", left.Process.Pid)
 		os.Exit(1)
 	}
 	fmt.Println("started")
@@ -286,4 +301,36 @@ func TestStartServices_WaitsForTheirHealth(t *testing.T) {
 	_, err = StartServices(context.Background(), s, []config.Service{{Name: "missing",
 		Exec: "/nonexistent/run.sh"}}, os.TempDir())
 	require.ErrorContains(t, err, "missing")
+}
+
+// The release of the last start of a process, eg: the one triggering the
+// Reconcile that tells an agent without Restart exited (B17), comes once the
+// supervisor forgot the process: it sees it stopped.
+func TestSupervisor_TheLastStartReleasedOnceForgotten(t *testing.T) {
+	s, _, _ := testSupervisor(t, time.Second)
+	running := make(chan bool, 1)
+	prepare := func() (map[string]string, func(), error) {
+		return nil, func() { running <- s.Running("vwap") }, nil
+	}
+	require.NoError(t, s.Start(fakeSpec("vwap", "crash"), prepare))
+	select {
+	case r := <-running:
+		assert.False(t, r, "released while the supervisor ran it still")
+	case <-time.After(5 * time.Second):
+		t.Fatal("never released")
+	}
+	assert.False(t, s.State("vwap").Running)
+	assert.Equal(t, "exit status 1", s.State("vwap").LastExit)
+
+	// stopped: released before Stop returns
+	require.NoError(t, s.Start(fakeSpec("orb", "bot"), func() (map[string]string, func(), error) {
+		return nil, func() { running <- s.Running("orb") }, nil
+	}))
+	s.Stop("orb")
+	select {
+	case r := <-running:
+		assert.False(t, r)
+	default:
+		t.Fatal("Stop returned before the release")
+	}
 }

@@ -97,7 +97,10 @@ func fakeAgent() int {
 		p := agent.Prompt()
 		fmt.Printf("runtime trade_panel=%t telegram=%t prompt=%s v%d %q\n", r.TradePanel, r.TelegramControl,
 			p.Ref.Name, p.Ref.Version, strings.TrimSpace(strings.SplitAfter(p.Content, "\n\n")[1]))
-	}, func(context.Context) error { select {} }) // a bot deaf to its context, as the one of xtrader
+	}, func(ctx context.Context) error { // a bot stopping with its context, as the one of xtrader
+		<-ctx.Done()
+		return nil
+	})
 	fmt.Println("stopping:", err)
 	return 0
 }

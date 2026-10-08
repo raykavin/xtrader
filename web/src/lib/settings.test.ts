@@ -10,6 +10,7 @@ import {
   agentKindLabel,
   agentKinds,
   agentNameError,
+  agentNote,
   agentState,
   agentSummary,
   agentUpdateRequest,
@@ -85,6 +86,38 @@ describe("agents", () => {
     });
     expect(agentState(agent({ running: true, launch_error: blocked })).label).toBe("Não iniciado");
     expect(agentState(agent({ enabled: false, launch_error: blocked })).label).toBe("Desativado");
+    expect(agentState(agent({ running: true, restarting: true, restart_pending: true }))).toEqual({
+      label: "Reiniciando",
+      tone: "warn",
+      mark: "stop",
+    });
+    expect(agentState(agent({ exited: true, restart: false })).label).toBe("Parado");
+  });
+
+  it("tells why an agent stopped, or how often it was started again", () => {
+    expect(agentNote(agent({}))).toBe("");
+    expect(agentNote(agent({ last_exit: "exit status 1" }))).toBe("Última saída: exit status 1");
+    expect(
+      agentNote(agent({ launch_error: "the address of its API", last_exit: "exit status 1" })),
+    ).toBe("Não iniciado: the address of its API");
+    expect(agentNote(agent({ running: true, restart_pending: true, restarts: 2 }))).toBe(
+      "Configurações de inicialização alteradas: reinicie para aplicá-las.",
+    );
+    expect(agentNote(agent({ restart: false, exited: true, last_exit: "exit status 1" }))).toBe(
+      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia). Última saída: exit status 1",
+    );
+    expect(agentNote(agent({ restart: false, exited: true }))).toBe(
+      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia).",
+    );
+    expect(agentNote(agent({ running: true, restarts: 1, last_exit: "signal: killed" }))).toBe(
+      "Última saída: signal: killed · reiniciado 1 vez",
+    );
+    expect(
+      agentNote(
+        agent({ running: true, restarting: true, restarts: 3, last_exit: "exit status 2" }),
+      ),
+    ).toBe("Última saída: exit status 2 · reiniciado 3 vezes");
+    expect(agentNote(agent({ running: true, restarts: 2 }))).toBe("Reiniciado 2 vezes");
   });
 
   it("groups the agents by kind, the LLM ones first, the unknown kinds last", () => {

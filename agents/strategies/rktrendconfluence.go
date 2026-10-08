@@ -348,7 +348,9 @@ type RKTrendConfluence struct {
 	warmup int
 	trades map[string]*rkTrade // positions followed by the stops, by pair
 
-	protection map[string]*rkProtection // stops placed at the broker with the positions, by pair
+	protection map[string]*rkProtection  // stops placed at the broker with the positions, by pair
+	exits      map[string]*rkExit        // closes that failed, retried on the next candles, by pair
+	followed   map[string]model.SideType // the side of the positions followed, by pair, see follows
 
 	mu      sync.Mutex                      // guards decided: the chart reads it from another goroutine
 	decided map[string]map[int64]rkDecision // signals of the closed candles of the window, by pair and time
@@ -360,6 +362,11 @@ type rkTrade struct {
 	side    model.SideType // BUY for a long, SELL for a short
 	extreme float64        // highest high of a long, lowest low of a short
 	stop    float64
+
+	// a position found held, eg: opened before a restart: set up on its last
+	// candle, its stop applying from the next (fresh); or, see MATrend.adopt,
+	// its stop at the broker to move to the one followed (adopted)
+	fresh, adopted bool
 }
 
 // sign is 1 for a long and -1 for a short, so that prices compare the same way
@@ -402,12 +409,14 @@ func rkProtectionLeg(legs []model.Order) model.Order {
 }
 
 // rkProtection is the stop placed at the broker with a position: its leg, its
-// level and the best price since the entry, which the trailing follows.
+// level and the best price since the entry, which the trailing follows, and
+// the level of the take profit placed with it, 0 for none.
 type rkProtection struct {
 	side    model.SideType // of the position
 	leg     model.Order
 	stop    float64
 	extreme float64 // highest high of a long, lowest low of a short, from the entry close
+	profit  float64
 }
 
 // tighten moves the stop to price when that is closer to the market.
@@ -429,6 +438,8 @@ func NewRKTrendConfluence(cfg RKTrendConfluenceConfig) (*RKTrendConfluence, erro
 			minValue: cfg.MinPositionValue},
 		trades:     make(map[string]*rkTrade),
 		protection: make(map[string]*rkProtection),
+		exits:      make(map[string]*rkExit),
+		followed:   make(map[string]model.SideType),
 		decided:    make(map[string]map[int64]rkDecision),
 	}
 	var chart time.Duration
@@ -537,7 +548,7 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 
 	fixed := s.cfg.StopValue > 0 // in place of the stops in ATR
 	stops := !fixed && (s.cfg.StopATR > 0 || s.cfg.TrailingATR > 0)
-	if side == "" && !stops && (fixed || s.cfg.BrokerTrailingATR == 0) {
+	if side == "" && !stops && (fixed || s.cfg.BrokerTrailingATR == 0) && s.exits[df.Pair] == nil {
 		return
 	}
 
@@ -552,8 +563,26 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 		log.Error(err)
 		return
 	}
+	if exit, ok := s.exits[df.Pair]; ok && exit.side != held {
+		delete(s.exits, df.Pair) // closed meanwhile, by its legs or by someone else
+	}
+	if s.followed[df.Pair] != held {
+		delete(s.followed, df.Pair)
+	}
 	if held == "" {
 		delete(s.protection, df.Pair) // the broker stop closed the position, if any
+	} else if !s.follows(df.Pair, held, stops) {
+		s.adopt(df, broker, held, stops) // a position opened before a restart, or by someone else
+	}
+
+	// a close that failed is retried before anything else, the position
+	// protected meanwhile
+	if _, ok := s.exits[df.Pair]; ok {
+		log.Infof("[RK TCF] %s %s | RETRY | close %f", df.Pair, s.cfg.Timeframe, closePrice)
+		if !s.close(df, broker, held) {
+			return
+		}
+		held = ""
 	}
 
 	// the stops come first: a signal on the candle of a stop applies to the
@@ -561,8 +590,7 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 	if stops {
 		if held != "" && s.stopped(df, held) {
 			log.Infof("[RK TCF] %s %s | STOP | close %f", df.Pair, s.cfg.Timeframe, closePrice)
-			s.unprotect(df.Pair, broker)
-			if !rkClose(df, broker, held, s.cfg.MinPositionValue) {
+			if !s.close(df, broker, held) {
 				return
 			}
 			held = ""
@@ -584,11 +612,9 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 
 	// a BUY closes a short and a SELL closes a long
 	if held != "" {
-		s.unprotect(df.Pair, broker)
-		if !rkClose(df, broker, held, s.cfg.MinPositionValue) {
+		if !s.close(df, broker, held) {
 			return
 		}
-		delete(s.trades, df.Pair)
 	}
 
 	if !s.opens(side) {
@@ -617,8 +643,11 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 
 	// an order reported as failed may have been filled even so, eg: a request
 	// that timed out, so the stops follow whatever position is held now
-	if stops && (err == nil || s.holds(df, broker, side)) {
-		s.trades[df.Pair] = s.newTrade(df, side)
+	if err == nil || s.holds(df, broker, side) {
+		s.followed[df.Pair] = side
+		if stops {
+			s.trades[df.Pair] = s.newTrade(df, side)
+		}
 	}
 }
 
@@ -652,9 +681,110 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 	orders, err := protected.CreateOrderMarketProtected(side, df.Pair, size, stop, profit)
 	if len(orders) > 1 {
 		s.protection[df.Pair] = &rkProtection{side: side, leg: rkProtectionLeg(orders[1:]), stop: stop,
-			extreme: closePrice}
+			extreme: closePrice, profit: rkLevelsOf(orders[1:]).profit}
 	}
 	return err
+}
+
+// follows reports whether the strategy follows the position held on side of
+// pair: one it opened, or one found held (see adopt), with its stops, if any.
+func (s *RKTrendConfluence) follows(pair string, held model.SideType, stops bool) bool {
+	if stops {
+		trade, ok := s.trades[pair]
+		return ok && trade.side == held
+	}
+	if protection, ok := s.protection[pair]; ok && protection.side == held {
+		return true
+	}
+	if exit, ok := s.exits[pair]; ok && exit.side == held {
+		return true
+	}
+	return s.followed[pair] == held
+}
+
+// adopt follows the position held on side found on the last candle of df,
+// eg: opened before a restart: with its legs at the broker, when it tells them
+// (see rkFind), whose stop it trails from the best price since the entry, and
+// with its stops, as they stood on the previous candle, replayed from the
+// candle of its entry when df holds it; else set up from the last candle on,
+// as for an entry.
+func (s *RKTrendConfluence) adopt(df *model.Dataframe, broker service.Broker, held model.SideType, stops bool) {
+	s.followed[df.Pair] = held
+	found := rkFind(df, broker, "RK TCF", held)
+	_, first, known := found.held(df, s.cfg.Timeframe)
+	replay := known && first >= 1 && first < len(df.Close)
+
+	delete(s.protection, df.Pair)
+	if len(found.legs) > 0 {
+		levels := rkLevelsOf(found.legs)
+		protection := &rkProtection{side: held, leg: rkProtectionLeg(found.legs), stop: levels.stop,
+			profit: levels.profit, extreme: df.Close.Last(0)}
+		if replay {
+			protection.extreme = rkExtreme(df, held, first)
+		}
+		s.protection[df.Pair] = protection
+	}
+
+	if !stops {
+		return
+	}
+	atr := df.Metadata["rk_atr"]
+	if !replay || len(atr) != len(df.Close) || len(df.High) != len(df.Close) || len(df.Low) != len(df.Close) ||
+		isNa(atr[first-1]) {
+		trade := s.newTrade(df, held)
+		trade.fresh = true
+		s.trades[df.Pair] = trade
+		return
+	}
+	trade := s.newTradeAt(df, held, first-1)
+	for i := first; i < len(df.Close)-1; i++ {
+		if held == model.SideTypeBuy {
+			trade.extreme = math.Max(trade.extreme, df.High[i])
+		} else {
+			trade.extreme = math.Min(trade.extreme, df.Low[i])
+		}
+		if !isNa(atr[i]) {
+			s.trailAt(trade, df, i)
+		}
+	}
+	s.trades[df.Pair] = trade
+}
+
+// close closes the position held on the pair at the market, and reports
+// whether the pair is flat now. Where the broker needs it, its stop at the
+// broker is canceled first, as it reserves the position: the close would
+// otherwise open the other side, eg: in the paper wallet; a close that fails
+// places it again, see rkCloseProtected, and is retried on the next candles.
+func (s *RKTrendConfluence) close(df *model.Dataframe, broker service.Broker, held model.SideType) bool {
+	var legs []model.Order
+	var levels rkLevels
+	if exit, ok := s.exits[df.Pair]; ok {
+		levels = exit.bare
+	}
+	protection := s.protection[df.Pair]
+	if protection != nil {
+		legs = []model.Order{protection.leg}
+		levels = rkLevels{stop: protection.stop, profit: protection.profit}
+	}
+
+	flat, kept, bare := rkCloseProtected(df, broker, "RK TCF", held, s.cfg.MinPositionValue, legs, levels)
+	delete(s.protection, df.Pair)
+	if flat {
+		delete(s.exits, df.Pair)
+		delete(s.trades, df.Pair)
+		delete(s.followed, df.Pair)
+		return true
+	}
+	s.exits[df.Pair] = &rkExit{side: held, bare: bare}
+	if len(kept) > 0 {
+		extreme := df.Close.Last(0)
+		if protection != nil {
+			extreme = protection.extreme
+		}
+		s.protection[df.Pair] = &rkProtection{side: held, leg: rkProtectionLeg(kept), stop: levels.stop,
+			profit: levels.profit, extreme: extreme}
+	}
+	return false
 }
 
 // trailBroker moves the stop at the broker of the position held on the pair to
@@ -692,18 +822,6 @@ func (s *RKTrendConfluence) trailBroker(df *model.Dataframe, broker service.Brok
 	log.Infof("[RK TCF] %s %s | BROKER STOP %f", df.Pair, s.cfg.Timeframe, stop)
 }
 
-// unprotect cancels the stop placed at the broker for the position of the pair
-// before the strategy closes it, as it reserves the position: a close would
-// otherwise open the other side, eg: in the paper wallet.
-func (s *RKTrendConfluence) unprotect(pair string, broker service.Broker) {
-	if protection, ok := s.protection[pair]; ok {
-		if err := broker.Cancel(protection.leg); err != nil {
-			log.Debugf("[RK TCF] %s | broker stop: %v", pair, err) // already filled or canceled
-		}
-	}
-	delete(s.protection, pair)
-}
-
 // position returns the asset held on the pair and the side of the position:
 // BUY for a long, SELL for a short, none for dust.
 func (s *RKTrendConfluence) position(df *model.Dataframe, broker service.Broker) (float64, model.SideType, error) {
@@ -727,26 +845,11 @@ func rkHeld(value, minValue float64) model.SideType {
 	return ""
 }
 
-// rkClose closes the position held on side at the market, once its legs at the
-// broker are canceled, and reports whether the pair is flat now. It reads the
-// position again rather than trust the one read before the cancels: a leg
-// filled while its cancel was in flight may have closed it meanwhile, and the
-// order would then open the other side, without legs.
+// rkClose closes the position held on side at the market, without legs at the
+// broker, and reports whether the pair is flat now, see rkCloseProtected.
 func rkClose(df *model.Dataframe, broker service.Broker, side model.SideType, minValue float64) bool {
-	asset, _, err := broker.Position(df.Pair)
-	if err != nil {
-		log.Error(err)
-		return false
-	}
-	if held := rkHeld(asset*df.Close.Last(0), minValue); held != side {
-		return held == "" // closed by a leg meanwhile
-	}
-
-	if _, err := broker.CreateOrderMarket(oppositeSide(side), df.Pair, math.Abs(asset)); err != nil {
-		log.Error(err)
-		return false
-	}
-	return true
+	flat, _, _ := rkCloseProtected(df, broker, "", side, minValue, nil, rkLevels{})
+	return flat
 }
 
 // rkSizing sizes the positions of a strategy, see the Sizing of
@@ -849,16 +952,21 @@ func (s *RKTrendConfluence) remember(df *model.Dataframe) {
 // is StopATR from the close and TrailingATR from the candle's high (low for a
 // short), whichever is tighter.
 func (s *RKTrendConfluence) newTrade(df *model.Dataframe, side model.SideType) *rkTrade {
-	trade := &rkTrade{side: side, extreme: df.High.Last(0)}
+	return s.newTradeAt(df, side, len(df.Close)-1)
+}
+
+// newTradeAt is newTrade on the candle i of df.
+func (s *RKTrendConfluence) newTradeAt(df *model.Dataframe, side model.SideType, i int) *rkTrade {
+	trade := &rkTrade{side: side, extreme: df.High[i]}
 	if side == model.SideTypeSell {
-		trade.extreme = df.Low.Last(0)
+		trade.extreme = df.Low[i]
 	}
 	trade.stop = math.Inf(-1) * trade.sign()
 
 	if s.cfg.StopATR > 0 {
-		trade.tighten(df.Close.Last(0) - trade.sign()*s.cfg.StopATR*df.Metadata["rk_atr"].Last(0))
+		trade.tighten(df.Close[i] - trade.sign()*s.cfg.StopATR*df.Metadata["rk_atr"][i])
 	}
-	s.trail(trade, df)
+	s.trailAt(trade, df, i)
 
 	return trade
 }
@@ -868,9 +976,13 @@ func (s *RKTrendConfluence) newTrade(df *model.Dataframe, side model.SideType) *
 func (s *RKTrendConfluence) stopped(df *model.Dataframe, held model.SideType) bool {
 	trade, ok := s.trades[df.Pair]
 	if !ok || trade.side != held {
-		// a position opened before a restart, or by someone else: its stops
-		// are followed from this candle on
+		// a position opened by someone else meanwhile: its stops are
+		// followed from this candle on, see adopt
 		s.trades[df.Pair] = s.newTrade(df, held)
+		return false
+	}
+	if trade.fresh {
+		trade.fresh = false // set up on this candle, as for an entry
 		return false
 	}
 
@@ -891,8 +1003,13 @@ func (s *RKTrendConfluence) stopped(df *model.Dataframe, held model.SideType) bo
 
 // trail tightens the trailing stop to TrailingATR from the best price.
 func (s *RKTrendConfluence) trail(trade *rkTrade, df *model.Dataframe) {
+	s.trailAt(trade, df, len(df.Close)-1)
+}
+
+// trailAt is trail with the ATR of the candle i of df.
+func (s *RKTrendConfluence) trailAt(trade *rkTrade, df *model.Dataframe, i int) {
 	if s.cfg.TrailingATR > 0 {
-		trade.tighten(trade.extreme - trade.sign()*s.cfg.TrailingATR*df.Metadata["rk_atr"].Last(0))
+		trade.tighten(trade.extreme - trade.sign()*s.cfg.TrailingATR*df.Metadata["rk_atr"][i])
 	}
 }
 

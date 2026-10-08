@@ -469,12 +469,17 @@ export interface ErrorResponse {
  * its process, its language model with its prompt, and which of its secrets
  * are set, never their values. Its Name and its Kind never change. Its API is
  * served at APIAddress, host:port. Launched tells that the controller runs it,
- * and Restart that it runs it again when it exits; LaunchError why the
- * controller didn't launch it, eg: another agent running trades the same
- * positions on MT5. Params are the flags of its settings that no field holds,
- * by name, the ones of its language model included, eg: {"pair": "XAUUSDm",
- * "llm-min-stop-atr": "1"}. Model names its language model, eg: openai gpt-5,
- * and LLM holds it, for an LLM agent only.
+ * and Restart that it runs it again when it exits, with the settings of its
+ * launch and the secrets of now: Restarts counts the times since then, and
+ * Restarting tells that it exited and waits for that, Running still. Exited
+ * tells that it exited without Restart: launched again once restarted,
+ * enabled again, its settings changed after it exited, or the controller
+ * started again. LaunchError tells why the controller didn't launch it,
+ * eg: another agent running trades the same positions on MT5. Params are the
+ * flags of its settings that no field holds, by name, the ones of its
+ * language model included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}.
+ * Model names its language model, eg: openai gpt-5, and LLM holds it, for an
+ * LLM agent only.
  */
 export interface AgentSettings {
   name: string;
@@ -488,6 +493,9 @@ export interface AgentSettings {
   telegram_control: boolean;
   running: boolean;
   restart_pending: boolean;
+  restarts?: number /* int */;
+  restarting?: boolean;
+  exited?: boolean;
   last_exit?: string;
   launch_error?: string;
   params: { [key: string]: string};

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -358,11 +359,24 @@ func TestInternalAPI_OnlyTheAgentOfTheToken(t *testing.T) {
 func settingsSession(t *testing.T, c *managed) (func(method, path string, body interface{}) (*http.Response, string),
 	*httptest.Server) {
 	t.Helper()
+	return settingsSessionIn(t, c, nil)
+}
+
+// settingsSessionIn is settingsSession, the requests of the dashboard in base
+// when set, as the controller serves them in the context of its signals.
+func settingsSessionIn(t *testing.T, c *managed, base context.Context) (
+	func(method, path string, body interface{}) (*http.Response, string), *httptest.Server) {
+	t.Helper()
 	_, err := c.store.CreateUser(context.Background(), "admin", "admin-password")
 	require.NoError(t, err)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("app"), 0o644))
-	srv := httptest.NewServer(c.dashboard.auth.protect(c.dashboard.router(bundle{dir: dir, version: "v1"}, nil)))
+	srv := httptest.NewUnstartedServer(c.dashboard.auth.protect(c.dashboard.router(bundle{dir: dir, version: "v1"},
+		nil)))
+	if base != nil {
+		srv.Config.BaseContext = func(net.Listener) context.Context { return base }
+	}
+	srv.Start()
 	t.Cleanup(srv.Close)
 	resp, _ := login(t, srv, "admin", "admin-password")
 	require.Equal(t, http.StatusOK, resp.StatusCode)

@@ -4,7 +4,7 @@ Quatro serviços, no padrão de `/var/containers`:
 
 | Serviço | O que roda | Dados |
 |---|---|---|
-| `controller` | painel web (com login), Telegram e os agentes do banco, processos do controller | `services/controller/data` (outbox de cada agente), `services/controller/config/config.yml` |
+| `controller` | painel web (com login), Telegram e os agentes do banco, processos do controller | `services/controller/data` (outbox de cada agente e pidfiles em `data/pids`), `services/controller/config/config.yml` |
 | `migrator` | migrações e seeds do banco (`migrator up`), a cada subida, antes do controller; e o import único da versão anterior | `services/migrator/config/` (`config.yml`, `agents.yml` de exemplo para o import) |
 | `postgres` | PostgreSQL 18: agentes, prompts, usuários, Telegram, ordens, decisões e journal | `services/postgres/data` |
 | `mt5` | terminal MetaTrader 5 da Exness no Wine, numa tela virtual (Xvfb), e a bridge HTTP (`tools/mt5bridge`) que os agentes usam | `services/mt5/data` (prefixo do Wine: Python, terminal e os dados dele) |
@@ -163,7 +163,7 @@ Sem esse passo, o agente llm roda sem o calendário. Ficam sem efeito as notíci
 |---|---|
 | Logs (rotação de 10 MB x 3) | `docker compose logs -f controller` (ou `mt5`, `postgres`, `migrator`) |
 | Reiniciar os agentes | `docker compose restart controller`, ou um agente pelo painel (**Configurações > Reiniciar**). Com posição aberta, o agente recupera a posição e o stop. |
-| Parar tudo | `docker compose down` |
+| Parar tudo | `docker compose down`. O controller para primeiro: os agentes têm `agents.stop_timeout` (20 s) e a parada inteira cabe no `shutdown_timeout` (30 s) do `services/controller/config/config.yml`, abaixo do `stop_grace_period` do compose (45 s), depois do qual o Docker mata o container. Ao mudar esses tempos, mantenha essa ordem. Uma instalação feita antes desse ajuste só ganha o `stop_grace_period` depois de reinstalar: o compose instalado não o tem, e o Docker espera só o padrão de 10 s, menos que o `agents.stop_timeout`. Rode o `install.sh` de novo (ele troca o compose, guarda o anterior em `docker-compose.yml.bak` e mantém os `config.yml`), pare o controller com o tempo inteiro (`docker compose stop -t 45 controller`) e depois `docker compose up -d`, que recria o container com o compose novo. De preferência, faça isso sem posição aberta. |
 | Atualizar | `git pull && deploy/docker/build.sh`, trocando a tag no compose se for uma nova versão; depois `docker compose up -d` (o `migrator` aplica as migrações novas) |
 | Backup do banco | `docker compose exec postgres pg_dump -U xtrader -Fc xtrader > xtrader.dump` |
 | Backup dos arquivos | `services/*/.env` (a chave dos segredos), `services/controller/data` (outbox dos agentes) e `services/mt5/data` (prefixo do Wine com o terminal logado; pode ser reinstalado) |

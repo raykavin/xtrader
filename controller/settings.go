@@ -92,7 +92,10 @@ func idParam(w http.ResponseWriter, r *http.Request, name string) (int64, bool) 
 
 // fail answers an error of the store: 404, 409 or 400 for the ones of the
 // request, 500 else, its detail logged; 409 for an agent that would trade the
-// positions of another one running.
+// positions of another one running, 503 once the controller stops, or for a
+// request canceled: the controller stopping cancels the requests in flight
+// (the BaseContext of its server), eg: a restart waiting for its agent, and a
+// client gone reads no answer.
 func (s *settings) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -101,6 +104,9 @@ func (s *settings) fail(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrInvalid):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrStopped), errors.Is(err, context.Canceled):
+		log.Debugf("ui: settings: %v", err)
+		writeJSONError(w, http.StatusServiceUnavailable, ErrStopped.Error())
 	default:
 		log.Errorf("ui: settings: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "the settings can't be read or changed now")
@@ -128,7 +134,8 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 	settings := ui.AgentSettings{Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
 		Enabled: a.Enabled, Launched: a.Launched, Restart: a.Restart, TradePanel: a.TradePanel,
 		TelegramControl: a.TelegramControl, Running: state.Running, RestartPending: state.RestartPending,
-		LastExit: state.LastExit, LaunchError: state.LaunchError, Params: a.AllParams()}
+		Restarts: state.Restarts, Restarting: state.Restarting, Exited: state.Exited, LastExit: state.LastExit,
+		LaunchError: state.LaunchError, Params: a.AllParams()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

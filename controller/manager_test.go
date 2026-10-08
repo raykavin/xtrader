@@ -105,9 +105,11 @@ func TestManager_DoesNotLaunchTwoAgentsOfTheSamePositions(t *testing.T) {
 	assert.Equal(t, err.Error(), c.manager.State("gold").LaunchError)
 }
 
-// An agent started again by the supervisor reads its settings anew: the
-// controller refuses them when it would trade the positions of another agent
-// running, and takes the ones of a paper agent.
+// An agent started again by the supervisor reads the settings of its launch:
+// what it trades, changed meanwhile, waits for its restart, never the
+// positions of another agent running. The settings read anew, of an agent
+// the controller didn't launch, are refused when it would trade the positions
+// of another agent running, and taken for a paper agent.
 func TestInternalAPI_RefusesTheSettingsOfTheSamePositions(t *testing.T) {
 	c := newManaged(t)
 	ctx := context.Background()
@@ -127,6 +129,14 @@ func TestInternalAPI_RefusesTheSettingsOfTheSamePositions(t *testing.T) {
 	assert.Equal(t, "nb:two", cfg.MT5Book().Comment)
 
 	c.sharesGold(t, second.ID) // changed meanwhile, as saved before the store refused it
+	require.Equal(t, http.StatusOK, internalCall(t, srv, token, http.MethodGet, "/config", nil, &cfg).StatusCode)
+	assert.Equal(t, "nb:two", cfg.MT5Book().Comment, "the settings of its launch")
+	assert.Empty(t, c.manager.State("gold-two").LaunchError)
+
+	// read anew once it stopped
+	c.manager.stop("gold-two")
+	token, err = c.manager.tokens.issue(second.ID)
+	require.NoError(t, err)
 	resp := internalCall(t, srv, token, http.MethodGet, "/config", nil, nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	assert.Contains(t, c.manager.State("gold-two").LaunchError, "the agent gold, running in live mode, trades XAUUSDm")
@@ -136,13 +146,25 @@ func TestInternalAPI_RefusesTheSettingsOfTheSamePositions(t *testing.T) {
 		"a paper agent reads the market data only")
 	assert.Empty(t, c.manager.State("gold-two").LaunchError)
 
-	// what it trades is the one of the settings it read: a paper agent, the
-	// agent of the same positions launches
-	c.manager.stop("gold")
+	// what it trades is the one of the settings it runs with, of its launch:
+	// launched in paper, changed to live meanwhile, it still reads paper, and
+	// the agent of the same positions launches
+	paper, err := c.store.AgentByName(ctx, "gold-two")
+	require.NoError(t, err)
+	require.NoError(t, c.manager.start(paper))
+	require.Eventually(t, func() bool { return c.manager.supervisor.Running("gold-two") }, 5*time.Second,
+		10*time.Millisecond)
 	c.exec(t, "UPDATE agents SET mode = 'live' WHERE id = ?", second.ID)
+	token, err = c.manager.tokens.issue(second.ID)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, internalCall(t, srv, token, http.MethodGet, "/config", nil, &cfg).StatusCode,
+		"its start reads the settings of its launch")
+	assert.Equal(t, "paper", cfg.Mode)
+	assert.Empty(t, c.manager.State("gold-two").LaunchError)
+	c.manager.stop("gold")
 	gold, err := c.store.AgentByName(ctx, "gold")
 	require.NoError(t, err)
-	require.NoError(t, c.manager.start(gold))
+	require.NoError(t, c.manager.start(gold), "the other one trades in paper")
 }
 
 // The settings refuse an agent trading the positions of another, created,

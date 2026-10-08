@@ -83,6 +83,7 @@ type scRunner struct {
 	s      *Scalp
 	wallet *exchange.PaperWallet
 	broker service.Broker // the wallet, unless a test wraps it
+	settle func()         // settles the fills of each candle before the strategy runs, if set, see tradingBot
 	df     *model.Dataframe
 }
 
@@ -111,6 +112,9 @@ func (r *scRunner) feed(candles ...scCandle) {
 		at := start.Add(time.Duration(len(r.df.Close)) * time.Minute)
 		r.wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: at, Close: candle.close, High: candle.high,
 			Low: candle.low, Complete: true})
+		if r.settle != nil {
+			r.settle()
+		}
 
 		df := r.df
 		df.Time = append(df.Time, at)
