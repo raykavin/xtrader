@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,6 +31,7 @@ var (
 	_ service.Exchange         = (*MT5)(nil)
 	_ service.ProtectionBroker = (*MT5)(nil)
 	_ service.OrderHistory     = (*MT5)(nil)
+	_ service.ProtectedCloser  = (*MT5)(nil)
 )
 
 const (
@@ -39,6 +41,33 @@ const (
 	// MT5TokenHeader is the header carrying the token of the bridge, see
 	// WithMT5Token.
 	MT5TokenHeader = "X-Bridge-Token"
+	// MT5DeadlineHeader is the header carrying the deadline of a trade request,
+	// in Unix milliseconds: the bridge never sends it to the terminal after it,
+	// refusing it with "sent": false.
+	MT5DeadlineHeader = "X-Bridge-Deadline"
+	// MT5TimeoutHeader is the header carrying the same deadline as the time
+	// left until it when the request is sent, in milliseconds: the bridge takes
+	// the earliest of the two, this one counted by its own clock from the
+	// receipt of the request, so that a clock of the bridge behind the one of
+	// the agent, eg: on another host, never makes it send a request later.
+	MT5TimeoutHeader = "X-Bridge-Timeout"
+
+	// mt5TradeDeadline is how long the bridge may hold a trade request before
+	// sending it to the terminal, eg: behind the requests of other bots or while
+	// the terminal reconnects; below the timeout of the HTTP client (30s), so
+	// that the bridge gives up before the adapter does.
+	mt5TradeDeadline = 20 * time.Second
+	// mt5ReconcileMargin is how long after the deadline of a trade request
+	// whose answer was lost it is looked for the last time, see reconcile.
+	mt5ReconcileMargin = 2 * time.Second
+	// mt5ReconcileReads bounds the reads of the account of the last look of
+	// reconcile, and of each look of awaitOutcome.
+	mt5ReconcileReads = 10 * time.Second
+	// mt5UnsettledRetry is the longest wait between two looks of awaitOutcome.
+	mt5UnsettledRetry = 30 * time.Second
+	// mt5ClockAhead is how far ahead of the clock of the agent the one of the
+	// bridge is warned about: it shortens the deadline of the trade requests.
+	mt5ClockAhead = time.Second
 
 	// mt5DefaultPoll is the default of WithMT5PollInterval.
 	mt5DefaultPoll = time.Second
@@ -192,6 +221,23 @@ const (
 	mt5StopLoss   = "sl"
 )
 
+var (
+	// ErrMT5AccountChanged is the error of the trading calls while the terminal
+	// is logged in another account than the one NewMT5 connected to, or the
+	// account turned real without WithMT5Real, eg: switched by hand.
+	ErrMT5AccountChanged = errors.New("mt5: the terminal is not logged in the account of the bot")
+	// ErrMT5OutcomeUnknown is the error of a trade request whose answer was lost
+	// and that the adapter could neither find in the account nor confirm as not
+	// executed: it may have been executed, so it must not be sent again before
+	// the account is checked.
+	ErrMT5OutcomeUnknown = errors.New("mt5: the outcome of the trade request is unknown")
+	// ErrMT5Unsettled is the error of a trade request opening or closing a
+	// position of a pair while the outcome of another one of the pair is
+	// unknown, the account unreadable since (see ErrMT5OutcomeUnknown): not
+	// sent, until a read of the account tells it.
+	ErrMT5Unsettled = errors.New("mt5: the outcome of a trade request of the pair is unknown yet")
+)
+
 // MT5Error is an error answer of the bridge (HTTP status, message, and the
 // last_error code of the terminal when it has one), or a trade request the
 // terminal did not execute (HTTP 200, the retcode and comment of order_send).
@@ -201,6 +247,7 @@ type MT5Error struct {
 	Status  int    // HTTP status of the answer
 	Retcode int    // trade retcode, or the terminal error code, 0 when unknown
 	Message string // error of the bridge, or comment of the trade result
+	NotSent bool   // a trade request the bridge refused before order_send ("sent": false)
 }
 
 func (e *MT5Error) Error() string {
@@ -222,8 +269,9 @@ func (e *MT5Error) Error() string {
 
 // Unwrap maps the retcodes to the errors of the package: invalid volume to
 // ErrInvalidQuantity, invalid stops to ErrInvalidProtection, no money to
-// ErrInsufficientFunds, and a bridge refusing the trading (read-only, HTTP 403)
-// to ErrNotSupported.
+// ErrInsufficientFunds, a bridge refusing the trading (read-only, HTTP 403)
+// to ErrNotSupported, and refusing it on another account (HTTP 409) to
+// ErrMT5AccountChanged.
 func (e *MT5Error) Unwrap() error {
 	switch {
 	case e.Retcode == mt5CodeInvalidVolume:
@@ -234,6 +282,8 @@ func (e *MT5Error) Unwrap() error {
 		return ErrInsufficientFunds
 	case e.Status == http.StatusForbidden:
 		return ErrNotSupported
+	case e.Status == http.StatusConflict:
+		return ErrMT5AccountChanged
 	}
 	return nil
 }
@@ -287,6 +337,13 @@ func mt5RetcodeName(code int) string {
 // local book, and the history (deals and orders) is read when something left
 // the book: Order and OrderSince, asked every second by the order controller,
 // answer from the book.
+//
+// A trade request is sent once, with a deadline the bridge never sends it to
+// the terminal after; one whose answer is lost is looked for in the account
+// before failing (reconcile), the trading of its pair only waiting meanwhile.
+// While the terminal is logged in another account
+// than the one NewMT5 connected to, or the account turned real without
+// WithMT5Real, nothing is traded (ErrMT5AccountChanged).
 type MT5 struct {
 	ctx          context.Context
 	client       *http.Client
@@ -302,6 +359,10 @@ type MT5 struct {
 	deviation    int
 	retryDelay   time.Duration
 	syncWait     time.Duration // see awaitHistory
+	deadline     time.Duration // of the trade requests, see tradeDeadline
+	margin       time.Duration // after their deadline, see reconcile
+	deadlines    bool          // the bridge honors MT5DeadlineHeader (GET /health)
+	timeouts     bool          // the bridge honors MT5TimeoutHeader (GET /health)
 
 	login       int64
 	currency    string
@@ -362,7 +423,9 @@ func WithMT5Magic(magic int64) MT5Option {
 
 // WithMT5Comment sets the comment of the bot's orders, a readable tag of at
 // most 31 characters, "xtrader" by default. Ownership is decided by the magic
-// number, not by the comment.
+// number, not by the comment. Each order is commented with it followed by "#"
+// and a tag of its own, eg: "xtrader#k3f9a2", cut to make room when needed:
+// an order whose answer is lost is found by it (see trade).
 func WithMT5Comment(comment string) MT5Option {
 	return func(m *MT5) {
 		m.comment = comment
@@ -436,6 +499,15 @@ func withMT5RetryDelay(delay time.Duration) MT5Option {
 	}
 }
 
+// withMT5TradeDeadline sets the deadline of the trade requests and the margin
+// of reconcile after it, mt5TradeDeadline and mt5ReconcileMargin by default:
+// for the tests.
+func withMT5TradeDeadline(deadline, margin time.Duration) MT5Option {
+	return func(m *MT5) {
+		m.deadline, m.margin = deadline, margin
+	}
+}
+
 // mt5Health is the answer of GET /health.
 type mt5Health struct {
 	Connected    bool    `json:"connected"`
@@ -444,6 +516,8 @@ type mt5Health struct {
 	Login        int64   `json:"login"`
 	Server       string  `json:"server"`
 	ReadOnly     bool    `json:"read_only"`
+	Deadline     bool    `json:"deadline"` // MT5DeadlineHeader honored
+	Timeout      bool    `json:"timeout"`  // MT5TimeoutHeader honored
 	Time         float64 `json:"time"`
 }
 
@@ -514,6 +588,8 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		deviation:    mt5DefaultDeviation,
 		retryDelay:   mt5RetryDelay,
 		syncWait:     mt5SyncWait,
+		deadline:     mt5TradeDeadline,
+		margin:       mt5ReconcileMargin,
 		instruments:  make(map[string]mt5Symbol),
 		assetsInfo:   make(map[string]model.AssetInfo),
 		catalog:      make(map[string]*mt5Symbol),
@@ -543,9 +619,11 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 	}
 
 	var health mt5Health
+	asked := time.Now()
 	if err := m.get(ctx, "/health", nil, &health); err != nil {
 		return nil, fmt.Errorf("mt5: the bridge at %s: %w", m.baseURL, err)
 	}
+	answered := time.Now()
 	switch {
 	case !health.Connected && !m.dataOnly:
 		return nil, fmt.Errorf("mt5: the terminal of the account %d is not connected to its server %s",
@@ -558,6 +636,23 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 	case !health.TradeAllowed && !m.dataOnly:
 		log.Warnf("[MT5] AlgoTrading is off in the terminal of the account %d: every order will be refused "+
 			"until it is turned on", health.Login)
+	}
+	m.deadlines, m.timeouts = health.Deadline, health.Timeout
+	switch {
+	case m.dataOnly:
+	case !m.deadlines:
+		log.Warnf("[MT5] the bridge at %s doesn't honor %s, update tools/mt5bridge: it may send a trade request "+
+			"after the bot gave up on it, or answer no positions when the terminal fails to list them, and a trade "+
+			"request whose answer is lost can't be confirmed as not executed", m.baseURL, MT5DeadlineHeader)
+	case !m.timeouts:
+		log.Warnf("[MT5] the bridge at %s doesn't honor %s, update tools/mt5bridge: its clock behind the bot's "+
+			"would send a trade request after its deadline, so a trade request whose answer is lost can't be "+
+			"confirmed as not executed", m.baseURL, MT5TimeoutHeader)
+	}
+	if ahead := mt5ClockSkew(health.Time, asked, answered); ahead > mt5ClockAhead && !m.dataOnly {
+		log.Warnf("[MT5] the clock of the bridge at %s is %s ahead of the bot's: the trade requests have that "+
+			"much less than their %s to reach the terminal (%s), and are all refused unsent past it: sync the "+
+			"clocks", m.baseURL, ahead.Round(time.Millisecond), m.deadline, MT5DeadlineHeader)
 	}
 
 	var account mt5Account
@@ -987,7 +1082,7 @@ func (m *MT5) quote(ctx context.Context, symbol string) (mt5Tick, error) {
 // again after a transport error or an HTTP 5xx, up to mt5Retries times.
 func (m *MT5) get(ctx context.Context, path string, query url.Values, out any) error {
 	for attempt := 0; ; attempt++ {
-		err := m.send(ctx, http.MethodGet, path, query, nil, out)
+		err := m.send(ctx, http.MethodGet, path, query, nil, time.Time{}, out)
 		var bridgeErr *MT5Error
 		retry := err != nil && ctx.Err() == nil &&
 			(!errors.As(err, &bridgeErr) || bridgeErr.Status >= http.StatusInternalServerError)
@@ -1001,13 +1096,68 @@ func (m *MT5) get(ctx context.Context, path string, query url.Values, out any) e
 }
 
 // post sends a POST to the bridge, once: a trade request may have been
-// executed even when its answer is lost.
-func (m *MT5) post(ctx context.Context, path string, body, out any) error {
-	return m.send(ctx, http.MethodPost, path, nil, body, out)
+// executed even when its answer is lost. The bridge never sends it to the
+// terminal after deadline (MT5DeadlineHeader, and MT5TimeoutHeader for a
+// bridge of another clock).
+func (m *MT5) post(ctx context.Context, path string, body any, deadline time.Time, out any) error {
+	return m.send(ctx, http.MethodPost, path, nil, body, deadline, out)
 }
 
-// send sends one request, turning an error status into an *MT5Error.
-func (m *MT5) send(ctx context.Context, method, path string, query url.Values, body, out any) error {
+// tradeDeadline returns the deadline of a trade request sent now: the
+// deadline of the adapter, within two thirds of the timeout of the HTTP client,
+// so that the bridge gives up on it before the adapter does.
+func (m *MT5) tradeDeadline() time.Time {
+	wait := m.deadline
+	if timeout := m.client.Timeout; timeout > 0 && wait > timeout*2/3 {
+		wait = timeout * 2 / 3
+	}
+	return time.Now().Add(wait)
+}
+
+// mt5ClockSkew returns how far the clock of the bridge, at, in Unix seconds,
+// read between asked and answered, is ahead of the one of the agent, at least:
+// negative when behind, 0 when unknown.
+func mt5ClockSkew(at float64, asked, answered time.Time) time.Duration {
+	if at <= 0 {
+		return 0
+	}
+	bridge := time.Unix(0, int64(at*float64(time.Second)))
+	switch {
+	case bridge.After(answered):
+		return bridge.Sub(answered)
+	case bridge.Before(asked):
+		return bridge.Sub(asked)
+	}
+	return 0
+}
+
+// confirmsAbsence reports whether a trade request absent from the account
+// margin after its deadline was not executed: the bridge honors both
+// deadlines, MT5DeadlineHeader and MT5TimeoutHeader, which it takes the
+// earliest of, so that it never sends one after it, whatever its clock.
+func (m *MT5) confirmsAbsence() bool {
+	return m.deadlines && m.timeouts
+}
+
+// mt5Unsent reports whether a trade request that failed surely never reached
+// the terminal: refused by the bridge (HTTP 4xx, or "sent": false, eg: its
+// deadline passed while the terminal was busy), or never delivered (the
+// connection to the bridge refused). Any other failure, a transport error, a
+// timeout or an error of the bridge after order_send, leaves its outcome
+// unknown.
+func mt5Unsent(err error) bool {
+	var bridgeErr *MT5Error
+	if errors.As(err, &bridgeErr) {
+		return bridgeErr.NotSent || (bridgeErr.Status >= 400 && bridgeErr.Status < 500)
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
+// send sends one request, turning an error status into an *MT5Error; a zero
+// deadline sends none.
+func (m *MT5) send(ctx context.Context, method, path string, query url.Values, body any, deadline time.Time,
+	out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -1032,6 +1182,10 @@ func (m *MT5) send(ctx context.Context, method, path string, query url.Values, b
 	if m.token != "" {
 		request.Header.Set(MT5TokenHeader, m.token)
 	}
+	if !deadline.IsZero() {
+		request.Header.Set(MT5DeadlineHeader, strconv.FormatInt(deadline.UnixMilli(), 10))
+		request.Header.Set(MT5TimeoutHeader, strconv.FormatInt(max(time.Until(deadline).Milliseconds(), 0), 10))
+	}
 
 	response, err := m.client.Do(request)
 	if err != nil {
@@ -1048,9 +1202,11 @@ func (m *MT5) send(ctx context.Context, method, path string, query url.Values, b
 		var answer struct {
 			Error   string `json:"error"`
 			Retcode int    `json:"retcode"`
+			Sent    *bool  `json:"sent"`
 		}
 		if json.Unmarshal(data, &answer) == nil {
 			bridgeErr.Message, bridgeErr.Retcode = answer.Error, answer.Retcode
+			bridgeErr.NotSent = answer.Sent != nil && !*answer.Sent
 		}
 		return bridgeErr
 	}

@@ -3,13 +3,13 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/exchange"
 )
 
@@ -19,9 +19,6 @@ var exchanges = []string{"mt5"}
 // mt5TokenEnv is the environment variable of the token of the bridge, read
 // when -mt5-token is not set.
 const mt5TokenEnv = "MT5_BRIDGE_TOKEN"
-
-// mt5MaxComment is the longest comment MT5 keeps.
-const mt5MaxComment = 31
 
 // mt5Venue holds the options of MetaTrader 5 in the paper and live modes.
 type mt5Venue struct {
@@ -71,34 +68,19 @@ func mt5Token(token string) string {
 }
 
 // mt5Magic returns the magic number of the bot: the one of -mt5-magic, or a
-// stable hash of its comment (see mt5Comment: "nb:" and the name of the
-// strategy by default), a positive int32, so that the same bot finds its
-// positions again after a restart, and two bots of a strategy with comments of
-// their own keep theirs apart.
+// stable hash of its comment (see mt5Comment), as the controller computes it
+// (see agentapi.MT5Magic), so that the same bot finds its positions again
+// after a restart, and two bots of a strategy with comments of their own keep
+// theirs apart.
 func mt5Magic(magic int64, comment string) int64 {
-	if magic > 0 {
-		return magic
-	}
-	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(comment))
-	if value := int64(hash.Sum32() & math.MaxInt32); value > 0 {
-		return value
-	}
-	return 1
+	return agentapi.MT5Magic(magic, comment)
 }
 
 // mt5Comment returns the comment of the bot's orders: the one of -mt5-comment,
 // or "nb:" followed by the name of the strategy, cut to the 31 characters MT5
-// keeps.
+// keeps, as the controller computes it (see agentapi.MT5Comment).
 func mt5Comment(comment, strategy string) string {
-	if comment = strings.TrimSpace(comment); comment != "" {
-		return comment
-	}
-	comment = "nb:" + strategy
-	if len(comment) > mt5MaxComment {
-		comment = comment[:mt5MaxComment]
-	}
-	return comment
+	return agentapi.MT5Comment(comment, strategy)
 }
 
 // parseMT5Size reads -mt5-size: how -lot is read on MT5, in lots ("lot",

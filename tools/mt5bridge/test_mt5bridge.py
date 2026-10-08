@@ -1,0 +1,415 @@
+"""Tests of mt5bridge.py over HTTP, with a simulated MetaTrader5 package put in
+sys.modules before the bridge is imported: the real package is never loaded,
+and no MetaTrader5.py lies on the path of the bridge.
+
+    python3 -B -m unittest discover -s tools/mt5bridge -v
+"""
+
+import collections
+import json
+import os
+import sys
+import threading
+import time
+import types
+import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+
+LOGIN = 198974329
+TOKEN = "secret"
+
+Account = collections.namedtuple("Account", "login trade_mode server currency")
+TerminalInfo = collections.namedtuple("TerminalInfo", "connected trade_allowed maxbars")
+Result = collections.namedtuple("Result", "retcode order deal volume price comment")
+Position = collections.namedtuple("Position", "ticket symbol volume magic comment")
+
+
+class Scalar(float):
+    """A numpy scalar: item() is its Python value."""
+
+    def item(self):
+        return float(self)
+
+
+class Rates(list):
+    """A structured numpy array, as copy_rates_* return it."""
+
+    class dtype:
+        names = ("time", "open")
+
+
+class Package:
+    """The state of the simulated MetaTrader5 package, reset by every test."""
+
+    LISTS = ("positions_get", "orders_get", "history_deals_get", "history_orders_get", "copy_rates_from_pos",
+             "copy_rates_range")
+
+    def reset(self):
+        self.login, self.trade_mode = LOGIN, 0
+        self.connected = True  # terminal_info() is not None
+        self.error = (1, "Success")
+        self.lists = {name: () for name in self.LISTS}  # or a function of the arguments
+        self.calls = []  # the calls of the lists, with their arguments
+        self.maxbars = 0  # of terminal_info(), 0 for none
+        self.slow = {}  # seconds a call takes, by name
+        self.initialize_delay = 0.0
+        self.initialized = 0
+        self.sends = []  # the requests of order_send, with when
+        self.send_none = False
+
+    def module(self):
+        mt5 = types.ModuleType("MetaTrader5")
+        for i, name in enumerate("M1 M3 M5 M10 M15 M30 H1 H2 H4 D1 W1 MN1".split()):
+            setattr(mt5, "TIMEFRAME_" + name, i + 1)
+        mt5.ACCOUNT_TRADE_MODE_REAL = 2
+
+        def listed(name):
+            def fn(*args, **kwargs):
+                self.calls.append((name, args))
+                time.sleep(self.slow.get(name, 0))
+                value = self.lists[name]
+                return value(*args) if callable(value) else value
+            return fn
+
+        def initialize(**kwargs):
+            time.sleep(self.initialize_delay)
+            self.initialized += 1
+            self.connected = True
+            return True
+
+        def order_send(request):
+            self.sends.append((time.time(), request))
+            time.sleep(self.slow.get("order_send", 0))
+            if self.send_none:
+                return None
+            return Result(10009, 680000001, 530000001, request.get("volume", 0.0), 4286.5, "Request executed")
+
+        mt5.initialize = initialize
+        mt5.shutdown = lambda: None
+        mt5.last_error = lambda: self.error
+        mt5.version = lambda: (500, 5200, "01 Jan 2026")
+        mt5.terminal_info = lambda: TerminalInfo(True, True, self.maxbars) if self.connected else None
+        mt5.account_info = lambda: Account(self.login, self.trade_mode, "Exness-MT5Trial11", "USD")
+        mt5.symbol_select = lambda symbol, enable: True
+        mt5.order_send = order_send
+        mt5.order_check = lambda request: Result(0, 0, 0, 0.0, 0.0, "Done")
+        for name in self.LISTS:
+            setattr(mt5, name, listed(name))
+        return mt5
+
+
+PACKAGE = Package()
+PACKAGE.reset()
+sys.modules["MetaTrader5"] = PACKAGE.module()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mt5bridge  # noqa: E402  (after the simulated package)
+
+
+class QuietServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        pass  # a client gone before its answer
+
+
+class BridgeTest(unittest.TestCase):
+    allow_real = False
+
+    def setUp(self):
+        PACKAGE.reset()
+        args = types.SimpleNamespace(login=LOGIN, server="Exness-MT5Trial11", path="", portable=False,
+                                     allow_real=self.allow_real, timeout=1, startup=0)
+        terminal = mt5bridge.Terminal(args)
+        terminal.call(lambda: None)
+        mt5bridge.Handler.terminal, mt5bridge.Handler.token, mt5bridge.Handler.read_only = terminal, TOKEN, False
+        self.server = QuietServer(("127.0.0.1", 0), mt5bridge.Handler)
+        self.server.verbose = False
+        threading.Thread(target=self.server.serve_forever, args=(0.05,), daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def request(self, method, path, body=None, deadline=None, timeout=5, left=None):
+        """Sends a request, returning its status and its JSON answer: deadline
+        in Unix seconds, left the seconds left until it from now."""
+        headers = {"X-Bridge-Token": TOKEN}
+        if deadline is not None:
+            headers[mt5bridge.DEADLINE_HEADER] = str(int(deadline * 1000))
+        if left is not None:
+            headers[mt5bridge.TIMEOUT_HEADER] = str(int(left * 1000))
+        data = json.dumps(body).encode() if body is not None else None
+        request = urllib.request.Request("http://127.0.0.1:%d%s" % (self.server.server_address[1], path),
+                                         method=method, data=data, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def order(self, deadline=None, timeout=5, left=None):
+        return self.request("POST", "/order", {"action": 1, "symbol": "XAUUSDm", "volume": 0.01, "type": 0,
+                                               "magic": 424242, "comment": "nb:test#a1b2c3"}, deadline, timeout,
+                            left)
+
+    def hold_terminal(self, seconds):
+        """Holds the terminal seconds with a slow GET /positions, from another
+        thread, returning it."""
+        PACKAGE.slow["positions_get"] = seconds
+        thread = threading.Thread(target=lambda: self.request("GET", "/positions", timeout=seconds + 5))
+        thread.start()
+        time.sleep(0.1)  # the GET holds the terminal
+        return thread
+
+
+class ListsTest(BridgeTest):
+    ROUTES = {
+        "/positions": "positions_get",
+        "/orders": "orders_get",
+        "/deals?from=0&to=10": "history_deals_get",
+        "/history_orders?from=0&to=10": "history_orders_get",
+        "/rates?symbol=XAUUSDm&timeframe=M5&count=2": "copy_rates_from_pos",
+        "/rates?symbol=XAUUSDm&timeframe=M5&from=0&to=10": "copy_rates_range",
+    }
+
+    def test_failure_is_502_not_empty(self):
+        PACKAGE.error = (-10005, "IPC timeout")
+        for path, name in self.ROUTES.items():
+            PACKAGE.lists[name] = None
+            status, answer = self.request("GET", path)
+            self.assertEqual(502, status, path)
+            self.assertEqual(-10005, answer["retcode"], path)
+            self.assertIn("IPC timeout", answer["error"], path)
+
+    def test_empty_is_200(self):
+        for path, name in self.ROUTES.items():
+            PACKAGE.lists[name] = Rates() if name.startswith("copy_rates") else ()
+            self.assertEqual((200, []), self.request("GET", path), path)
+
+    def test_none_without_error_is_empty(self):
+        for path, name in self.ROUTES.items():
+            PACKAGE.lists[name] = None
+            self.assertEqual((200, []), self.request("GET", path), path)
+
+    def test_records(self):
+        PACKAGE.lists["positions_get"] = (Position(680000001, "XAUUSDm", 0.03, 424242, "nb:test#a1b2c3"),)
+        status, answer = self.request("GET", "/positions")
+        self.assertEqual(200, status)
+        self.assertEqual([{"ticket": 680000001, "symbol": "XAUUSDm", "volume": 0.03, "magic": 424242,
+                           "comment": "nb:test#a1b2c3"}], answer)
+        PACKAGE.lists["copy_rates_from_pos"] = Rates([{"time": Scalar(60), "open": Scalar(4286.5)}])
+        self.assertEqual((200, [{"time": 60.0, "open": 4286.5}]),
+                         self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&count=2"))
+
+
+class RatesTest(BridgeTest):
+    """copy_rates_* return None for a range entirely outside the history of the
+    terminal, before its start or beyond its "Max. bars in chart" (-1 of
+    CopyRates), and an empty array for a range without candles in it."""
+
+    LATEST = Rates([{"time": Scalar(600), "open": Scalar(4286.5)}])
+
+    def setUp(self):
+        super().setUp()
+        PACKAGE.error = (-1, "Terminal: Call failed")
+
+    def test_range_outside_the_history_is_empty(self):
+        PACKAGE.lists["copy_rates_range"] = None
+        PACKAGE.lists["copy_rates_from_pos"] = self.LATEST  # the latest candle reads
+        self.assertEqual((200, []), self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&from=0&to=10"))
+
+    def test_positions_beyond_the_history_are_empty(self):
+        PACKAGE.lists["copy_rates_from_pos"] = lambda symbol, timeframe, start, count: (
+            self.LATEST if start == 0 else None)
+        self.assertEqual((200, []),
+                         self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&count=100&start=5000"))
+        self.assertEqual((200, [{"time": 600.0, "open": 4286.5}]),
+                         self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&count=100"))
+
+    def test_range_without_candles_is_empty(self):
+        PACKAGE.error = (1, "Success")
+        PACKAGE.lists["copy_rates_range"] = Rates()  # eg: a weekend
+        self.assertEqual((200, []), self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&from=0&to=10"))
+
+    def test_failure_of_the_terminal_is_502(self):
+        PACKAGE.error = (-10005, "IPC timeout")
+        PACKAGE.lists["copy_rates_range"] = None
+        PACKAGE.lists["copy_rates_from_pos"] = None  # the latest candle doesn't read either
+        for path in ("/rates?symbol=XAUUSDm&timeframe=M5&from=0&to=10",
+                     "/rates?symbol=XAUUSDm&timeframe=M5&count=2&start=50"):
+            status, answer = self.request("GET", path)
+            self.assertEqual(502, status, path)
+            self.assertEqual(-10005, answer["retcode"], path)
+
+    def test_positions_within_the_bars_of_the_chart(self):
+        PACKAGE.maxbars = 1000
+        PACKAGE.lists["copy_rates_from_pos"] = self.LATEST
+        self.assertEqual((200, []),
+                         self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&count=10&start=1000"))
+        self.assertEqual([], PACKAGE.calls, "beyond the bars of the chart: not asked")
+        self.assertEqual(200, self.request("GET", "/rates?symbol=XAUUSDm&timeframe=M5&count=500&start=800")[0])
+        self.assertEqual(("copy_rates_from_pos", ("XAUUSDm", 3, 800, 200)), PACKAGE.calls[-1],
+                         "the count cut to the bars of the chart")
+
+
+class DeadlineTest(BridgeTest):
+    def test_health_advertises_deadlines(self):
+        status, health = self.request("GET", "/health")
+        self.assertEqual(200, status)
+        self.assertIs(True, health["deadline"])
+        self.assertIs(True, health["timeout"])
+
+    def test_waiting_for_the_terminal_past_the_deadline_is_refused_unsent(self):
+        held = self.hold_terminal(1.5)
+        started = time.time()
+        status, answer = self.order(deadline=started + 0.3)
+        self.assertEqual(504, status)
+        self.assertIs(False, answer["sent"])
+        self.assertLess(time.time() - started, 1.0, "refused at its deadline, not once the terminal is free")
+        held.join()
+        time.sleep(0.2)
+        self.assertEqual([], PACKAGE.sends, "never sent, even once the terminal is free")
+
+    def test_reconnecting_past_the_deadline_is_refused_unsent(self):
+        PACKAGE.connected, PACKAGE.initialize_delay = False, 0.5  # the terminal lost
+        initialized = PACKAGE.initialized
+        status, answer = self.order(deadline=time.time() + 0.2)
+        self.assertEqual(504, status)
+        self.assertIs(False, answer["sent"])
+        self.assertEqual([], PACKAGE.sends)
+        self.assertEqual(initialized + 1, PACKAGE.initialized, "connected again for the next requests")
+        self.assertEqual(200, self.request("GET", "/account")[0])
+
+    def test_deadline_passed_already(self):
+        status, answer = self.order(deadline=time.time() - 1)
+        self.assertEqual(504, status)
+        self.assertIs(False, answer["sent"])
+        self.assertEqual([], PACKAGE.sends)
+
+    def test_within_the_deadline(self):
+        held = self.hold_terminal(0.3)
+        status, answer = self.order(deadline=time.time() + 3)
+        held.join()
+        self.assertEqual(200, status)
+        self.assertEqual(10009, answer["retcode"])
+        self.assertEqual(1, len(PACKAGE.sends))
+
+    def test_without_the_header_as_before(self):
+        held = self.hold_terminal(0.3)
+        status, answer = self.order()
+        held.join()
+        self.assertEqual(200, status)
+        self.assertEqual(10009, answer["retcode"])
+        self.assertEqual("nb:test#a1b2c3", PACKAGE.sends[0][1]["comment"])
+        self.assertEqual(200, self.request("GET", "/positions")[0])
+
+    def test_invalid_header(self):
+        request = urllib.request.Request("http://127.0.0.1:%d/positions" % self.server.server_address[1],
+                                         headers={"X-Bridge-Token": TOKEN, mt5bridge.DEADLINE_HEADER: "soon"})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(400, caught.exception.code)
+
+    def test_far_deadline_capped(self):
+        handler = mt5bridge.Handler.__new__(mt5bridge.Handler)
+        handler.headers = {mt5bridge.DEADLINE_HEADER: str(int((time.time() + 3600) * 1000))}
+        self.assertLessEqual(handler.request_deadline(), time.monotonic() + mt5bridge.MAX_DEADLINE)
+        handler.headers = {mt5bridge.TIMEOUT_HEADER: "3600000"}
+        self.assertLessEqual(handler.request_deadline(), time.monotonic() + mt5bridge.MAX_DEADLINE)
+        handler.headers = {}
+        self.assertIsNone(handler.request_deadline())
+
+    def test_the_earliest_of_the_two_deadlines(self):
+        handler = mt5bridge.Handler.__new__(mt5bridge.Handler)
+        handler.headers = {mt5bridge.DEADLINE_HEADER: str(int((time.time() + 10) * 1000)),
+                           mt5bridge.TIMEOUT_HEADER: "2000"}
+        self.assertAlmostEqual(time.monotonic() + 2, handler.request_deadline(), delta=0.5)
+        handler.headers = {mt5bridge.DEADLINE_HEADER: str(int((time.time() + 2) * 1000)),
+                           mt5bridge.TIMEOUT_HEADER: "10000"}
+        self.assertAlmostEqual(time.monotonic() + 2, handler.request_deadline(), delta=0.5)
+
+    def test_timeout_of_a_clock_behind_the_client(self):
+        """The clock of the bridge 10s behind the one of the client, eg: on
+        another host: the deadline of the client is 10s further by the clock of
+        the bridge, the time left until it is not."""
+        held = self.hold_terminal(1.5)
+        started = time.time()
+        status, answer = self.order(deadline=started + 10.3, left=0.3)
+        self.assertEqual(504, status)
+        self.assertIs(False, answer["sent"])
+        self.assertLess(time.time() - started, 1.0, "refused at the time left, not at the deadline of the client")
+        held.join()
+        time.sleep(0.2)
+        self.assertEqual([], PACKAGE.sends, "never sent, even once the terminal is free")
+
+    def test_timeout_alone(self):
+        held = self.hold_terminal(1.5)
+        status, answer = self.order(left=0.3)
+        held.join()
+        self.assertEqual(504, status)
+        self.assertIs(False, answer["sent"])
+        status, answer = self.order(left=3)
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(PACKAGE.sends))
+
+    def test_invalid_timeout_header(self):
+        request = urllib.request.Request("http://127.0.0.1:%d/positions" % self.server.server_address[1],
+                                         headers={"X-Bridge-Token": TOKEN, mt5bridge.TIMEOUT_HEADER: "soon"})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(400, caught.exception.code)
+
+    def test_failure_of_order_send_is_unknown(self):
+        PACKAGE.send_none, PACKAGE.error = True, (-10005, "IPC timeout")
+        status, answer = self.order(deadline=time.time() + 3)
+        self.assertEqual(502, status)
+        self.assertNotIn("sent", answer, "sent to the terminal: the outcome is unknown")
+        self.assertEqual(1, len(PACKAGE.sends))
+
+    def test_refusals_before_order_send_are_unsent(self):
+        mt5bridge.Handler.read_only = True
+        status, answer = self.order()
+        self.assertEqual(403, status)
+        self.assertIs(False, answer["sent"])
+        mt5bridge.Handler.read_only = False
+        status, answer = self.request("POST", "/order", {"symbol": "XAUUSDm"})
+        self.assertEqual(400, status)
+        self.assertIs(False, answer["sent"])
+        self.assertEqual([], PACKAGE.sends)
+
+
+class AccountTest(BridgeTest):
+    def test_another_login_refuses_the_orders_only(self):
+        PACKAGE.login = 999  # switched by hand in the terminal
+        status, answer = self.order(deadline=time.time() + 3)
+        self.assertEqual(409, status)
+        self.assertIs(False, answer["sent"])
+        self.assertIn("logged in 999, not %d" % LOGIN, answer["error"])
+        self.assertEqual([], PACKAGE.sends)
+        self.assertEqual(200, self.request("GET", "/positions")[0], "the reads go on")
+        self.assertEqual(999, self.request("GET", "/health")[1]["login"])
+
+        PACKAGE.login = LOGIN  # back
+        self.assertEqual(200, self.order()[0])
+        self.assertEqual(1, len(PACKAGE.sends))
+
+    def test_real_account_without_allow_real(self):
+        PACKAGE.trade_mode = 2
+        status, answer = self.order()
+        self.assertEqual(409, status)
+        self.assertIs(False, answer["sent"])
+        self.assertIn("--allow-real", answer["error"])
+        self.assertEqual([], PACKAGE.sends)
+
+
+class RealAccountTest(BridgeTest):
+    allow_real = True
+
+    def test_real_account_with_allow_real(self):
+        PACKAGE.trade_mode = 2
+        self.assertEqual(200, self.order()[0])
+        self.assertEqual(1, len(PACKAGE.sends))
+
+
+if __name__ == "__main__":
+    unittest.main()

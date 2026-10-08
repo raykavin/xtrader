@@ -425,6 +425,14 @@ func (imp *importer) createAgent(ctx context.Context, position int, a legacyAgen
 	}
 
 	created, err := imp.store.CreateAgent(ctx, agent, secrets)
+	if refusal := err; errors.Is(refusal, store.ErrConflict) && agent.Enabled {
+		// two agents of the previous version trading the same positions: the
+		// second one disabled, until it gets a comment or a magic number of its own
+		agent.Enabled = false
+		if created, err = imp.store.CreateAgent(ctx, agent, secrets); err == nil {
+			imp.report.note("agent %s imported disabled: %v", agent.Name, refusal)
+		}
+	}
 	if err != nil {
 		return store.Agent{}, err
 	}

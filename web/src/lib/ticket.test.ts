@@ -5,6 +5,7 @@ import {
   defaultProfit,
   defaultStop,
   levelsError,
+  orderFeedback,
   pendingLines,
   priceStep,
   roundPrice,
@@ -86,5 +87,22 @@ describe("ticket", () => {
     expect(applyPendingOrder(snapshot, order({ id: 2, status: "PENDING_CANCEL" }))).toBe(snapshot);
     expect(applyPendingOrder(snapshot, order({ id: 3 }))).toBe(snapshot);
     expect(applyPendingOrder(snapshot, order({ id: 1, pair: "BTCUSD" }))).toBe(snapshot);
+  });
+});
+
+describe("orderFeedback", () => {
+  it("tells the order created", () => {
+    const feedback = orderFeedback(order({ id: 7, quantity: 0.5 }), "buy", "XAU");
+    expect(feedback.tone).toBe("ok");
+    expect(feedback.text).toBe("Ordem de compra #7 criada — 0,5 XAU");
+  });
+
+  it("warns of a position left without its stop loss or take profit", () => {
+    const warning = "the order was created, but 0 of its 2 stop loss and take profit orders only";
+    const feedback = orderFeedback({ ...order({ id: 8, quantity: 1 }), warning }, "sell", "XAU");
+    expect(feedback.tone).toBe("warn");
+    expect(feedback.text).toContain("Ordem de venda #8 criada");
+    expect(feedback.text).toContain("pode estar desprotegida");
+    expect(feedback.text).toContain(warning);
   });
 });

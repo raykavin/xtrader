@@ -43,7 +43,7 @@ const (
 // The codes of why an analysis didn't ask the model, see OutcomeSkipped.
 const (
 	SkipPosition     = "position"      // the position unread from the broker
-	SkipCloseRetry   = "close_retry"   // a close that failed, retried first
+	SkipCloseRetry   = "close_retry"   // a close that failed, being retried
 	SkipProtection   = "protection"    // the broker can't place the legs with the order
 	SkipDailyLimit   = "daily_limit"   // the entries refused by a daily limit
 	SkipNews         = "news"          // the entries refused around a release

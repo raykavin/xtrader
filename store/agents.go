@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/config"
 )
 
@@ -133,6 +134,12 @@ type LLMUpdate struct {
 func (u AgentUpdate) switchesOnly() bool {
 	return u.Mode == nil && u.APIAddress == nil && u.Launched == nil && u.Restart == nil && u.Params == nil &&
 		u.Account == nil && u.LLM == nil
+}
+
+// touchesBook reports whether the update may make the agent trade on MT5 (see
+// Agent.trades) or change what it trades there (see Agent.MT5Book).
+func (u AgentUpdate) touchesBook() bool {
+	return u.Enabled != nil || u.Mode != nil || u.Params != nil || u.Account != nil
 }
 
 // agentChange is an update applied to an agent: the agent changed, and the
@@ -258,6 +265,25 @@ func (a Agent) AllParams() Params {
 		maps.Copy(params, a.LLM.Params)
 	}
 	return params
+}
+
+// trades reports whether the agent a trades its account on MT5: enabled in
+// live mode, the paper mode reading the market data only (see
+// exchange.WithMT5DataOnly), whether the controller launches it or it runs
+// apart (Launched false), which trades all the same.
+func (a Agent) trades() bool {
+	return a.Enabled && a.Mode == "live"
+}
+
+// MT5Book returns what the agent a trades on MT5, as it computes it from its
+// settings: its bridge, its magic number and its pairs, see
+// agentapi.NewMT5Book.
+func (a Agent) MT5Book() agentapi.MT5Book {
+	var account *agentapi.Account
+	if acc := a.Account; acc != nil {
+		account = &agentapi.Account{BridgeURL: acc.BridgeURL, Magic: acc.Magic, Comment: acc.Comment}
+	}
+	return agentapi.NewMT5Book(a.Kind, a.AllParams(), account)
 }
 
 // setParams sets the params of the agent a, merged: the ones of its language
@@ -528,7 +554,8 @@ func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 
 // CreateAgent creates an agent with its account and language model, if any,
 // their secrets encrypted: checked (see checkAgent), its API at an address no
-// other agent has (ErrConflict otherwise), its params given merged or apart
+// other agent has and, trading, positions no other agent trading trades
+// (ErrConflict otherwise, see checkBookFree), its params given merged or apart
 // (see Agent.AllParams), its prompt one of the database. An agent without a
 // position, 0, goes after the others on the dashboard.
 func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecrets) (Agent, error) {
@@ -544,10 +571,14 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 	if err := checkSecrets(agent, secrets); err != nil {
 		return Agent{}, err
 	}
+	whole := agent
 	account, llm := agent.Account, agent.LLM
 	agent.Account, agent.LLM = nil, nil
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		if err := s.checkAddressFree(ctx, 0, agent.APIAddress); err != nil {
+			return err
+		}
+		if err := s.checkBookFree(ctx, 0, whole); err != nil {
 			return err
 		}
 		if llm != nil && llm.PromptID != nil {
@@ -604,7 +635,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 // addresses of the agents are then checked one at a time until its end, so
 // that two agents can't take the same one.
 func (s *Store) checkAddressFree(ctx context.Context, id int64, address string) error {
-	if err := s.conn(ctx).Exec("SELECT pg_advisory_xact_lock(hashtext('xtrader.agents'))").Error; err != nil {
+	if err := s.lockAgents(ctx); err != nil {
 		return err
 	}
 	var others []Agent
@@ -615,6 +646,47 @@ func (s *Store) checkAddressFree(ctx context.Context, id int64, address string) 
 	for _, other := range others {
 		if sameListener(address, other.APIAddress) {
 			return fmt.Errorf("%w: the address %s is the one of the agent %s", ErrConflict, address, other.Name)
+		}
+	}
+	return nil
+}
+
+// lockAgents locks the agents until the end of the transaction, for the checks
+// of what they share with the others to apply one at a time, see
+// checkAddressFree and checkBookFree.
+func (s *Store) lockAgents(ctx context.Context) error {
+	return s.conn(ctx).Exec("SELECT pg_advisory_xact_lock(hashtext('xtrader.agents'))").Error
+}
+
+// checkBookFree fails with ErrConflict when the agent a, of id, trades on MT5
+// (see Agent.trades) the positions of another agent trading, not deleted: the
+// same bridge, the same magic number and a pair in common (see
+// agentapi.MT5Book.Overlaps), as two processes of the same magic number on a
+// pair close, move and net the positions of each other. The agents running
+// apart count as the others, by their settings: the controller doesn't see
+// them run (see controller.Manager, which never runs two agents trading them
+// at once). The agents that don't trade, disabled or paper ones, may share
+// them. In a transaction, see lockAgents.
+func (s *Store) checkBookFree(ctx context.Context, id int64, a Agent) error {
+	if !a.trades() {
+		return nil
+	}
+	if err := s.lockAgents(ctx); err != nil {
+		return err
+	}
+	var others []Agent
+	err := s.conn(ctx).Preload("Account").Preload("LLM").
+		Where("id <> ? AND enabled AND mode = ?", id, "live").Order("position, name").Find(&others).Error
+	if err != nil {
+		return err
+	}
+	book := a.MT5Book()
+	for _, other := range others {
+		if theirs := other.MT5Book(); book.Overlaps(theirs) {
+			return fmt.Errorf("%w: agent %s: the agent %s, enabled in live mode, trades %s with the magic number %d "+
+				"(comment %q) on the bridge %s: give one of them a comment or a magic number of its own, or "+
+				"disable it", ErrConflict, a.Name, other.Name, strings.Join(book.Common(theirs), ";"), book.Magic,
+				book.Comment, book.Bridge)
 		}
 	}
 	return nil
@@ -659,7 +731,9 @@ func (s *Store) sealInto(column *[]byte, secret Secret) error {
 // UpdateAgent changes the agent of id, see AgentUpdate: a change of more than
 // its switches (Enabled, TradePanel, TelegramControl) is checked with the
 // whole agent, as CreateAgent checks a new one, and a new address with the
-// ones of the others; the switches alone always apply, eg: to disable it.
+// ones of the others; the switches alone always apply, eg: to disable it, but
+// for enabling an agent trading the positions of another one, as a change of
+// what it trades (ErrConflict, see checkBookFree).
 func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (Agent, error) {
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
@@ -675,6 +749,11 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (
 		}
 		if update.APIAddress != nil && !strings.EqualFold(change.agent.APIAddress, agent.APIAddress) {
 			if err := s.checkAddressFree(ctx, id, change.agent.APIAddress); err != nil {
+				return err
+			}
+		}
+		if update.touchesBook() {
+			if err := s.checkBookFree(ctx, id, change.agent); err != nil {
 				return err
 			}
 		}

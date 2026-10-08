@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"os"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/tools/log"
@@ -236,15 +236,14 @@ func mt5Token(token string) string {
 
 // mt5Magic returns the magic number of the bot: the one of -mt5-magic, or a
 // stable hash of the comment, a positive int32, so that the bot finds its
-// positions again after a restart.
+// positions again after a restart, as the controller computes it (see
+// agentapi.MT5Magic).
 func mt5Magic(magic int64, comment string) int64 {
-	if magic > 0 {
-		return magic
-	}
-	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(comment))
-	if value := int64(hash.Sum32() & math.MaxInt32); value > 0 {
-		return value
-	}
-	return 1
+	return agentapi.MT5Magic(magic, comment)
+}
+
+// mt5Comment returns the comment of the bot's orders: the one of -mt5-comment,
+// trimmed, or nb:llm, as the controller computes it (see agentapi.MT5Comment).
+func mt5Comment(comment string) string {
+	return agentapi.MT5Comment(comment, "llm")
 }

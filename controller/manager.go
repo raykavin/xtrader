@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,11 +37,20 @@ type Bot interface {
 	SyncRelays(names []string)
 }
 
-// AgentState is the state of an agent of the controller: its process, and
-// whether a change of its settings waits for a restart to apply.
+// samePositions is the error of an agent that would trade on MT5 the
+// positions of another agent running, see Manager.conflict.
+type samePositions string
+
+func (e samePositions) Error() string { return string(e) }
+
+// AgentState is the state of an agent of the controller: its process, whether
+// a change of its settings waits for a restart to apply, and why the
+// controller didn't launch it, eg: another agent running trades the same
+// positions.
 type AgentState struct {
 	ProcessState
 	RestartPending bool
+	LaunchError    string
 }
 
 // Manager applies the database to the controller: the agents enabled launched
@@ -47,7 +58,10 @@ type AgentState struct {
 // each one (see agentapi.Runtime), and the Telegram bot. It runs after every
 // change made through the controller (see Trigger), and every reconcileEvery.
 // A change of the settings an agent was launched with waits for its restart
-// (see Restart): it may be trading.
+// (see Restart): it may be trading. An agent that would trade on MT5 the
+// positions of another one running isn't launched (see conflict), whatever
+// the database says, eg: two agents of the same magic number saved before the
+// store refused them.
 type Manager struct {
 	store      *store.Store
 	agents     config.Agents
@@ -59,17 +73,23 @@ type Manager struct {
 
 	trigger chan struct{}
 
-	mu       sync.Mutex
-	launched map[string]launch // what each agent runs with
-	byName   map[string]store.Agent
+	starting sync.Mutex // the launches one at a time, each checked with the others (see conflict)
+
+	mu        sync.Mutex
+	launched  map[string]launch // what each agent runs with
+	byName    map[string]store.Agent
+	launchErr map[string]string // why an agent wasn't launched, see AgentState.LaunchError
 }
 
 // launch is what an agent was launched with: the hash of its settings (see
-// launchHash), and the address of its API, where the process listens until it
-// is restarted, whatever the database says meanwhile.
+// launchHash), the address of its API, where the process listens until it is
+// restarted, whatever the database says meanwhile, and what it trades on MT5
+// in live mode, of the settings it read last (see admit).
 type launch struct {
 	hash    [32]byte
 	address string
+	live    bool
+	book    agentapi.MT5Book
 }
 
 // NewManager creates the manager of the agents of s, run by sup with the
@@ -77,7 +97,7 @@ type launch struct {
 func NewManager(s *store.Store, agents config.Agents, sup *Supervisor, dashboard *Dashboard, bot Bot) *Manager {
 	return &Manager{store: s, agents: agents, supervisor: sup, tokens: newTokens(), runtimes: newRuntimes(),
 		dashboard: dashboard, bot: bot, trigger: make(chan struct{}, 1), launched: make(map[string]launch),
-		byName: make(map[string]store.Agent)}
+		byName: make(map[string]store.Agent), launchErr: make(map[string]string)}
 }
 
 // Trigger makes the manager apply the database now.
@@ -148,17 +168,28 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		running := m.supervisor.Running(a.Name)
 		switch {
 		case wanted && !running:
-			if err := m.start(a); err != nil {
+			if err := m.start(a); m.noteLaunch(a.Name, err) {
 				log.Errorf("controller: agent %s: %v", a.Name, err)
 			}
 		case !wanted && running:
-			go m.stop(a.Name)
+			go func() {
+				m.stop(a.Name)
+				m.Trigger() // an agent it kept from launching may launch now
+			}()
+		}
+		if !wanted {
+			m.noteLaunch(a.Name, nil)
 		}
 	}
 	m.mu.Lock()
 	for name := range m.launched {
 		if _, ok := byName[name]; !ok && m.supervisor.Running(name) {
 			go m.stop(name) // gone from the database
+		}
+	}
+	for name := range m.launchErr {
+		if _, ok := byName[name]; !ok {
+			delete(m.launchErr, name)
 		}
 	}
 	m.mu.Unlock()
@@ -195,8 +226,19 @@ func (m *Manager) telegramConfig(ctx context.Context) (TelegramConfig, error) {
 }
 
 // start launches the agent a with the command of its kind, each start with a
-// token of its own.
+// token of its own, unless it would trade the positions of another agent
+// running (see conflict).
 func (m *Manager) start(a store.Agent) error {
+	m.starting.Lock()
+	defer m.starting.Unlock()
+	live, book := a.Mode == "live", a.MT5Book()
+	m.mu.Lock()
+	err := m.conflict(a.Name, live, book)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
 	env := make(map[string]string, len(m.agents.Env)+2)
 	for name, value := range m.agents.Env.Map() {
 		env[name] = value
@@ -217,9 +259,66 @@ func (m *Manager) start(a store.Agent) error {
 		return err
 	}
 	m.mu.Lock()
-	m.launched[a.Name] = launch{hash: launchHash(a), address: a.APIAddress}
+	m.launched[a.Name] = launch{hash: launchHash(a), address: a.APIAddress, live: live, book: book}
 	m.mu.Unlock()
 	return nil
+}
+
+// conflict fails when the agent of name, in live mode, would trade on MT5 the
+// positions of book that another agent running in live mode trades (see
+// agentapi.MT5Book.Overlaps): two processes of the same magic number on a
+// pair close, move and net the positions of each other. The caller holds mu.
+func (m *Manager) conflict(name string, live bool, book agentapi.MT5Book) error {
+	if !live {
+		return nil
+	}
+	for _, other := range slices.Sorted(maps.Keys(m.launched)) {
+		l := m.launched[other]
+		if other == name || !l.live || !l.book.Overlaps(book) || !m.supervisor.Running(other) {
+			continue
+		}
+		return samePositions(fmt.Sprintf("the agent %s, running in live mode, trades %s with the magic number %d "+
+			"(comment %q) on the bridge %s: give one of them a comment or a magic number of its own", other,
+			strings.Join(book.Common(l.book), ";"), book.Magic, book.Comment, book.Bridge))
+	}
+	return nil
+}
+
+// admit takes the book of the agent a, of the settings it read (see
+// handleConfig), as the one it trades until it starts again, unless another
+// agent running trades its positions (see conflict): the supervisor starts an
+// agent again with the settings of then.
+func (m *Manager) admit(a store.Agent, book agentapi.MT5Book) error {
+	m.starting.Lock()
+	defer m.starting.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	live := a.Mode == "live"
+	if err := m.conflict(a.Name, live, book); err != nil {
+		m.launchErr[a.Name] = err.Error()
+		return err
+	}
+	if l, ok := m.launched[a.Name]; ok {
+		l.live, l.book = live, book
+		m.launched[a.Name] = l
+	}
+	delete(m.launchErr, a.Name)
+	return nil
+}
+
+// noteLaunch keeps err, the error of a launch of the agent of name, nil for
+// none, as its state, see AgentState.LaunchError. It reports whether it is a
+// new one, to log.
+func (m *Manager) noteLaunch(name string, err error) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.launchErr, name)
+		return false
+	}
+	known := m.launchErr[name] == err.Error()
+	m.launchErr[name] = err.Error()
+	return !known
 }
 
 // stop stops the agent of name.
@@ -240,9 +339,14 @@ func (m *Manager) Restart(ctx context.Context, name string) error {
 	m.stop(name)
 	defer m.Trigger() // the dashboard follows the address it listens at now
 	if !a.Enabled || !a.Launched {
+		m.noteLaunch(name, nil)
 		return nil
 	}
-	return m.start(a)
+	err = m.start(a)
+	if m.noteLaunch(name, err) {
+		log.Errorf("controller: agent %s: %v", name, err)
+	}
+	return err
 }
 
 // State returns the state of the agent of name.
@@ -250,6 +354,7 @@ func (m *Manager) State(name string) AgentState {
 	state := AgentState{ProcessState: m.supervisor.State(name)}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	state.LaunchError = m.launchErr[name]
 	if l, ok := m.launched[name]; ok && state.Running {
 		if a, found := m.byName[name]; found {
 			state.RestartPending = l.hash != launchHash(a)

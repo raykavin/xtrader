@@ -1550,6 +1550,10 @@ tbody tr:last-child td {
   color: var(--neg);
 }
 
+.control-feedback.warn {
+  color: var(--warn);
+}
+
 /* messages of the chart and the orders table */
 .chart-error {
   margin-left: var(--space-3);

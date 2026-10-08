@@ -141,7 +141,7 @@ func (t *Trader) pause(until time.Time) {
 
 // SetNotifier sets where the Trader sends its messages, eg: ui.Chart.Notify,
 // which the dashboard and the Telegram of the controller show: the results of
-// the reanalyses.
+// the reanalyses, and the exits that fail, see Trader.close.
 func (t *Trader) SetNotifier(notify func(message string)) {
 	t.decisionsMtx.Lock()
 	defer t.decisionsMtx.Unlock()

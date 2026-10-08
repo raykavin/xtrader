@@ -2,6 +2,8 @@ package exchange
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -9,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,12 +30,14 @@ import (
 // positions seen open and gone since, and the history of the traded symbols:
 // the deals (entries and exits of the positions) and the orders out of the
 // book with their final state. It is fed by:
-//   - the poll, every poll interval (and at once after a trade request whose
-//     answer was lost): GET /orders, then GET /positions (in that order, so a
-//     pending order filled between the two shows its position), then the
-//     history (GET /deals and /history_orders) since the last read, when a
-//     position or a pending order of the bot left the book, until their outcome
-//     shows (mt5ResolveWait at most);
+//   - the poll, every poll interval (and at once after a trade request that
+//     failed): GET /orders, then GET /positions (in that order, so a pending
+//     order filled between the two shows its position), between two GET
+//     /account (a snapshot of another account is not applied, see
+//     checkAccount), then the history (GET /deals and /history_orders) since
+//     the last read, when a position or a pending order of the bot left the
+//     book, until their outcome shows (mt5ResolveWait at most); a read failing
+//     applies nothing;
 //   - the answers of the trade requests, applied before the methods return, so
 //     that Position and Order see them at once: the position opened with its
 //     entry deal, the volume closed with its exit deal, the pending order
@@ -253,6 +258,7 @@ type mt5Book struct {
 	snapshotAt time.Time             // start of the last snapshot applied
 	account    mt5Account
 	accountAt  time.Time // of the account read, zero to read it again
+	switched   error     // the account last read is not the bot's, see checkAccount
 
 	pollMtx  sync.Mutex // one poll at a time
 	pruned   time.Time  // of the last prune, under pollMtx
@@ -266,13 +272,22 @@ type mt5Book struct {
 	known       map[int64]mt5Known // by ExchangeID
 	generations map[int64]int      // protection in use of each ticket, see mt5LegID
 
-	pairsMtx sync.Mutex
-	pairs    map[string]*sync.Mutex // serialize the trading of each pair, see lockPair
+	pairsMtx  sync.Mutex
+	pairs     map[string]*sync.Mutex  // serialize the trading of each pair, see lockPair
+	unsettled map[string]mt5Unsettled // the trade request of an unknown outcome of each pair, see unsettle
 
 	settle chan string // pairs to net, see settler
 
 	settleMtx    sync.Mutex
 	settleFailed map[string]time.Time // last failure of the netting of each pair, see settleBackoff
+	settleErrs   map[string]string    // last error of the netting of each pair, logged once
+}
+
+// mt5Unsettled is a trade request whose answer was lost, its outcome unknown,
+// the account unreadable since, see unsettle.
+type mt5Unsettled struct {
+	request map[string]any
+	sent    time.Time
 }
 
 func newMT5Book() *mt5Book {
@@ -294,8 +309,10 @@ func newMT5Book() *mt5Book {
 		known:        make(map[int64]mt5Known),
 		generations:  make(map[int64]int),
 		pairs:        make(map[string]*sync.Mutex),
+		unsettled:    make(map[string]mt5Unsettled),
 		settle:       make(chan string, 64),
 		settleFailed: make(map[string]time.Time),
+		settleErrs:   make(map[string]string),
 	}
 }
 
@@ -354,15 +371,23 @@ func (m *MT5) requestPoll() {
 	}
 }
 
-// poll reads a snapshot of the account (GET /orders, then /positions) and
-// applies it (applySnapshot), reads the history when something of the bot left
-// the book or is still unresolved (readHistory), then queues the netting of the
-// pairs where the bot holds both sides. One at a time.
+// poll reads a snapshot of the account (GET /account, /orders, then
+// /positions, then /account again) and applies it (applySnapshot), reads the
+// history when something of the bot left the book or is still unresolved
+// (readHistory), then queues the netting of the pairs where the bot holds
+// both sides. One at a time. A read failing applies nothing: an error is never
+// taken for no positions. Nor is the snapshot of another account
+// (checkAccount), which would close the bot's positions in the book: the
+// account read before and after the lists, the terminal back on the bot's
+// account between them never passes them for its own.
 func (m *MT5) poll(ctx context.Context) error {
 	b := m.book
 	b.pollMtx.Lock()
 	defer b.pollMtx.Unlock()
 
+	if err := m.pollAccount(ctx); err != nil {
+		return err
+	}
 	started := time.Now()
 	var orders []mt5Order
 	if err := m.get(ctx, "/orders", nil, &orders); err != nil {
@@ -371,6 +396,9 @@ func (m *MT5) poll(ctx context.Context) error {
 	var positions []mt5Position
 	if err := m.get(ctx, "/positions", nil, &positions); err != nil {
 		return fmt.Errorf("reading the positions: %w", err)
+	}
+	if err := m.pollAccount(ctx); err != nil {
+		return err
 	}
 	m.applySnapshot(started, positions, orders)
 
@@ -733,18 +761,37 @@ func (m *MT5) prune(horizon time.Time) {
 }
 
 // lockPair serializes the trading of a pair, the netting of the market orders
-// and settlePair, returning the unlock.
+// and settlePair, returning the unlock. Only the trading of the pair waits for
+// it: the reads, the poll and the netting of the other pairs never do (see
+// settler), as a trade request may hold it long, eg: its answer lost, looked
+// for in the account (reconcile).
 func (m *MT5) lockPair(pair string) func() {
+	mtx := m.pairMutex(pair)
+	mtx.Lock()
+	return mtx.Unlock
+}
+
+// tryLockPair is lockPair unless the pair is locked already: then it reports
+// false.
+func (m *MT5) tryLockPair(pair string) (func(), bool) {
+	mtx := m.pairMutex(pair)
+	if !mtx.TryLock() {
+		return nil, false
+	}
+	return mtx.Unlock, true
+}
+
+// pairMutex returns the mutex of lockPair of pair.
+func (m *MT5) pairMutex(pair string) *sync.Mutex {
 	b := m.book
 	b.pairsMtx.Lock()
+	defer b.pairsMtx.Unlock()
 	mtx, ok := b.pairs[pair]
 	if !ok {
 		mtx = new(sync.Mutex)
 		b.pairs[pair] = mtx
 	}
-	b.pairsMtx.Unlock()
-	mtx.Lock()
-	return mtx.Unlock
+	return mtx
 }
 
 // botPositions returns the bot's open positions of pair, first in first out:
@@ -816,34 +863,51 @@ func (m *MT5) settleBackoff(pair string) bool {
 	return ok && time.Since(failed) < mt5SettleRetry
 }
 
-// settler nets the pairs queued until ctx is done, see settlePair. An error
+// settler nets the pairs queued until ctx is done, see settleLocked, each one
+// apart, so that a close-by holding a pair long, eg: its answer lost, never
+// holds the netting of the others. A pair trading meanwhile is skipped: its
+// trading calls net it first, and the next poll queues it again. An error
 // repeated by the next attempts is logged once, and the pair waits
 // mt5SettleRetry before the next one (settleBackoff).
 func (m *MT5) settler(ctx context.Context) {
-	failures := make(map[string]string)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case pair := <-m.book.settle:
-			err := m.settlePair(ctx, pair)
-			m.book.settleMtx.Lock()
-			if err != nil {
-				m.book.settleFailed[pair] = time.Now()
-			} else {
-				delete(m.book.settleFailed, pair)
+			if _, traded := m.instruments[pair]; !traded {
+				continue
 			}
-			m.book.settleMtx.Unlock()
-			switch {
-			case ctx.Err() != nil:
-				return
-			case err != nil && err.Error() != failures[pair]:
-				failures[pair] = err.Error()
-				log.Errorf("[MT5] %v", err)
-			case err == nil:
-				delete(failures, pair)
+			unlock, ok := m.tryLockPair(pair)
+			if !ok {
+				continue
 			}
+			go func() {
+				defer unlock()
+				m.settled(ctx, pair, m.settleLocked(ctx, pair))
+			}()
 		}
+	}
+}
+
+// settled records the outcome of the netting of pair by the settler, see
+// settleBackoff, logging an error once.
+func (m *MT5) settled(ctx context.Context, pair string, err error) {
+	b := m.book
+	b.settleMtx.Lock()
+	defer b.settleMtx.Unlock()
+	switch {
+	case err == nil:
+		delete(b.settleFailed, pair)
+		delete(b.settleErrs, pair)
+		return
+	case ctx.Err() != nil:
+		return
+	}
+	b.settleFailed[pair] = time.Now()
+	if err.Error() != b.settleErrs[pair] {
+		b.settleErrs[pair] = err.Error()
+		log.Errorf("[MT5] %v", err)
 	}
 }
 
@@ -1002,13 +1066,34 @@ func (m *MT5) applyClose(position mt5Position, steps int64, now time.Time) {
 
 // trade sends a trade request (POST /order) and checks its retcode: done,
 // placed or done partially, and no changes for the modifications. Any other is
-// an *MT5Error. A request whose answer is lost may have been executed: the
-// book is polled at once.
+// an *MT5Error. The request carries a deadline (tradeDeadline), and the ones
+// creating records (a deal, a pending order, a close-by) a comment of their own
+// (tagComment). One refused by the bridge before order_send (mt5Unsent) fails
+// as it is; one whose answer is lost is looked for in the account first
+// (reconcile), its result returned when found. None is sent while the
+// terminal is logged in another account (ErrMT5AccountChanged), nor one
+// opening or closing a position of a pair unsettled (ErrMT5Unsettled). The
+// book is polled at once after a failure.
 func (m *MT5) trade(ctx context.Context, request map[string]any) (mt5Result, error) {
-	var result mt5Result
-	if err := m.post(ctx, "/order", request, &result); err != nil {
-		m.requestPoll()
+	if err := m.accountSwitched(); err != nil {
 		return mt5Result{}, err
+	}
+	if err := m.checkUnsettled(request); err != nil {
+		return mt5Result{}, err
+	}
+	if _, ok := request["comment"]; ok {
+		request["comment"] = m.tagComment()
+	}
+	sent, deadline := time.Now(), m.tradeDeadline()
+	var result mt5Result
+	if err := m.post(ctx, "/order", request, deadline, &result); err != nil {
+		m.requestPoll()
+		if mt5Unsent(err) {
+			return mt5Result{}, err
+		}
+		if result, err = m.reconcile(ctx, request, err, sent, deadline); err != nil {
+			return mt5Result{}, err
+		}
 	}
 	switch result.Retcode {
 	case mt5CodeDone, mt5CodePlaced, mt5CodeDonePartial:
@@ -1020,6 +1105,360 @@ func (m *MT5) trade(ctx context.Context, request map[string]any) (mt5Result, err
 	}
 	return mt5Result{}, &MT5Error{Method: "POST", Path: "/order", Status: 200, Retcode: result.Retcode,
 		Message: result.Comment}
+}
+
+// mt5TagLength is the length of the tag of a trade request, and mt5TagSpace
+// the number of tags (base 36).
+const (
+	mt5TagLength = 6
+	mt5TagSpace  = 2176782336 // 36^6
+)
+
+// tagComment returns the comment of a trade request: the bot's, cut to make
+// room when needed, then "#" and a random tag, eg: "nb:llm#k3f9a2", so that the
+// records of the request are found in the account when its answer is lost
+// (reconcile). Ownership stays with the magic number.
+func (m *MT5) tagComment() string {
+	var random [8]byte
+	_, _ = rand.Read(random[:]) // never fails, see crypto/rand
+	tag := strconv.FormatUint(binary.LittleEndian.Uint64(random[:])%mt5TagSpace, 36)
+	tag = strings.Repeat("0", mt5TagLength-len(tag)) + tag
+	base := m.comment
+	if room := mt5MaxComment - mt5TagLength - 1; len(base) > room {
+		base = base[:room]
+	}
+	return base + "#" + tag
+}
+
+// mt5Tagged reports whether a comment ends with the tag of a trade request,
+// see tagComment.
+func mt5Tagged(comment string) bool {
+	if len(comment) < mt5TagLength+2 || comment[len(comment)-mt5TagLength-1] != '#' {
+		return false
+	}
+	for _, r := range comment[len(comment)-mt5TagLength:] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// The outcomes of a trade request looked for in the account, see lookupTrade.
+const (
+	mt5TradeAbsent    = iota // not found
+	mt5TradeFound            // executed, its result rebuilt
+	mt5TradeAmbiguous        // not found by its comment, but a record of the bot could be its own
+)
+
+// reconcile settles a trade request whose answer was lost (failed, a
+// transport error, a timeout, or an error of the bridge after order_send): it
+// is looked for in the account (lookupTrade) at once and, when not found or
+// the reads failing, once more margin after its deadline, the reads of then
+// bounded by mt5ReconcileReads. The bridge never sends a request to the
+// terminal after its deadline and serves one request at a time, so a request
+// absent then was not executed: failed is returned, said so. One found returns
+// its result, as if its answer had come. Otherwise, the reads failing, a
+// record ambiguous or a bridge without both deadlines (confirmsAbsence), the
+// error is ErrMT5OutcomeUnknown: it may have been executed. A request opening
+// or closing a position whose reads failed leaves its pair unsettled (see
+// unsettle). The wait holds only the lock of the pair its caller holds, if
+// any: the trading of the other pairs, the poll and the reads go on.
+func (m *MT5) reconcile(ctx context.Context, request map[string]any, failed error, sent,
+	deadline time.Time) (mt5Result, error) {
+	unknown := func(reason string) (mt5Result, error) {
+		log.Errorf("[MT5] the answer of the trade request %v was lost (%v): %s, it may have been executed", request,
+			failed, reason)
+		return mt5Result{}, fmt.Errorf("%w, %s: %w", ErrMT5OutcomeUnknown, reason, failed)
+	}
+	final := deadline.Add(m.margin) // the bridge can no longer send it
+	for {
+		last := !time.Now().Before(final)
+		reads, cancel := context.WithDeadline(ctx, final)
+		if last {
+			reads, cancel = context.WithTimeout(ctx, mt5ReconcileReads)
+		}
+		result, outcome, err := m.lookupTrade(reads, request, sent)
+		cancel()
+		switch {
+		case err != nil && last && ctx.Err() == nil:
+			m.unsettle(request, sent)
+			return unknown(fmt.Sprintf("looking for it in the account: %v", err))
+		case err != nil && last:
+			return unknown(fmt.Sprintf("looking for it in the account: %v", err))
+		case err != nil: // again past the deadline, eg: the bridge restarting
+		case outcome == mt5TradeFound:
+			log.Warnf("[MT5] the answer of the trade request %v was lost (%v): found executed, order %d", request,
+				failed, result.Order)
+			return result, nil
+		case outcome == mt5TradeAmbiguous:
+			return unknown("a record of the bot since it was sent has no comment of a request")
+		case last && !m.confirmsAbsence():
+			return unknown("not found, but the bridge doesn't honor both deadlines")
+		case last:
+			log.Warnf("[MT5] the answer of the trade request %v was lost (%v): not executed, absent from the "+
+				"account after its deadline", request, failed)
+			return mt5Result{}, fmt.Errorf("%w: not executed, absent from the account after its deadline", failed)
+		}
+		if err := sleep(ctx, time.Until(final)); err != nil {
+			return unknown(fmt.Sprintf("interrupted: %v", err))
+		}
+	}
+}
+
+// mt5Exposes reports whether a trade request opens or closes a position: a
+// deal, a pending order or a close-by. The others, the levels of a position
+// and the changes of a pending order, sent twice, leave the same state.
+func mt5Exposes(request map[string]any) bool {
+	switch action, _ := request["action"].(int); action {
+	case mt5ActionDeal, mt5ActionPending, mt5ActionCloseBy:
+		return true
+	}
+	return false
+}
+
+// unsettle leaves the pair of a trade request opening or closing a position
+// unsettled, its outcome unknown, the account unreadable after its deadline:
+// no other one of the pair is sent (checkUnsettled), which could double it,
+// until a read of the account tells the outcome (awaitOutcome). The requests
+// of the other kinds, and the ones sent to a bridge that doesn't confirm an
+// absence (confirmsAbsence), leave none.
+func (m *MT5) unsettle(request map[string]any, sent time.Time) {
+	pair, _ := request["symbol"].(string)
+	if !mt5Exposes(request) || !m.confirmsAbsence() || pair == "" {
+		return
+	}
+	b := m.book
+	b.pairsMtx.Lock()
+	_, waiting := b.unsettled[pair]
+	b.unsettled[pair] = mt5Unsettled{request: request, sent: sent}
+	b.pairsMtx.Unlock()
+	if !waiting {
+		go m.awaitOutcome(pair)
+	}
+}
+
+// checkUnsettled refuses a trade request opening or closing a position of a
+// pair unsettled, see unsettle.
+func (m *MT5) checkUnsettled(request map[string]any) error {
+	pair, _ := request["symbol"].(string)
+	if !mt5Exposes(request) {
+		return nil
+	}
+	b := m.book
+	b.pairsMtx.Lock()
+	unsettled, ok := b.unsettled[pair]
+	b.pairsMtx.Unlock()
+	if !ok {
+		return nil
+	}
+	return fmt.Errorf("%w: the answer of the trade request %v sent at %s was lost, and the account can't be "+
+		"read since: nothing opening or closing a position of %s is sent until it is", ErrMT5Unsettled,
+		unsettled.request, unsettled.sent.Format(time.TimeOnly), pair)
+}
+
+// awaitOutcome looks for the trade request leaving pair unsettled (see
+// unsettle) until a read of the account tells its outcome, waiting more after
+// each failure, mt5UnsettledRetry at most, then settles the pair: the request
+// found executed shows in the book with the next poll. Until the adapter
+// stops: the pair stays unsettled then.
+func (m *MT5) awaitOutcome(pair string) {
+	b := m.book
+	delay := m.retryDelay
+	var failure string
+	for {
+		if err := sleep(m.ctx, delay); err != nil {
+			return
+		}
+		b.pairsMtx.Lock()
+		unsettled := b.unsettled[pair]
+		b.pairsMtx.Unlock()
+		reads, cancel := context.WithTimeout(m.ctx, mt5ReconcileReads)
+		result, outcome, err := m.lookupTrade(reads, unsettled.request, unsettled.sent)
+		cancel()
+		if err != nil {
+			if m.ctx.Err() != nil {
+				return
+			}
+			if err.Error() != failure {
+				failure = err.Error()
+				log.Errorf("[MT5] %s stays unsettled, the trade request %v of an unknown outcome: %v", pair,
+					unsettled.request, err)
+			}
+			delay = min(max(2*delay, time.Millisecond), mt5UnsettledRetry)
+			continue
+		}
+		switch outcome {
+		case mt5TradeFound:
+			log.Warnf("[MT5] %s settled: the trade request %v of an unknown outcome was executed, order %d", pair,
+				unsettled.request, result.Order)
+			m.requestPoll()
+		case mt5TradeAmbiguous:
+			log.Errorf("[MT5] %s settled: the trade request %v of an unknown outcome may have been executed, a "+
+				"record of the bot since it was sent has no comment of a request", pair, unsettled.request)
+			m.requestPoll()
+		default:
+			log.Warnf("[MT5] %s settled: the trade request %v of an unknown outcome was not executed, absent from "+
+				"the account after its deadline", pair, unsettled.request)
+		}
+		b.pairsMtx.Lock()
+		delete(b.unsettled, pair)
+		b.pairsMtx.Unlock()
+		return
+	}
+}
+
+// lookupTrade looks for a trade request sent at sent in the account: the
+// pending orders, the positions, and the deals and the orders of the history
+// since then. The records of a deal, of a pending order or of a close-by carry
+// the comment of their request (tagComment); a record of the bot on the symbol
+// since then without the comment of a request, eg: cut by the broker, is
+// ambiguous. A modification is found by the state it sets: the levels of the
+// position (SLTP), the price and the levels of the pending order (MODIFY), or
+// the pending order gone unfilled (REMOVE).
+func (m *MT5) lookupTrade(ctx context.Context, request map[string]any, sent time.Time) (mt5Result, int, error) {
+	var orders []mt5Order
+	if err := m.get(ctx, "/orders", nil, &orders); err != nil {
+		return mt5Result{}, 0, err
+	}
+	var positions []mt5Position
+	if err := m.get(ctx, "/positions", nil, &positions); err != nil {
+		return mt5Result{}, 0, err
+	}
+	since := sent.Add(-mt5HistoryOverlap)
+	query := url.Values{
+		"from": {strconv.FormatInt(since.Unix(), 10)},
+		"to":   {strconv.FormatInt(time.Now().Add(mt5HistoryAhead).Unix(), 10)},
+	}
+	var deals []mt5Deal
+	if err := m.get(ctx, "/deals", query, &deals); err != nil {
+		return mt5Result{}, 0, err
+	}
+	var history []mt5Order
+	if err := m.get(ctx, "/history_orders", query, &history); err != nil {
+		return mt5Result{}, 0, err
+	}
+
+	done := mt5Result{Retcode: mt5CodeDone}
+	action, _ := request["action"].(int)
+	ticket, _ := request["order"].(int64)
+	position, _ := request["position"].(int64)
+	sl, _ := request["sl"].(float64)
+	tp, _ := request["tp"].(float64)
+	switch action {
+	case mt5ActionSLTP:
+		for _, open := range positions {
+			if symbol := m.instrument(open.Symbol); open.id() == position && symbol.price(open.SL) == symbol.price(sl) &&
+				symbol.price(open.TP) == symbol.price(tp) {
+				return done, mt5TradeFound, nil
+			}
+		}
+		return mt5Result{}, mt5TradeAbsent, nil
+	case mt5ActionModify:
+		price, _ := request["price"].(float64)
+		for _, pending := range orders {
+			if symbol := m.instrument(pending.Symbol); pending.Ticket == ticket &&
+				symbol.price(pending.PriceOpen) == symbol.price(price) && symbol.price(pending.SL) == symbol.price(sl) &&
+				symbol.price(pending.TP) == symbol.price(tp) {
+				return done, mt5TradeFound, nil
+			}
+		}
+		return mt5Result{}, mt5TradeAbsent, nil
+	case mt5ActionRemove:
+		filled := slices.ContainsFunc(positions, func(open mt5Position) bool { return open.id() == ticket }) ||
+			slices.ContainsFunc(deals, func(deal mt5Deal) bool { return deal.Order == ticket })
+		if filled || slices.ContainsFunc(orders, func(pending mt5Order) bool { return pending.Ticket == ticket }) {
+			return mt5Result{}, mt5TradeAbsent, nil
+		}
+		done.Order = ticket
+		return done, mt5TradeFound, nil
+	}
+
+	comment, _ := request["comment"].(string)
+	symbol, _ := request["symbol"].(string)
+	ours := func(magic int64, name, tag string) bool { return tag == comment && magic == m.magic && name == symbol }
+	switch action {
+	case mt5ActionDeal: // opening a position, or closing position
+		var volume, value float64
+		for _, deal := range deals {
+			entry := deal.Entry == mt5EntryIn
+			if position != 0 {
+				entry = deal.Entry == mt5EntryOut && deal.PositionID == position
+			}
+			if ours(deal.Magic, deal.Symbol, deal.Comment) && entry {
+				if done.Deal == 0 {
+					done.Order, done.Deal = deal.Order, deal.Ticket
+				}
+				volume, value = volume+deal.Volume, value+deal.Volume*deal.Price
+			}
+		}
+		if volume > 0 {
+			done.Volume, done.Price = volume, value/volume
+			return done, mt5TradeFound, nil
+		}
+		for _, open := range positions {
+			if position == 0 && ours(open.Magic, open.Symbol, open.Comment) {
+				done.Order, done.Volume, done.Price = open.id(), open.Volume, open.PriceOpen
+				return done, mt5TradeFound, nil
+			}
+		}
+		for _, order := range history {
+			if ours(order.Magic, order.Symbol, order.Comment) && order.State == mt5StateFilled &&
+				(position == 0 || order.PositionID == position) {
+				done.Order, done.Volume, done.Price = order.Ticket, order.VolumeInitial, order.PriceOpen
+				return done, mt5TradeFound, nil
+			}
+		}
+	case mt5ActionPending:
+		for _, pending := range orders {
+			if ours(pending.Magic, pending.Symbol, pending.Comment) {
+				done.Order, done.Volume, done.Price = pending.Ticket, pending.VolumeInitial, pending.PriceOpen
+				return done, mt5TradeFound, nil
+			}
+		}
+		for _, order := range history { // placed, and filled or canceled since
+			if ours(order.Magic, order.Symbol, order.Comment) && order.State != mt5StateRejected {
+				done.Order, done.Volume, done.Price = order.Ticket, order.VolumeInitial, order.PriceOpen
+				return done, mt5TradeFound, nil
+			}
+		}
+	case mt5ActionCloseBy:
+		for _, deal := range deals {
+			if ours(deal.Magic, deal.Symbol, deal.Comment) && deal.Entry == mt5EntryOutBy {
+				done.Order, done.Deal, done.Volume = deal.Order, deal.Ticket, deal.Volume
+				return done, mt5TradeFound, nil
+			}
+		}
+		for _, order := range history {
+			if ours(order.Magic, order.Symbol, order.Comment) && order.Type == mt5TypeCloseBy {
+				done.Order, done.Volume = order.Ticket, order.VolumeInitial
+				return done, mt5TradeFound, nil
+			}
+		}
+	}
+
+	// a record of the bot without the comment of a request: maybe this one
+	untagged := func(magic int64, name, tag string, at time.Time) bool {
+		return magic == m.magic && name == symbol && !at.Before(since) && !mt5Tagged(tag)
+	}
+	for _, deal := range deals {
+		if untagged(deal.Magic, deal.Symbol, deal.Comment, deal.at()) && deal.Reason != mt5ReasonSL &&
+			deal.Reason != mt5ReasonTP && deal.Reason != mt5ReasonSO {
+			return mt5Result{}, mt5TradeAmbiguous, nil
+		}
+	}
+	for _, open := range positions {
+		if untagged(open.Magic, open.Symbol, open.Comment, open.opened()) {
+			return mt5Result{}, mt5TradeAmbiguous, nil
+		}
+	}
+	for _, order := range slices.Concat(orders, history) {
+		if untagged(order.Magic, order.Symbol, order.Comment, order.setup()) && order.Reason != mt5ReasonSL &&
+			order.Reason != mt5ReasonTP && order.Reason != mt5ReasonSO {
+			return mt5Result{}, mt5TradeAmbiguous, nil
+		}
+	}
+	return mt5Result{}, mt5TradeAbsent, nil
 }
 
 // marketRequest returns the trade request of a market order of lots on side at
@@ -1291,23 +1730,77 @@ type mt5Wallet struct {
 	sizes     map[string]float64 // net units of the bot on each traded symbol, negative when short
 }
 
+// pollAccount reads the account for the poll and checks it, see checkAccount.
+func (m *MT5) pollAccount(ctx context.Context) error {
+	var account mt5Account
+	if err := m.get(ctx, "/account", nil, &account); err != nil {
+		return fmt.Errorf("reading the account: %w", err)
+	}
+	return m.checkAccount(account)
+}
+
 // accountInfo returns the account of the book, read again (GET /account) when
-// older than the poll interval or changed by a trade.
+// older than the poll interval, changed by a trade, or of another account
+// last time: then ErrMT5AccountChanged, see checkAccount.
 func (m *MT5) accountInfo(ctx context.Context) (mt5Account, error) {
 	b := m.book
 	b.mtx.RLock()
-	account, at := b.account, b.accountAt
+	account, at, switched := b.account, b.accountAt, b.switched
 	b.mtx.RUnlock()
-	if !at.IsZero() && time.Since(at) < m.pollInterval {
+	if switched == nil && !at.IsZero() && time.Since(at) < m.pollInterval {
 		return account, nil
 	}
 	if err := m.get(ctx, "/account", nil, &account); err != nil {
 		return mt5Account{}, fmt.Errorf("mt5: reading the account: %w", err)
 	}
+	if err := m.checkAccount(account); err != nil {
+		return mt5Account{}, err
+	}
 	b.mtx.Lock()
 	b.account, b.accountAt = account, time.Now()
 	b.mtx.Unlock()
 	return account, nil
+}
+
+// checkAccount compares an account read with the one NewMT5 connected to.
+// Another login, eg: the account switched by hand in the terminal, or the
+// account turned real or demo, is ErrMT5AccountChanged: until an account read
+// is the bot's again, no trade request is sent (see trade), the poll applies
+// no snapshot and the account is not reported, logged once each way.
+func (m *MT5) checkAccount(account mt5Account) error {
+	var err error
+	if real := account.TradeMode == mt5AccountReal; account.Login != m.login || real == m.demo {
+		mode, want := "demo", "real"
+		if real {
+			mode = "real"
+		}
+		if m.demo {
+			want = "demo"
+		}
+		err = fmt.Errorf("%w: it is logged in the %s account %d, the bot trades the %s account %d",
+			ErrMT5AccountChanged, mode, account.Login, want, m.login)
+	}
+	b := m.book
+	b.mtx.Lock()
+	previous := b.switched
+	b.switched = err
+	b.mtx.Unlock()
+	switch {
+	case err != nil && (previous == nil || previous.Error() != err.Error()):
+		log.Errorf("[MT5] %v: no trade request is sent until it is back", err)
+	case err == nil && previous != nil:
+		log.Infof("[MT5] the terminal is logged in the account %d again: trading resumes", m.login)
+	}
+	return err
+}
+
+// accountSwitched returns the error of the last account read when it was not
+// the bot's, see checkAccount.
+func (m *MT5) accountSwitched() error {
+	b := m.book
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+	return b.switched
 }
 
 // wallet returns the wallet: the cash is the account's, shared by the bots,
@@ -1651,6 +2144,15 @@ func (m *MT5) CreateOrderMarket(side model.SideType, pair string, size float64) 
 		log.Warnf("[MT5] %v", err)
 	}
 	return m.marketNet(m.ctx, side, pair, lots)
+}
+
+// ClosesProtected reports that a market order closes a protected position with
+// its stop loss and take profit in place, see service.ProtectedCloser: it
+// closes the bot's opposite positions by their tickets (marketNet), and the
+// levels go with them, the legs reported CANCELED. A close refused leaves the
+// position protected.
+func (m *MT5) ClosesProtected() bool {
+	return true
 }
 
 // marketNet is CreateOrderMarket of lots under the lock of the pair.

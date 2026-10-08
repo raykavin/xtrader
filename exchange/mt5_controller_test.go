@@ -182,6 +182,108 @@ func TestMT5ControllerEndToEnd(t *testing.T) {
 	m5cSettle(t, c, st, pendingLimit.ID, model.OrderStatusTypeCanceled)
 }
 
+// TestMT5Controller_ClosesWithTheLegsInPlace closes a protected position at the
+// market through the order controller, as the LLM trader does where the exchange
+// closes it with its legs in place (service.ProtectedCloser): a close refused
+// leaves the position with its levels and its legs stored open, and the close
+// done settles them CANCELED, no other side opened.
+func TestMT5Controller_ClosesWithTheLegsInPlace(t *testing.T) {
+	fake := exchange.NewMT5TestFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m, err := exchange.NewMT5(ctx, fake.Options()...)
+	require.NoError(t, err)
+	st, err := storage.FromMemory()
+	require.NoError(t, err)
+	c := order.NewController(ctx, m, st, order.NewOrderFeed())
+	require.True(t, c.ClosesProtected(), "delegated to the adapter")
+
+	orders, err := c.CreateOrderMarketProtected(model.SideTypeBuy, m5cPair, 2, 4280, 4300)
+	require.NoError(t, err)
+	entry := orders[0]
+	tp, sl := m5cLegs(orders[1:])
+
+	fake.RefuseNextTrade()
+	_, err = c.CreateOrderMarket(model.SideTypeSell, m5cPair, 2)
+	require.Error(t, err)
+	stop, profit, open := fake.Levels(entry.ExchangeID)
+	require.True(t, open)
+	require.Equal(t, 4280.0, stop)
+	require.Equal(t, 4300.0, profit)
+	c.UpdateOrders()
+	for _, leg := range []model.Order{tp, sl} {
+		m5cSettle(t, c, st, leg.ID, model.OrderStatusTypeNew)
+	}
+
+	_, err = c.CreateOrderMarket(model.SideTypeSell, m5cPair, 2)
+	require.NoError(t, err)
+	for _, leg := range []model.Order{tp, sl} {
+		m5cSettle(t, c, st, leg.ID, model.OrderStatusTypeCanceled)
+	}
+	require.Zero(t, fake.Positions())
+	require.Zero(t, fake.NetLots(m5cPair))
+}
+
+// R1: a trade request whose answer is lost holds, while the adapter waits for
+// its deadline, the orders of its pair only: the order controller follows the
+// pending orders, answers its reads and trades the other pairs meanwhile.
+func TestMT5Controller_LostAnswerHoldsItsPairOnly(t *testing.T) {
+	fake := exchange.NewMT5TestFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m, err := exchange.NewMT5(ctx, fake.Options(exchange.WithMT5Symbols(m5cPair, "BTCUSDm"))...)
+	require.NoError(t, err)
+	st, err := storage.FromMemory()
+	require.NoError(t, err)
+	c := order.NewController(ctx, m, st, order.NewOrderFeed())
+	limit, err := c.CreateOrderLimit(model.SideTypeBuy, m5cPair, 1, 4000) // followed by UpdateOrders
+	require.NoError(t, err)
+
+	fake.FailNextTrade()
+	fake.ClearRequests()
+	started := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.CreateOrderMarket(model.SideTypeBuy, m5cPair, 1)
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return fake.Requests("GET", "/history_orders") > 0 }, time.Second,
+		time.Millisecond, "looked for in the account at once, then waiting for its deadline")
+
+	quick := func(what string, fn func()) {
+		t.Helper()
+		at := time.Now()
+		fn()
+		require.Less(t, time.Since(at), 400*time.Millisecond, what)
+	}
+	quick("an order of another pair", func() {
+		order, err := c.CreateOrderMarket(model.SideTypeBuy, "BTCUSDm", 0.01)
+		require.NoError(t, err)
+		require.Equal(t, 0.01, order.Quantity)
+	})
+	quick("UpdateOrders", c.UpdateOrders)
+	quick("the status", func() { c.Status() })
+	quick("the position", func() {
+		_, _, err := c.Position(m5cPair)
+		require.NoError(t, err)
+	})
+	quick("the order", func() {
+		got, err := c.Order(m5cPair, limit.ExchangeID)
+		require.NoError(t, err)
+		require.Equal(t, model.OrderStatusTypeNew, got.Status)
+	})
+	select {
+	case err := <-done:
+		t.Fatalf("returned before its deadline: %v", err)
+	default:
+	}
+
+	err = <-done
+	require.ErrorContains(t, err, "not executed, absent from the account after its deadline")
+	require.GreaterOrEqual(t, time.Since(started), time.Second)
+	require.Zero(t, fake.NetLots(m5cPair))
+}
+
 // TestMT5ControllerRestart stops a controller with a protected entry pending,
 // fills it and triggers its take profit while the bot is off, then starts a new
 // adapter and controller on the same storage: the orders of the previous run

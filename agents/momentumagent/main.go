@@ -18,6 +18,12 @@ import (
 )
 
 func main() {
-	runner.Run(runner.Agent{Name: "momentumagent", Strategies: runner.Signals("adxema", "macdtrend", "emamacd",
-		"emarsiadx", "rsitrend", "stochpullback", "papullback")})
+	runner.Run(agent())
+}
+
+// agent returns the agent and its strategies, the first one its default, the
+// one of agentapi.DefaultStrategy for the kind momentum.
+func agent() runner.Agent {
+	return runner.Agent{Name: "momentumagent", Strategies: runner.Signals("adxema", "macdtrend", "emamacd",
+		"emarsiadx", "rsitrend", "stochpullback", "papullback")}
 }

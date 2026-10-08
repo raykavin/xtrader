@@ -79,7 +79,7 @@ func TestMT5MarketNetting(t *testing.T) {
 	require.Len(t, positions, 1)
 	require.Equal(t, buy.ExchangeID, positions[0].ticket, "the ticket of the position opened")
 	require.Equal(t, 0.03, positions[0].volume)
-	require.Equal(t, "nb:test", positions[0].comment)
+	require.Regexp(t, `^nb:test#[0-9a-z]{6}$`, positions[0].comment, "the bot's comment and the tag of the request")
 
 	request := f.tradeRequests(mt5ActionDeal)[0]
 	require.Equal(t, float64(mt5TypeBuy), request["type"])
@@ -87,7 +87,7 @@ func TestMT5MarketNetting(t *testing.T) {
 	require.Equal(t, m5fAsk, request["price"])
 	require.Equal(t, float64(mt5DefaultDeviation), request["deviation"])
 	require.Equal(t, float64(m5fMagic), request["magic"])
-	require.Equal(t, "nb:test", request["comment"])
+	require.Equal(t, positions[0].comment, request["comment"])
 	require.Equal(t, float64(mt5FillFOK), request["type_filling"], "filling_mode 3 allows fill or kill")
 	require.Equal(t, float64(mt5TimeGTC), request["type_time"])
 	require.NotContains(t, request, "position")
@@ -352,6 +352,34 @@ func TestMT5ProtectedMarket(t *testing.T) {
 		require.Equal(t, model.OrderStatusTypeCanceled, m5fOrderOf(t, m, tp.ExchangeID).Status,
 			"known at once from the answer")
 		require.Equal(t, model.OrderStatusTypeCanceled, m5fOrderOf(t, m, sl.ExchangeID).Status)
+	})
+
+	t.Run("closed by the bot with its legs in place, refused first", func(t *testing.T) {
+		// service.ProtectedCloser: no leg canceled before the close, so that a
+		// close refused leaves the position protected
+		f, m, entry, tp, sl := open(t)
+		require.True(t, m.ClosesProtected())
+		f.clearRequests()
+		f.resultNext(mt5CodeMarketClosed, "Market closed")
+		_, err := m.CreateOrderMarket(model.SideTypeSell, m5fPair, 2)
+		require.Error(t, err)
+		require.Empty(t, f.tradeRequests(mt5ActionSLTP), "the levels never touched")
+		p, ok := f.position(entry.ExchangeID)
+		require.True(t, ok)
+		require.Equal(t, 4280.0, p.sl)
+		require.Equal(t, 4300.0, p.tp)
+		require.Equal(t, model.OrderStatusTypeNew, m5fOrderOf(t, m, tp.ExchangeID).Status)
+		require.Equal(t, model.OrderStatusTypeNew, m5fOrderOf(t, m, sl.ExchangeID).Status)
+		require.Equal(t, 2.0, m5fNet(t, m))
+
+		_, err = m.CreateOrderMarket(model.SideTypeSell, m5fPair, 2)
+		require.NoError(t, err)
+		require.Zero(t, m5fNet(t, m))
+		require.Zero(t, f.openCount(), "closed, no other side opened")
+		require.Equal(t, model.OrderStatusTypeCanceled, m5fOrderOf(t, m, tp.ExchangeID).Status)
+		require.Equal(t, model.OrderStatusTypeCanceled, m5fOrderOf(t, m, sl.ExchangeID).Status)
+		require.ErrorIs(t, m.Cancel(sl), ErrOrderNotOpen, "the legs left canceled once flat: gone already")
+		require.Empty(t, f.tradeRequests(mt5ActionSLTP))
 	})
 
 	t.Run("closed by hand", func(t *testing.T) {

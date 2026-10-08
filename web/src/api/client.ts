@@ -13,6 +13,7 @@ import type {
   CandleEvent,
   ControlMoveRequest,
   ControlOrderRequest,
+  ControlOrderResponse,
   ControlsResponse,
   Decision,
   DecisionEvent,
@@ -157,8 +158,12 @@ export function stopBot(agent: string): Promise<ControlsResponse> {
   return postJSON<ControlsResponse>(agentPath(agent, "/controls/stop"));
 }
 
-export function createOrder(agent: string, request: ControlOrderRequest): Promise<Order> {
-  return postJSON<Order>(agentPath(agent, "/controls/order"), request);
+/** Creates an order of the ticket: its warning tells of one created short of what was asked. */
+export function createOrder(
+  agent: string,
+  request: ControlOrderRequest,
+): Promise<ControlOrderResponse> {
+  return postJSON<ControlOrderResponse>(agentPath(agent, "/controls/order"), request);
 }
 
 /** Moves a pending order: the price of a limit order, or a stop loss or take profit. */

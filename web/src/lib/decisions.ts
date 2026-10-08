@@ -25,7 +25,7 @@ const outcomes: Record<string, string> = {
 // agents/llm/decisions.go), the code in the reason of a skipped one
 const skips: Record<string, string> = {
   position: "Não foi possível ler a posição na corretora",
-  close_retry: "Um fechamento que falhou foi tentado de novo",
+  close_retry: "Um fechamento que falhou está sendo tentado de novo",
   protection: "A corretora não aceita stop e alvo na ordem",
   daily_limit: "Entradas bloqueadas pelo limite diário do ativo",
   news: "Entradas bloqueadas perto de notícia de alta importância",

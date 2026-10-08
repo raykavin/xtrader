@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/order"
+	"github.com/raykavin/xtrader/storage"
 )
 
 // fakeController records calls and returns canned balances / orders.
@@ -41,6 +43,7 @@ type fakeController struct {
 	lastLevel            float64
 	canceled             []int64
 	moveErr, cancelErr   error
+	legsErr              error // of a protected entry placed, its legs failing
 }
 
 func (f *fakeController) Status() order.Status { return f.status }
@@ -86,7 +89,7 @@ func (f *fakeController) CreateOrderMarketProtected(side model.SideType, pair st
 	if f.orderErr != nil {
 		return nil, f.orderErr
 	}
-	return []model.Order{{ID: 4, Pair: pair, Side: side, Type: model.OrderTypeMarket, Quantity: size}}, nil
+	return []model.Order{{ID: 4, Pair: pair, Side: side, Type: model.OrderTypeMarket, Quantity: size}}, f.legsErr
 }
 
 func (f *fakeController) CreateOrderLimitProtected(side model.SideType, pair string, size, limit, stop,
@@ -98,7 +101,7 @@ func (f *fakeController) CreateOrderLimitProtected(side model.SideType, pair str
 		return nil, f.orderErr
 	}
 	return []model.Order{{ID: 5, Pair: pair, Side: side, Type: model.OrderTypeLimit, Quantity: size, Price: limit}},
-		nil
+		f.legsErr
 }
 
 func (f *fakeController) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
@@ -268,6 +271,71 @@ func TestControls_OrderErrors(t *testing.T) {
 	resp, body = postJSON(t, srv.URL+"/api/controls/order", `{"pair":"BTCUSDT","side":"buy","amount":10}`)
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, body, assert.AnError.Error())
+}
+
+// failingStorage fails every write, eg: a full disk.
+type failingStorage struct{}
+
+func (failingStorage) CreateOrder(*model.Order) error { return errors.New("no space left on device") }
+func (failingStorage) UpdateOrder(*model.Order) error { return errors.New("no space left on device") }
+func (failingStorage) Orders(...storage.OrderFilter) ([]*model.Order, error) {
+	return nil, nil
+}
+
+// An order executed by the broker is never answered as an error, which would
+// have it sent again: the storage failing to write it, or the legs of a
+// protected entry failing, told by the notifications of the bot.
+func TestControls_OrderExecutedIsNoError(t *testing.T) {
+	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
+
+	t.Run("not stored", func(t *testing.T) {
+		ctx := context.Background()
+		wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 100000))
+		wallet.OnCandle(candleAt("BTCUSDT", base, 40000))
+		controller := order.NewController(ctx, wallet, failingStorage{}, order.NewOrderFeed())
+		c := newTestChart(t)
+		controller.SetNotifier(c)
+		c.SetOrderController(controller)
+		c.OnCandle(candleAt("BTCUSDT", base, 40000))
+		srv := newTestServer(t, c)
+
+		for _, body := range []string{
+			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true}`,
+			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"stop_loss":39000,"take_profit":42000}`,
+			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"type":"limit","price":39500}`,
+		} {
+			resp, got := postJSON(t, srv.URL+"/api/controls/order", body)
+			require.Equal(t, http.StatusOK, resp.StatusCode, "%s: %s", body, got)
+			var created ControlOrderResponse
+			require.NoError(t, json.Unmarshal([]byte(got), &created))
+			assert.Equal(t, "BTCUSDT", created.Pair, body)
+			assert.Empty(t, created.Warning, body)
+			assert.NotContains(t, got, `"warning"`, body)
+		}
+		asset, _, err := wallet.Position("BTCUSDT")
+		require.NoError(t, err)
+		assert.InDelta(t, 0.2, asset, 1e-9, "the market orders executed, once each")
+	})
+
+	t.Run("its legs failing", func(t *testing.T) {
+		c := newTestChart(t)
+		controller := &fakeController{asset: 2, quote: 1000, legsErr: exchange.ErrInvalidProtection}
+		c.SetOrderController(controller)
+		c.OnCandle(candleAt("BTCUSDT", base, 40000))
+		srv := newTestServer(t, c)
+
+		resp, body := postJSON(t, srv.URL+"/api/controls/order",
+			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"stop_loss":39000}`)
+		require.Equal(t, http.StatusOK, resp.StatusCode, body)
+		assert.Contains(t, body, `"id":4`)
+		assert.Equal(t, []string{"market protected"}, controller.calls)
+		// B5: told in the answer that the position may be left unprotected
+		var created ControlOrderResponse
+		require.NoError(t, json.Unmarshal([]byte(body), &created))
+		assert.Equal(t, int64(4), created.ID)
+		assert.Contains(t, created.Warning, "0 of its 1 stop loss and take profit orders only")
+		assert.Contains(t, created.Warning, exchange.ErrInvalidProtection.Error())
+	})
 }
 
 func TestControls_OrderTicket(t *testing.T) {

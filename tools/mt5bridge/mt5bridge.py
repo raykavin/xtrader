@@ -27,7 +27,28 @@ Endpoints (JSON):
     GET  /history_orders?from=<s>&to=<s>   orders of the history
     POST /order                        order_send, body: the MT5 trade request
     POST /check                        order_check, body: the MT5 trade request
-Errors: {"error": "...", "retcode": n} with an HTTP status.
+Errors: {"error": "...", "retcode": n} with an HTTP status. A list the package
+fails to read (None) is an error (502), never an empty list. Candles are the
+exception for a range the terminal holds none of, eg: before the start of its
+history or beyond its "Max. bars in chart", which copy_rates_* refuse (None)
+as the documentation of CopyRates says: when the latest candle of the symbol
+reads, the range is outside the history, answered empty as a range without
+candles, and only otherwise an error. The candles by position are read within
+the "Max. bars in chart" of the terminal (terminal_info().maxbars).
+
+The terminal serves one request at a time. A request with a deadline waits for
+it until then at most, and POST /order is never sent to the terminal after it,
+eg: while the terminal reconnects: the client gave up by then. The deadline is
+the earliest of the headers X-Bridge-Deadline (Unix milliseconds, by the clock
+of the client) and X-Bridge-Timeout (milliseconds from the receipt of the
+request, by the clock of the bridge, so that a clock of the bridge behind the
+client's, eg: on another host, never sends a request later), a minute from
+now at most, and is counted by the monotonic clock. POST /order also
+checks the account before order_send: the terminal logged in another account
+than --login, or a real one without --allow-real, eg: switched by hand, refuses
+it (409). A POST /order refused before order_send answers "sent": false (504
+for its deadline passed), so the client knows it was not executed; without it,
+an error after order_send (502, 503) leaves the outcome unknown.
 """
 
 import argparse
@@ -65,12 +86,32 @@ INT_FIELDS = {"action", "magic", "order", "deviation", "type", "type_filling", "
 
 MAX_RATES = 100000
 
+# the headers of the deadline of a request: in Unix milliseconds, and in
+# milliseconds from its receipt; and the furthest one taken, in seconds from now
+DEADLINE_HEADER = "X-Bridge-Deadline"
+TIMEOUT_HEADER = "X-Bridge-Timeout"
+MAX_DEADLINE = 60
+
+# the code of last_error() after a call without error (RES_S_OK of the package)
+RES_S_OK = 1
+
 
 class BridgeError(Exception):
-    def __init__(self, status, message, retcode=None):
+    """An error answer: its HTTP status, and the last_error code of the terminal
+    when it has one; sent is False for a trade request refused before
+    order_send, None when unknown or not a trade request."""
+
+    def __init__(self, status, message, retcode=None, sent=None):
         super().__init__(message)
         self.status = status
         self.retcode = retcode
+        self.sent = sent
+
+
+def check_deadline(deadline, what):
+    """Refuses (504) to go on past deadline, a time.monotonic() or None for none."""
+    if deadline is not None and time.monotonic() >= deadline:
+        raise BridgeError(504, "the deadline of the request passed %s: not sent to the terminal" % what)
 
 
 class Terminal:
@@ -111,23 +152,50 @@ class Terminal:
         if account is None:
             mt5.shutdown()
             raise BridgeError(503, "no account: %s" % (mt5.last_error(),))
-        if account.login != self.args.login:
+        problem = self.account_problem(account)
+        if problem:
             mt5.shutdown()
-            raise BridgeError(503, "the terminal is logged in %d, not %d" % (account.login, self.args.login))
-        if account.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not self.args.allow_real:
-            mt5.shutdown()
-            raise BridgeError(503, "the account %d is real: start the bridge with --allow-real" % account.login)
+            raise BridgeError(503, problem)
         self.connected = True
 
-    def call(self, fn):
+    def account_problem(self, account):
+        """Why the account the terminal is logged in is not the one to trade,
+        None when it is."""
+        if account.login != self.args.login:
+            return "the terminal is logged in %d, not %d" % (account.login, self.args.login)
+        if account.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not self.args.allow_real:
+            return "the account %d is real: start the bridge with --allow-real" % account.login
+        return None
+
+    def check_account(self):
+        """Refuses a trade request (409) when the terminal is no longer logged in
+        the account of --login, or is real without --allow-real, eg: the account
+        switched by hand after the bridge connected. Under the lock."""
+        account = mt5.account_info()
+        if account is None:
+            raise terminal_error("account_info")
+        problem = self.account_problem(account)
+        if problem:
+            raise BridgeError(409, "%s: trade request refused" % problem)
+
+    def call(self, fn, deadline=None):
         """Runs fn with the terminal, connecting again when it was lost, eg: the
-        terminal closed, which initialize starts again with --path."""
-        with self.lock:
+        terminal closed, which initialize starts again with --path. With a
+        deadline (a time.monotonic()), it waits for the terminal until then at
+        most, a request behind a slow one or a reconnection, and refuses to
+        start fn after it (504)."""
+        if deadline is None:
+            self.lock.acquire()
+        elif not self.lock.acquire(timeout=max(deadline - time.monotonic(), 0)):
+            raise BridgeError(504, "the deadline of the request passed waiting for the terminal: not sent to it")
+        try:
+            check_deadline(deadline, "waiting for the terminal")
             if self.connected and mt5.terminal_info() is None:
                 self.connected = False
                 mt5.shutdown()
             if not self.connected:
                 self.connect()
+                check_deadline(deadline, "connecting to the terminal")
             try:
                 return fn()
             except BridgeError:
@@ -136,6 +204,8 @@ class Terminal:
                 self.connected = False
                 mt5.shutdown()
                 raise BridgeError(503, "terminal: %s" % exc)
+        finally:
+            self.lock.release()
 
 
 def record(value):
@@ -151,11 +221,39 @@ def record(value):
     return value
 
 
-def rates_json(rates):
-    if rates is None:
+def listing(what, value, convert=record):
+    """The JSON list of the records the package returned, by convert: None is
+    an error of the terminal (502), unless last_error() reports none, as for
+    nothing to list; an empty tuple or array is an empty list. Under the lock,
+    right after the call."""
+    if value is None:
+        code, message = mt5.last_error()
+        if code != RES_S_OK:
+            raise BridgeError(502, "%s: %s" % (what, message), code)
         return []
+    return convert(value)
+
+
+def rates_json(rates):
     names = rates.dtype.names
     return [{name: row[name].item() for name in names} for row in rates]
+
+
+def rates_listing(what, symbol, timeframe, rates):
+    """The JSON candles copy_rates_* returned, see listing: None with an error
+    is a range outside the history of the terminal, answered empty, when the
+    latest candle of the symbol reads, eg: before the start of its history or
+    beyond its "Max. bars in chart" (-1 of CopyRates); else the error (502).
+    Under the lock, right after the call."""
+    if rates is not None:
+        return rates_json(rates)
+    code, message = mt5.last_error()
+    if code == RES_S_OK:
+        return []
+    latest = mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)
+    if latest is not None and len(latest) > 0:
+        return []
+    raise BridgeError(502, "%s: %s" % (what, message), code)
 
 
 def utc(seconds):
@@ -190,6 +288,7 @@ class Handler(BaseHTTPRequestHandler):
     terminal = None
     token = ""
     read_only = False
+    deadline = None  # of the request handled, see request_deadline
 
     def log_message(self, fmt, *args):
         if self.server.verbose:
@@ -206,6 +305,30 @@ class Handler(BaseHTTPRequestHandler):
     def authorized(self):
         return not self.token or self.headers.get("X-Bridge-Token") == self.token
 
+    def request_deadline(self):
+        """The deadline of the request as a time.monotonic(): the earliest of
+        X-Bridge-Deadline, by the clock of the client, and X-Bridge-Timeout from
+        now, its receipt, MAX_DEADLINE from now at most, or None without
+        either."""
+        now, wall = time.monotonic(), time.time()
+        deadlines = []
+        for header, deadline in ((DEADLINE_HEADER, lambda ms: now + ms / 1000 - wall),
+                                 (TIMEOUT_HEADER, lambda ms: now + ms / 1000)):
+            value = self.headers.get(header)
+            if value is None:
+                continue
+            try:
+                deadlines.append(deadline(int(value)))
+            except ValueError:
+                raise BridgeError(400, "invalid %s: %r" % (header, value))
+        if not deadlines:
+            return None
+        return min(min(deadlines), now + MAX_DEADLINE)
+
+    def run(self, fn):
+        """Runs fn with the terminal, within the deadline of the request."""
+        return self.terminal.call(fn, self.deadline)
+
     def handle_request(self, method):
         if not self.authorized():
             self.reply(401, {"error": "invalid X-Bridge-Token"})
@@ -213,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         query = parse_qs(url.query)
         try:
+            self.deadline = self.request_deadline()
             route = ROUTES.get((method, url.path))
             if route is None:
                 raise BridgeError(404, "no route %s %s" % (method, url.path))
@@ -225,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = {"error": str(exc)}
             if exc.retcode is not None:
                 payload["retcode"] = exc.retcode
+            if exc.sent is False:
+                payload["sent"] = False
             self.reply(exc.status, payload)
         except json.JSONDecodeError as exc:
             self.reply(400, {"error": "invalid JSON: %s" % exc})
@@ -248,9 +374,11 @@ class Handler(BaseHTTPRequestHandler):
                 "login": account.login if account else 0,
                 "server": account.server if account else "",
                 "read_only": self.read_only,
+                "deadline": True,  # X-Bridge-Deadline is honored
+                "timeout": True,  # and X-Bridge-Timeout
                 "time": time.time(),
             }
-        return self.terminal.call(fn)
+        return self.run(fn)
 
     def account(self, query, body):
         def fn():
@@ -258,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
             if account is None:
                 raise terminal_error("account_info")
             return record(account)
-        return self.terminal.call(fn)
+        return self.run(fn)
 
     def symbol(self, query, body):
         symbol = query_symbol(query)
@@ -267,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
             if not mt5.symbol_select(symbol, True):
                 raise BridgeError(404, "no symbol %s" % symbol)
             return record(mt5.symbol_info(symbol))
-        return self.terminal.call(fn)
+        return self.run(fn)
 
     def tick(self, query, body):
         symbol = query_symbol(query)
@@ -278,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
             if tick is None:
                 raise terminal_error("symbol_info_tick %s" % symbol)
             return record(tick)
-        return self.terminal.call(fn)
+        return self.run(fn)
 
     def rates(self, query, body):
         symbol = query_symbol(query)
@@ -291,7 +419,8 @@ class Handler(BaseHTTPRequestHandler):
 
             def fn():
                 mt5.symbol_select(symbol, True)
-                return mt5.copy_rates_range(symbol, timeframe, utc(start), utc(end))
+                return rates_listing("copy_rates_range %s" % symbol, symbol, timeframe,
+                                     mt5.copy_rates_range(symbol, timeframe, utc(start), utc(end)))
         else:
             count, first = query_int(query, "count"), query_int(query, "start", 0)
             if not 0 < count <= MAX_RATES:
@@ -299,24 +428,35 @@ class Handler(BaseHTTPRequestHandler):
 
             def fn():
                 mt5.symbol_select(symbol, True)
-                return mt5.copy_rates_from_pos(symbol, timeframe, first, count)
-        return rates_json(self.terminal.call(fn))
+                # within the "Max. bars in chart" of the terminal, beyond which
+                # copy_rates_from_pos refuses the whole request
+                info = mt5.terminal_info()
+                bars = getattr(info, "maxbars", 0) if info is not None else 0
+                wanted = count
+                if bars > 0:
+                    if first >= bars:
+                        return []
+                    wanted = min(count, bars - first)
+                return rates_listing("copy_rates_from_pos %s" % symbol, symbol, timeframe,
+                                     mt5.copy_rates_from_pos(symbol, timeframe, first, wanted))
+        return self.run(fn)
 
     def positions(self, query, body):
         symbol = query_symbol(query, required=False)
-        return self.terminal.call(lambda: record(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or [])
+        return self.run(lambda: listing("positions_get",
+                                        mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()))
 
     def orders(self, query, body):
         symbol = query_symbol(query, required=False)
-        return self.terminal.call(lambda: record(mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()) or [])
+        return self.run(lambda: listing("orders_get", mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()))
 
     def deals(self, query, body):
         start, end = query_int(query, "from"), query_int(query, "to")
-        return self.terminal.call(lambda: record(mt5.history_deals_get(utc(start), utc(end))) or [])
+        return self.run(lambda: listing("history_deals_get", mt5.history_deals_get(utc(start), utc(end))))
 
     def history_orders(self, query, body):
         start, end = query_int(query, "from"), query_int(query, "to")
-        return self.terminal.call(lambda: record(mt5.history_orders_get(utc(start), utc(end))) or [])
+        return self.run(lambda: listing("history_orders_get", mt5.history_orders_get(utc(start), utc(end))))
 
     def trade_request(self, body):
         if self.read_only:
@@ -342,16 +482,29 @@ class Handler(BaseHTTPRequestHandler):
         return request
 
     def order(self, query, body):
-        request = self.trade_request(body)
+        """order_send of the trade request, once the account checked and within
+        the deadline of the request; an error before order_send is sent False,
+        as is never one after it: its outcome is unknown then."""
+        sent = False
 
         def fn():
+            nonlocal sent
+            self.terminal.check_account()
             if request.get("symbol"):
                 mt5.symbol_select(request["symbol"], True)
+            check_deadline(self.deadline, "selecting the symbol")
+            sent = True
             result = mt5.order_send(request)
             if result is None:
                 raise terminal_error("order_send")
             return record(result)
-        return self.terminal.call(fn)
+        try:
+            request = self.trade_request(body)
+            return self.run(fn)
+        except BridgeError as exc:
+            if not sent:
+                exc.sent = False
+            raise
 
     def check(self, query, body):
         request = self.trade_request(body)
@@ -361,7 +514,7 @@ class Handler(BaseHTTPRequestHandler):
             if result is None:
                 raise terminal_error("order_check")
             return record(result)
-        return self.terminal.call(fn)
+        return self.run(fn)
 
 
 ROUTES = {

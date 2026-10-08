@@ -337,9 +337,22 @@ func (p *Position) Update(order *model.Order) (result *Result, finished bool) {
 	return result, finished
 }
 
+// Controller creates the orders of the strategies on the exchange, stores them
+// and follows them until they fill or are canceled, settling the positions
+// and the results of their pairs.
+//
+// The orders of a pair are serialized, each one from its call to the exchange
+// to its recording (see lockPair), but nothing else waits for the exchange: a
+// slow call, eg: an MT5 trade request whose answer was lost, looked for in the
+// account, holds the orders of its pair only, while UpdateOrders, the reads
+// and the orders of the other pairs go on.
 type Controller struct {
-	mtx            sync.RWMutex // Use RWMutex for better read concurrency
+	mtx            sync.RWMutex // the state below, never held during a call to the exchange
 	updateMtx      sync.Mutex   // serializes UpdateOrders, so a fill is never settled twice
+	pairsMtx       sync.Mutex
+	pairs          map[string]*sync.Mutex // serialize the orders of each pair, see lockPair
+	inflight       int                    // orders begun and not recorded yet, under mtx, see beginOrder
+	idle           *sync.Cond             // on mtx, broadcast when inflight drops to 0
 	ctx            context.Context
 	exchange       service.Exchange
 	storage        storage.Storage
@@ -361,7 +374,35 @@ type Controller struct {
 	// restoring is set while restore replays the stored fills: they settle
 	// the positions and the results quietly, notified already.
 	restoring bool
+
+	// unstored holds the orders created or changed on the exchange that the
+	// storage failed to write, in their last state, by id: followed all the
+	// same, and written again by UpdateOrders until the storage takes them.
+	unstored map[int64]model.Order
+	// provisional numbers, below zero, the orders the storage failed to
+	// number: followed in memory only.
+	provisional int64
+	warned      time.Time // the last warning of the orders unstored
+	// the notices of the orders the storage fails to write, see notStored:
+	// the last one; the new failures since, the ones of orders never numbered
+	// among them, and the last of them; the last notice of the orders stored
+	// at last, and how many were since
+	notified   time.Time
+	unnotified int
+	unnumbered int
+	lastFailed error
+	recovered  time.Time
+	storedLate int
 }
+
+// unstoredWarnEvery is how often the orders the storage still fails to write
+// are warned about.
+const unstoredWarnEvery = 5 * time.Minute
+
+// unstoredNotifyEvery bounds how often the orders the storage fails to write,
+// and the ones it writes at last, are notified: the new failures meanwhile are
+// notified together, that late at most.
+var unstoredNotifyEvery = time.Minute
 
 func NewController(ctx context.Context, exchange service.Exchange, storage storage.Storage,
 	orderFeed *Feed) *Controller {
@@ -377,6 +418,7 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 		finish:         make(chan bool),
 		position:       make(map[string]*Position),
 		pending:        make(map[int64]model.Order),
+		unstored:       make(map[int64]model.Order),
 	}
 	c.restore()
 	return c
@@ -413,9 +455,7 @@ func (c *Controller) restore() {
 		profit, value := order.Profit, order.ProfitValue
 		c.processTrade(order)
 		if order.Profit != profit || order.ProfitValue != value {
-			if err := c.storage.UpdateOrder(order); err != nil {
-				log.Errorf("order controller: storing the profit of the order %d: %v", order.ID, err)
-			}
+			c.store(order)
 		}
 	}
 	open := make([]string, 0, len(c.position))
@@ -459,9 +499,7 @@ func (c *Controller) updatePosition(o *model.Order) {
 		// the profit belongs to the order, stored with it: the history of a
 		// restart shows it
 		if !c.restoring && c.storage != nil {
-			if err := c.storage.UpdateOrder(o); err != nil {
-				c.notifyError(err)
-			}
+			c.store(o)
 		}
 
 		// TODO: replace by a slice of Result
@@ -549,6 +587,142 @@ func (c *Controller) notifyError(err error) {
 	}
 }
 
+// create stores an order the exchange created. The order exists on the
+// exchange: a failure of the storage never loses it, see notStored. Must be
+// called while holding c.mtx.
+func (c *Controller) create(order *model.Order) {
+	err := c.storage.CreateOrder(order)
+	if err == nil {
+		return
+	}
+	if order.ID == 0 {
+		c.provisional--
+		order.ID = c.provisional
+	}
+	c.notStored(*order, err)
+}
+
+// store writes an order changed on the exchange, see create. Must be called
+// while holding c.mtx.
+func (c *Controller) store(order *model.Order) {
+	if order.ID < 0 {
+		return // never numbered by the storage
+	}
+	if err := c.storage.UpdateOrder(order); err != nil {
+		c.notStored(*order, err)
+		return
+	}
+	delete(c.unstored, order.ID) // its last state written
+}
+
+// notStored keeps an order the storage failed to write, to write it again (see
+// storeAgain), and notifies of the failure: the order is followed all the
+// same, its fills settled and published. The failure of an order already kept
+// is logged only; the ones of new orders are notified, unstoredNotifyEvery
+// apart at most, the ones meanwhile with the next notice (see
+// notifyUnstored), so that an order the storage refuses for good never hides
+// the failures of the others. Must be called while holding c.mtx.
+func (c *Controller) notStored(order model.Order, err error) {
+	if order.ID < 0 {
+		c.failedToStore(fmt.Errorf("order controller: %s executed on the exchange (%d) but not stored, the "+
+			"storage failing to number it: followed in memory only, lost by a restart: %w", order,
+			order.ExchangeID, err), true)
+		return
+	}
+	_, kept := c.unstored[order.ID]
+	c.unstored[order.ID] = order
+	if kept {
+		log.Errorf("order controller: %s executed on the exchange (%d) not stored yet: %v", order,
+			order.ExchangeID, err)
+		return
+	}
+	c.failedToStore(fmt.Errorf("order controller: %s executed on the exchange (%d) but not stored: followed all "+
+		"the same, stored again until it is: %w", order, order.ExchangeID, err), false)
+}
+
+// failedToStore notifies err, the failure of a new order to be stored, never
+// numbered when unnumbered, unless another one was notified less than
+// unstoredNotifyEvery ago: then it is logged, and notified with the next
+// notice. Must be called while holding c.mtx.
+func (c *Controller) failedToStore(err error, unnumbered bool) {
+	c.unnotified++
+	if unnumbered {
+		c.unnumbered++
+	}
+	c.lastFailed = err
+	if !c.notified.IsZero() && time.Since(c.notified) < unstoredNotifyEvery {
+		log.Error(err)
+		return
+	}
+	c.notifyUnstored()
+}
+
+// notifyUnstored notifies the failures of the new orders to be stored since
+// the last notice, the last one with how many others failed. Must be called
+// while holding c.mtx.
+func (c *Controller) notifyUnstored() {
+	err := c.lastFailed
+	if others := c.unnotified - 1; others > 0 {
+		err = fmt.Errorf("%w (and %d other orders since the last notice, %d not stored yet in all)", err, others,
+			len(c.unstored))
+	}
+	c.notified, c.unnotified, c.unnumbered, c.lastFailed = time.Now(), 0, 0, nil
+	c.notifyError(err)
+}
+
+// storeAgain writes again the orders the storage failed to write, in their
+// last state, see unstored: UpdateOrder writes an order under its id, as the
+// storages do. The ones stored at last are notified: at once when none is left,
+// else unstoredNotifyEvery apart at most; so are the failures of new orders
+// waiting for their notice, see failedToStore.
+func (c *Controller) storeAgain() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if c.unnotified > 0 && time.Since(c.notified) >= unstoredNotifyEvery {
+		c.notifyUnstored()
+	}
+	if len(c.unstored) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(c.unstored))
+	for id := range c.unstored {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var failed error
+	for _, id := range ids {
+		order := c.unstored[id]
+		if err := c.storage.UpdateOrder(&order); err != nil {
+			failed = err
+			continue // one refused for good never holds the others
+		}
+		delete(c.unstored, id)
+		c.storedLate++
+		log.Infof("order controller: the order %d stored at last", id)
+	}
+	switch {
+	case len(c.unstored) == 0:
+		c.notify(fmt.Sprintf("✅ order controller: the %d orders the storage failed to write are stored at last",
+			c.storedLate))
+		c.storedLate, c.recovered = 0, time.Now()
+		// the failures not notified yet, of the orders stored now, told by this
+		// notice; the next one, of another interruption, notified at once
+		c.notified = time.Time{}
+		if c.unnumbered == 0 {
+			c.unnotified, c.lastFailed = 0, nil
+		}
+	case c.storedLate > 0 && time.Since(c.recovered) >= unstoredNotifyEvery:
+		c.notify(fmt.Sprintf("✅ order controller: %d orders the storage failed to write are stored at last, %d "+
+			"not yet: %v", c.storedLate, len(c.unstored), failed))
+		c.storedLate, c.recovered = 0, time.Now()
+	}
+	if len(c.unstored) > 0 && time.Since(c.warned) >= unstoredWarnEvery {
+		c.warned = time.Now()
+		log.Errorf("order controller: %d orders executed on the exchange not stored yet, followed in memory: %v",
+			len(c.unstored), failed)
+	}
+}
+
 func (c *Controller) processTrade(order *model.Order) {
 	if order.Status != model.OrderStatusTypeFilled {
 		return
@@ -616,6 +790,8 @@ func (c *Controller) UpdateOrders() {
 	c.updateMtx.Lock()
 	defer c.updateMtx.Unlock()
 
+	c.storeAgain()
+
 	c.mtx.RLock()
 	orders := make([]model.Order, 0, len(c.pending))
 	for _, order := range c.pending {
@@ -646,12 +822,6 @@ func (c *Controller) UpdateOrders() {
 		}
 
 		keepStored(&excOrder, order)
-		err = c.storage.UpdateOrder(&excOrder)
-		if err != nil {
-			c.notifyError(err)
-			continue
-		}
-
 		log.Infof("[ORDER %s] %s", excOrder.Status, excOrder)
 		updatedOrders = append(updatedOrders, excOrder)
 	}
@@ -660,9 +830,11 @@ func (c *Controller) UpdateOrders() {
 		return
 	}
 
-	// Lock only when updating internal state
+	// Lock only when updating internal state: the change happened on the
+	// exchange, settled even when the storage fails to write it
 	c.mtx.Lock()
 	for _, processOrder := range updatedOrders {
+		c.store(&processOrder)
 		if isOpen(processOrder.Status) {
 			c.pending[processOrder.ID] = processOrder
 		} else {
@@ -719,6 +891,57 @@ func (c *Controller) requireRunning() error {
 	return nil
 }
 
+// lockPair serializes the orders of pair, each one from its call to the
+// exchange to its recording, returning the unlock: c.mtx is never held during
+// a call to the exchange, which may be slow, eg: an MT5 trade request whose
+// answer was lost, looked for in the account.
+func (c *Controller) lockPair(pair string) func() {
+	c.pairsMtx.Lock()
+	if c.pairs == nil {
+		c.pairs = make(map[string]*sync.Mutex)
+	}
+	mtx, ok := c.pairs[pair]
+	if !ok {
+		mtx = new(sync.Mutex)
+		c.pairs[pair] = mtx
+	}
+	c.pairsMtx.Unlock()
+	mtx.Lock()
+	return mtx.Unlock
+}
+
+// beginOrder begins an order of pair, under the lock of the pair (see
+// lockPair), refused on a stopped bot (ErrBotStopped): Stop waits for the
+// orders begun to end. It returns the end of the order.
+func (c *Controller) beginOrder(pair string) (func(), error) {
+	unlock := c.lockPair(pair)
+	c.mtx.Lock()
+	if err := c.requireRunning(); err != nil {
+		c.mtx.Unlock()
+		unlock()
+		return nil, err
+	}
+	c.inflight++
+	c.mtx.Unlock()
+	return func() {
+		c.mtx.Lock()
+		if c.inflight--; c.inflight == 0 {
+			c.idleCond().Broadcast()
+		}
+		c.mtx.Unlock()
+		unlock()
+	}, nil
+}
+
+// idleCond returns the condition the orders begun ending signal, see
+// beginOrder. Must be called while holding c.mtx.
+func (c *Controller) idleCond() *sync.Cond {
+	if c.idle == nil {
+		c.idle = sync.NewCond(&c.mtx)
+	}
+	return c.idle
+}
+
 func (c *Controller) Start() {
 	c.mtx.Lock()
 	if c.status == StatusRunning {
@@ -745,6 +968,8 @@ func (c *Controller) Start() {
 	log.Info("Bot started.")
 }
 
+// Stop stops the controller: no order begins any more (ErrBotStopped), and
+// once the ones begun are recorded, the pending orders are updated a last time.
 func (c *Controller) Stop() {
 	c.mtx.Lock()
 	if c.status != StatusRunning {
@@ -752,6 +977,9 @@ func (c *Controller) Stop() {
 		return
 	}
 	c.status = StatusStopped
+	for c.inflight > 0 {
+		c.idleCond().Wait()
+	}
 	c.mtx.Unlock()
 
 	c.UpdateOrders()
@@ -788,12 +1016,11 @@ func (c *Controller) Order(pair string, id int64) (model.Order, error) {
 
 func (c *Controller) CreateOrderOCO(side model.SideType, pair string, size, price, stop,
 	stopLimit float64) ([]model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return nil, err
 	}
+	defer end()
 
 	log.Infof("[ORDER] Creating OCO order for %s", pair)
 	orders, err := c.exchange.CreateOrderOCO(side, pair, size, price, stop, stopLimit)
@@ -802,12 +1029,10 @@ func (c *Controller) CreateOrderOCO(side model.SideType, pair string, size, pric
 		return nil, err
 	}
 
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	for i := range orders {
-		err := c.storage.CreateOrder(&orders[i])
-		if err != nil {
-			c.notifyError(err)
-			return nil, err
-		}
+		c.create(&orders[i])
 		c.track(orders[i])
 		go c.orderFeed.Publish(orders[i], true)
 	}
@@ -853,12 +1078,11 @@ func (c *Controller) CreateOrderStopProtected(side model.SideType, pair string, 
 func (c *Controller) createProtected(kind string, side model.SideType, pair string,
 	create func(service.ProtectionBroker) ([]model.Order, error)) ([]model.Order, error) {
 
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return nil, err
 	}
+	defer end()
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -869,16 +1093,7 @@ func (c *Controller) createProtected(kind string, side model.SideType, pair stri
 
 	log.Infof("[ORDER] Creating protected %s %s order for %s", kind, side, pair)
 	orders, err := create(broker)
-	for i := range orders {
-		if err := c.storage.CreateOrder(&orders[i]); err != nil {
-			c.notifyError(err)
-			return orders[:i], err
-		}
-		c.processTrade(&orders[i])
-		c.track(orders[i])
-		go c.orderFeed.Publish(orders[i], true)
-		log.Infof("[ORDER CREATED] %s", orders[i])
-	}
+	c.keepCreated(orders)
 	if err != nil {
 		c.notifyError(err)
 		return orders, err
@@ -886,12 +1101,59 @@ func (c *Controller) createProtected(kind string, side model.SideType, pair stri
 	return orders, nil
 }
 
+// keepCreated stores the orders created on the exchange and follows them as any
+// other order, stored or not, see create.
+func (c *Controller) keepCreated(orders []model.Order) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	for i := range orders {
+		c.create(&orders[i])
+		c.processTrade(&orders[i])
+		c.track(orders[i])
+		go c.orderFeed.Publish(orders[i], true)
+		log.Infof("[ORDER CREATED] %s", orders[i])
+	}
+}
+
+// ClosesProtected reports whether a market order of the exchange closes a
+// protected position with its legs in place, see service.ProtectedCloser.
+func (c *Controller) ClosesProtected() bool {
+	closer, ok := c.exchange.(service.ProtectedCloser)
+	return ok && closer.ClosesProtected()
+}
+
+// Protect protects the position held on side of pair with a stop loss and a
+// take profit, see service.PositionProtector, and stores the legs, followed as
+// any other order. Like UpdateProtection, it works on a stopped bot too: it
+// only protects a position.
+func (c *Controller) Protect(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error) {
+	unlock := c.lockPair(pair)
+	defer unlock()
+
+	protector, ok := c.exchange.(service.PositionProtector)
+	if !ok {
+		err := fmt.Errorf("protecting a position held: %w", exchange.ErrNotSupported)
+		c.notifyError(err)
+		return nil, err
+	}
+
+	log.Infof("[ORDER] Protecting the %s position of %s with a stop loss at %f and a take profit at %f", side,
+		pair, stop, profit)
+	legs, err := protector.Protect(side, pair, size, stop, profit)
+	c.keepCreated(legs)
+	if err != nil {
+		c.notifyError(err)
+		return legs, err
+	}
+	return legs, nil
+}
+
 // UpdateProtection moves a stop loss or take profit leg to level, see
 // service.ProtectionBroker, and stores it moved. Like Cancel, it works on a
 // stopped bot too: it only protects a position.
 func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	unlock := c.lockPair(leg.Pair)
+	defer unlock()
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -907,11 +1169,10 @@ func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Ord
 		return model.Order{}, err
 	}
 
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	keepStored(&moved, leg)
-	if err := c.storage.UpdateOrder(&moved); err != nil {
-		c.notifyError(err)
-		return moved, err
-	}
+	c.store(&moved)
 	if _, ok := c.pending[moved.ID]; ok {
 		c.pending[moved.ID] = moved
 	}
@@ -924,12 +1185,11 @@ func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Ord
 // service.ProtectionBroker, and stores it moved. Unlike UpdateProtection, it
 // needs the bot running: it changes when a position opens.
 func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(order.Pair)
+	if err != nil {
 		return model.Order{}, err
 	}
+	defer end()
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -945,11 +1205,10 @@ func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order,
 		return model.Order{}, err
 	}
 
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	keepStored(&moved, order)
-	if err := c.storage.UpdateOrder(&moved); err != nil {
-		c.notifyError(err)
-		return moved, err
-	}
+	c.store(&moved)
 	if _, ok := c.pending[moved.ID]; ok {
 		c.pending[moved.ID] = moved
 	}
@@ -959,12 +1218,11 @@ func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order,
 }
 
 func (c *Controller) CreateOrderLimit(side model.SideType, pair string, size, limit float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return model.Order{}, err
 	}
+	defer end()
 
 	log.Infof("[ORDER] Creating LIMIT %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderLimit(side, pair, size, limit)
@@ -973,11 +1231,9 @@ func (c *Controller) CreateOrderLimit(side model.SideType, pair string, size, li
 		return model.Order{}, err
 	}
 
-	err = c.storage.CreateOrder(&order)
-	if err != nil {
-		c.notifyError(err)
-		return model.Order{}, err
-	}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.create(&order)
 	c.track(order)
 	go c.orderFeed.Publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
@@ -985,12 +1241,11 @@ func (c *Controller) CreateOrderLimit(side model.SideType, pair string, size, li
 }
 
 func (c *Controller) CreateOrderMarketQuote(side model.SideType, pair string, amount float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return model.Order{}, err
 	}
+	defer end()
 
 	log.Infof("[ORDER] Creating MARKET %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderMarketQuote(side, pair, amount)
@@ -999,27 +1254,24 @@ func (c *Controller) CreateOrderMarketQuote(side model.SideType, pair string, am
 		return model.Order{}, err
 	}
 
-	err = c.storage.CreateOrder(&order)
-	if err != nil {
-		c.notifyError(err)
-		return model.Order{}, err
-	}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.create(&order)
 
 	// calculate profit
 	c.processTrade(&order)
 	c.track(order) // exchanges may report a market order as new and fill it right after
 	go c.orderFeed.Publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
-	return order, err
+	return order, nil
 }
 
 func (c *Controller) CreateOrderMarket(side model.SideType, pair string, size float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return model.Order{}, err
 	}
+	defer end()
 
 	log.Infof("[ORDER] Creating MARKET %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderMarket(side, pair, size)
@@ -1028,27 +1280,24 @@ func (c *Controller) CreateOrderMarket(side model.SideType, pair string, size fl
 		return model.Order{}, err
 	}
 
-	err = c.storage.CreateOrder(&order)
-	if err != nil {
-		c.notifyError(err)
-		return model.Order{}, err
-	}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.create(&order)
 
 	// calculate profit
 	c.processTrade(&order)
 	c.track(order) // exchanges may report a market order as new and fill it right after
 	go c.orderFeed.Publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
-	return order, err
+	return order, nil
 }
 
 func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (model.Order, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if err := c.requireRunning(); err != nil {
+	end, err := c.beginOrder(pair)
+	if err != nil {
 		return model.Order{}, err
 	}
+	defer end()
 
 	log.Infof("[ORDER] Creating STOP order for %s", pair)
 	order, err := c.exchange.CreateOrderStop(pair, size, limit)
@@ -1057,11 +1306,9 @@ func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (
 		return model.Order{}, err
 	}
 
-	err = c.storage.CreateOrder(&order)
-	if err != nil {
-		c.notifyError(err)
-		return model.Order{}, err
-	}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.create(&order)
 	c.track(order)
 	go c.orderFeed.Publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
@@ -1069,8 +1316,8 @@ func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (
 }
 
 func (c *Controller) Cancel(order model.Order) error {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	unlock := c.lockPair(order.Pair)
+	defer unlock()
 
 	log.Infof("[ORDER] Cancelling order for %s", order.Pair)
 	err := c.exchange.Cancel(order)
@@ -1078,12 +1325,10 @@ func (c *Controller) Cancel(order model.Order) error {
 		return err
 	}
 
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	order.Status = model.OrderStatusTypePendingCancel
-	err = c.storage.UpdateOrder(&order)
-	if err != nil {
-		c.notifyError(err)
-		return err
-	}
+	c.store(&order)
 	if _, ok := c.pending[order.ID]; ok {
 		c.pending[order.ID] = order
 	}

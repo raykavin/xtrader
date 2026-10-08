@@ -1,4 +1,5 @@
-import type { Order, Snapshot } from "../api/types";
+import type { ControlOrderResponse, Order, Snapshot } from "../api/types";
+import { formatQuantity } from "./format";
 
 export type Side = "buy" | "sell";
 
@@ -103,4 +104,31 @@ export function applyPendingOrder(snapshot: Snapshot, order: Order): Snapshot {
   const orders = [...snapshot.orders];
   orders[index] = order;
   return { ...snapshot, orders };
+}
+
+/** What the ticket tells of an order created: "warn" when it was created short of what was asked. */
+export interface OrderFeedback {
+  tone: "ok" | "warn";
+  text: string;
+}
+
+/**
+ * The feedback of an order created by the ticket: a warning when it was
+ * created short of what was asked, eg: the entry filled but its stop loss or
+ * take profit failing, the position left without them, which another order
+ * would double rather than protect.
+ */
+export function orderFeedback(
+  order: ControlOrderResponse,
+  side: Side,
+  asset: string,
+): OrderFeedback {
+  const text = `Ordem de ${side === "buy" ? "compra" : "venda"} #${order.id} criada — ${formatQuantity(
+    order.quantity,
+  )} ${asset}`;
+  if (!order.warning) return { tone: "ok", text };
+  return {
+    tone: "warn",
+    text: `${text}, mas sem todo o stop loss e take profit pedidos: confira a posição, ela pode estar desprotegida (${order.warning})`,
+  };
 }

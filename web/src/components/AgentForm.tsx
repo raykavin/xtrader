@@ -331,7 +331,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
         <Section
           title="Conta MT5"
           disabled={busy}
-          hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic."
+          hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ativos em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
         >
           <div className="agent-form-grid">
             <TextField

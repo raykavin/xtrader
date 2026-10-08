@@ -56,6 +56,12 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - calendário econômico;
   - memória das últimas decisões e operações.
 - **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem.
+- **Saída que falha** (mercado fechado, cotação recusada, bridge fora do ar, bot parado): a posição não fica sem stop loss e take profit.
+  - No MT5, a ordem de fechamento sai com eles no lugar. Eles saem junto com a posição, e um fechamento recusado não mexe neles.
+  - No paper, as pernas reservam a posição: são canceladas antes do fechamento e, se ele falhar, recolocadas nos mesmos níveis.
+  - O fechamento é tentado de novo, sem consultar o modelo, a cada fechamento de candle e nos ticks, com intervalo crescente (30s, 1 min, 2 min... até 15 min).
+  - A falha, uma posição que ficou sem proteção e o fechamento concluído são avisados no painel e no Telegram.
+  - Num reinício, a saída pendente não é retomada: a posição segue com a proteção, e o modelo é consultado de novo.
 - **Quando consultar:** uma decisão por fechamento de candle ou, com `llm-consult-interval`, numa agenda própria (por exemplo, a cada 10 min). Há também a **reanálise sob demanda**, pelo painel ou pelo Telegram, com uma nota para o modelo.
 - **Início do agente:** ao (re)iniciar, os ativos são analisados de uma vez, em paralelo, com as mesmas regras das outras análises: um ativo sem entrada possível (por exemplo, com a tendência maior exigida e mista) não é consultado, e a análise aparece no painel como "Não consultado", com o motivo. Cada decisão é aplicada no tick seguinte do ativo.
 - **Prompts:** editáveis e trocados com o agente rodando. A troca vale a partir da próxima análise, e cada decisão registra o prompt e a versão usados.
@@ -115,6 +121,11 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM.
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
+- **Ordem executada que não se grava:** a ordem que a corretora já executou nunca vira erro por falha de gravação, por exemplo com o disco do outbox cheio.
+  - O bot continua a acompanhá-la em memória: posição, pernas e lucro.
+  - A falha é notificada no painel e no Telegram, e a gravação é repetida até dar certo, com outra notificação quando conclui. As falhas de ordens novas durante a mesma interrupção saem juntas, no máximo uma notificação por minuto, mesmo que uma ordem fique recusada para sempre. As ordens gravadas enquanto outra continua falhando também são notificadas.
+  - Ao parar, o agente tenta gravar de novo antes de fechar o outbox. O que ainda não tiver sido gravado aparece no log como perdido. A posição continua na corretora.
+  - A boleta não responde erro para uma ordem executada. Se a entrada foi executada e o stop loss ou o take profit falharam, a resposta traz um aviso (`warning`), que o painel mostra até a próxima ordem: a posição pode estar sem proteção. Números não finitos (NaN, infinito) são gravados como 0, também no storage local (buntdb) do paper e do backtest.
 
 ## Arquitetura
 
@@ -133,7 +144,15 @@ navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegra
 - **`cmd/controller`:** o único processo que acessa o banco.
 - **`cmd/migrator`:** aplica as migrações e os seeds (`gobox/database/migrate`) e importa, uma única vez, a configuração e os dados da versão anterior. O controller não migra: ele confere a versão do schema.
 - **Agentes:** recebem a configuração pela API interna (`agentapi`). Os parâmetros viram as mesmas flags da linha de comando, e os segredos nunca passam por argumento.
-- **`tools/mt5bridge`:** uma ponte HTTP em Python para o terminal MT5, que roda no Wine, dentro do container `mt5`.
+- **`tools/mt5bridge`:** uma ponte HTTP em Python para o terminal MT5, que roda no Wine, dentro do container `mt5`. Ela atende uma requisição por vez e protege as ordens:
+  - cada ordem leva um prazo de 20 s, em dois headers: `X-Bridge-Deadline` (instante em ms Unix, pelo relógio do agente) e `X-Bridge-Timeout` (ms restantes, que a bridge conta pelo próprio relógio a partir do recebimento). A bridge usa o que vencer primeiro, contado no relógio monotônico. Assim, uma bridge em outro host com o relógio atrasado não envia a ordem mais tarde. Se o terminal estiver ocupado ou reconectando além do prazo, a ordem é recusada sem ir ao terminal (`504` com `"sent": false`), e nunca é executada depois que o agente desistiu dela. Um relógio da bridge adiantado encurta o prazo: o agente avisa no log quando a diferença passa de 1 s;
+  - antes de cada ordem, a bridge confere se o terminal ainda está na conta do `--login` e se uma conta real tem `--allow-real`. Se não, recusa a ordem (`409`);
+  - uma lista que o terminal não conseguiu ler (posições, ordens, histórico, candles) é erro (`502`), nunca uma lista vazia. A exceção são os candles de uma faixa fora do histórico do terminal (antes do início dele ou além do "Max. bars in chart"), que o `copy_rates_*` recusa como diz a documentação do `CopyRates`: se o último candle do símbolo é lido, a faixa vem vazia, e o download e a paginação seguem como no fim do histórico.
+- **Ordens sem resposta:** o comentário de cada ordem é o do agente seguido de `#` e uma etiqueta própria (ex.: `nb:llm#k3f9a2`). O magic continua sendo o que identifica as posições do bot. Se a resposta de uma ordem se perde, o agente procura a ordem na conta por essa etiqueta antes de dar erro. Se a acha, segue como se a resposta tivesse chegado; se ela não aparece depois do prazo (até cerca de 22 s), a ordem não foi executada.
+  - Durante essa espera, só aguardam as outras ordens do mesmo par e quem enviou a ordem (a chamada espera o resultado; num bot de vários pares, os candles dele esperam junto). O acompanhamento das ordens, as leituras, o painel e as ordens dos outros pares seguem.
+  - Se a conta não puder ser lida depois do prazo, o resultado fica desconhecido e o par fica bloqueado para ordens que abrem ou fecham posição até uma leitura da conta dizer o que aconteceu. Stop loss e take profit continuam podendo ser movidos.
+  - Se o terminal muda de conta (ex.: pelo VNC), o agente para de enviar ordens, e de aplicar as posições lidas, até a conta voltar. A conta é lida antes e depois das listas de cada leitura.
+  - Atualize as duas imagens juntas: com uma bridge antiga, que não respeita os dois prazos, o agente avisa no log e trata a ordem não encontrada como de resultado desconhecido.
 
 ## Estrutura do repositório
 
@@ -246,6 +265,14 @@ Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entr
 - segredos;
 - parâmetros.
 
+**Magic e comentário:** cada agente só opera as posições do próprio magic na conta. Sem magic, ele é um hash do comentário; sem comentário, vale `nb:` e a estratégia (`nb:llm` no agente LLM; `nb:trendconfluence`, `nb:adxema`, `nb:atrbreakout` ou `nb:orb` quando o parâmetro `strategy` não é definido).
+
+- Dois agentes ativos em live na mesma bridge, com o mesmo magic e um par em comum, fechariam e moveriam as posições um do outro. Por isso o painel recusa o segundo (`409`) ao criar, ativar ou editar. A bridge é comparada pelo host e pela porta (`localhost` e `127.0.0.1` contam como a mesma).
+- Isso vale também para os agentes que rodam à parte (**Iniciado pelo controller** desligado): eles operam do mesmo jeito, e o painel os compara pelas configurações gravadas, já que o controller não os vê rodando. Mantenha as configurações de um agente à parte iguais às flags com que ele roda.
+- Agentes desativados ou em paper podem repetir o magic: eles não enviam ordens.
+- O controller também não inicia um agente que conflita com outro em execução, por exemplo com dados gravados antes dessa regra. O card mostra **Não iniciado** e o motivo. Essa verificação só enxerga os agentes que o próprio controller roda.
+- Para separar dois agentes, dê a um deles um comentário (ou magic) próprio. Trocar o magic de um agente com posições abertas faz ele deixar de reconhecê-las.
+
 **Quais mudanças valem na hora:** num agente rodando, **Ativo**, **Painel de trading**, **Controle via Telegram** e o prompt. As demais ficam como "reinício pendente", aplicadas pelo botão **Reiniciar**.
 
 **Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`. Nas listas, os itens são separados por `;` (a vírgula continua aceita).
@@ -348,6 +375,8 @@ O agente LLM também roda backtests, mas cada candle vira uma requisição paga 
 
 Faça uma vez só, com o serviço antigo parado. Nunca rode os dois ao mesmo tempo: eles usariam a mesma conta, o mesmo magic e o mesmo bot.
 
+Se dois agentes da versão anterior operavam o mesmo par com o mesmo magic na mesma bridge, o segundo é importado desativado, com uma nota no relatório.
+
 ```bash
 go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
   -env ~/.config/automator/automator.env -dry-run      # o que seria importado
@@ -369,6 +398,7 @@ go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
 | Comando                                                            | O que faz                                                                              |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
 | `make test`                                                        | `go test -race -cover ./...`                                                           |
+| `make bridge-test`                                                 | testes da `tools/mt5bridge` (`python3 -m unittest`), com um MetaTrader5 simulado       |
 | `make lint`                                                        | `golangci-lint run --fix`                                                              |
 | `make generate` / `make generate-check`                            | gera e confere `web/src/api/types.ts` a partir de `ui/dto.go` (tygo)                   |
 | `make ui-install`, `make ui-dev`, `make ui-check`, `make ui-build` | dependências, servidor de desenvolvimento, lint + typecheck + testes e build do painel |

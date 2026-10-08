@@ -1265,6 +1265,109 @@ func TestPaperWallet_UpdateProtection(t *testing.T) {
 	require.Equal(t, 104.0, got.Price)
 }
 
+// Protect places the legs of a position held again, eg: once canceled for a
+// close that failed: they reserve the position and close it at their level.
+func TestPaperWallet_Protect(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	candle := func(hour int, low, high, close float64) model.Candle {
+		return model.Candle{Pair: "BTCUSDT", Time: start.Add(time.Duration(hour) * time.Hour), Low: low, High: high,
+			Close: close, Complete: true}
+	}
+	protected := func(t *testing.T, side model.SideType) (*PaperWallet, []model.Order) {
+		t.Helper()
+		wallet := NewPaperWallet(context.Background(), "USDT", WithPaperAsset("USDT", 10000))
+		wallet.OnCandle(candle(0, 100, 100, 100))
+		stop, profit := 90.0, 120.0
+		if side == model.SideTypeSell {
+			stop, profit = 110, 80
+		}
+		orders, err := wallet.CreateOrderMarketProtected(side, "BTCUSDT", 50, stop, profit)
+		require.NoError(t, err)
+		require.NoError(t, wallet.Cancel(orders[1]), "the legs canceled, eg: for a close")
+		return wallet, orders
+	}
+
+	t.Run("a long, closed by its stop loss", func(t *testing.T) {
+		wallet, orders := protected(t, model.SideTypeBuy)
+		legs, err := wallet.Protect(model.SideTypeBuy, "BTCUSDT", 50, 90, 120)
+		require.NoError(t, err)
+		require.Len(t, legs, 2)
+		takeProfit, stopLoss := legs[0], legs[1]
+		require.Equal(t, model.OrderTypeLimitMaker, takeProfit.Type)
+		require.Equal(t, 120.0, takeProfit.Price)
+		require.Equal(t, model.OrderTypeStopLoss, stopLoss.Type)
+		require.Equal(t, 90.0, *stopLoss.Stop)
+		require.Equal(t, *takeProfit.GroupID, *stopLoss.GroupID)
+		require.NotEqual(t, *orders[1].GroupID, *takeProfit.GroupID, "a protection of its own")
+		for _, leg := range legs {
+			require.Equal(t, model.SideTypeSell, leg.Side)
+			require.Equal(t, 50.0, leg.Quantity)
+			require.Equal(t, model.OrderStatusTypeNew, leg.Status)
+		}
+		_, err = wallet.CreateOrderLimit(model.SideTypeSell, "BTCUSDT", 50, 130)
+		require.ErrorIs(t, err, ErrInsufficientFunds, "the position reserved by its legs")
+		_, err = wallet.Protect(model.SideTypeBuy, "BTCUSDT", 50, 90, 120)
+		require.ErrorIs(t, err, ErrNotSupported, "protected already")
+
+		wallet.OnCandle(candle(1, 89, 101, 95))
+		got, err := wallet.Order("BTCUSDT", stopLoss.ExchangeID)
+		require.NoError(t, err)
+		require.Equal(t, model.OrderStatusTypeFilled, got.Status)
+		require.Equal(t, 90.0, got.Price)
+		got, err = wallet.Order("BTCUSDT", takeProfit.ExchangeID)
+		require.NoError(t, err)
+		require.Equal(t, model.OrderStatusTypeCanceled, got.Status)
+		asset, _, err := wallet.Position("BTCUSDT")
+		require.NoError(t, err)
+		require.Zero(t, asset)
+	})
+
+	t.Run("a short, closed by its take profit", func(t *testing.T) {
+		wallet, _ := protected(t, model.SideTypeSell)
+		legs, err := wallet.Protect(model.SideTypeSell, "BTCUSDT", 50, 110, 80)
+		require.NoError(t, err)
+		require.Len(t, legs, 2)
+		require.Equal(t, model.SideTypeBuy, legs[0].Side)
+		_, err = wallet.Protect(model.SideTypeSell, "BTCUSDT", 50, 110, 80)
+		require.ErrorIs(t, err, ErrNotSupported, "protected already")
+
+		wallet.OnCandle(candle(1, 79, 101, 85))
+		got, err := wallet.Order("BTCUSDT", legs[0].ExchangeID)
+		require.NoError(t, err)
+		require.Equal(t, model.OrderStatusTypeFilled, got.Status)
+		asset, _, err := wallet.Position("BTCUSDT")
+		require.NoError(t, err)
+		require.Zero(t, asset)
+	})
+
+	t.Run("a stop loss alone", func(t *testing.T) {
+		wallet, _ := protected(t, model.SideTypeBuy)
+		legs, err := wallet.Protect(model.SideTypeBuy, "BTCUSDT", 50, 90, 0)
+		require.NoError(t, err)
+		require.Len(t, legs, 1)
+		require.Equal(t, model.OrderTypeStopLoss, legs[0].Type)
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		wallet, _ := protected(t, model.SideTypeBuy)
+		_, err := wallet.Protect(model.SideTypeSell, "BTCUSDT", 50, 110, 80)
+		require.ErrorIs(t, err, ErrNotSupported, "no short held")
+		_, err = wallet.Protect(model.SideTypeBuy, "BTCUSDT", 60, 90, 120)
+		require.ErrorIs(t, err, ErrInvalidQuantity, "more than held")
+		_, err = wallet.Protect(model.SideTypeBuy, "BTCUSDT", 0, 90, 120)
+		require.ErrorIs(t, err, ErrInvalidQuantity)
+		_, err = wallet.Protect(model.SideTypeBuy, "BTCUSDT", 50, 101, 120)
+		require.ErrorIs(t, err, ErrInvalidProtection, "a stop loss above the price")
+		_, err = wallet.Protect(model.SideTypeBuy, "BTCUSDT", 50, 0, 0)
+		require.ErrorIs(t, err, ErrInvalidProtection)
+
+		flat := NewPaperWallet(context.Background(), "USDT", WithPaperAsset("USDT", 10000))
+		flat.OnCandle(candle(0, 100, 100, 100))
+		_, err = flat.Protect(model.SideTypeBuy, "BTCUSDT", 50, 90, 120)
+		require.ErrorIs(t, err, ErrNotSupported, "nothing held")
+	})
+}
+
 func TestPaperWallet_UpdateLimit(t *testing.T) {
 	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	candle := func(hour int, low, high, close float64) model.Candle {

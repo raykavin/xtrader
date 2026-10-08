@@ -77,7 +77,9 @@ func (m *Manager) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// handleConfig answers the settings of the agent, its secrets included.
+// handleConfig answers the settings of the agent, its secrets included,
+// unless it would trade on MT5 the positions of another agent running (409,
+// see Manager.admit).
 func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	a, err := m.store.Agent(ctx, agentOf(r))
@@ -112,6 +114,12 @@ func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 			cfg.Prompt = &agentapi.Prompt{PromptRef: agentapi.PromptRef{ID: prompt.ID, Name: prompt.Name,
 				Version: prompt.Version}, Content: prompt.Content}
 		}
+	}
+	// what it trades, kept apart from the positions of the agents running
+	if err := m.admit(a, cfg.MT5Book()); err != nil {
+		log.Errorf("controller: agent %s: %v", a.Name, err)
+		writeJSONError(w, http.StatusConflict, err.Error())
+		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, cfg)

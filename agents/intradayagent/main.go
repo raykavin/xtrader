@@ -29,8 +29,14 @@ import (
 )
 
 func main() {
+	runner.Run(agent())
+}
+
+// agent returns the agent and its strategies, the first one its default, the
+// one of agentapi.DefaultStrategy for the kind intraday.
+func agent() runner.Agent {
 	f := newFlags()
-	runner.Run(runner.Agent{Name: "intradayagent", Strategies: []runner.Strategy{
+	return runner.Agent{Name: "intradayagent", Strategies: []runner.Strategy{
 		{Name: "orb", About: "opening range breakout", New: f.orb, Inputs: inputs("timezone", "session", "open-range",
 			"buffer-atr", "max-trades", "max-range-atr", "trend-ema", "vwap")},
 		{Name: "asialondon", About: "the Asia range broken in London", New: f.asiaLondon, Inputs: inputs("timezone",
@@ -41,7 +47,7 @@ func main() {
 			Inputs: inputs("timezone", "lookback", "day-levels")},
 		{Name: "zscore", About: "reversion of the Z-Score of the close", New: f.zscore,
 			Inputs: inputs("entry-z", "exit-z", "max-adx")},
-	}})
+	}}
 }
 
 // inputs returns the flags of a strategy: its own and the ones of its exits.
