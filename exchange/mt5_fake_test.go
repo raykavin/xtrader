@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -127,10 +128,12 @@ type m5fResult struct {
 }
 
 type m5fRequest struct {
-	method string
-	path   string
-	query  string
-	body   map[string]any
+	method   string
+	path     string
+	query    string
+	body     map[string]any
+	deadline string // MT5DeadlineHeader
+	timeout  string // MT5TimeoutHeader
 }
 
 type m5fFake struct {
@@ -158,7 +161,14 @@ type m5fFake struct {
 	drift         float64           // added to the prices after every market deal
 	marketClosed  bool
 	requests      []m5fRequest
-	afterSnapshot func() // runs after the next GET /orders, eg: to fill an order between the two reads
+	afterSnapshot func()                // runs after the next GET /orders, eg: to fill an order between the two reads
+	after         map[string]func()     // run after the next request of their method and path
+	failing       map[string]m5fFailure // the answers of every request of their method and path, until cleared
+
+	login       int64         // of --login: the trade requests on another account are refused (409)
+	tradeDelay  time.Duration // waited by the trade requests before their deadline is checked, as for the terminal
+	loseAnswers int           // next trade requests executed whose answer is lost (the connection closed)
+	stripTags   bool          // the comments of the trade requests recorded without their tag, as by a broker
 }
 
 func m5fTestdata(t *testing.T, name string) []byte {
@@ -174,7 +184,7 @@ func newM5F(t *testing.T) *m5fFake {
 	t.Helper()
 	f := &m5fFake{
 		t:          t,
-		health:     map[string]any{"connected": true, "trade_allowed": true, "build": 5200, "login": 12345678, "server": "Exness-MT5Trial11", "read_only": false},
+		health:     map[string]any{"connected": true, "trade_allowed": true, "build": 5200, "login": 12345678, "server": "Exness-MT5Trial11", "read_only": false, "deadline": true, "timeout": true},
 		symbols:    make(map[string]*m5fSymbol),
 		ticks:      make(map[string]m5fTick),
 		rates:      make(map[string][]mt5Rate),
@@ -184,6 +194,7 @@ func newM5F(t *testing.T) *m5fFake {
 		nextDeal:   530000000,
 	}
 	require.NoError(t, json.Unmarshal(m5fTestdata(t, "account.json"), &f.account))
+	f.login = int64(f.account["login"].(float64))
 	for _, name := range []string{"XAUUSDm", "BTCUSDm", "USDBRLm", "EURUSDm"} {
 		var raw map[string]any
 		require.NoError(t, json.Unmarshal(m5fTestdata(t, "symbol_"+name+".json"), &raw))
@@ -229,6 +240,7 @@ func (f *m5fFake) options(extra ...MT5Option) []MT5Option {
 		WithMT5PollInterval(20 * time.Millisecond),
 		withMT5RetryDelay(time.Millisecond),
 		withMT5SyncWait(0), // the candles of the tests are old: see TestMT5AwaitsTheHistory
+		withMT5TradeDeadline(time.Second, 20*time.Millisecond),
 	}
 	probe := &MT5{}
 	for _, option := range extra {
@@ -300,6 +312,33 @@ func (f *m5fFake) failNext(method, path string, status int, body string) {
 	f.failures = append(f.failures, m5fFailure{method: method, path: path, status: status, body: body})
 }
 
+// afterNext runs fn once the next request of method to path is answered.
+func (f *m5fFake) afterNext(method, path string, fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.after == nil {
+		f.after = make(map[string]func())
+	}
+	f.after[method+" "+path] = fn
+}
+
+// setFailing answers every request of method to path with status and body,
+// without handling it, until clearFailing.
+func (f *m5fFake) setFailing(method, path string, status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failing == nil {
+		f.failing = make(map[string]m5fFailure)
+	}
+	f.failing[method+" "+path] = m5fFailure{method: method, path: path, status: status, body: body}
+}
+
+func (f *m5fFake) clearFailing(method, path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.failing, method+" "+path)
+}
+
 // resultNext answers the next trade request with retcode and comment, without
 // executing it.
 func (f *m5fFake) resultNext(retcode int, comment string) {
@@ -330,6 +369,35 @@ func (f *m5fFake) setZeroPrice(zero bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.zeroPrice = zero
+}
+
+// setTradeDelay makes the trade requests wait delay before their deadline is
+// checked, as behind a slow request or a reconnection of the terminal.
+func (f *m5fFake) setTradeDelay(delay time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tradeDelay = delay
+}
+
+// loseNext executes the next n trade requests but loses their answers: the
+// connection is closed instead.
+func (f *m5fFake) loseNext(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loseAnswers = n
+}
+
+func (f *m5fFake) setStripTags(strip bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stripTags = strip
+}
+
+// tradesExecuted counts the trade requests that reached order_send.
+func (f *m5fFake) tradesExecuted() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.trades
 }
 
 func (f *m5fFake) requestsTo(method, path string) []m5fRequest {
@@ -633,9 +701,17 @@ func (f *m5fFake) reduceLocked(p *m5fPosition, volume float64) {
 
 // serveHTTP answers a request as the bridge does.
 func (f *m5fFake) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	received := time.Now()
 	data, _ := io.ReadAll(r.Body)
+	if r.Method == http.MethodPost && r.URL.Path == "/order" {
+		f.mu.Lock()
+		delay := f.tradeDelay
+		f.mu.Unlock()
+		time.Sleep(delay) // waiting for the terminal
+	}
 	f.mu.Lock()
-	request := m5fRequest{method: r.Method, path: r.URL.Path, query: r.URL.RawQuery}
+	request := m5fRequest{method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
+		deadline: r.Header.Get(MT5DeadlineHeader), timeout: r.Header.Get(MT5TimeoutHeader)}
 	if r.Method == http.MethodPost {
 		_ = json.Unmarshal(data, &request.body)
 	}
@@ -661,9 +737,16 @@ func (f *m5fFake) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if failure, ok := f.failing[r.Method+" "+r.URL.Path]; ok {
+		f.mu.Unlock()
+		w.WriteHeader(failure.status)
+		_, _ = w.Write([]byte(failure.body))
+		return
+	}
 
 	query := r.URL.Query()
 	var after func()
+	lost := false
 	status, payload := http.StatusOK, any(nil)
 	switch r.Method + " " + r.URL.Path {
 	case "GET /health":
@@ -674,7 +757,7 @@ func (f *m5fFake) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		health["time"] = float64(time.Now().UnixNano()) / 1e9
 		payload = health
 	case "GET /account":
-		payload = f.account
+		payload = maps.Clone(f.account) // written after the lock is released
 	case "GET /symbol":
 		symbol, ok := f.symbols[query.Get("symbol")]
 		if !ok {
@@ -708,10 +791,32 @@ func (f *m5fFake) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		status, payload = f.dealsLocked(query)
 	case "GET /history_orders":
 		status, payload = f.historyLocked(query)
-	case "POST /order", "POST /check":
+	case "POST /order":
+		if status, payload = f.refuseTradeLocked(request, received); status == 0 {
+			status, payload = f.tradeLocked(r.URL.Path, request.body, data)
+			if lost = f.loseAnswers > 0; lost {
+				f.loseAnswers--
+			}
+		}
+	case "POST /check":
 		status, payload = f.tradeLocked(r.URL.Path, request.body, data)
 	default:
 		status, payload = http.StatusNotFound, map[string]any{"error": "no route " + r.Method + " " + r.URL.Path}
+	}
+	if hook, ok := f.after[r.Method+" "+r.URL.Path]; ok {
+		delete(f.after, r.Method+" "+r.URL.Path)
+		if previous := after; previous != nil {
+			after = func() { previous(); hook() }
+		} else {
+			after = hook
+		}
+	}
+	if lost {
+		f.mu.Unlock()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(f.t, err)
+		_ = conn.Close()
+		return
 	}
 	reply(status, payload)
 	if after != nil {
@@ -876,6 +981,53 @@ func (f *m5fFake) historyLocked(query map[string][]string) (int, any) {
 	return http.StatusOK, orders
 }
 
+// refuseTradeLocked refuses a trade request received at received before
+// order_send, as the bridge does, unsent: its deadline passed, the earliest of
+// MT5DeadlineHeader and of MT5TimeoutHeader from its receipt, or the terminal
+// logged in another account than its --login. 0 when it goes on.
+func (f *m5fFake) refuseTradeLocked(request m5fRequest, received time.Time) (int, any) {
+	var deadlines []time.Time
+	if request.deadline != "" {
+		ms, err := strconv.ParseInt(request.deadline, 10, 64)
+		if err != nil {
+			return http.StatusBadRequest, map[string]any{"error": "invalid " + MT5DeadlineHeader, "sent": false}
+		}
+		deadlines = append(deadlines, time.UnixMilli(ms))
+	}
+	if request.timeout != "" {
+		ms, err := strconv.ParseInt(request.timeout, 10, 64)
+		if err != nil {
+			return http.StatusBadRequest, map[string]any{"error": "invalid " + MT5TimeoutHeader, "sent": false}
+		}
+		deadlines = append(deadlines, received.Add(time.Duration(ms)*time.Millisecond))
+	}
+	for _, deadline := range deadlines {
+		if !time.Now().Before(deadline) {
+			return http.StatusGatewayTimeout, map[string]any{
+				"error": "the deadline of the request passed waiting for the terminal: not sent to it", "sent": false}
+		}
+	}
+	if login := m5fInt(f.account["login"]); login != f.login {
+		return http.StatusConflict, map[string]any{
+			"error": fmt.Sprintf("the terminal is logged in %d, not %d: trade request refused", login, f.login),
+			"sent":  false}
+	}
+	return 0, nil
+}
+
+// m5fInt reads an integer of the account, decoded from JSON or set by a test.
+func m5fInt(value any) int64 {
+	switch n := value.(type) {
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
+}
+
 // m5fNumber reads a number of a trade request.
 func m5fNumber(body map[string]any, name string) float64 {
 	value, _ := body[name].(float64)
@@ -940,6 +1092,9 @@ func (f *m5fFake) executeLocked(body map[string]any, result map[string]any) (int
 	comment, _ := body["comment"].(string)
 	if len(comment) > mt5MaxComment {
 		comment = comment[:mt5MaxComment]
+	}
+	if i := strings.LastIndex(comment, "#"); f.stripTags && i >= 0 {
+		comment = comment[:i]
 	}
 
 	switch action {
@@ -1186,3 +1341,19 @@ func (x *MT5TestFake) Requests(method, path string) int { return x.f.requestCoun
 
 // ClearRequests forgets the requests counted.
 func (x *MT5TestFake) ClearRequests() { x.f.clearRequests() }
+
+// RefuseNextTrade answers the next trade request with the retcode of a closed
+// market, not executed.
+func (x *MT5TestFake) RefuseNextTrade() { x.f.resultNext(mt5CodeMarketClosed, "Market closed") }
+
+// FailNextTrade answers the next trade request with an error of the bridge
+// after order_send, its outcome unknown to the adapter, not executed.
+func (x *MT5TestFake) FailNextTrade() {
+	x.f.failNext("POST", "/order", http.StatusBadGateway, `{"error":"order_send: IPC timeout","retcode":-10005}`)
+}
+
+// Levels returns the stop loss and the take profit of an open position.
+func (x *MT5TestFake) Levels(position int64) (sl, tp float64, ok bool) {
+	p, ok := x.f.position(position)
+	return p.sl, p.tp, ok
+}

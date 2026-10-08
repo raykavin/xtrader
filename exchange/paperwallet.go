@@ -1116,6 +1116,55 @@ func (p *PaperWallet) activate(pair string, legs []int) {
 	p.pendingOrders[pair] = append(p.pendingOrders[pair], open...)
 }
 
+// Protect protects size units of the position held on side of pair with a stop
+// loss at stop and a take profit at profit, 0 for none, see
+// service.PositionProtector: the legs CreateOrderMarketProtected places, on the
+// book at once, reserving the position. As a broker requires, the levels are
+// on their side of the last price, and the position is held, free of other
+// legs.
+func (p *PaperWallet) Protect(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error) {
+	p.Lock()
+	defer p.Unlock()
+
+	fail := func(err error) ([]model.Order, error) {
+		return nil, &OrderError{Err: err, Pair: pair, Quantity: size}
+	}
+	if size <= 0 {
+		return fail(ErrInvalidQuantity)
+	}
+	if err := checkProtection(side, p.lastCandle[pair].Close, stop, profit); err != nil {
+		return fail(err)
+	}
+
+	asset, _ := p.ensureAssets(pair)
+	held := p.assets[asset].Free // a long reserved by its legs isn't free
+	if side == model.SideTypeSell {
+		held = -held
+	}
+	closing := model.SideTypeSell
+	if side == model.SideTypeSell {
+		closing = model.SideTypeBuy
+	}
+	for _, i := range p.pendingOrders[pair] {
+		if order := p.orders[i]; order.GroupID != nil && order.Side == closing &&
+			order.Status == model.OrderStatusTypeNew {
+			return fail(fmt.Errorf("the %s position of %s is protected already by the order %d: %w", side, pair,
+				order.ExchangeID, ErrNotSupported))
+		}
+	}
+	switch {
+	case held <= 0:
+		return fail(fmt.Errorf("no %s position of %s to protect: %w", side, pair, ErrNotSupported))
+	case held < size*(1-1e-9):
+		return fail(fmt.Errorf("the %s position of %s is %v, not %v: %w", side, pair, held, size,
+			ErrInvalidQuantity))
+	}
+
+	legs := p.addLegs(side, pair, size, stop, profit)
+	p.activate(pair, legs)
+	return p.legOrders(legs), nil
+}
+
 // UpdateProtection moves a leg of a protection, or of an OCO order, to level: it
 // fills there from the next candle on. As a broker requires, the level must be
 // on its side of the entry of a leg waiting for it, else of the last price, and

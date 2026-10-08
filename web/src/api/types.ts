@@ -302,6 +302,16 @@ export interface ControlOrderRequest {
   take_profit: number /* float64 */;
 }
 /**
+ * ControlOrderResponse is the answer of POST /api/controls/order: the order
+ * created, the entry of a protected one. Warning tells of an order executed
+ * short of what was asked, never answered as an error, which would have it sent
+ * again: eg: the entry filled, but its stop loss or its take profit failing,
+ * the position left without them.
+ */
+export interface ControlOrderResponse extends Order {
+  warning?: string;
+}
+/**
  * ControlMoveRequest is the payload of POST /api/controls/orders/{id}/move: the
  * new price of a pending limit order, or the new level of a stop loss or take
  * profit.
@@ -459,10 +469,12 @@ export interface ErrorResponse {
  * its process, its language model with its prompt, and which of its secrets
  * are set, never their values. Its Name and its Kind never change. Its API is
  * served at APIAddress, host:port. Launched tells that the controller runs it,
- * and Restart that it runs it again when it exits. Params are the flags of its
- * settings that no field holds, by name, the ones of its language model
- * included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}. Model names its
- * language model, eg: openai gpt-5, and LLM holds it, for an LLM agent only.
+ * and Restart that it runs it again when it exits; LaunchError why the
+ * controller didn't launch it, eg: another agent running trades the same
+ * positions on MT5. Params are the flags of its settings that no field holds,
+ * by name, the ones of its language model included, eg: {"pair": "XAUUSDm",
+ * "llm-min-stop-atr": "1"}. Model names its language model, eg: openai gpt-5,
+ * and LLM holds it, for an LLM agent only.
  */
 export interface AgentSettings {
   name: string;
@@ -477,6 +489,7 @@ export interface AgentSettings {
   running: boolean;
   restart_pending: boolean;
   last_exit?: string;
+  launch_error?: string;
   params: { [key: string]: string};
   account?: AgentAccountSettings;
   llm?: AgentLLMSettings;

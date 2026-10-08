@@ -455,8 +455,8 @@ var IndicatorGroups = []string{"ema", "sma", "rsi", "atr", "adx", "macd", "bb", 
 
 // trade is a position of the Trader: its side, its entry, 0 when unknown, the
 // candles closed since, the legs of its stop loss and take profit at the
-// broker, and whether its exit was decided, retried on each candle once its
-// legs are canceled.
+// broker, and whether its exit was decided, its close retried on the next
+// ticks while it fails, the position protected meanwhile, see close.
 type trade struct {
 	side    model.SideType
 	entry   float64
@@ -464,7 +464,27 @@ type trade struct {
 	bars    int
 	legs    []model.Order
 	exiting bool
+
+	attempts int         // of its close
+	retryAt  time.Time   // the next attempt of its close on a tick, see retryClose
+	canceled *protection // the levels of its legs canceled for its close, nil once placed again
+	failed   int         // the attempts of its close failed
+	bare     bool        // notified left without its legs
 }
+
+// protection is the stop loss and the take profit of a position, 0 for none.
+type protection struct {
+	stop, profit float64
+}
+
+// The attempts to close a position on the ticks, once its close failed: the
+// first one after closeRetry, then twice as late each time, up to
+// closeRetryMax, so that the broker isn't flooded with orders it refuses, eg:
+// the market closed. The close of each candle is retried at once.
+const (
+	closeRetry    = 30 * time.Second
+	closeRetryMax = 15 * time.Minute
+)
 
 // Option configures the Trader, see New.
 type Option func(*options)
@@ -685,14 +705,17 @@ func (t *Trader) chart(df *model.Dataframe, st *promptState) []strategy.ChartInd
 
 func (t *Trader) OnCandle(df *model.Dataframe, broker service.Broker) {
 	t.finishStart(df.Pair, broker, true) // the decision of the start first, asked before the close
-	t.onClose(df, broker, TriggerCandle)
+	if !t.onClose(df, broker, TriggerCandle) {
+		t.retryExit(df, broker) // a close left out of the analyses: the exit retried all the same
+	}
 }
 
 // onClose asks the model about the candle just closed of df, once per candle,
 // trigger telling why: at its close, or on the first candle after the start.
-func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger string) {
+// It reports whether the candle is analyzed, false when it is left out.
+func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger string) bool {
 	if len(df.Close) == 0 {
-		return
+		return false
 	}
 	if len(df.Time) > 0 {
 		// a candle handled already, handed again: never asked twice, as each
@@ -701,7 +724,7 @@ func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger str
 		if last, ok := t.handled[df.Pair]; ok && !at.After(last) {
 			log.Warnf("[LLM] %s %s | the candle of %s again, after the one of %s: skipped", df.Pair,
 				t.cfg.Timeframe, at.UTC().Format(time.DateTime), last.UTC().Format(time.DateTime))
-			return
+			return false
 		}
 		t.handled[df.Pair] = at
 		if t.cfg.Live && t.period > 0 {
@@ -712,7 +735,7 @@ func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger str
 						t.now().Sub(closed).Round(time.Second))
 				}
 				t.history[df.Pair]++
-				return
+				return false
 			}
 			if skipped := t.history[df.Pair]; skipped > 0 {
 				log.Infof("[LLM] %s %s | live again, after %d candles of history not asked", df.Pair,
@@ -726,16 +749,17 @@ func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger str
 			if !closed.Truncate(interval).Equal(closed) {
 				log.Debugf("[LLM] %s %s | the close of %s off the consult interval of %s: not asked", df.Pair,
 					t.cfg.Timeframe, closed.UTC().Format(time.DateTime), interval)
-				return
+				return false
 			}
 			t.consulted[df.Pair] = closed
 		}
 	}
 	if trigger == TriggerStart {
 		t.startApart(df, broker)
-		return
+		return true
 	}
 	t.analyze(df, broker, analysis{trigger: trigger, market: df})
+	return true
 }
 
 // analysis is a decision to ask: why (TriggerCandle, TriggerStart or
@@ -796,9 +820,12 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 
 	trade = t.follow(df.Pair, heldSide(asset*price, t.cfg.MinPositionValue), !run.inProgress)
 	if trade != nil && trade.exiting {
-		// a close that failed, the position left without its legs
-		log.Infof("[LLM] %s %s | RETRY | close %f", df.Pair, t.cfg.Timeframe, price)
-		t.close(run.market, broker, trade)
+		// a close that failed: retried at the close of a candle, and on the
+		// ticks once due
+		if !t.retryClose(run.market, broker, trade, !run.inProgress) {
+			return skipped(skip{SkipCloseRetry, "a close that failed is retried on the ticks, next at " +
+				trade.retryAt.UTC().Format(time.TimeOnly)})
+		}
 		return skipped(skip{SkipCloseRetry, "a close that failed was retried first"})
 	}
 
@@ -929,8 +956,13 @@ func (t *Trader) finishStart(pair string, broker service.Broker, wait bool) bool
 // late: the model is never asked twice at the close. The decision of the
 // start, asked apart for the pairs to be asked at once (see startApart), is
 // applied on the next one, and takes the slots it is asked in. The candles in
-// progress are otherwise left to their close.
+// progress are otherwise left to their close. On each of them, the close of
+// an exit that failed is retried once due, see retryClose.
 func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
+	if len(df.Close) == 0 {
+		return
+	}
+	t.retryExit(df, broker) // at the price of now
 	if !t.cfg.Live || len(df.Close) < 2 {
 		return
 	}
@@ -1673,42 +1705,215 @@ func (t *Trader) open(df *model.Dataframe, broker service.Broker, side model.Sid
 	return orders
 }
 
-// close closes the position of tr at the market once its legs are canceled,
-// and reports whether the pair is flat now, with the order at the market, nil
-// when none was placed. The legs reserve the position, so
-// the close would otherwise open the other side, eg: in the paper wallet. A
-// close that fails leaves the position without them, so the trade is marked as
-// exiting and the close retried on the next candles.
+// close closes the position of tr at the market, and reports whether the pair
+// is flat now, with the order at the market, nil when none was placed. The
+// position held is never left without its stop loss and take profit: where
+// the order closes it with its legs in place (service.ProtectedCloser, eg:
+// MT5), they stay until it is flat; elsewhere they reserve the position, eg:
+// in the paper wallet, and the order would open the other side, so they are
+// canceled first, and placed again at their levels when the close fails
+// (service.PositionProtector). A close that fails, or fills a part only,
+// leaves the trade exiting, its close retried on the next ticks, see
+// retryClose.
 func (t *Trader) close(df *model.Dataframe, broker service.Broker, tr *trade) (bool, *model.Order) {
 	tr.exiting = true
-	for _, leg := range tr.legs {
-		if err := broker.Cancel(leg); err != nil {
-			log.Debugf("[LLM] %s | %s: %v", df.Pair, leg.Type, err) // already filled or canceled
-		}
+	tr.attempts++
+	tr.retryAt = t.now().Add(closeDelay(tr.attempts))
+	if !closesProtected(broker) {
+		t.unprotect(df.Pair, broker, tr)
 	}
-	tr.legs = nil
 
-	// the position is read again: a leg filled while its cancel was in flight
-	// may have closed it meanwhile, and the order would open the other side
-	asset, _, err := broker.Position(df.Pair)
-	if err != nil {
-		log.Error(err)
-		return false, nil
-	}
-	if held := heldSide(asset*df.Close.Last(0), t.cfg.MinPositionValue); held != tr.side {
-		if held == "" {
-			delete(t.trades, df.Pair) // closed by a leg meanwhile
-		}
+	// the position is read again: a leg filled meanwhile, eg: while its cancel
+	// was in flight, may have closed it, and the order would open the other side
+	asset, held, err := t.held(df, broker)
+	switch {
+	case err != nil:
+		return t.settleClose(df, broker, tr, err), nil
+	case held != tr.side:
+		t.closed(df.Pair, broker, tr) // by a leg meanwhile, or by someone else
 		return held == "", nil
 	}
 
 	order, err := broker.CreateOrderMarket(oppositeSide(tr.side), df.Pair, math.Abs(asset))
+	flat := t.settleClose(df, broker, tr, err)
 	if err != nil {
-		log.Error(err)
-		return false, nil
+		return flat, nil
 	}
-	delete(t.trades, df.Pair)
-	return true, &order
+	return flat, &order
+}
+
+// closeDelay returns the delay of the next attempt to close a position on the
+// ticks, after attempts of it, see closeRetry.
+func closeDelay(attempts int) time.Duration {
+	delay := closeRetry
+	for i := 1; i < attempts && delay < closeRetryMax; i++ {
+		delay *= 2
+	}
+	return min(delay, closeRetryMax)
+}
+
+// retryExit retries the close of the position of df.Pair whose exit failed,
+// once due, see retryClose.
+func (t *Trader) retryExit(df *model.Dataframe, broker service.Broker) {
+	if tr, ok := t.trades[df.Pair]; ok && tr.exiting {
+		t.retryClose(df, broker, tr, false)
+	}
+}
+
+// retryClose closes again the position of tr, whose close failed, at the price
+// of df: at once when now, eg: at the close of a candle, else once its next
+// attempt is due, the attempts on the ticks spaced out, see closeRetry. It
+// reports whether the close was retried.
+func (t *Trader) retryClose(df *model.Dataframe, broker service.Broker, tr *trade, now bool) bool {
+	if !now && t.now().Before(tr.retryAt) {
+		return false
+	}
+	log.Infof("[LLM] %s %s | RETRY | close %f", df.Pair, t.cfg.Timeframe, df.Close.Last(0))
+	t.close(df, broker, tr)
+	return true
+}
+
+// closesProtected reports whether a market order of broker closes a protected
+// position with its legs in place, see service.ProtectedCloser.
+func closesProtected(broker service.Broker) bool {
+	closer, ok := broker.(service.ProtectedCloser)
+	return ok && closer.ClosesProtected()
+}
+
+// held reads the position of df.Pair: the asset held, and its side at the last
+// price of df, none for dust.
+func (t *Trader) held(df *model.Dataframe, broker service.Broker) (float64, model.SideType, error) {
+	asset, _, err := broker.Position(df.Pair)
+	if err != nil {
+		return 0, "", err
+	}
+	return asset, heldSide(asset*df.Close.Last(0), t.cfg.MinPositionValue), nil
+}
+
+// unprotect cancels the legs of tr before its close, as they reserve its
+// position, and keeps their levels to place them again with should the close
+// fail, see protectAgain.
+func (t *Trader) unprotect(pair string, broker service.Broker, tr *trade) {
+	if len(tr.legs) == 0 {
+		return
+	}
+	levels := tr.protection()
+	for _, leg := range tr.legs {
+		if err := broker.Cancel(leg); err != nil {
+			log.Debugf("[LLM] %s | %s: %v", pair, leg.Type, err) // already filled or canceled
+		}
+	}
+	tr.legs, tr.canceled = nil, &levels
+}
+
+// settleClose checks the position of tr once its order at the market is done,
+// failed with failure, nil when filled, and reports whether the pair is flat
+// now: the close may be done whatever the error says, eg: a request that
+// timed out, and an order filled may close a part only. Still held, the
+// position keeps its legs, or gets them back at their levels when they were
+// canceled for the close, and its close is retried on the next ticks: the
+// first failure is notified, and the position left without its legs.
+func (t *Trader) settleClose(df *model.Dataframe, broker service.Broker, tr *trade, failure error) bool {
+	pair := df.Pair
+	asset, held, err := t.held(df, broker)
+	if err == nil && held != tr.side {
+		t.closed(pair, broker, tr)
+		return held == ""
+	}
+
+	switch {
+	case failure != nil:
+	case err != nil:
+		failure = fmt.Errorf("the order filled, the position unread: %w", err)
+	default:
+		failure = fmt.Errorf("the order filled a part of the position only, %g left", math.Abs(asset))
+	}
+	tr.failed++
+	log.Errorf("[LLM] %s %s | the close failed: %v: retried on the next ticks, from %s", pair, t.cfg.Timeframe,
+		failure, tr.retryAt.UTC().Format(time.TimeOnly))
+
+	var bare error // why the position is left without its legs
+	var state string
+	switch {
+	case tr.canceled != nil && err != nil:
+		bare = fmt.Errorf("the position: %w", err)
+	case tr.canceled != nil:
+		levels := *tr.canceled
+		if bare = t.protectAgain(pair, broker, tr, math.Abs(asset)); bare == nil {
+			state = fmt.Sprintf("its %s placed again", levels)
+		}
+	case len(tr.legs) > 0:
+		state = fmt.Sprintf("it keeps its %s", tr.protection())
+	default:
+		state = "it has no stop loss nor take profit known to the bot"
+	}
+
+	message := fmt.Sprintf("EXIT of %s %s failed: %v", pair, t.cfg.Timeframe, failure)
+	if bare != nil {
+		log.Errorf("[LLM] %s %s | the position is left without its %s: %v", pair, t.cfg.Timeframe,
+			*tr.canceled, bare)
+		if !tr.bare {
+			tr.bare = true
+			t.tell(fmt.Sprintf("🛑 %s. The position is left WITHOUT its %s: %v. Its close is retried on the "+
+				"next ticks.", message, *tr.canceled, bare))
+		}
+		return false
+	}
+	if tr.failed == 1 || tr.bare {
+		t.tell(fmt.Sprintf("⚠️ %s. The position is held, %s. Its close is retried on the next ticks.", message,
+			state))
+	}
+	tr.bare = false
+	return false
+}
+
+// protectAgain places the legs of tr canceled for its close again, at their
+// levels, on the size units held: the close failed.
+func (t *Trader) protectAgain(pair string, broker service.Broker, tr *trade, size float64) error {
+	protector, ok := broker.(service.PositionProtector)
+	if !ok {
+		return errors.New("the broker can't protect a position held")
+	}
+	levels := *tr.canceled
+	legs, err := protector.Protect(tr.side, pair, size, levels.stop, levels.profit)
+	if len(legs) == 0 {
+		if err == nil {
+			err = errors.New("no leg placed")
+		}
+		return err
+	}
+	if err != nil {
+		log.Errorf("[LLM] %s %s | %v", pair, t.cfg.Timeframe, err) // placed, a part of them unstored
+	}
+	log.Warnf("[LLM] %s %s | the %s placed again on the %s position of %g", pair, t.cfg.Timeframe, levels,
+		tr.side, size)
+	tr.legs, tr.canceled = legs, nil
+	return nil
+}
+
+// closed ends tr, its position closed: the legs a close leaves in place
+// (service.ProtectedCloser) are canceled, so that none outlives it, eg: gone
+// with the position already at MT5.
+func (t *Trader) closed(pair string, broker service.Broker, tr *trade) {
+	for _, leg := range tr.legs {
+		if err := broker.Cancel(leg); err != nil {
+			log.Debugf("[LLM] %s | %s: %v", pair, leg.Type, err) // gone with the position
+		}
+	}
+	tr.legs = nil
+	delete(t.trades, pair)
+	if tr.failed > 0 {
+		t.tell(fmt.Sprintf("✅ EXIT of %s %s: the position is closed, after %d failed attempts.", pair,
+			t.cfg.Timeframe, tr.failed))
+	}
+}
+
+// tell logs a message for the trader and notifies it, see SetNotifier.
+func (t *Trader) tell(message string) {
+	log.Infof("[LLM] %s", message)
+	if notify := t.notifier(); notify != nil {
+		notify(message)
+	}
 }
 
 // move moves the stop loss leg of tr to level, or its take profit leg, and
@@ -1772,6 +1977,30 @@ func (t *Trader) size(pair string, quote, price float64) (float64, bool) {
 		return size, true
 	}
 	return 0, false
+}
+
+// protection returns the levels of the legs of the trade.
+func (tr *trade) protection() protection {
+	var p protection
+	if i := tr.leg(true); i >= 0 {
+		p.stop = legLevel(tr.legs[i])
+	}
+	if i := tr.leg(false); i >= 0 {
+		p.profit = legLevel(tr.legs[i])
+	}
+	return p
+}
+
+func (p protection) String() string {
+	switch {
+	case p.stop > 0 && p.profit > 0:
+		return fmt.Sprintf("stop loss %g and take profit %g", p.stop, p.profit)
+	case p.stop > 0:
+		return fmt.Sprintf("stop loss %g", p.stop)
+	case p.profit > 0:
+		return fmt.Sprintf("take profit %g", p.profit)
+	}
+	return "stop loss and take profit"
 }
 
 // leg returns the index of the stop loss leg of the trade, or of its take

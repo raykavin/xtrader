@@ -9,7 +9,7 @@ Quatro serviços, no padrão de `/var/containers`:
 | `postgres` | PostgreSQL 18: agentes, prompts, usuários, Telegram, ordens, decisões e journal | `services/postgres/data` |
 | `mt5` | terminal MetaTrader 5 da Exness no Wine, numa tela virtual (Xvfb), e a bridge HTTP (`tools/mt5bridge`) que os agentes usam | `services/mt5/data` (prefixo do Wine: Python, terminal e os dados dele) |
 
-Os agentes de uma mesma conta dividem o mesmo `mt5`, separados pelo magic number. Uma segunda conta seria outro serviço `mt5`.
+Os agentes de uma mesma conta dividem o mesmo `mt5`, separados pelo magic number: o controller recusa dois agentes ativos em live com o mesmo magic e um par em comum (veja "Magic e comentário" no README da raiz). Uma segunda conta seria outro serviço `mt5`.
 
 ## Estrutura
 
@@ -102,6 +102,8 @@ docker compose exec mt5 sh -c 'curl -s -H "X-Bridge-Token: $MT5_BRIDGE_TOKEN" ht
 
 Na resposta da bridge, `connected` e `trade_allowed` precisam estar `true`. O `MT5_ALGO_TRADING=1` liga o Algo Trading a cada subida. Ele também o mantém ligado depois de uma troca de conta, porque o padrão do terminal o desliga nesse caso, e o primeiro login de um terminal novo conta como troca.
 
+Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os dois headers do prazo das ordens (`X-Bridge-Deadline` e `X-Bridge-Timeout`, este contado pelo relógio da bridge). Atualize as duas imagens juntas (`build.sh` sem argumento): um agente novo com uma bridge antiga avisa no log e não consegue confirmar que uma ordem sem resposta deixou de ser executada. Com o terminal logado em outra conta que não a do `MT5_LOGIN` (ex.: trocada pelo VNC), a bridge recusa as ordens e os agentes param de operar até a conta voltar.
+
 ## 5. Agentes, Telegram e usuários
 
 1. **Agentes:** o banco começa sem agentes. Crie-os em **Configurações > Agentes > Novo agente** (modo, endereço da API, conta MT5 com a bridge `http://mt5:18812`, modelo do LLM, parâmetros e segredos), ou importe os do `services/migrator/config/agents.yml`, no formato da versão anterior:
@@ -165,6 +167,7 @@ Sem esse passo, o agente llm roda sem o calendário. Ficam sem efeito as notíci
 | Atualizar | `git pull && deploy/docker/build.sh`, trocando a tag no compose se for uma nova versão; depois `docker compose up -d` (o `migrator` aplica as migrações novas) |
 | Backup do banco | `docker compose exec postgres pg_dump -U xtrader -Fc xtrader > xtrader.dump` |
 | Backup dos arquivos | `services/*/.env` (a chave dos segredos), `services/controller/data` (outbox dos agentes) e `services/mt5/data` (prefixo do Wine com o terminal logado; pode ser reinstalado) |
+| Disco do outbox cheio | O agente segue operando e acompanha as ordens em memória. Ele notifica a falha no painel e no Telegram e regrava as ordens quando houver espaço. Libere espaço em `services/controller/data` antes de reiniciar o agente, porque uma ordem ainda não gravada se perde no reinício. |
 
 ## Portas e segurança
 

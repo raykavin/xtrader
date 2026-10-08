@@ -115,7 +115,7 @@ func run() error {
 		language      = flag.String("llm-language", cfg.Language, "language of the reasons of the decisions, eg: pt-BR or en")
 		mode          = flag.String("mode", "backtest", "backtest, paper or live")
 		exchangeName  = flag.String("exchange", "mt5", "exchange traded: mt5, MetaTrader 5 through tools/mt5bridge")
-		pairList      = flag.String("pair", "XAUUSDm", "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
+		pairList      = flag.String("pair", agentapi.DefaultPair, "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
 		timeframe     = flag.String("timeframe", cfg.Timeframe, "timeframe of the candles, one decision per candle close")
 		direction     = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
 		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01")
@@ -132,7 +132,7 @@ func run() error {
 		mt5Bridge     = flag.String("mt5-bridge", exchange.MT5DefaultBaseURL, "mt5: address of the bridge (tools/mt5bridge) running with the terminal logged in the account")
 		mt5TokenArg   = flag.String("mt5-token", "", "mt5, on its own: X-Bridge-Token of the bridge (default: "+mt5TokenEnv+"; launched by the controller: the token of its settings)")
 		mt5MagicArg   = flag.Int64("mt5-magic", 0, "mt5: magic number of the bot's orders and positions, only those count for it (default: a hash of -mt5-comment)")
-		mt5Comment    = flag.String("mt5-comment", "nb:llm", "mt5: comment of the bot's orders, 31 characters at most")
+		mt5CommentArg = flag.String("mt5-comment", mt5Comment(""), "mt5: comment of the bot's orders, 31 characters at most")
 		mt5Live       = flag.Bool("mt5-live", false, "mt5: allow a real account, refused otherwise")
 		mt5Size       = flag.String("mt5-size", "lot", "mt5: how -lot is read, lot (converted into units with the contract size of the pair) or unit")
 		mt5Poll       = flag.Duration("mt5-poll", 0, "mt5: how often the account and the candles are polled (default 1s)")
@@ -319,10 +319,17 @@ func run() error {
 
 	settings := xtrader.Settings{Pairs: pairs}
 	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl}
+	comment := mt5Comment(*mt5CommentArg)
 	venue := venue{leverage: *leverage, lots: lots,
-		mt5: mt5Venue{bridge: *mt5Bridge, token: keys.bridge, magic: mt5Magic(*mt5MagicArg,
-			strings.TrimSpace(*mt5Comment)), comment: strings.TrimSpace(*mt5Comment), live: *mt5Live,
-			inLots: inLots, poll: *mt5Poll}}
+		mt5: mt5Venue{bridge: *mt5Bridge, token: keys.bridge, magic: mt5Magic(*mt5MagicArg, comment),
+			comment: comment, live: *mt5Live, inLots: inLots, poll: *mt5Poll}}
+	if agent != nil {
+		// the positions the controller keeps apart from the ones of the other agents
+		book := agentapi.MT5Book{Bridge: venue.mt5.bridge, Magic: venue.mt5.magic, Comment: comment, Pairs: pairs}
+		if err := agent.Config.CheckMT5Book(book); err != nil {
+			return err
+		}
+	}
 
 	switch *mode {
 	case "backtest":
@@ -552,6 +559,7 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 	apply := func(agentapi.Runtime) {}
 	if chart != nil {
 		trader.SetNotifier(chart.Notify) // the results of the reanalyses
+		orders.SetNotifier(chart)        // the orders the outbox fails to write
 		// the orders of the previous runs, on the chart and in its history
 		stored, err := orders.Orders()
 		if err != nil {

@@ -77,6 +77,14 @@ describe("agents", () => {
     );
     expect(agentState(agent({}))).toEqual({ label: "Parado", tone: "warn", mark: "stop" });
     expect(agentState(agent({ launched: false })).label).toBe("Iniciado à parte");
+    const blocked = "the agent llm, running in live mode, trades XAUUSDm";
+    expect(agentState(agent({ launch_error: blocked }))).toEqual({
+      label: "Não iniciado",
+      tone: "warn",
+      mark: "stop",
+    });
+    expect(agentState(agent({ running: true, launch_error: blocked })).label).toBe("Não iniciado");
+    expect(agentState(agent({ enabled: false, launch_error: blocked })).label).toBe("Desativado");
   });
 
   it("groups the agents by kind, the LLM ones first, the unknown kinds last", () => {

@@ -39,6 +39,12 @@ import (
 )
 
 func main() {
+	runner.Run(agent())
+}
+
+// agent returns the agent and its strategies, the first one its default, the
+// one of agentapi.DefaultStrategy for the kind trend.
+func agent() runner.Agent {
 	matrend := strategies.DefaultMATrendConfig()
 	f := flags{
 		maxDistance:  flag.Float64("max-distance", matrend.MaxTrendDistancePct, "matrend: how far the close may be from the SMA 200 at an entry, in % of it"),
@@ -49,7 +55,7 @@ func main() {
 		fastEMA:      flag.Int("fast-ema", 0, "emapullback: period of the fast EMA (default 20)"),
 		slowEMA:      flag.Int("slow-ema", 0, "emapullback: period of the slow EMA (default 50)"),
 	}
-	runner.Run(runner.Agent{Name: "trendagent", Strategies: append([]runner.Strategy{
+	return runner.Agent{Name: "trendagent", Strategies: append([]runner.Strategy{
 		{Name: "trendconfluence", About: "RK Trend Confluence", New: f.trendConfluence,
 			Inputs: []string{"stop-atr", "trailing-atr", "broker-stop-atr", "broker-trailing-atr"}},
 		{Name: "matrend", About: "the break of the SMA 200 with the EMA 9/21 on its side", New: f.maTrend,
@@ -57,7 +63,7 @@ func main() {
 		{Name: "emapullback", About: "the pullbacks to the fast EMA in a trend of two EMAs", New: f.emaPullback,
 			Inputs: append([]string{"fast-ema", "slow-ema"}, runner.BracketInputs...)},
 	}, runner.Signals("emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema", "atrtrailing",
-		"ichimoku", "ichimokuadx", "mtftrend", "mtfema")...)})
+		"ichimoku", "ichimokuadx", "mtftrend", "mtfema")...)}
 }
 
 // flags holds the flags of the strategies of the agent.

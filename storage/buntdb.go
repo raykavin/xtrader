@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/tidwall/buntdb"
@@ -63,7 +64,7 @@ func (b *Bunt) getID() int64 {
 func (b *Bunt) CreateOrder(order *model.Order) error {
 	return b.db.Update(func(tx *buntdb.Tx) error {
 		order.ID = b.getID()
-		content, err := json.Marshal(order)
+		content, err := orderJSON(*order)
 		if err != nil {
 			return err
 		}
@@ -77,7 +78,7 @@ func (b *Bunt) UpdateOrder(order *model.Order) error {
 	return b.db.Update(func(tx *buntdb.Tx) error {
 		id := strconv.FormatInt(order.ID, 10)
 
-		content, err := json.Marshal(order)
+		content, err := orderJSON(*order)
 		if err != nil {
 			return err
 		}
@@ -85,6 +86,18 @@ func (b *Bunt) UpdateOrder(order *model.Order) error {
 		_, _, err = tx.Set(id, string(content), nil)
 		return err
 	})
+}
+
+// orderJSON returns the JSON of order, its numbers that aren't finite, eg: the
+// profit of a fill without a price, written as 0: JSON can't write them, and
+// the order executed would never be stored.
+func orderJSON(order model.Order) ([]byte, error) {
+	stored, fields := order.Finite()
+	if len(fields) > 0 {
+		log.Printf("storage: the order %d (%s %s of %s): %s not finite, stored as 0", order.ID, order.Type,
+			order.Side, order.Pair, strings.Join(fields, ", "))
+	}
+	return json.Marshal(stored)
 }
 
 func (b *Bunt) Orders(filters ...OrderFilter) ([]*model.Order, error) {

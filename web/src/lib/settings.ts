@@ -46,11 +46,13 @@ export const agentKinds = Object.keys(kinds);
 export type Tone = "on" | "off" | "warn";
 
 /**
- * The state of an agent: disabled, running (a restart pending), or stopped,
- * with the mark of its chip when it runs or stopped.
+ * The state of an agent: disabled, not launched by the controller (eg: another
+ * agent running trades the same positions), running (a restart pending), or
+ * stopped, with the mark of its chip when it runs or stopped.
  */
 export function agentState(agent: AgentSettings): { label: string; tone: Tone; mark?: StatusMark } {
   if (!agent.enabled) return { label: "Desativado", tone: "off" };
+  if (agent.launch_error) return { label: "Não iniciado", tone: "warn", mark: "stop" };
   if (agent.running && agent.restart_pending) return { label: "Reinício pendente", tone: "warn" };
   if (agent.running) return { label: "Executando", tone: "on", mark: "play" };
   if (!agent.launched) return { label: "Iniciado à parte", tone: "off" };

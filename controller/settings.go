@@ -91,12 +91,13 @@ func idParam(w http.ResponseWriter, r *http.Request, name string) (int64, bool) 
 }
 
 // fail answers an error of the store: 404, 409 or 400 for the ones of the
-// request, 500 else, its detail logged.
+// request, 500 else, its detail logged; 409 for an agent that would trade the
+// positions of another one running.
 func (s *settings) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, store.ErrConflict), errors.As(err, new(samePositions)):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrInvalid):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -127,7 +128,7 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 	settings := ui.AgentSettings{Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
 		Enabled: a.Enabled, Launched: a.Launched, Restart: a.Restart, TradePanel: a.TradePanel,
 		TelegramControl: a.TelegramControl, Running: state.Running, RestartPending: state.RestartPending,
-		LastExit: state.LastExit, Params: a.AllParams()}
+		LastExit: state.LastExit, LaunchError: state.LaunchError, Params: a.AllParams()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

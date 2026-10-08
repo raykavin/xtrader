@@ -1,4 +1,4 @@
-.PHONY: generate generate-check lint test release ui-install ui-build ui-dev ui-check ui-bundle
+.PHONY: generate generate-check lint test bridge-test release ui-install ui-build ui-dev ui-check ui-bundle
 
 generate:
 	go generate ./...
@@ -13,6 +13,11 @@ lint:
 
 test:
 	go test -race -cover ./...
+
+# The tests of tools/mt5bridge, with a MetaTrader5 package simulated by the
+# tests themselves (never the real one); -B leaves no __pycache__.
+bridge-test:
+	python3 -B -m unittest discover -s tools/mt5bridge -v
 
 release:
 	goreleaser build --snapshot

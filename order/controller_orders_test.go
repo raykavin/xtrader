@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -462,26 +463,32 @@ func (failingStorage) Orders(...storage.OrderFilter) ([]*model.Order, error) {
 	return nil, errStorageUnavailable
 }
 
-// An order accepted by the exchange but not persisted must be reported: the
-// controller would otherwise lose track of it.
+// An order accepted by the exchange but not persisted is reported, never an
+// error: it exists on the exchange, followed all the same, the storage failing
+// to number it followed under a provisional id of its own.
 func TestControllerStorageFailures(t *testing.T) {
 	open := model.Order{ExchangeID: 20, Pair: "BTCUSDT", Side: model.SideTypeBuy,
 		Type: model.OrderTypeLimit, Status: model.OrderStatusTypeNew, Price: 100, Quantity: 1}
 
 	tests := []struct {
-		name   string
-		expect func(*mocks.Exchange)
-		run    func(*Controller) error
+		name     string
+		expect   func(*mocks.Exchange)
+		run      func(*Controller) ([]model.Order, error)
+		followed func(*testing.T, *Controller, []model.Order)
 	}{
 		{
 			name: "OCO",
 			expect: func(e *mocks.Exchange) {
 				e.On("CreateOrderOCO", model.SideTypeSell, "BTCUSDT", 1.0, 120.0, 90.0, 89.0).
-					Return([]model.Order{open}, nil)
+					Return([]model.Order{open, open}, nil)
 			},
-			run: func(c *Controller) error {
-				_, err := c.CreateOrderOCO(model.SideTypeSell, "BTCUSDT", 1, 120, 90, 89)
-				return err
+			run: func(c *Controller) ([]model.Order, error) {
+				return c.CreateOrderOCO(model.SideTypeSell, "BTCUSDT", 1, 120, 90, 89)
+			},
+			followed: func(t *testing.T, c *Controller, orders []model.Order) {
+				require.Len(t, orders, 2)
+				require.Equal(t, []int64{-1, -2}, []int64{orders[0].ID, orders[1].ID}, "an id of their own")
+				require.Len(t, c.pending, 2)
 			},
 		},
 		{
@@ -489,9 +496,13 @@ func TestControllerStorageFailures(t *testing.T) {
 			expect: func(e *mocks.Exchange) {
 				e.On("CreateOrderLimit", model.SideTypeBuy, "BTCUSDT", 1.0, 100.0).Return(open, nil)
 			},
-			run: func(c *Controller) error {
-				_, err := c.CreateOrderLimit(model.SideTypeBuy, "BTCUSDT", 1, 100)
-				return err
+			run: func(c *Controller) ([]model.Order, error) {
+				order, err := c.CreateOrderLimit(model.SideTypeBuy, "BTCUSDT", 1, 100)
+				return []model.Order{order}, err
+			},
+			followed: func(t *testing.T, c *Controller, orders []model.Order) {
+				require.Equal(t, int64(20), orders[0].ExchangeID)
+				require.Contains(t, c.pending, orders[0].ID)
 			},
 		},
 		{
@@ -500,9 +511,13 @@ func TestControllerStorageFailures(t *testing.T) {
 				e.On("CreateOrderMarket", model.SideTypeBuy, "BTCUSDT", 1.0).
 					Return(filledOrder(21, model.SideTypeBuy, 100, 1), nil)
 			},
-			run: func(c *Controller) error {
-				_, err := c.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
-				return err
+			run: func(c *Controller) ([]model.Order, error) {
+				order, err := c.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
+				return []model.Order{order}, err
+			},
+			followed: func(t *testing.T, c *Controller, orders []model.Order) {
+				require.Equal(t, int64(21), orders[0].ExchangeID)
+				require.Equal(t, 1.0, c.position["BTCUSDT"].Quantity, "the fill settled")
 			},
 		},
 		{
@@ -511,9 +526,13 @@ func TestControllerStorageFailures(t *testing.T) {
 				e.On("CreateOrderMarketQuote", model.SideTypeBuy, "BTCUSDT", 100.0).
 					Return(filledOrder(22, model.SideTypeBuy, 100, 1), nil)
 			},
-			run: func(c *Controller) error {
-				_, err := c.CreateOrderMarketQuote(model.SideTypeBuy, "BTCUSDT", 100)
-				return err
+			run: func(c *Controller) ([]model.Order, error) {
+				order, err := c.CreateOrderMarketQuote(model.SideTypeBuy, "BTCUSDT", 100)
+				return []model.Order{order}, err
+			},
+			followed: func(t *testing.T, c *Controller, orders []model.Order) {
+				require.Equal(t, int64(22), orders[0].ExchangeID)
+				require.Equal(t, 1.0, c.position["BTCUSDT"].Quantity, "the fill settled")
 			},
 		},
 		{
@@ -521,9 +540,13 @@ func TestControllerStorageFailures(t *testing.T) {
 			expect: func(e *mocks.Exchange) {
 				e.On("CreateOrderStop", "BTCUSDT", 1.0, 90.0).Return(open, nil)
 			},
-			run: func(c *Controller) error {
-				_, err := c.CreateOrderStop("BTCUSDT", 1, 90)
-				return err
+			run: func(c *Controller) ([]model.Order, error) {
+				order, err := c.CreateOrderStop("BTCUSDT", 1, 90)
+				return []model.Order{order}, err
+			},
+			followed: func(t *testing.T, c *Controller, orders []model.Order) {
+				require.Equal(t, int64(20), orders[0].ExchangeID)
+				require.Contains(t, c.pending, orders[0].ID)
 			},
 		},
 		{
@@ -531,8 +554,15 @@ func TestControllerStorageFailures(t *testing.T) {
 			expect: func(e *mocks.Exchange) {
 				e.On("Cancel", mock.Anything).Return(nil)
 			},
-			run: func(c *Controller) error {
-				return c.Cancel(open)
+			run: func(c *Controller) ([]model.Order, error) {
+				canceled := open
+				canceled.ID = 7
+				c.pending[7] = canceled
+				return nil, c.Cancel(canceled)
+			},
+			followed: func(t *testing.T, c *Controller, _ []model.Order) {
+				require.Equal(t, model.OrderStatusTypePendingCancel, c.pending[7].Status)
+				require.Equal(t, model.OrderStatusTypePendingCancel, c.unstored[7].Status, "stored again")
 			},
 		},
 	}
@@ -548,13 +578,18 @@ func TestControllerStorageFailures(t *testing.T) {
 			controller := NewController(context.Background(), exchange, failingStorage{}, NewOrderFeed())
 			controller.SetNotifier(notifier)
 
-			require.ErrorIs(t, tt.run(controller), errStorageUnavailable)
-			notifier.AssertNumberOfCalls(t, "OnError", 1)
+			orders, err := tt.run(controller)
+			require.NoError(t, err, "executed on the exchange")
+			tt.followed(t, controller, orders)
+			notifier.AssertCalled(t, "OnError", mock.MatchedBy(func(err error) bool {
+				return errors.Is(err, errStorageUnavailable)
+			}))
 		})
 	}
 }
 
-// UpdateOrders keeps going when the storage rejects an update.
+// UpdateOrders settles a fill the storage fails to write, the fill done on
+// the exchange: notified once, written again on the next rounds.
 func TestControllerUpdateOrdersStorageFailure(t *testing.T) {
 	exch := &mocks.Exchange{}
 	filled := filledOrder(23, model.SideTypeBuy, 100, 1)
@@ -569,9 +604,154 @@ func TestControllerUpdateOrdersStorageFailure(t *testing.T) {
 		Status: model.OrderStatusTypeNew, Side: model.SideTypeBuy, Quantity: 1, Price: 100}
 
 	controller.UpdateOrders()
+	controller.UpdateOrders()
 
 	notifier.AssertNumberOfCalls(t, "OnError", 1)
-	require.Len(t, controller.pending, 1, "the order is retried on the next round")
+	require.Empty(t, controller.pending, "the fill settled")
+	require.Equal(t, 1.0, controller.position["BTCUSDT"].Quantity)
+	require.Equal(t, model.OrderStatusTypeFilled, controller.unstored[1].Status, "written again")
+}
+
+// flakyStorage is a storage in memory failing its writes while failing is set,
+// the orders created numbered all the same, as the storages number them before
+// they write them.
+type flakyStorage struct {
+	storage.Storage
+	mu      sync.Mutex
+	failing bool
+	next    int64
+}
+
+func newFlakyStorage(t *testing.T) *flakyStorage {
+	t.Helper()
+	memory, err := storage.FromMemory()
+	require.NoError(t, err)
+	return &flakyStorage{Storage: memory, next: 1000}
+}
+
+func (f *flakyStorage) fail(failing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failing = failing
+}
+
+func (f *flakyStorage) CreateOrder(order *model.Order) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failing {
+		f.next++
+		order.ID = f.next
+		return errStorageUnavailable
+	}
+	return f.Storage.CreateOrder(order)
+}
+
+func (f *flakyStorage) UpdateOrder(order *model.Order) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failing {
+		return errStorageUnavailable
+	}
+	return f.Storage.UpdateOrder(order)
+}
+
+// A protected entry the storage fails to write is followed all the same: the
+// entry settled, published, its legs followed until the stop loss closes the
+// position, the profit counted; the orders stored in their last state once the
+// storage writes, the failure and the recovery notified once.
+func TestController_OrdersExecutedFollowedWhenTheStorageFails(t *testing.T) {
+	ctx := context.Background()
+	flaky := newFlakyStorage(t)
+	wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 10000))
+	feed := NewOrderFeed()
+	var mu sync.Mutex
+	var published []model.Order
+	feed.Subscribe("BTCUSDT", func(order model.Order) {
+		mu.Lock()
+		defer mu.Unlock()
+		published = append(published, order)
+	}, false)
+	feed.Start()
+	controller := NewController(ctx, wallet, flaky, feed)
+	notifier := &mocks.Notifier{}
+	notifier.On("OnError", mock.Anything).Return()
+	notifier.On("Notify", mock.Anything).Return()
+	controller.SetNotifier(notifier)
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: start, Low: 100, High: 100, Close: 100, Complete: true})
+
+	flaky.fail(true)
+	orders, err := controller.CreateOrderMarketProtected(model.SideTypeBuy, "BTCUSDT", 10, 90, 120)
+	require.NoError(t, err, "executed on the exchange")
+	require.Len(t, orders, 3)
+	require.Equal(t, []int64{1001, 1002, 1003}, []int64{orders[0].ID, orders[1].ID, orders[2].ID})
+	require.Equal(t, 10.0, controller.position["BTCUSDT"].Quantity, "the entry settled")
+	require.Len(t, controller.pending, 2, "the legs followed")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(published) == 3
+	}, time.Second, time.Millisecond, "published")
+
+	wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: start.Add(time.Hour), Low: 85, High: 101, Close: 88,
+		Complete: true})
+	controller.UpdateOrders()
+	require.Empty(t, controller.pending)
+	require.Nil(t, controller.position["BTCUSDT"], "closed by the stop loss")
+	require.Len(t, controller.Results["BTCUSDT"].LoseLong, 1)
+	notifier.AssertNumberOfCalls(t, "OnError", 1)
+	stored, err := flaky.Orders()
+	require.NoError(t, err)
+	require.Empty(t, stored)
+
+	flaky.fail(false)
+	controller.UpdateOrders()
+	require.Empty(t, controller.unstored)
+	statuses := map[model.OrderType]model.OrderStatusType{}
+	stored, err = flaky.Orders()
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	for _, order := range stored {
+		statuses[order.Type] = order.Status
+		if order.Type == model.OrderTypeStopLoss {
+			require.InDelta(t, -100, order.ProfitValue, 1e-9, "with its profit")
+		}
+	}
+	require.Equal(t, map[model.OrderType]model.OrderStatusType{model.OrderTypeMarket: model.OrderStatusTypeFilled,
+		model.OrderTypeStopLoss: model.OrderStatusTypeFilled, model.OrderTypeLimitMaker: model.OrderStatusTypeCanceled},
+		statuses, "their last state")
+	recovered := 0
+	for _, call := range notifier.Calls {
+		if call.Method == "Notify" && strings.Contains(call.Arguments.String(0), "stored at last") {
+			recovered++
+		}
+	}
+	require.Equal(t, 1, recovered, "the recovery notified")
+	notifier.AssertNumberOfCalls(t, "OnError", 1)
+}
+
+// The orders the storage fails to number are followed apart, each under a
+// provisional id of its own, never written under it.
+func TestController_OrdersNotNumberedFollowedApart(t *testing.T) {
+	ctx := context.Background()
+	wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 10000))
+	controller := NewController(ctx, wallet, failingStorage{}, NewOrderFeed())
+	wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Now(), Low: 100, High: 100, Close: 100,
+		Complete: true})
+
+	first, err := controller.CreateOrderLimit(model.SideTypeBuy, "BTCUSDT", 1, 95)
+	require.NoError(t, err)
+	second, err := controller.CreateOrderLimit(model.SideTypeBuy, "BTCUSDT", 2, 94)
+	require.NoError(t, err)
+	require.Equal(t, []int64{-1, -2}, []int64{first.ID, second.ID})
+	require.Len(t, controller.pending, 2, "both followed")
+
+	wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Now(), Low: 90, High: 100, Close: 92,
+		Complete: true})
+	controller.UpdateOrders()
+	require.Empty(t, controller.pending)
+	require.InDelta(t, 3, controller.position["BTCUSDT"].Quantity, 1e-9, "both settled")
+	require.Empty(t, controller.unstored, "never written under a provisional id")
 }
 
 func TestSummarySaveReturns(t *testing.T) {
@@ -697,6 +877,95 @@ func TestControllerUpdateProtection(t *testing.T) {
 	})
 }
 
+// Protect places the legs of a position held, stored and followed as the ones
+// of a protected entry, even with the bot stopped: it only protects.
+func TestControllerProtect(t *testing.T) {
+	setup := func(t *testing.T) (*Controller, *exchange.PaperWallet, storage.Storage) {
+		t.Helper()
+		memory, err := storage.FromMemory()
+		require.NoError(t, err)
+		ctx := context.Background()
+		wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 10000),
+			exchange.WithPaperAsset("BTC", 10))
+		wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Low: 100,
+			High: 100, Close: 100, Complete: true})
+		return NewController(ctx, wallet, memory, NewOrderFeed()), wallet, memory
+	}
+
+	t.Run("stored and followed until the stop loss closes the position", func(t *testing.T) {
+		controller, wallet, memory := setup(t)
+		legs, err := controller.Protect(model.SideTypeBuy, "BTCUSDT", 10, 90, 120)
+		require.NoError(t, err)
+		require.Len(t, legs, 2)
+		require.Len(t, controller.pending, 2, "the legs are followed")
+		stored, err := memory.Orders(storage.WithStatus(model.OrderStatusTypeNew))
+		require.NoError(t, err)
+		require.Len(t, stored, 2)
+
+		wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Date(2024, 1, 1, 1, 0, 0, 0, time.UTC), Low: 85,
+			High: 101, Close: 88, Complete: true})
+		controller.UpdateOrders()
+		require.Empty(t, controller.pending)
+		statuses := map[model.OrderType]model.OrderStatusType{}
+		stored, err = memory.Orders()
+		require.NoError(t, err)
+		for _, order := range stored {
+			statuses[order.Type] = order.Status
+		}
+		require.Equal(t, model.OrderStatusTypeFilled, statuses[model.OrderTypeStopLoss])
+		require.Equal(t, model.OrderStatusTypeCanceled, statuses[model.OrderTypeLimitMaker])
+	})
+
+	t.Run("with the bot stopped", func(t *testing.T) {
+		controller, _, _ := setup(t)
+		controller.Start()
+		controller.Stop()
+		_, err := controller.CreateOrderMarket(model.SideTypeSell, "BTCUSDT", 10)
+		require.ErrorIs(t, err, ErrBotStopped)
+		legs, err := controller.Protect(model.SideTypeBuy, "BTCUSDT", 10, 90, 120)
+		require.NoError(t, err)
+		require.Len(t, legs, 2)
+	})
+
+	t.Run("refused by the exchange", func(t *testing.T) {
+		controller, _, memory := setup(t)
+		_, err := controller.Protect(model.SideTypeSell, "BTCUSDT", 10, 110, 80)
+		require.ErrorIs(t, err, exchange.ErrNotSupported, "no short held")
+		stored, err := memory.Orders()
+		require.NoError(t, err)
+		require.Empty(t, stored)
+	})
+
+	t.Run("not supported by the exchange", func(t *testing.T) {
+		controller, _ := newTestController(t)
+		_, err := controller.Protect(model.SideTypeBuy, "BTCUSDT", 10, 90, 120)
+		require.ErrorIs(t, err, exchange.ErrNotSupported)
+	})
+}
+
+// closerExchange is an exchange closing a protected position with its legs in
+// place, eg: MT5.
+type closerExchange struct {
+	*mocks.Exchange
+}
+
+func (closerExchange) ClosesProtected() bool { return true }
+
+// ClosesProtected tells what the exchange does.
+func TestControllerClosesProtected(t *testing.T) {
+	controller, _ := newTestController(t)
+	require.False(t, controller.ClosesProtected(), "not told")
+
+	memory, err := storage.FromMemory()
+	require.NoError(t, err)
+	wallet := exchange.NewPaperWallet(context.Background(), "USDT", exchange.WithPaperAsset("USDT", 10000))
+	require.False(t, NewController(context.Background(), wallet, memory, NewOrderFeed()).ClosesProtected(),
+		"the legs reserve the position in the paper wallet")
+
+	closer := NewController(context.Background(), closerExchange{&mocks.Exchange{}}, memory, NewOrderFeed())
+	require.True(t, closer.ClosesProtected())
+}
+
 func TestControllerUpdateLimit(t *testing.T) {
 	setup := func(t *testing.T) (*Controller, storage.Storage) {
 		t.Helper()
@@ -741,4 +1010,218 @@ func TestControllerUpdateLimit(t *testing.T) {
 		_, err := controller.UpdateLimit(model.Order{ID: 1, ExchangeID: 2, Pair: "BTCUSDT"}, 95)
 		require.ErrorIs(t, err, exchange.ErrNotSupported)
 	})
+}
+
+// within runs fn, failing the test unless it returns within wait.
+func within(t *testing.T, wait time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(wait):
+		t.Fatalf("%s: still waiting after %s", what, wait)
+	}
+}
+
+// R1: a slow call to the exchange, eg: an MT5 trade request whose answer was
+// lost, looked for in the account, holds the orders of its pair only:
+// UpdateOrders, the reads and the orders of the other pairs go on, and the
+// next order of the pair waits for it.
+func TestController_SlowOrderHoldsItsPairOnly(t *testing.T) {
+	controller, exch := newTestController(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	slow := filledOrder(1, model.SideTypeBuy, 100, 1)
+	exch.On("CreateOrderMarket", model.SideTypeBuy, "BTCUSDT", 1.0).Run(func(mock.Arguments) {
+		close(entered)
+		<-release
+	}).Return(slow, nil).Once()
+	exch.On("CreateOrderMarket", model.SideTypeBuy, "BTCUSDT", 2.0).Return(filledOrder(2, model.SideTypeBuy, 100,
+		2), nil).Once()
+	other := filledOrder(3, model.SideTypeBuy, 10, 1)
+	other.Pair = "ETHUSDT"
+	exch.On("CreateOrderMarket", model.SideTypeBuy, "ETHUSDT", 1.0).Return(other, nil).Once()
+	exch.On("Position", "ETHUSDT").Return(1.0, 0.0, nil)
+	pendingOrder := model.Order{ID: 99, ExchangeID: 99, Pair: "ETHUSDT", Side: model.SideTypeSell,
+		Type: model.OrderTypeLimit, Status: model.OrderStatusTypeNew, Price: 20, Quantity: 1}
+	exch.On("Order", "ETHUSDT", int64(99)).Return(pendingOrder, nil)
+	controller.pending[99] = pendingOrder
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := controller.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
+		first <- err
+	}()
+	<-entered
+
+	within(t, time.Second, "another pair", func() {
+		order, err := controller.CreateOrderMarket(model.SideTypeBuy, "ETHUSDT", 1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), order.ExchangeID)
+	})
+	within(t, time.Second, "UpdateOrders", controller.UpdateOrders)
+	within(t, time.Second, "the status", func() { require.Equal(t, Status(""), controller.Status()) })
+	within(t, time.Second, "the value of a position", func() {
+		_, err := controller.PositionValue("ETHUSDT")
+		require.NoError(t, err)
+	})
+
+	second := make(chan error, 1)
+	go func() {
+		_, err := controller.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 2)
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("the next order of the pair went before the slow one: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
+	require.InDelta(t, 3, controller.position["BTCUSDT"].Quantity, 1e-9, "both settled, in their order")
+	exch.AssertExpectations(t)
+}
+
+// Stop waits for the orders begun to be recorded, and refuses the new ones
+// meanwhile.
+func TestController_StopWaitsForTheOrdersBegun(t *testing.T) {
+	controller, exch := newTestController(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	exch.On("CreateOrderMarket", model.SideTypeBuy, "BTCUSDT", 1.0).Run(func(mock.Arguments) {
+		close(entered)
+		<-release
+	}).Return(filledOrder(1, model.SideTypeBuy, 100, 1), nil).Once()
+	controller.Start()
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := controller.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
+		created <- err
+	}()
+	<-entered
+	stopped := make(chan struct{})
+	go func() {
+		controller.Stop()
+		close(stopped)
+	}()
+	require.Eventually(t, func() bool { return controller.Status() == StatusStopped }, time.Second,
+		time.Millisecond)
+	within(t, time.Second, "a new order", func() {
+		_, err := controller.CreateOrderMarket(model.SideTypeSell, "ETHUSDT", 1)
+		require.ErrorIs(t, err, ErrBotStopped)
+	})
+	select {
+	case <-stopped:
+		t.Fatal("stopped before the order begun was recorded")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-created)
+	<-stopped
+	orders, err := controller.storage.Orders()
+	require.NoError(t, err)
+	require.Len(t, orders, 1, "recorded before Stop returned")
+	require.Equal(t, 1.0, controller.position["BTCUSDT"].Quantity)
+}
+
+// unstoredStorage is a storage in memory refusing for good the orders of
+// pairs set, eg: the NaN of an order a JSON storage can't write, and while
+// failing is set, the others.
+type unstoredStorage struct {
+	*flakyStorage
+	refused map[string]bool
+}
+
+func (u *unstoredStorage) CreateOrder(order *model.Order) error {
+	if u.refused[order.Pair] {
+		u.mu.Lock()
+		u.next++
+		order.ID = u.next
+		u.mu.Unlock()
+		return errors.New("json: unsupported value: NaN")
+	}
+	return u.flakyStorage.CreateOrder(order)
+}
+
+func (u *unstoredStorage) UpdateOrder(order *model.Order) error {
+	if u.refused[order.Pair] {
+		return errors.New("json: unsupported value: NaN")
+	}
+	return u.flakyStorage.UpdateOrder(order)
+}
+
+// B5: an order the storage refuses for good never hides the failures of the
+// next ones: each new failure is notified, unstoredNotifyEvery apart at most,
+// the ones meanwhile together with the next notice, and so are the orders
+// stored at last while the one refused stays.
+func TestController_NewStorageFailuresNotifiedWithAnOrderRefusedForGood(t *testing.T) {
+	every := unstoredNotifyEvery
+	unstoredNotifyEvery = 200 * time.Millisecond
+	t.Cleanup(func() { unstoredNotifyEvery = every })
+
+	ctx := context.Background()
+	st := &unstoredStorage{flakyStorage: newFlakyStorage(t), refused: map[string]bool{"ETHUSDT": true}}
+	wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 100000))
+	controller := NewController(ctx, wallet, st, NewOrderFeed())
+	var mu sync.Mutex
+	var errs, notices []string
+	notifier := &mocks.Notifier{}
+	notifier.On("OnError", mock.Anything).Run(func(args mock.Arguments) {
+		mu.Lock()
+		defer mu.Unlock()
+		errs = append(errs, args.Error(0).Error())
+	}).Return()
+	notifier.On("Notify", mock.Anything).Run(func(args mock.Arguments) {
+		mu.Lock()
+		defer mu.Unlock()
+		notices = append(notices, args.String(0))
+	}).Return()
+	controller.SetNotifier(notifier)
+	for _, pair := range []string{"BTCUSDT", "ETHUSDT"} {
+		wallet.OnCandle(model.Candle{Pair: pair, Time: time.Now(), Low: 100, High: 100, Close: 100, Complete: true})
+	}
+	counts := func() (int, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(errs), len(notices)
+	}
+
+	_, err := controller.CreateOrderMarket(model.SideTypeBuy, "ETHUSDT", 1) // refused for good
+	require.NoError(t, err)
+	failures, _ := counts()
+	require.Equal(t, 1, failures)
+
+	st.fail(true)
+	_, err = controller.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
+	require.NoError(t, err)
+	_, err = controller.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 2)
+	require.NoError(t, err)
+	failures, _ = counts()
+	require.Equal(t, 1, failures, "within the notice of the first one")
+	require.Eventually(t, func() bool {
+		controller.UpdateOrders()
+		failures, _ := counts()
+		return failures == 2
+	}, 2*time.Second, 10*time.Millisecond, "the new failures notified, though one order is refused for good")
+	mu.Lock()
+	require.Contains(t, errs[1], "and 1 other orders since the last notice, 3 not stored yet in all")
+	mu.Unlock()
+
+	st.fail(false)
+	require.Eventually(t, func() bool {
+		controller.UpdateOrders()
+		_, stored := counts()
+		return stored == 1
+	}, 2*time.Second, 10*time.Millisecond, "the orders stored at last notified, though one is refused for good")
+	mu.Lock()
+	require.Contains(t, notices[0], "2 orders the storage failed to write are stored at last, 1 not yet")
+	mu.Unlock()
+	require.Len(t, controller.unstored, 1)
+	failures, _ = counts()
+	require.Equal(t, 2, failures)
 }

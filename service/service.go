@@ -96,6 +96,26 @@ type ProtectionBroker interface {
 	UpdateLimit(order model.Order, limit float64) (model.Order, error)
 }
 
+// ProtectedCloser is implemented by the brokers whose market order closes a
+// protected position with its legs in place, its stop loss and take profit
+// going with it, eg: MT5, which closes the positions held by their tickets.
+// Elsewhere, eg: the paper wallet, the legs reserve the position: they are
+// canceled before it is closed, or the order would open the other side.
+// ClosesProtected reports which: the order controller implements it for its
+// exchange.
+type ProtectedCloser interface {
+	ClosesProtected() bool
+}
+
+// PositionProtector is implemented by the brokers that protect a position
+// already held, eg: placing again the legs canceled for a close that failed.
+// Protect places a stop loss at stop and a take profit at profit, 0 for none,
+// on the size units held on side of pair, and returns the legs, the take
+// profit first, as ProtectionBroker does.
+type PositionProtector interface {
+	Protect(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error)
+}
+
 type Notifier interface {
 	Notify(string)
 	OnOrder(order model.Order)

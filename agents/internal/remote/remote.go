@@ -41,6 +41,7 @@ type Agent struct {
 	prompts *Prompts
 
 	mu     sync.Mutex
+	orders *Orders
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -156,9 +157,17 @@ func (a *Agent) Open(dir string) error {
 	return nil
 }
 
-// Orders returns the storage of the orders of the agent, see NewOrders.
+// Orders returns the storage of the orders of the agent, see NewOrders, the
+// orders it failed to write written again by Close.
 func (a *Agent) Orders(ctx context.Context) (*Orders, error) {
-	return NewOrders(ctx, a.client, a.outbox)
+	orders, err := NewOrders(ctx, a.client, a.outbox)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.orders = orders
+	a.mu.Unlock()
+	return orders, nil
 }
 
 // Decisions returns the store of the decisions of the LLM agent, see
@@ -281,11 +290,12 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 	}
 }
 
-// Close stops sending the records and watching the runtime, sends the records
-// left, flushTimeout at most, and closes the outbox.
+// Close stops sending the records and watching the runtime, writes the orders
+// the outbox failed to write a last time, sends the records left,
+// flushTimeout at most, and closes the outbox.
 func (a *Agent) Close() error {
 	a.mu.Lock()
-	cancel, done := a.cancel, a.done
+	cancel, done, orders := a.cancel, a.done, a.orders
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -293,6 +303,11 @@ func (a *Agent) Close() error {
 	}
 	if a.outbox == nil {
 		return nil
+	}
+	if orders != nil {
+		if err := orders.Close(); err != nil {
+			log.Errorf("%s: %v", a.Config.Name, err)
+		}
 	}
 	ctx, stop := context.WithTimeout(context.Background(), flushTimeout)
 	defer stop()

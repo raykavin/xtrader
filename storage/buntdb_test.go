@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -81,4 +82,31 @@ func TestBunt_IDsAcrossReopens(t *testing.T) {
 	orders, err := db.Orders()
 	require.NoError(t, err)
 	require.Len(t, orders, 4, "none overwritten")
+}
+
+// B5: an order of numbers that aren't finite, eg: the profit of a fill without
+// a price, which JSON can't write, is stored with them at 0, rather than
+// refused for good while it was executed; the order of the caller untouched.
+func TestBunt_NumbersNotFiniteStoredAsZero(t *testing.T) {
+	st, err := FromMemory()
+	require.NoError(t, err)
+	stop := math.Inf(1)
+	order := &model.Order{ExchangeID: 7, Pair: "BTCUSDT", Side: model.SideTypeSell, Type: model.OrderTypeMarket,
+		Status: model.OrderStatusTypeFilled, Price: 100, Quantity: 1, Profit: math.NaN(), Stop: &stop,
+		UpdatedAt: time.Now()}
+	require.NoError(t, st.CreateOrder(order))
+	require.True(t, math.IsNaN(order.Profit), "the order of the caller untouched")
+	require.True(t, math.IsInf(*order.Stop, 1))
+
+	order.ProfitValue = math.Inf(-1)
+	require.NoError(t, st.UpdateOrder(order))
+	orders, err := st.Orders()
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	require.Equal(t, order.ID, orders[0].ID)
+	require.Zero(t, orders[0].Profit)
+	require.Zero(t, orders[0].ProfitValue)
+	require.NotNil(t, orders[0].Stop)
+	require.Zero(t, *orders[0].Stop)
+	require.Equal(t, 100.0, orders[0].Price)
 }

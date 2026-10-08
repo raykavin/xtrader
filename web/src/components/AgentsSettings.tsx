@@ -219,11 +219,13 @@ function AgentCard({
     : stopping
       ? "O agente ainda está parando: aguarde para excluí-lo"
       : "Exclui o agente; as ordens e as decisões dele são mantidas";
-  const footnote = agent.restart_pending
-    ? "Configurações de inicialização alteradas: reinicie para aplicá-las."
-    : agent.last_exit
-      ? `Última saída: ${agent.last_exit}`
-      : "";
+  const footnote = agent.launch_error
+    ? `Não iniciado: ${agent.launch_error}`
+    : agent.restart_pending
+      ? "Configurações de inicialização alteradas: reinicie para aplicá-las."
+      : agent.last_exit
+        ? `Última saída: ${agent.last_exit}`
+        : "";
 
   return (
     <article className={`card settings-agent ${state.tone}`} aria-label={`Agente ${agent.name}`}>

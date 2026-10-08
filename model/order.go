@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -55,6 +56,31 @@ type Order struct {
 	Profit      float64 `json:"profit" gorm:"-"`
 	ProfitValue float64 `json:"profit_value" gorm:"-"`
 	Candle      Candle  `json:"-" gorm:"-"`
+}
+
+// Finite returns the order with its numbers that aren't finite, which JSON
+// can't write, eg: the profit of a fill without a price, set to 0, and their
+// JSON names. Its Stop is copied when set to 0.
+func (o Order) Finite() (Order, []string) {
+	var fields []string
+	for _, field := range []struct {
+		name  string
+		value *float64
+	}{
+		{"price", &o.Price}, {"quantity", &o.Quantity}, {"fee", &o.Fee}, {"ref_price", &o.RefPrice},
+		{"profit", &o.Profit}, {"profit_value", &o.ProfitValue},
+	} {
+		if math.IsNaN(*field.value) || math.IsInf(*field.value, 0) {
+			*field.value = 0
+			fields = append(fields, field.name)
+		}
+	}
+	if o.Stop != nil && (math.IsNaN(*o.Stop) || math.IsInf(*o.Stop, 0)) {
+		stop := 0.0
+		o.Stop = &stop
+		fields = append(fields, "stop")
+	}
+	return o, fields
 }
 
 func (o Order) String() string {

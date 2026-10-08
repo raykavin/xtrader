@@ -482,6 +482,41 @@ func TestImport_IntoTheContainersOnceWithTheFlags(t *testing.T) {
 	require.Equal(t, "http://mt5:22347/mcp", *agent.LLM.CalendarURL)
 }
 
+// Two agents of the previous version trading the same positions, of the
+// default comment of their kind on the same pair and bridge: the second one is
+// imported disabled, as the store refuses two agents trading them, told.
+func TestImport_TheSecondAgentOfTheSamePositionsDisabled(t *testing.T) {
+	cfg := testConfig(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	agents := `
+agents:
+  - name: gold
+    exec: go run ./agents/trendagent
+    args: [-mode live -exchange mt5 -pair XAUUSDm -api localhost:5555]
+  - name: gold-15m
+    exec: go run ./agents/trendagent
+    args: [-mode live -exchange mt5 -pair XAUUSDm -timeframe 15m -api localhost:5556]
+  - name: gold-own
+    exec: go run ./agents/trendagent
+    args: [-mode live -exchange mt5 -pair XAUUSDm -mt5-comment nb:own -api localhost:5557]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents.yml"), []byte(agents), 0o600))
+	var out bytes.Buffer
+	require.NoError(t, runImport(ctx, cfg, []string{"-agents", filepath.Join(dir, "agents.yml")}, &out))
+	require.Contains(t, out.String(), "agent gold-15m imported disabled: store: already exists: agent gold-15m: "+
+		"the agent gold, enabled in live mode, trades XAUUSDm")
+
+	s := testStore(t, cfg)
+	list, err := s.Agents(ctx)
+	require.NoError(t, err)
+	enabled := map[string]bool{}
+	for _, a := range list {
+		enabled[a.Name] = a.Enabled
+	}
+	require.Equal(t, map[string]bool{"gold": true, "gold-15m": false, "gold-own": true}, enabled)
+}
+
 func TestImport_InvalidURLsFailBeforeTheDatabase(t *testing.T) {
 	ctx := context.Background()
 	host := hostArgs(t)

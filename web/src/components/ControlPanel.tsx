@@ -7,6 +7,7 @@ import {
   defaultStop,
   levelsError,
   noLevels,
+  orderFeedback,
   priceStep,
   roundPrice,
   type Side,
@@ -31,7 +32,7 @@ interface Props {
 type Unit = "quote" | "percent" | "lot";
 type OrderType = "market" | "limit";
 type Confirm = { kind: "order" };
-type Feedback = { tone: "ok" | "error"; text: string };
+type Feedback = { tone: "ok" | "warn" | "error"; text: string };
 
 const shares = [25, 50, 75, 100];
 
@@ -216,7 +217,10 @@ export function ControlPanel({
   const showFeedback = (next: Feedback) => {
     setFeedback(next);
     window.clearTimeout(feedbackTimer.current);
-    feedbackTimer.current = window.setTimeout(() => setFeedback(null), 8000);
+    // a warning stays until the next feedback: the position may be unprotected
+    if (next.tone !== "warn") {
+      feedbackTimer.current = window.setTimeout(() => setFeedback(null), 8000);
+    }
   };
 
   const run = async (action: () => Promise<void>) => {
@@ -281,12 +285,7 @@ export function ControlPanel({
         stop_loss: stop ?? 0,
         take_profit: profit ?? 0,
       });
-      showFeedback({
-        tone: "ok",
-        text: `Ordem de ${side === "buy" ? "compra" : "venda"} #${order.id} criada — ${formatQuantity(
-          order.quantity,
-        )} ${asset}`,
-      });
+      showFeedback(orderFeedback(order, side, asset));
       setAmount("");
       setType("market");
       setStopOn(false);

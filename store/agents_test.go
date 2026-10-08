@@ -565,3 +565,207 @@ func TestSameListener(t *testing.T) {
 		assert.Equal(t, c.same, sameListener(c.a, c.b), "%s and %s", c.a, c.b)
 	}
 }
+
+// tradingAgent returns an agent trading on MT5, enabled and launched in live
+// mode, of kind on the bridge, its API at an address of its own, changed by
+// edit.
+func tradingAgent(name, kind string, port int, edit func(a *Agent)) Agent {
+	a := Agent{Name: name, Kind: kind, Enabled: true, Mode: "live", APIAddress: fmt.Sprintf("localhost:%d", port),
+		Launched: true, Params: Params{"pair": "XAUUSDm"}, Account: &Account{BridgeURL: "http://127.0.0.1:18812"}}
+	if kind == "llm" {
+		a.LLM = &LLMSettings{Provider: "openai", Model: "gpt-5"}
+	}
+	if edit != nil {
+		edit(&a)
+	}
+	return a
+}
+
+// Two agents trading the same pair with the same magic number on the bridge
+// of an account close, move and net the positions of each other: the second
+// is refused, whatever gives it the magic number, its default of the comment
+// of its kind or one set; the ones of another bridge, of other pairs, of a
+// magic number or a comment of their own, and the ones not trading, aren't.
+func TestCreateAgent_RefusesTheSamePositions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, err := s.CreateAgent(ctx, tradingAgent("llm", "llm", 5600, nil), AgentSecrets{})
+	require.NoError(t, err)
+	_, err = s.CreateAgent(ctx, tradingAgent("trend", "trend", 5601, nil), AgentSecrets{})
+	require.NoError(t, err, "nb:trendconfluence, another magic number")
+
+	port := 5610
+	for _, tc := range []struct {
+		name     string
+		kind     string
+		edit     func(a *Agent)
+		conflict string // the agent of the same positions, "" for none
+	}{
+		{"the same defaults", "llm", nil, "llm"},
+		{"the default comment set", "llm", func(a *Agent) { a.Account.Comment = ptr("nb:llm") }, "llm"},
+		{"the magic number of the default comment", "llm", func(a *Agent) { a.Account.Magic = ptr(int64(496707372)) },
+			"llm"},
+		{"the bridge under another name", "llm", func(a *Agent) { a.Account.BridgeURL = "http://LOCALHOST:18812/" },
+			"llm"},
+		{"a pair in common", "llm", func(a *Agent) { a.Params["pair"] = "BTCUSDm; xauusdm" }, "llm"},
+		{"no account, the default bridge", "llm", func(a *Agent) { a.Account = nil }, "llm"},
+		{"the default strategy set", "trend", func(a *Agent) { a.Params["strategy"] = "trendconfluence" }, "trend"},
+		{"another bridge", "llm", func(a *Agent) { a.Account.BridgeURL = "http://127.0.0.1:18813" }, ""},
+		{"another pair", "llm", func(a *Agent) { a.Params["pair"] = "BTCUSDm" }, ""},
+		{"a comment of its own", "llm", func(a *Agent) { a.Account.Comment = ptr("nb:llm-2") }, ""},
+		{"a magic number of its own", "llm", func(a *Agent) { a.Account.Magic = ptr(int64(42)) }, ""},
+		{"the magic number of another kind", "trend", func(a *Agent) { a.Account.Magic = ptr(int64(42)) },
+			"a-magic-number-of-its-own"},
+		{"another strategy", "trend", func(a *Agent) { a.Params["strategy"] = "matrend" }, ""},
+		{"disabled", "llm", func(a *Agent) { a.Enabled = false }, ""},
+		{"paper", "llm", func(a *Agent) { a.Mode = "paper" }, ""},
+		{"running apart", "llm", func(a *Agent) { a.Launched = false }, "llm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port++
+			name := strings.NewReplacer(" ", "-", ",", "").Replace(tc.name)
+			created, err := s.CreateAgent(ctx, tradingAgent(name, tc.kind, port, tc.edit), AgentSecrets{})
+			if tc.conflict == "" {
+				require.NoError(t, err)
+				require.Equal(t, name, created.Name)
+				return
+			}
+			require.ErrorIs(t, err, ErrConflict)
+			require.ErrorContains(t, err, "agent "+name+": the agent "+tc.conflict+", enabled in live mode, trades")
+			_, err = s.AgentByName(ctx, name)
+			require.ErrorIs(t, err, ErrNotFound, "nothing written")
+		})
+	}
+}
+
+// B2: an agent running apart (Launched false) trades all the same, the
+// controller not seeing it run: an agent trading its positions is refused,
+// launched or apart, and so is enabling one of them.
+func TestCreateAgent_RefusesThePositionsOfAnAgentRunningApart(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	apart, err := s.CreateAgent(ctx, tradingAgent("apart", "llm", 5600, func(a *Agent) { a.Launched = false }),
+		AgentSecrets{})
+	require.NoError(t, err)
+
+	_, err = s.CreateAgent(ctx, tradingAgent("launched", "llm", 5601, nil), AgentSecrets{})
+	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorContains(t, err, "the agent apart, enabled in live mode, trades XAUUSDm")
+	_, err = s.CreateAgent(ctx, tradingAgent("apart-too", "llm", 5602, func(a *Agent) { a.Launched = false }),
+		AgentSecrets{})
+	require.ErrorIs(t, err, ErrConflict, "two of them apart")
+
+	launched, err := s.CreateAgent(ctx, tradingAgent("launched", "llm", 5601, func(a *Agent) { a.Enabled = false }),
+		AgentSecrets{})
+	require.NoError(t, err, "disabled")
+	_, err = s.UpdateAgent(ctx, launched.ID, AgentUpdate{Enabled: ptr(true)})
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = s.UpdateAgent(ctx, apart.ID, AgentUpdate{Launched: ptr(true)})
+	require.NoError(t, err, "launching it changes nothing it trades")
+	_, err = s.UpdateAgent(ctx, apart.ID, AgentUpdate{Enabled: ptr(false)})
+	require.NoError(t, err)
+	_, err = s.UpdateAgent(ctx, launched.ID, AgentUpdate{Enabled: ptr(true)})
+	require.NoError(t, err, "the other one disabled")
+}
+
+// Enabling an agent, or changing its mode, its params or its account, is
+// refused when it would trade the positions of another; disabling it, or
+// changing what it trades for its own, isn't, nor are the other switches of
+// two agents sharing them already, eg: set in SQL.
+func TestUpdateAgent_RefusesTheSamePositions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	trading, err := s.CreateAgent(ctx, tradingAgent("trading", "llm", 5600, nil), AgentSecrets{})
+	require.NoError(t, err)
+	other, err := s.CreateAgent(ctx, tradingAgent("other", "llm", 5601, func(a *Agent) { a.Enabled = false }),
+		AgentSecrets{})
+	require.NoError(t, err, "disabled, it may share them")
+
+	refused := func(update AgentUpdate) {
+		t.Helper()
+		_, err := s.UpdateAgent(ctx, other.ID, update)
+		require.ErrorIs(t, err, ErrConflict)
+		require.ErrorContains(t, err, "the agent trading, enabled in live mode, trades XAUUSDm")
+	}
+	refused(AgentUpdate{Enabled: ptr(true)})
+	unchanged, err := s.Agent(ctx, other.ID)
+	require.NoError(t, err)
+	require.False(t, unchanged.Enabled, "nothing written")
+
+	updated, err := s.UpdateAgent(ctx, other.ID, AgentUpdate{Enabled: ptr(true), Mode: ptr("paper")})
+	require.NoError(t, err, "a paper agent reads the market data only")
+	require.True(t, updated.Enabled)
+	refused(AgentUpdate{Mode: ptr("live")})
+	_, err = s.UpdateAgent(ctx, other.ID, AgentUpdate{Mode: ptr("live"),
+		Account: &AccountUpdate{Comment: ptr("nb:other")}})
+	require.NoError(t, err, "a comment of its own")
+	refused(AgentUpdate{Account: &AccountUpdate{Comment: ptr("")}})
+	refused(AgentUpdate{Account: &AccountUpdate{Magic: ptr(trading.MT5Book().Magic)}})
+	refused(AgentUpdate{Account: &AccountUpdate{BridgeURL: ptr("http://localhost:18812"), Comment: ptr("")},
+		Params: Params{"pair": "XAUUSDm"}})
+	_, err = s.UpdateAgent(ctx, trading.ID, AgentUpdate{Params: Params{"pair": "BTCUSDm"}})
+	require.NoError(t, err)
+	_, err = s.UpdateAgent(ctx, other.ID, AgentUpdate{Account: &AccountUpdate{Comment: ptr("")}})
+	require.NoError(t, err, "the agent trading trades another pair now")
+	_, err = s.UpdateAgent(ctx, trading.ID, AgentUpdate{Params: Params{"pair": "BTCUSDm;XAUUSDm"}})
+	require.ErrorIs(t, err, ErrConflict, "both ways")
+	require.ErrorContains(t, err, "the agent other, enabled in live mode, trades XAUUSDm")
+
+	// two agents sharing them already, set in SQL: the switches apply, and
+	// disabling one of them
+	require.NoError(t, s.db.Exec(`UPDATE agents SET params = '{"pair": "XAUUSDm"}' WHERE id = ?`, trading.ID).Error)
+	_, err = s.UpdateAgent(ctx, trading.ID, AgentUpdate{TradePanel: ptr(true), APIAddress: ptr("localhost:5602")})
+	require.NoError(t, err, "what it trades unchanged")
+	refused(AgentUpdate{Params: Params{"pair": "XAUUSDm", "lot": "0.01"}})
+	_, err = s.UpdateAgent(ctx, other.ID, AgentUpdate{Enabled: ptr(false)})
+	require.NoError(t, err)
+	_, err = s.UpdateAgent(ctx, trading.ID, AgentUpdate{Params: Params{"pair": "XAUUSDm", "lot": "0.01"}})
+	require.NoError(t, err, "the other one disabled")
+}
+
+// Two agents enabled at once, each alone free to trade the positions both
+// would: the checks apply one at a time, so one of them only is enabled.
+func TestUpdateAgent_EnablesOneOfTwoAgentsOfTheSamePositionsAtOnce(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	var ids []int64
+	for i, name := range []string{"first", "second"} {
+		a, err := s.CreateAgent(ctx, tradingAgent(name, "llm", 5600+i, func(a *Agent) { a.Enabled = false }),
+			AgentSecrets{})
+		require.NoError(t, err)
+		ids = append(ids, a.ID)
+	}
+	for round := 0; round < 5; round++ {
+		errs := make(chan error, len(ids))
+		start := make(chan struct{})
+		for _, id := range ids {
+			go func() {
+				<-start
+				_, err := s.UpdateAgent(ctx, id, AgentUpdate{Enabled: ptr(true)})
+				errs <- err
+			}()
+		}
+		close(start)
+		var conflicts int
+		for range ids {
+			if err := <-errs; err != nil {
+				require.ErrorIs(t, err, ErrConflict)
+				conflicts++
+			}
+		}
+		require.Equal(t, 1, conflicts, "round %d", round)
+		agents, err := s.Agents(ctx)
+		require.NoError(t, err)
+		var enabled int
+		for _, a := range agents {
+			if a.Enabled {
+				enabled++
+			}
+		}
+		require.Equal(t, 1, enabled, "round %d", round)
+		for _, id := range ids {
+			_, err := s.UpdateAgent(ctx, id, AgentUpdate{Enabled: ptr(false)})
+			require.NoError(t, err)
+		}
+	}
+}

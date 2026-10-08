@@ -35,6 +35,16 @@ type Agent struct {
 	Strategies []Strategy
 }
 
+// DefaultStrategy returns the strategy the agent trades without -strategy, its
+// first one, "" for none: the one of agentapi.DefaultStrategy for its kind, as
+// the comment of its orders on MT5, and so its magic number, depend on it.
+func (a Agent) DefaultStrategy() string {
+	if len(a.Strategies) == 0 {
+		return ""
+	}
+	return a.Strategies[0].Name
+}
+
 // Strategy is a strategy of an agent: its name for -strategy, what it trades,
 // the flags it takes of its own (see BracketInputs), refused with the other
 // strategies of the agent, and how it is created from the inputs of the agent.
@@ -192,7 +202,7 @@ func run(agent Agent) error {
 		about = append(about, fmt.Sprintf("%s (%s)", s.Name, s.About))
 	}
 	var (
-		strategyName = flag.String("strategy", names[0], "strategy traded: "+strings.Join(about, ", "))
+		strategyName = flag.String("strategy", agent.DefaultStrategy(), "strategy traded: "+strings.Join(about, ", "))
 		mode         = flag.String("mode", "backtest", "backtest, paper or live")
 		exchangeName = flag.String("exchange", "mt5", "exchange traded: mt5, MetaTrader 5 through tools/mt5bridge")
 		currency     = flag.String("currency", "USD", "backtest: currency the symbols are quoted in, eg: GBP for EURGBPm")
@@ -204,7 +214,7 @@ func run(agent Agent) error {
 		mt5Size      = flag.String("mt5-size", "lot", "mt5: how -lot is read, lot (MT5 lots, converted into units of the base asset with the contract size of the pair) or unit")
 		mt5CSize     = flag.String("mt5-contract-size", "", "mt5 backtest: units of the base asset in a lot, to convert -lot, eg: 100 for XAUUSDm; one for all the pairs, one per pair in the order of -pair, or one by pair, eg: XAUUSDm=100 (default: the ones the package knows)")
 		mt5Poll      = flag.Duration("mt5-poll", 0, "mt5: how often the account and the candles are polled (default 1s)")
-		pairList     = flag.String("pair", "XAUUSDm", "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
+		pairList     = flag.String("pair", agentapi.DefaultPair, "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
 		timeframe    = flag.String("timeframe", "1h", "strategy timeframe (the strategies with a stop loss and a take profit at the broker: default the strategy's)")
 		direction    = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
 		stopATR      = flag.Float64("stop-atr", 0, "stop from the entry close, in ATR: trendconfluence: checked on the close (0: off); the strategies with a stop loss at the broker: placed there (default: the strategy's)")
@@ -334,6 +344,13 @@ func run(agent Agent) error {
 	venue := venue{leverage: *leverage, lots: lots,
 		mt5: mt5Venue{bridge: *mt5Bridge, token: token, magic: mt5Magic(*mt5MagicArg, comment),
 			comment: comment, live: *mt5Live, inLots: inLots, poll: *mt5Poll}}
+	if remoteAgent != nil {
+		// the positions the controller keeps apart from the ones of the other agents
+		book := agentapi.MT5Book{Bridge: venue.mt5.bridge, Magic: venue.mt5.magic, Comment: comment, Pairs: pairs}
+		if err := remoteAgent.Config.CheckMT5Book(book); err != nil {
+			return err
+		}
+	}
 
 	switch *mode {
 	case "backtest":
@@ -513,6 +530,7 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 
 	apply := func(agentapi.Runtime) {}
 	if chart != nil {
+		orders.SetNotifier(chart) // the orders the outbox fails to write
 		// the orders of the previous runs, on the chart and in its history
 		stored, err := orders.Orders()
 		if err != nil {

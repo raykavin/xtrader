@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -252,7 +253,7 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := createControlOrder(controller, side, pair, request, reference)
+	created, warning, err := createControlOrder(controller, side, pair, request, reference)
 	if err != nil {
 		writeControlError(w, err)
 		return
@@ -261,7 +262,7 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	dto := c.toOrder(created, c.candles[pair])
 	c.mu.Unlock()
-	writeJSON(w, dto)
+	writeJSON(w, ControlOrderResponse{Order: dto, Warning: warning})
 }
 
 // writeControlError replies the error of an order of the control panel: 409
@@ -281,36 +282,53 @@ func writeControlError(w http.ResponseWriter, err error) {
 }
 
 // createControlOrder creates the order of the control panel and returns it, the
-// entry of a protected one. A market order without stop loss nor take profit
-// mirrors the Telegram /buy and /sell semantics, see createMarketOrder; the
-// others are sized at reference, see controlSize.
+// entry of a protected one, with a warning when it was executed short of what
+// was asked (see ControlOrderResponse). A market order without stop loss nor
+// take profit mirrors the Telegram /buy and /sell semantics, see
+// createMarketOrder; the others are sized at reference, see controlSize.
 func createControlOrder(controller OrderController, side model.SideType, pair string,
-	request ControlOrderRequest, reference float64) (model.Order, error) {
+	request ControlOrderRequest, reference float64) (model.Order, string, error) {
 
 	protected := request.StopLoss > 0 || request.TakeProfit > 0
 	if request.Type != "limit" && !protected {
-		return createMarketOrder(controller, side, pair, request)
+		created, err := createMarketOrder(controller, side, pair, request)
+		return created, "", err
 	}
 
 	size, err := controlSize(controller, side, pair, request, reference)
 	if err != nil {
-		return model.Order{}, err
+		return model.Order{}, "", err
 	}
 
 	var orders []model.Order
 	switch {
 	case request.Type == "limit" && !protected:
-		return controller.CreateOrderLimit(side, pair, size, request.Price)
+		created, err := controller.CreateOrderLimit(side, pair, size, request.Price)
+		return created, "", err
 	case request.Type == "limit":
 		orders, err = controller.CreateOrderLimitProtected(side, pair, size, request.Price, request.StopLoss,
 			request.TakeProfit)
 	default:
 		orders, err = controller.CreateOrderMarketProtected(side, pair, size, request.StopLoss, request.TakeProfit)
 	}
-	if err != nil {
-		return model.Order{}, err
+	if len(orders) == 0 {
+		if err == nil {
+			err = errors.New("the broker created no order")
+		}
+		return model.Order{}, "", err
 	}
-	return orders[0], nil
+	if err != nil {
+		// the entry is on the exchange: an error would have it sent again
+		asked := 0
+		for _, level := range []float64{request.StopLoss, request.TakeProfit} {
+			if level > 0 {
+				asked++
+			}
+		}
+		return orders[0], fmt.Sprintf("the order was created, but %d of its %d stop loss and take profit "+
+			"orders only: the position may be left without them, check it: %v", len(orders)-1, asked, err), nil
+	}
+	return orders[0], "", nil
 }
 
 // controlSize returns the size of an order at price: its lots, its amount in

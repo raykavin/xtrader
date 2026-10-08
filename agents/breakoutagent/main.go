@@ -26,16 +26,22 @@ import (
 )
 
 func main() {
+	runner.Run(agent())
+}
+
+// agent returns the agent and its strategies, the first one its default, the
+// one of agentapi.DefaultStrategy for the kind breakout.
+func agent() runner.Agent {
 	f := flags{
 		bufferATR:   flag.Float64("buffer-atr", 0, "atrbreakout: how far beyond the range the close must end, in ATR"),
 		expansion:   flag.Float64("expansion", 0, "atrbreakout: ATR multiple of its average for an expansion (default 1.2)"),
 		breakoutLen: flag.Int("breakout-len", 0, "atrbreakout: candles of the channel broken (default 20)"),
 	}
-	runner.Run(runner.Agent{Name: "breakoutagent", Strategies: append([]runner.Strategy{
+	return runner.Agent{Name: "breakoutagent", Strategies: append([]runner.Strategy{
 		{Name: "atrbreakout", About: "the breakouts of the recent range on an expansion of the volatility",
 			New: f.atrBreakout, Inputs: append([]string{"buffer-atr", "expansion", "breakout-len"}, runner.BracketInputs...)},
 	}, runner.Signals("donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner",
-		"volumebreakout", "highlow", "momentumbreakout")...)})
+		"volumebreakout", "highlow", "momentumbreakout")...)}
 }
 
 // flags holds the flags of the strategies of the agent.

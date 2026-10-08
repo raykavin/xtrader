@@ -39,6 +39,7 @@ type managed struct {
 	dashboard *Dashboard
 	manager   *Manager
 	stdout    *lockedBuffer
+	dsn       string // of its database
 }
 
 func newManaged(t *testing.T) *managed {
@@ -58,15 +59,15 @@ func newManaged(t *testing.T) *managed {
 		Env: config.Env{"GOCACHE=/tmp/go-cache"}}
 	m := NewManager(st, agents, sup, dashboard, nil)
 	dashboard.ServeSettings(st, m, nil)
-	return &managed{store: st, dashboard: dashboard, manager: m, stdout: stdout}
+	return &managed{store: st, dashboard: dashboard, manager: m, stdout: stdout, dsn: dsn}
 }
 
 // secret returns a pointer to value, a secret to write.
 func secret(value string) *string { return &value }
 
 // agent creates an agent of the tests: an LLM one with its secrets, or one of
-// the runner.
-func (c *managed) agent(t *testing.T, name, kind string, enabled bool) store.Agent {
+// the runner, changed by edit, if any.
+func (c *managed) agent(t *testing.T, name, kind string, enabled bool, edit ...func(a *store.Agent)) store.Agent {
 	t.Helper()
 	a := store.Agent{Name: name, Kind: kind, Enabled: enabled, Mode: "live",
 		APIAddress: fmt.Sprintf("localhost:%d", 15500+len(name)),
@@ -76,6 +77,9 @@ func (c *managed) agent(t *testing.T, name, kind string, enabled bool) store.Age
 	if kind == "llm" {
 		a.LLM = &store.LLMSettings{Provider: "openai", Model: "gpt-5", Params: store.Params{"llm-min-stop-atr": "1"}}
 		secrets.LLMAPIKey, secrets.CalendarToken = secret("sk-"+name), secret("mcp-"+name)
+	}
+	for _, change := range edit {
+		change(&a)
 	}
 	created, err := c.store.CreateAgent(context.Background(), a, secrets)
 	require.NoError(t, err)
@@ -219,7 +223,8 @@ func record(t *testing.T, seq uint64, kind, key string, payload interface{}) age
 func TestInternalAPI_OnlyTheAgentOfTheToken(t *testing.T) {
 	c := newManaged(t)
 	ctx := context.Background()
-	llm, other := c.agent(t, "llm", "llm", true), c.agent(t, "other", "llm", true)
+	llm := c.agent(t, "llm", "llm", true)
+	other := c.agent(t, "other", "llm", true, func(a *store.Agent) { a.Account.Comment = secret("nb:other") })
 	prompt, err := c.store.PromptByName(ctx, "trend_following")
 	require.NoError(t, err)
 	require.NoError(t, c.store.SetAgentPrompt(ctx, llm.ID, &prompt.ID))
