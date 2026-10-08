@@ -67,10 +67,11 @@ func (d *Dashboard) call(ctx context.Context, a *agent, method, path string, bod
 	if err != nil {
 		return err
 	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if body != nil || !safeMethod(method) {
+		request.Header.Set("Content-Type", "application/json") // a change is JSON, see ui.Chart
 	}
 	request.Header.Set(ui.ChannelHeader, string(ui.ChannelTelegram))
+	d.keys.authorize(a.Name, request.Header)
 
 	response, err := d.client.Do(request)
 	if err != nil {
@@ -110,6 +111,7 @@ func (d *Dashboard) events(ctx context.Context, a *agent, connected func(),
 	if err != nil {
 		return err
 	}
+	d.keys.authorize(a.Name, request.Header)
 	response, err := d.stream.Do(request)
 	if err != nil {
 		log.Debugf("controller: agent %s: %v", a.Name, err)

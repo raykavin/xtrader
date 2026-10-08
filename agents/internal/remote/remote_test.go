@@ -105,6 +105,14 @@ func TestConnect(t *testing.T) {
 	t.Setenv(agentapi.EnvURL, f.srv.URL)
 	_, err = Connect(context.Background())
 	require.ErrorIs(t, err, ErrUnauthorized)
+
+	// the key of its API, apart from the token, which its API wants
+	t.Setenv(agentapi.EnvToken, testToken)
+	t.Setenv(agentapi.EnvAgent, "llm")
+	t.Setenv(agentapi.EnvAPIKey, "the-key")
+	a, err = Connect(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "the-key", a.APIKey)
 }
 
 // Run applies the runtime as it changes, the prompt read beforehand, and ends

@@ -15,7 +15,7 @@ import (
 // router wires the API of the bot, which the dashboard proxies.
 func (c *Chart) router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Recoverer)
+	r.Use(middleware.Recoverer, c.guard)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", c.handleHealth)

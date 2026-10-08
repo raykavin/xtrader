@@ -138,6 +138,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.mu.Unlock()
 	var served []Agent
 	var relayed []string
+	unserved := make(map[string]error) // the agents of an address off the loopback, see agentAPI
 	for _, a := range agents {
 		byName[a.Name] = a
 		if !a.Enabled {
@@ -146,6 +147,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		address := a.APIAddress
 		if l, ok := launched[a.Name]; ok && m.supervisor.Running(a.Name) {
 			address = l.address // a new one waits for the restart, as the process listens there
+		}
+		if _, err := agentAPI(address); err != nil {
+			// saved before the store refused it: neither served nor launched
+			unserved[a.Name] = fmt.Errorf("the address of its API: %w: change it in its settings", err)
+			continue
 		}
 		served = append(served, Agent{Name: a.Name, Address: address})
 		relayed = append(relayed, a.Name)
@@ -177,8 +183,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				m.Trigger() // an agent it kept from launching may launch now
 			}()
 		}
-		if !wanted {
-			m.noteLaunch(a.Name, nil)
+		if err := unserved[a.Name]; !wanted && m.noteLaunch(a.Name, err) {
+			log.Errorf("controller: agent %s: %v", a.Name, err)
 		}
 	}
 	m.mu.Lock()
@@ -226,9 +232,13 @@ func (m *Manager) telegramConfig(ctx context.Context) (TelegramConfig, error) {
 }
 
 // start launches the agent a with the command of its kind, each start with a
-// token of its own, unless it would trade the positions of another agent
-// running (see conflict).
+// token of its own and a key of its API (see agentKeys), unless it would trade
+// the positions of another agent running (see conflict) or its API is off the
+// loopback (see agentAPI).
 func (m *Manager) start(a store.Agent) error {
+	if _, err := agentAPI(a.APIAddress); err != nil {
+		return fmt.Errorf("the address of its API: %w: change it in its settings", err)
+	}
 	m.starting.Lock()
 	defer m.starting.Unlock()
 	live, book := a.Mode == "live", a.MT5Book()
@@ -247,13 +257,23 @@ func (m *Manager) start(a store.Agent) error {
 	env[agentapi.EnvAgent] = a.Name
 	spec := ProcessSpec{Name: a.Name, Command: strings.Fields(m.agents.Command(a.Kind)), Dir: m.agents.Dir,
 		Env: env, Restart: a.Restart}
-	id := a.ID
+	id, name := a.ID, a.Name
+	keys := m.dashboard.keys
 	prepare := func() (map[string]string, func(), error) {
 		token, err := m.tokens.issue(id)
 		if err != nil {
 			return nil, nil, err
 		}
-		return map[string]string{agentapi.EnvToken: token}, func() { m.tokens.revoke(token) }, nil
+		key, err := randomToken()
+		if err != nil {
+			m.tokens.revoke(token)
+			return nil, nil, err
+		}
+		keys.set(name, key)
+		return map[string]string{agentapi.EnvToken: token, agentapi.EnvAPIKey: key}, func() {
+			m.tokens.revoke(token)
+			keys.drop(name, key)
+		}, nil
 	}
 	if err := m.supervisor.Start(spec, prepare); err != nil {
 		return err

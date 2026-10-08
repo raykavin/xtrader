@@ -131,8 +131,16 @@ func TestCreateAgent_RefusesTheInvalidOnes(t *testing.T) {
 			"the one of the agent llm"},
 		{"address of the loopback taken", trend(func(a *Agent) { a.APIAddress = "127.0.0.1:5580" }), AgentSecrets{},
 			ErrConflict, "the one of the agent llm"},
-		{"address of every interface taken", trend(func(a *Agent) { a.APIAddress = "0.0.0.0:5580" }),
-			AgentSecrets{}, ErrConflict, "the one of the agent llm"},
+		{"address of every interface", trend(func(a *Agent) { a.APIAddress = "0.0.0.0:5580" }),
+			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+		{"address of every IPv6 interface", trend(func(a *Agent) { a.APIAddress = "[::]:5581" }),
+			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+		{"address of another machine", trend(func(a *Agent) { a.APIAddress = "10.0.0.5:5581" }),
+			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+		{"address of the metadata of a cloud", trend(func(a *Agent) { a.APIAddress = "169.254.169.254:80" }),
+			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+		{"name of another machine", trend(func(a *Agent) { a.APIAddress = "bot.lan:5581" }),
+			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
 		{"model of another kind", trend(func(a *Agent) { a.LLM = &LLMSettings{Provider: "openai", Model: "gpt-5"} }),
 			AgentSecrets{}, ErrInvalid, "language model for an agent of kind trend"},
 		{"llm without model", llm(func(a *Agent) { a.LLM = nil }), AgentSecrets{}, ErrInvalid,
@@ -543,6 +551,37 @@ func TestLeaseOrderIDs_NeverTheSameTwice(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 	_, _, err = s.LeaseOrderIDs(ctx, agent.ID, 0)
 	require.ErrorIs(t, err, ErrInvalid)
+}
+
+// The API of an agent answers whoever reaches it: its address is on the
+// loopback, where the controller reaches it, never another host nor every
+// interface.
+func TestValidAddress_OnTheLoopbackOnly(t *testing.T) {
+	for address, valid := range map[string]bool{
+		"localhost:5580": true, "LocalHost:5580": true, "127.0.0.1:5580": true, "127.1.2.3:1": true,
+		"[::1]:65535": true, "localhost": false, "localhost:0": false, "localhost:65536": false,
+		"0.0.0.0:5580": false, "[::]:5580": false, "10.0.0.5:5580": false, "192.168.0.10:5580": false,
+		"169.254.169.254:80": false, "bot.lan:5580": false, "localhost.evil.example:5580": false,
+		"[fe80::1%lo]:5580": false, "[::1%lo]:5580": false, "127.0.0.1.nip.io:5580": false, ":5580": false,
+	} {
+		assert.Equal(t, valid, validAddress(address), address)
+	}
+}
+
+func TestUpdateAgent_APIOnTheLoopbackOnly(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	agent := llmAgent(t, s, "llm")
+	for _, address := range []string{"0.0.0.0:5590", "10.0.0.5:5590", "bot.lan:5590"} {
+		_, err := s.UpdateAgent(ctx, agent.ID, AgentUpdate{APIAddress: &address})
+		require.ErrorIs(t, err, ErrInvalid, address)
+		require.ErrorContains(t, err, "the host on the loopback", address)
+	}
+	for _, address := range []string{"127.0.0.2:5590", "[::1]:5591", "localhost:5592"} {
+		updated, err := s.UpdateAgent(ctx, agent.ID, AgentUpdate{APIAddress: &address})
+		require.NoError(t, err, address)
+		require.Equal(t, address, updated.APIAddress)
+	}
 }
 
 // Two agents listen at the same port under the names of the machine, not

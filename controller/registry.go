@@ -11,13 +11,15 @@ import (
 // Manager. An agent is never changed once in it, a new one taking its place,
 // so the requests in flight keep theirs.
 type registry struct {
+	keys *agentKeys // of their API, see newAgentProxy
+
 	mu     sync.RWMutex
 	agents []*agent
 	byName map[string]*agent
 }
 
-func newRegistry() *registry {
-	return &registry{byName: make(map[string]*agent)}
+func newRegistry(keys *agentKeys) *registry {
+	return &registry{keys: keys, byName: make(map[string]*agent)}
 }
 
 // replace makes the valid agents of list the agents, keeping the proxy of the
@@ -50,7 +52,7 @@ func (r *registry) replace(list []Agent) error {
 			errs = append(errs, fmt.Errorf("ui: agent %s: %w", a.Name, err))
 			continue
 		}
-		created := &agent{Agent: a, api: api, proxy: newAgentProxy(a, api)}
+		created := &agent{Agent: a, api: api, proxy: newAgentProxy(a, api, r.keys)}
 		agents = append(agents, created)
 		byName[a.Name] = created
 	}

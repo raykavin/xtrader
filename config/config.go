@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -49,6 +51,10 @@ type Config struct {
 	Agents    Agents    `mapstructure:"agents"`
 	Services  []Service `mapstructure:"services"`
 	Log       Log       `mapstructure:"log"`
+
+	// Warnings are the ${VAR} of the file that weren't set, taken as empty,
+	// by Load: the ones it can't do without fail it instead, see checkUnset.
+	Warnings []string `mapstructure:"-"`
 }
 
 // Database is the connection to PostgreSQL.
@@ -84,6 +90,38 @@ type Bootstrap struct {
 type UI struct {
 	Dir     string `mapstructure:"dir"`
 	Version string `mapstructure:"version"`
+
+	// TrustedProxies are the reverse proxies in front of the dashboard, IPs or
+	// CIDRs, eg: ngrok on the host: only the X-Forwarded-For and
+	// X-Forwarded-Proto of a request coming from one of them are believed, for
+	// the address of the client (the logs and the limits of the logins) and
+	// its HTTPS. The loopback by default.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+}
+
+// defaultTrustedProxies are the proxies trusted by default: the loopback.
+var defaultTrustedProxies = []string{"127.0.0.0/8", "::1/128"}
+
+// Proxies returns the prefixes of TrustedProxies.
+func (u UI) Proxies() ([]netip.Prefix, error) {
+	proxies := make([]netip.Prefix, 0, len(u.TrustedProxies))
+	for _, entry := range u.TrustedProxies {
+		entry = strings.TrimSpace(entry)
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(entry)
+			if addrErr != nil {
+				return nil, fmt.Errorf("ui.trusted_proxies: %q is neither an IP nor a CIDR", entry)
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		if prefix.Bits() == 0 {
+			// anyone could tell its address and its HTTPS
+			return nil, fmt.Errorf("ui.trusted_proxies: %q trusts every address", entry)
+		}
+		proxies = append(proxies, prefix.Masked())
+	}
+	return proxies, nil
 }
 
 // Agents is how the controller runs the agents of the database.
@@ -169,8 +207,27 @@ func Load(file string) (*Config, error) {
 		return nil, fmt.Errorf("config %s: %w", file, err)
 	}
 	cfg.defaults()
-	if err := cfg.Validate(); err != nil {
+
+	// gobox/config expands a ${VAR} without a value to nothing: the URL of the
+	// database without its password, the bridge of MT5 without its token
+	text, err := os.ReadFile(file)
+	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	found, err := unsetVars(string(text))
+	if err != nil {
+		return nil, fmt.Errorf("config %s: %w", file, err)
+	}
+	errs, warnings := cfg.checkUnset(found)
+	cfg.Warnings = warnings
+	if len(errs) > 0 {
+		errs = []error{fmt.Errorf("%w: %w", ErrInvalid, errors.Join(errs...))}
+	}
+	if err := cfg.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("config %s: %w", file, errors.Join(errs...))
 	}
 	return cfg, nil
 }
@@ -206,6 +263,9 @@ func (c *Config) defaults() {
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
+	}
+	if len(c.UI.TrustedProxies) == 0 {
+		c.UI.TrustedProxies = slices.Clone(defaultTrustedProxies)
 	}
 	for i := range c.Services {
 		if c.Services[i].Wait == 0 {
@@ -259,6 +319,9 @@ func (c *Config) Validate() error {
 		if err := s.Env.check("service " + s.Name + ": env"); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if _, err := c.UI.Proxies(); err != nil {
+		errs = append(errs, err)
 	}
 	if (c.Bootstrap.Username == "") != (c.Bootstrap.Password == "") {
 		errs = append(errs, errors.New("bootstrap: the username and the password go together"))

@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,11 +32,20 @@ const (
 	testPassword = "s3cret-Pa55"
 )
 
-// fakeUsers are the users of the tests, their passwords in plain text.
+// fakeUsers are the users of the tests, their passwords in plain text, their
+// hash a mark of it.
 type fakeUsers struct {
 	mu        sync.Mutex
 	users     []store.User
 	passwords map[int64]string
+	lookup    error  // of User, eg: the database out of reach
+	onLookup  func() // called by User, eg: to close the sessions meanwhile
+
+	// delay is how long a password takes to check, as bcrypt does: calls
+	// counts the checks, active and maxActive the ones at once.
+	delay             time.Duration
+	calls             atomic.Int64
+	active, maxActive atomic.Int64
 }
 
 // newFakeUsers returns the users of the pairs of username and password.
@@ -40,13 +53,25 @@ func newFakeUsers(credentials ...string) *fakeUsers {
 	f := &fakeUsers{passwords: make(map[int64]string)}
 	for i := 0; i+1 < len(credentials); i += 2 {
 		id := int64(len(f.users) + 1)
-		f.users = append(f.users, store.User{Model: store.Model{ID: id}, Username: credentials[i], Enabled: true})
+		f.users = append(f.users, store.User{Model: store.Model{ID: id}, Username: credentials[i],
+			PasswordHash: "hash:" + credentials[i+1], Enabled: true})
 		f.passwords[id] = credentials[i+1]
 	}
 	return f
 }
 
 func (f *fakeUsers) Authenticate(_ context.Context, username, password string) (store.User, error) {
+	f.calls.Add(1)
+	active := f.active.Add(1)
+	for {
+		top := f.maxActive.Load()
+		if active <= top || f.maxActive.CompareAndSwap(top, active) {
+			break
+		}
+	}
+	time.Sleep(f.delay)
+	f.active.Add(-1)
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, u := range f.users {
@@ -60,6 +85,12 @@ func (f *fakeUsers) Authenticate(_ context.Context, username, password string) (
 func (f *fakeUsers) User(_ context.Context, id int64) (store.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onLookup != nil {
+		f.onLookup()
+	}
+	if f.lookup != nil {
+		return store.User{}, f.lookup
+	}
 	for _, u := range f.users {
 		if u.ID == id {
 			return u, nil
@@ -83,6 +114,86 @@ func (f *fakeUsers) disable(id int64) {
 			f.users[i].Enabled = false
 		}
 	}
+}
+
+// setPassword replaces the password of the user of id, as SQL or cmd/migrator
+// would, the dashboard not told.
+func (f *fakeUsers) setPassword(id int64, password string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.users {
+		if f.users[i].ID == id {
+			f.users[i].PasswordHash = "hash:" + password
+			f.passwords[id] = password
+		}
+	}
+}
+
+// failLookups makes User fail with err, nil for none.
+func (f *fakeUsers) failLookups(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookup = err
+}
+
+// serve serves a request to h from the client at remote, eg: a proxy, with
+// the headers given, and returns its answer.
+func serve(h http.Handler, method, target, body, remote string, headers ...string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.RemoteAddr = remote
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// loginBody is the payload of a login of username with password.
+func loginBody(t *testing.T, username, password string) string {
+	t.Helper()
+	body, err := json.Marshal(ui.LoginRequest{Username: username, Password: password})
+	require.NoError(t, err)
+	return string(body)
+}
+
+// retryAfter returns the seconds of the Retry-After of an answer, 0 for none.
+func retryAfter(t *testing.T, rec *httptest.ResponseRecorder) int {
+	t.Helper()
+	value := rec.Header().Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(value)
+	require.NoError(t, err, value)
+	return seconds
+}
+
+// clock is the time of a test, moved by hand.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newClock(d *Dashboard) *clock {
+	c := &clock{now: time.Now()}
+	d.auth.now = c.Now
+	return c
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 // authServer serves the dashboard of an agent online behind its login, with
@@ -384,7 +495,8 @@ func TestAuth_PasswordsNotExposed(t *testing.T) {
 	_, srv := authServer(t, WithUsers(newFakeUsers(testUsername, testPassword)))
 	var answers []string
 	for _, password := range []string{"wrong", testPassword} {
-		resp, body := login(t, srv, testUsername, password, "X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+		// the client is the last address the proxy saw: the first one is the client's word
+		resp, body := login(t, srv, testUsername, password, "X-Forwarded-For", "198.51.100.1, 203.0.113.7")
 		answers = append(answers, body)
 		cookies := sessionOf(resp)
 		for _, path := range []string{"/api/auth/session", "/api/agents", "/login", "/"} {
@@ -402,15 +514,482 @@ func TestAuth_PasswordsNotExposed(t *testing.T) {
 
 func TestSafeNext(t *testing.T) {
 	for next, want := range map[string]string{
-		"":                         "/",
-		"/":                        "/",
-		"/?agent=llm&pair=XAUUSDm": "/?agent=llm&pair=XAUUSDm",
-		"//evil.example":           "/",
-		"/\\evil.example":          "/",
-		"https://evil.example":     "/",
-		"/login":                   "/",
-		"/login?next=/":            "/",
+		"":                           "/",
+		"/":                          "/",
+		"/?agent=llm&pair=XAUUSDm":   "/?agent=llm&pair=XAUUSDm",
+		"//evil.example":             "/",
+		"/\\evil.example":            "/",
+		"https://evil.example":       "/",
+		"/login":                     "/",
+		"/login?next=/":              "/",
+		"/settings#prompts":          "/settings#prompts",
+		"/?agent=llm&pair=XAU%2FUSD": "/?agent=llm&pair=XAU%2FUSD",
+		// the browsers drop the tabs and the newlines of a URL, and read a
+		// backslash as a slash: //evil.example
+		"/\t/evil.example":     "/",
+		"/\n/evil.example":     "/",
+		"/\r/evil.example":     "/",
+		"\t//evil.example":     "/",
+		"/ /evil.example":      "/",
+		"/\x00/evil.example":   "/",
+		"/\x7f/evil.example":   "/",
+		"/a\\b":                "/",
+		"/\\\\evil.example":    "/",
+		"///evil.example":      "/",
+		"http:/evil.example":   "/",
+		"https:evil.example":   "/",
+		"//user@evil.example/": "/",
+		"javascript:alert(1)":  "/",
+		"/%2Flogin":            "/%2Flogin",
+		"/%6Cogin":             "/",
+		// the browsers remove the dot segments of a path: "//evil.example"
+		"/.//evil.example":      "/",
+		"/a/..//evil.example/x": "/",
+		"/%2e//evil.example":    "/",
+		"/%2E%2E//evil.example": "/",
+		"/a//b":                 "/",
+		"/?next=//evil.example": "/?next=//evil.example",
+		"/settings#//evil":      "/settings#//evil",
 	} {
-		assert.Equal(t, want, safeNext(next), next)
+		assert.Equal(t, want, safeNext(next), "%q", next)
 	}
+}
+
+// A page of the login with a session goes on to next, a page of the dashboard
+// only: never another site, whatever the browser drops of the URL.
+func TestAuth_LoginRedirectStaysOnTheDashboard(t *testing.T) {
+	_, srv := authServer(t, WithUsers(newFakeUsers(testUsername, testPassword)))
+	resp, _ := login(t, srv, testUsername, testPassword)
+	session := cookieOf(resp, sessionCookie)
+	require.NotNil(t, session)
+	for next, want := range map[string]string{
+		"%2F%09%2Fevil.example":  "/",
+		"%2F%0A%2Fevil.example":  "/",
+		"%2F%0D%2Fevil.example":  "/",
+		"%2F%5C%2Fevil.example":  "/",
+		"https%3A%2F%2Fevil.exa": "/",
+		"%2F.%2F%2Fevil.example": "/",
+		"%2Fsettings%23users":    "/settings#users",
+	} {
+		// the Location as sent, which a client of Go refuses to follow
+		req := httptest.NewRequest(http.MethodGet, "/login?next="+next, nil)
+		req.AddCookie(session)
+		rec := httptest.NewRecorder()
+		srv.Config.Handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusFound, rec.Code, next)
+		assert.Equal(t, want, rec.Header().Get("Location"), next)
+	}
+}
+
+// 200 wrong passwords at once from an address, with the right one from
+// another: the right one gets in, and few of the wrong ones are checked, the
+// others refused before bcrypt with 429 and Retry-After.
+func TestAuth_LoginBruteForce_ConcurrentGuesses(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	users.delay = 20 * time.Millisecond
+	d, srv := authServer(t, WithUsers(users))
+	d.auth.failDelay = 50 * time.Millisecond
+	h := srv.Config.Handler
+
+	const guesses = 200
+	start := make(chan struct{})
+	answers := make([]*httptest.ResponseRecorder, guesses+1)
+	var wg sync.WaitGroup
+	for i := range answers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body, client := loginBody(t, testUsername, fmt.Sprintf("guess-%d", i)), "203.0.113.66"
+			if i == guesses {
+				body, client = loginBody(t, testUsername, testPassword), "198.51.100.7"
+			}
+			<-start
+			answers[i] = serve(h, http.MethodPost, "/api/auth/login", body, "127.0.0.1:40000",
+				"X-Forwarded-For", client)
+		}()
+	}
+	began := time.Now()
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, http.StatusOK, answers[guesses].Code, "the right password from elsewhere: %s",
+		answers[guesses].Body.String())
+	refused := 0
+	for _, rec := range answers[:guesses] {
+		switch rec.Code {
+		case http.StatusUnauthorized:
+		case http.StatusTooManyRequests:
+			refused++
+			assert.GreaterOrEqual(t, retryAfter(t, rec), 1, "429 tells when to try again")
+		default:
+			t.Errorf("a wrong password answered %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	checked := users.calls.Load() - 1 // the right one
+	t.Logf("%d wrong passwords checked, %d refused before bcrypt, in %v", checked, refused, time.Since(began))
+	assert.LessOrEqual(t, checked, int64(clientFreeFailures+1), "the guesses of an address checked one at a time")
+	assert.Equal(t, int64(guesses), checked+int64(refused))
+	assert.LessOrEqual(t, users.maxActive.Load(), int64(maxConcurrentLogins))
+}
+
+// Logins of many addresses at once, eg: a password spraying, never check more
+// than maxConcurrentLogins passwords at once: the others get 429 at once.
+func TestAuth_LoginBruteForce_BcryptsAtOnce(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	users.delay = 50 * time.Millisecond
+	_, srv := authServer(t, WithUsers(users))
+	h := srv.Config.Handler
+
+	const clients = 200
+	start := make(chan struct{})
+	codes := make([]int, clients)
+	retries := make([]string, clients)
+	var wg sync.WaitGroup
+	for i := range clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := loginBody(t, fmt.Sprintf("user-%d", i), "wrong-password")
+			<-start
+			rec := serve(h, http.MethodPost, "/api/auth/login", body, "127.0.0.1:40000",
+				"X-Forwarded-For", fmt.Sprintf("198.18.%d.%d", i/250, i%250+1))
+			codes[i], retries[i] = rec.Code, rec.Header().Get("Retry-After")
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	refused := 0
+	for i, code := range codes {
+		if code == http.StatusTooManyRequests {
+			refused++
+			assert.Equal(t, "1", retries[i])
+		} else {
+			assert.Equal(t, http.StatusUnauthorized, code)
+		}
+	}
+	t.Logf("%d passwords checked, at most %d at once, %d refused", users.calls.Load(), users.maxActive.Load(), refused)
+	assert.LessOrEqual(t, users.maxActive.Load(), int64(maxConcurrentLogins), "the bcrypts at once")
+	assert.Positive(t, refused)
+	assert.Equal(t, int64(clients), users.calls.Load()+int64(refused), "a login refused is never checked")
+}
+
+// The failed logins of an address in a row wait failDelay each, then twice as
+// long each, up to clientMaxBackoff, the password not checked meanwhile, even
+// the right one; another address goes on, and an hour without failures
+// forgets them.
+func TestAuth_LoginBruteForce_BackoffOfAnAddress(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	d, srv := authServer(t, WithUsers(users))
+	d.auth.failDelay = 10 * time.Millisecond // the answers, the next login 1s later on the clock
+	clock := newClock(d)
+	h := srv.Config.Handler
+	from := func(client, username, password string) *httptest.ResponseRecorder {
+		return serve(h, http.MethodPost, "/api/auth/login", loginBody(t, username, password), "127.0.0.1:40000",
+			"X-Forwarded-For", client)
+	}
+	const attacker = "203.0.113.66"
+	guess := 0
+	fail := func() {
+		t.Helper()
+		guess++
+		rec := from(attacker, fmt.Sprintf("someone-%d", guess), "wrong")
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "guess %d: %s", guess, rec.Body.String())
+	}
+
+	for i := 1; i < clientFreeFailures; i++ {
+		fail()
+		rec := from(attacker, testUsername, testPassword)
+		require.Equal(t, http.StatusTooManyRequests, rec.Code, "right after failure %d", i)
+		assert.Equal(t, 1, retryAfter(t, rec))
+		clock.advance(time.Second)
+	}
+	wait := clientBackoff
+	for range 12 {
+		fail()
+		calls := users.calls.Load()
+		rec := from(attacker, testUsername, testPassword)
+		require.Equal(t, http.StatusTooManyRequests, rec.Code, "after %d failures", guess)
+		assert.Equal(t, int(wait.Seconds()), retryAfter(t, rec), "after %d failures", guess)
+		assert.Contains(t, decodeError(t, rec.Body.String()), "too many failed logins")
+		assert.Equal(t, calls, users.calls.Load(), "the password not checked, even the right one")
+
+		clock.advance(wait - time.Second)
+		require.Equal(t, http.StatusTooManyRequests, from(attacker, testUsername, testPassword).Code)
+		rec = from("198.51.100.7", testUsername, testPassword)
+		require.Equal(t, http.StatusOK, rec.Code, "another address: %s", rec.Body.String())
+		clock.advance(time.Second)
+		wait = min(2*wait, clientMaxBackoff)
+	}
+	assert.Equal(t, clientMaxBackoff, wait, "up to clientMaxBackoff")
+
+	clock.advance(loginForget)
+	for range clientFreeFailures - 1 {
+		fail()
+		clock.advance(time.Second)
+	}
+	assert.Equal(t, http.StatusOK, from(attacker, testUsername, testPassword).Code, "forgotten")
+}
+
+// The logins of a username, from any address, have a budget of userBurst in a
+// row, then one every userRefill: a looser limit than the one of an address,
+// which a success refills. A refused one doesn't tell whether the user exists.
+func TestAuth_LoginBruteForce_BudgetOfAUser(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	d, srv := authServer(t, WithUsers(users))
+	clock := newClock(d)
+	h := srv.Config.Handler
+	client := 0
+	from := func(username, password string) *httptest.ResponseRecorder {
+		client++
+		return serve(h, http.MethodPost, "/api/auth/login", loginBody(t, username, password), "127.0.0.1:40000",
+			"X-Forwarded-For", fmt.Sprintf("198.18.0.%d", client))
+	}
+
+	for _, username := range []string{testUsername, "nobody"} {
+		for i := range userBurst {
+			require.Equal(t, http.StatusUnauthorized, from(username, "wrong").Code, "%s: login %d", username, i)
+		}
+		calls := users.calls.Load()
+		rec := from(strings.ToUpper(username)+" ", testPassword)
+		require.Equal(t, http.StatusTooManyRequests, rec.Code, username)
+		assert.Equal(t, int(userRefill.Seconds()), retryAfter(t, rec), username)
+		assert.Equal(t, calls, users.calls.Load(), "not checked")
+		assert.Equal(t, http.StatusUnauthorized, from("other", "wrong").Code, "another username goes on")
+	}
+
+	clock.advance(userRefill)
+	require.Equal(t, http.StatusOK, from(testUsername, testPassword).Code, "one more every userRefill")
+	for i := range userBurst {
+		require.Equal(t, http.StatusUnauthorized, from(testUsername, "wrong").Code, "refilled: login %d", i)
+	}
+	assert.Equal(t, http.StatusTooManyRequests, from(testUsername, testPassword).Code)
+}
+
+// The delay of a failed login ends with its request.
+func TestAuth_FailedLoginDelayEndsWithTheRequest(t *testing.T) {
+	d, srv := authServer(t, WithUsers(newFakeUsers(testUsername, testPassword)))
+	d.auth.failDelay = time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/auth/login",
+		strings.NewReader(loginBody(t, testUsername, "wrong")))
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		srv.Config.Handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed login still waits after its request ended")
+	}
+}
+
+// X-Forwarded-For and X-Forwarded-Proto are only believed from a trusted
+// proxy, the loopback by default: the address of the logs and of the limits
+// of the logins is the one of the client otherwise, and its cookies are only
+// Secure over HTTPS.
+func TestAuth_ForwardedHeadersOnlyFromTrustedProxies(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	d, srv := authServer(t, WithUsers(newFakeUsers(testUsername, testPassword)))
+	h := srv.Config.Handler
+	body := loginBody(t, testUsername, testPassword)
+
+	rec := serve(h, http.MethodPost, "/api/auth/login", body, "192.0.2.10:5555",
+		"X-Forwarded-For", "203.0.113.7", "X-Forwarded-Proto", "https")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, logs.String(), "login of "+testUsername+" from 192.0.2.10")
+	assert.NotContains(t, logs.String(), "203.0.113.7")
+	for _, cookie := range rec.Result().Cookies() {
+		assert.False(t, cookie.Secure, "%s: over HTTP, whatever the client says", cookie.Name)
+	}
+
+	for forwarded, client := range map[string]string{
+		"203.0.113.7":                               "203.0.113.7",
+		"198.51.100.1, 203.0.113.7":                 "203.0.113.7",
+		"203.0.113.7, 127.0.0.1":                    "203.0.113.7",
+		"2001:db8::1":                               "2001:db8::1",
+		"not an address, 203.0.113.7":               "203.0.113.7",
+		"203.0.113.7, not an address":               "127.0.0.1",
+		"198.51.100.1, 203.0.113.7, ::1, 127.0.0.2": "203.0.113.7",
+	} {
+		logs.Reset()
+		rec := serve(h, http.MethodPost, "/api/auth/login", body, "127.0.0.1:5555",
+			"X-Forwarded-For", forwarded, "X-Forwarded-Proto", "https")
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, logs.String(), "login of "+testUsername+" from "+client+"\"", forwarded)
+		for _, cookie := range rec.Result().Cookies() {
+			assert.True(t, cookie.Secure, "%s: through the proxy over HTTPS", cookie.Name)
+		}
+	}
+
+	// the limits of the logins follow the client, not the headers it sends
+	newClock(d)
+	d.auth.failDelay = 10 * time.Millisecond
+	wrong := loginBody(t, "someone", "wrong")
+	require.Equal(t, http.StatusUnauthorized, serve(h, http.MethodPost, "/api/auth/login", wrong, "192.0.2.10:5555",
+		"X-Forwarded-For", "203.0.113.1").Code)
+	rec = serve(h, http.MethodPost, "/api/auth/login", wrong, "192.0.2.10:5556", "X-Forwarded-For", "203.0.113.2")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "the same client")
+}
+
+// A session ends with the password of its user, changed elsewhere than on
+// the dashboard, eg: by SQL or by cmd/migrator, found within sessionCheck.
+func TestAuth_SessionEndsWithItsPassword(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword, "other", "other-password")
+	d, srv := authServer(t, WithUsers(users))
+	clock := newClock(d)
+	resp, _ := login(t, srv, testUsername, testPassword)
+	cookies := sessionOf(resp)
+	resp, _ = login(t, srv, "other", "other-password")
+	other := sessionOf(resp)
+
+	users.setPassword(1, "a-new-password")
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", cookies)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "checked again after sessionCheck")
+	clock.advance(sessionCheck + time.Second)
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", cookies)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "the password changed")
+	users.setPassword(1, testPassword)
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", cookies)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "closed for good")
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", other)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "the other user goes on")
+	resp, _ = login(t, srv, testUsername, testPassword)
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", sessionOf(resp))
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "a new session")
+}
+
+// A session closed while its user is checked, eg: by a new password on the
+// dashboard, isn't served by the check.
+func TestAuth_SessionClosedWhileChecked(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	d, srv := authServer(t, WithUsers(users))
+	clock := newClock(d)
+	resp, _ := login(t, srv, testUsername, testPassword)
+	cookies := sessionOf(resp)
+
+	users.onLookup = func() { d.auth.closeUser(1) }
+	clock.advance(sessionCheck + time.Second)
+	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", cookies)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Empty(t, d.auth.sessions)
+}
+
+// With the database out of reach, a session goes on for sessionGrace since its
+// user was last checked, then is refused until the database answers again,
+// when it goes on, unless its user changed meanwhile.
+func TestAuth_SessionWhileTheDatabaseFails(t *testing.T) {
+	users := newFakeUsers(testUsername, testPassword)
+	d, srv := authServer(t, WithUsers(users))
+	clock := newClock(d)
+	resp, _ := login(t, srv, testUsername, testPassword)
+	cookies := sessionOf(resp)
+	get := func() int {
+		resp, _ := do(t, http.MethodGet, srv.URL+"/api/agents", "", cookies)
+		return resp.StatusCode
+	}
+
+	users.failLookups(errors.New("connection refused"))
+	clock.advance(sessionCheck + time.Second)
+	assert.Equal(t, http.StatusOK, get(), "a short outage")
+	clock.advance(sessionGrace - sessionCheck - 2*time.Second)
+	assert.Equal(t, http.StatusOK, get(), "within sessionGrace")
+	clock.advance(time.Second)
+	assert.Equal(t, http.StatusUnauthorized, get(), "unchecked for sessionGrace")
+	_, body := do(t, http.MethodGet, srv.URL+"/api/auth/session", "", cookies)
+	assert.JSONEq(t, `{"authenticated":false}`, body)
+
+	users.failLookups(nil)
+	assert.Equal(t, http.StatusOK, get(), "the database back, the session goes on")
+
+	users.failLookups(errors.New("connection refused"))
+	clock.advance(sessionGrace + time.Second)
+	assert.Equal(t, http.StatusUnauthorized, get())
+	users.setPassword(1, "a-new-password")
+	users.failLookups(nil)
+	assert.Equal(t, http.StatusUnauthorized, get(), "its password changed meanwhile")
+}
+
+// The proxies of ui.trusted_proxies are the ones trusted, eg: the gateway of
+// the network of the compose, through which ngrok on the host reaches the
+// controller in its container; the loopback isn't anymore.
+func TestAuth_TrustedProxiesConfigured(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	_, srv := authServer(t, WithTrustedProxies([]netip.Prefix{netip.MustParsePrefix("172.16.0.0/12")}),
+		WithUsers(newFakeUsers(testUsername, testPassword)))
+	h := srv.Config.Handler
+	body := loginBody(t, testUsername, testPassword)
+
+	for remote, want := range map[string]struct {
+		client string
+		secure bool
+	}{
+		"172.18.0.1:40000": {"203.0.113.7", true},
+		"127.0.0.1:40000":  {"127.0.0.1", false},
+		"10.12.0.5:40000":  {"10.12.0.5", false},
+	} {
+		logs.Reset()
+		rec := serve(h, http.MethodPost, "/api/auth/login", body, remote,
+			"X-Forwarded-For", "203.0.113.7", "X-Forwarded-Proto", "https")
+		require.Equal(t, http.StatusOK, rec.Code, remote)
+		assert.Contains(t, logs.String(), "login of "+testUsername+" from "+want.client+"\"", remote)
+		session := rec.Result().Cookies()[0]
+		assert.Equal(t, want.secure, session.Secure, remote)
+	}
+}
+
+// The addresses and the usernames followed are maxLoginEntries at most: a new
+// one is refused while all of them are limited, and taken once some are over.
+func TestLoginLimiter_Bounded(t *testing.T) {
+	l := newLoginLimiter()
+	l.entries = 64
+	now := time.Now()
+	fail := func(client, user string) {
+		t.Helper()
+		ticket, refusal := l.admit(client, user, now)
+		require.Nil(t, refusal, "%s %s", client, user)
+		ticket.finish(loginFailed, now, time.Second)
+	}
+	for i := range l.entries {
+		fail(fmt.Sprintf("198.18.0.%d", i), fmt.Sprintf("user-%d", i))
+	}
+	require.Len(t, l.clients, l.entries)
+	require.Len(t, l.users, l.entries)
+
+	now = now.Add(time.Second)
+	_, refusal := l.admit("198.18.1.1", "user-0", now)
+	require.NotNil(t, refusal, "the addresses all limited")
+	assert.Equal(t, refusedFailures, refusal.reason)
+	_, refusal = l.admit("198.18.0.0", "someone", now)
+	require.NotNil(t, refusal, "the usernames all limited")
+	ticket, refusal := l.admit("198.18.0.0", "user-0", now)
+	require.Nil(t, refusal, "the ones followed go on")
+	ticket.finish(loginFailed, now, time.Second)
+
+	now = now.Add(loginForget)
+	ticket, refusal = l.admit("198.18.1.1", "someone", now)
+	require.Nil(t, refusal, "the old ones forgotten")
+	ticket.finish(loginSucceeded, now, time.Second)
+	assert.LessOrEqual(t, len(l.clients), 2)
+	assert.LessOrEqual(t, len(l.users), 1)
+	assert.Zero(t, l.active)
+}
+
+// The limits of an address: an IPv6 one by its /64, an IPv4 one mapped to
+// IPv6 as IPv4; of a username: as the store finds it, its length bounded.
+func TestLoginLimiter_Keys(t *testing.T) {
+	assert.Equal(t, "203.0.113.7", clientKey("203.0.113.7"))
+	assert.Equal(t, "203.0.113.7", clientKey("::ffff:203.0.113.7"))
+	assert.Equal(t, "2001:db8:1:2::/64", clientKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd"))
+	assert.Equal(t, "pipe", clientKey("pipe"))
+	assert.Equal(t, "admin", usernameKey(" Admin "))
+	assert.Len(t, usernameKey(strings.Repeat("x", maxLoginBody)), maxUsernameKey)
 }

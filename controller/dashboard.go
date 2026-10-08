@@ -12,8 +12,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +65,7 @@ type agent struct {
 // with the control panel enabled, and change the settings.
 type Dashboard struct {
 	agents   *registry
+	keys     *agentKeys   // of the API of the agents the controller launched
 	probe    *http.Client // lists the agents online
 	client   *http.Client // calls their API, see call
 	stream   *http.Client // follows their events, see events
@@ -97,7 +100,14 @@ func WithCacheDir(dir string) DashboardOption {
 // WithUsers sets the users who log in the dashboard, see store.Store:
 // without any, the dashboard is closed.
 func WithUsers(users Users) DashboardOption {
-	return func(d *Dashboard) { d.auth = newAuth(users) }
+	return func(d *Dashboard) { d.auth.users = users }
+}
+
+// WithTrustedProxies sets the reverse proxies in front of the dashboard,
+// whose X-Forwarded-For and X-Forwarded-Proto are believed: ui.trusted_proxies
+// of config.yml, the loopback by default.
+func WithTrustedProxies(proxies []netip.Prefix) DashboardOption {
+	return func(d *Dashboard) { d.auth.proxies = slices.Clone(proxies) }
 }
 
 // WithHTTPClient sets the client used to download the bundle.
@@ -113,8 +123,10 @@ func withReleaseURL(url string) DashboardOption {
 // NewDashboard creates the dashboard of the agents, each with its own name,
 // replaced later with SetAgents. Call Handler to serve it.
 func NewDashboard(agents []Agent, options ...DashboardOption) (*Dashboard, error) {
+	keys := newAgentKeys()
 	d := &Dashboard{
-		agents: newRegistry(),
+		agents: newRegistry(keys),
+		keys:   keys,
 		probe:  &http.Client{Timeout: probeTimeout},
 		client: &http.Client{Timeout: apiTimeout},
 		stream: &http.Client{},
@@ -137,7 +149,9 @@ func (d *Dashboard) SetAgents(agents []Agent) error {
 }
 
 // agentAPI returns the URL of the API of an agent at address, host:port served
-// over HTTP or an http(s) URL.
+// over HTTP or an http(s) URL, on the loopback only (see ui.LoopbackHost):
+// the API of an agent answers whoever reaches it, and the dashboard sends
+// nothing to another host.
 func agentAPI(address string) (*url.URL, error) {
 	if address == "" {
 		return nil, errors.New("no address")
@@ -150,28 +164,15 @@ func agentAPI(address string) (*url.URL, error) {
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return nil, fmt.Errorf("invalid address %q: host:port or an http(s) URL", address)
 	}
+	if !ui.LoopbackHost(base.Hostname()) {
+		return nil, fmt.Errorf("the address %q isn't on the loopback (localhost, 127.0.0.0/8 or [::1]): the "+
+			"controller reaches the API of its agents on its machine only", address)
+	}
 	// JoinPath keeps an empty path relative, which would be requested as api/...
 	if base.Path == "" {
 		base.Path = "/"
 	}
 	return base.JoinPath("api"), nil
-}
-
-// newAgentProxy proxies the requests to the API of an agent, their path
-// relative to it, from the trade panel of the web dashboard, whatever channel
-// the browser tells. The events stream is flushed as it comes, as ReverseProxy
-// does with any text/event-stream.
-func newAgentProxy(a Agent, api *url.URL) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
-		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(api)
-			r.Out.Header.Set(ui.ChannelHeader, string(ui.ChannelWeb))
-		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.Debugf("ui: agent %s: %v", a.Name, err)
-			writeJSONError(w, http.StatusBadGateway, offline(a).Error())
-		},
-	}
 }
 
 // Handler resolves the dashboard bundle and returns the HTTP handler: the
@@ -183,7 +184,7 @@ func (d *Dashboard) Handler(ctx context.Context) http.Handler {
 	if err != nil {
 		log.Warnf("ui: dashboard bundle unavailable, serving API only: %v", err)
 	}
-	return d.auth.protect(d.router(bundle, err))
+	return securityHeaders(d.auth.protect(d.router(bundle, err)))
 }
 
 // router wires the API, the bundle static files and the index page, which the
@@ -200,24 +201,36 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		}
 	})
 
+	var page []byte
+	var pageCSP string
 	if bundleErr == nil {
-		fs := http.FileServer(http.Dir(b.dir))
+		var err error
+		if page, pageCSP, err = indexPage(b.version); err != nil {
+			log.Errorf("ui: the index page of the dashboard: %v", err)
+			bundleErr = err
+		}
+	}
+	if bundleErr == nil {
+		fs := http.FileServer(bundleFiles{http.Dir(b.dir)})
 		r.Handle("/ui/{version}/*", http.StripPrefix("/ui/"+b.version, bundleCacheHeaders(b, fs)))
 		index := func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := indexTemplate.Execute(w, map[string]string{"Version": b.version}); err != nil {
-				log.Error(err)
+			w.Header().Set("Content-Security-Policy", pageCSP)
+			if _, err := w.Write(page); err != nil {
+				log.Debug(err)
 			}
 		}
 		r.Get("/", index)
 		r.Get("/login", index)    // the app shows its login
 		r.Get("/settings", index) // and the settings
 	} else {
+		// the reason is in the log of Handler, never on this page, which the
+		// login is too
 		unavailable := func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Content-Security-Policy", errorPolicy)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			if err := errorTemplate.Execute(w, map[string]string{
-				"Error":      bundleErr.Error(),
 				"DirKey":     uiDirKey,
 				"VersionKey": uiVersionKey,
 			}); err != nil {
@@ -286,6 +299,7 @@ func (d *Dashboard) online(ctx context.Context, a *agent) bool {
 	if err != nil {
 		return false
 	}
+	d.keys.authorize(a.Name, req.Header)
 	resp, err := d.probe.Do(req)
 	if err != nil {
 		return false
@@ -296,7 +310,7 @@ func (d *Dashboard) online(ctx context.Context, a *agent) bool {
 }
 
 // handleAgent proxies a request under /api/agents/{agent} to the API of the
-// agent.
+// agent, its answer never sniffed, see newAgentProxy.
 func (d *Dashboard) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "agent")
 	a, ok := d.agents.get(name)
@@ -304,5 +318,6 @@ func (d *Dashboard) handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "unknown agent")
 		return
 	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.StripPrefix("/api/agents/"+name, a.proxy).ServeHTTP(w, r)
 }

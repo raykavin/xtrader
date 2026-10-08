@@ -57,6 +57,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	for _, warning := range cfg.Warnings {
+		log.Warnf("config %s: %s", *configFile, warning)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

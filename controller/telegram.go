@@ -56,7 +56,8 @@ type Telegram struct {
 	ctx       context.Context
 	dashboard *Dashboard
 	users     atomic.Pointer[[]int64]
-	token     string // of the bot, kept out of the logs
+	refused   refusals // the updates of anyone else, logged
+	token     string   // of the bot, kept out of the logs
 	client    *tb.Bot
 	menu      *tb.ReplyMarkup
 	prompts   PromptStore
@@ -173,17 +174,45 @@ func (t *Telegram) SetUsers(users []int64) {
 }
 
 // authorized filters out the updates of anyone but the users, so that only
-// the owners of the bots drive them.
+// the owners of the bots drive them. A refused update is logged by the ID of
+// its sender only, never its content, see refusals.
 func (t *Telegram) authorized(u *tb.Update) bool {
 	if u.Message == nil || u.Message.Sender == nil {
-		log.Error("no message, ", u)
+		t.refused.log(0, time.Now())
 		return false
 	}
 	if slices.Contains(*t.users.Load(), u.Message.Sender.ID) {
 		return true
 	}
-	log.Error("invalid user, ", u.Message)
+	t.refused.log(u.Message.Sender.ID, time.Now())
 	return false
+}
+
+// refusalLogEvery is how often the updates refused are logged at most.
+const refusalLogEvery = time.Minute
+
+// refusals logs the updates refused by the bot: anyone can write to it, so a
+// line at most each refusalLogEvery, with the ID of the last sender (0 for an
+// update without one) and the count of the ones since the previous line.
+type refusals struct {
+	mu     sync.Mutex
+	last   time.Time // of the previous line
+	missed int       // the updates refused since
+}
+
+func (r *refusals) log(sender int64, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.missed++
+	if !r.last.IsZero() && now.Sub(r.last) < refusalLogEvery {
+		return
+	}
+	last := "without a sender"
+	if sender != 0 {
+		last = fmt.Sprintf("of the user %d", sender)
+	}
+	log.Warnf("telegram: refused %d update(s) of users not allowed, the last %s", r.missed, last)
+	r.last, r.missed = now, 0
 }
 
 // Start serves the bot until ctx is done.

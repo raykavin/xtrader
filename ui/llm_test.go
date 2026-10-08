@@ -106,6 +106,9 @@ func send(t *testing.T, method, url, body string, channel Channel) (*http.Respon
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	require.NoError(t, err)
+	if method != http.MethodGet {
+		req.Header.Set("Content-Type", "application/json") // as the controller sends them
+	}
 	if channel != "" {
 		req.Header.Set(ChannelHeader, string(channel))
 	}

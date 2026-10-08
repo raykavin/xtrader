@@ -271,7 +271,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                     reiniciado.
                   </span>
                 ) : (
-                  "host:porta onde o agente serve a API, único entre os agentes."
+                  "host:porta onde o agente serve a API, único entre os agentes e só no loopback (localhost, 127.0.0.1 ou [::1]): só o controller a acessa."
                 )
               }
             />

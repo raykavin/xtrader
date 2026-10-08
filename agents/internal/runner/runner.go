@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -340,6 +339,9 @@ func run(agent Agent) error {
 		return err
 	}
 	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl}
+	if remoteAgent != nil {
+		dash.key = remoteAgent.APIKey
+	}
 	comment := mt5Comment(*mt5CommentAr, chosen.Name)
 	venue := venue{leverage: *leverage, lots: lots,
 		mt5: mt5Venue{bridge: *mt5Bridge, token: token, magic: mt5Magic(*mt5MagicArg, comment),
@@ -710,6 +712,7 @@ type dashboard struct {
 	addr       string // of the API, none when off
 	tradePanel bool   // control panel from the trade panel of the dashboard, in live mode
 	telegram   bool   // control panel from the Telegram of the controller, in live mode
+	key        string // of the API, of the controller that launched the agent, none run on its own
 }
 
 // channels returns the channels the control panel is operated from in live
@@ -733,7 +736,7 @@ func (d dashboard) chart(strategy strategy.Strategy, wallet *exchange.PaperWalle
 		return nil, nil
 	}
 
-	options := []ui.Option{ui.WithStrategyIndicators(strategy)}
+	options := []ui.Option{ui.WithStrategyIndicators(strategy), ui.WithAPIKey(d.key)}
 	if wallet != nil {
 		options = append(options, ui.WithPaperWallet(wallet))
 	}
@@ -762,7 +765,7 @@ func accountOptions(broker service.Exchange) []ui.Option {
 // serve serves the API of the chart until the server fails.
 func (d dashboard) serve(chart *ui.Chart) error {
 	fmt.Printf("Dashboard API available at http://%s/api, open it with cmd/controller\n", d.addr)
-	return http.ListenAndServe(d.addr, chart.Handler())
+	return ui.NewHTTPServer(d.addr, chart.Handler()).ListenAndServe()
 }
 
 // subscribe feeds the candles and orders of the bot to the chart, if any, and

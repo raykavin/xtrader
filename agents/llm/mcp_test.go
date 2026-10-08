@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -307,4 +310,32 @@ func TestMCPPayload(t *testing.T) {
 	payload, err = mcpPayload("application/json", []byte(`{"id":3}`), 3)
 	require.NoError(t, err)
 	require.Equal(t, `{"id":3}`, string(payload))
+}
+
+// An HTTP error of the server is logged: its error keeps the start of the
+// body only, without the token of the client, a bearer token or an API key,
+// eg: the page of a proxy echoing the request.
+func TestMCPClient_HTTPErrorKeepsTheStartOfItsBody(t *testing.T) {
+	const secretKey = "sk-proj-abcdef0123456789"
+	body := "upstream failed: Authorization: Bearer " + fakeMCPToken + ", Bearer other.jwt-token, key " +
+		secretKey + ", token " + fakeMCPToken + " " + strings.Repeat("x", 1<<20) + " the end"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	client := newMCPClient(server.URL, fakeMCPToken, nil)
+	err := client.callTool(context.Background(), "economic_calendar_list_values", nil, nil)
+	var status *mcpHTTPError
+	require.ErrorAs(t, err, &status)
+	require.Equal(t, http.StatusBadGateway, status.Status)
+
+	text := err.Error()
+	assert.Contains(t, text, "MCP server: HTTP 502 upstream failed: Authorization: Bearer [redacted]")
+	assert.LessOrEqual(t, len(status.Body), maxMCPErrorBody+len("..."))
+	assert.True(t, strings.HasSuffix(status.Body, "..."), "cut")
+	for _, secret := range []string{fakeMCPToken, "other.jwt-token", secretKey, "the end"} {
+		assert.NotContains(t, text, secret)
+	}
 }

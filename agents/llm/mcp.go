@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -73,10 +74,38 @@ func (e *mcpToolError) Error() string {
 	return fmt.Sprintf("llm: MCP tool %s failed: %s", e.Tool, e.Message)
 }
 
-// mcpHTTPError is an HTTP error status of the server.
+// mcpHTTPError is an HTTP error status of the server, with the start of its
+// body, see mcpErrorBody.
 type mcpHTTPError struct {
 	Status int
 	Body   string
+}
+
+// maxMCPErrorBody caps the body of an HTTP error of the server kept in the
+// error, which is logged.
+const maxMCPErrorBody = 1 << 10
+
+// bearerPattern matches a bearer token, eg: one echoed by a proxy.
+var bearerPattern = regexp.MustCompile(`(?i)(bearer\s+)[^\s"',;]+`)
+
+// mcpErrorBody returns the start of data, the body of an HTTP error of the
+// server, without the token of the client nor anything like an API key or a
+// bearer token, as it is logged.
+func (c *mcpClient) mcpErrorBody(data []byte) string {
+	cut := len(data) > maxMCPErrorBody
+	if cut {
+		data = data[:maxMCPErrorBody]
+	}
+	body := strings.ToValidUTF8(string(data), "")
+	if c.token != "" {
+		body = strings.ReplaceAll(body, c.token, "[redacted]")
+	}
+	body = keyPattern.ReplaceAllString(body, "[redacted]")
+	body = bearerPattern.ReplaceAllString(body, "${1}[redacted]")
+	if cut {
+		body += "..."
+	}
+	return body
 }
 
 func (e *mcpHTTPError) Error() string {
@@ -213,17 +242,19 @@ func (c *mcpClient) post(ctx context.Context, method string, params, out any, no
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
-	if err != nil {
-		return err
-	}
 	if session := response.Header.Get("Mcp-Session-Id"); session != "" {
 		c.mtx.Lock()
 		c.session = session
 		c.mtx.Unlock()
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return &mcpHTTPError{Status: response.StatusCode, Body: string(data)}
+		// the start of the body only, the rest left unread
+		data, _ := io.ReadAll(io.LimitReader(response.Body, maxMCPErrorBody+1))
+		return &mcpHTTPError{Status: response.StatusCode, Body: c.mcpErrorBody(data)}
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	if err != nil {
+		return err
 	}
 	if notification {
 		return nil
