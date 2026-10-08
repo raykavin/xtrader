@@ -8,7 +8,13 @@ import (
 	"github.com/raykavin/xtrader/tools/log"
 )
 
+// Turtle buys half the balance on a close at the highest of 40 candles and
+// sells the position on one at the lowest of 20, see
 // https://www.investopedia.com/articles/trading/08/turtle-trading.asp
+//
+// Deprecated: registered in no agent (breakoutagent trades the channel
+// breakouts with the Signals, eg: donchianatr). Kept until its removal is
+// decided.
 type Turtle struct{}
 
 func (e Turtle) Timeframe() string {

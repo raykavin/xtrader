@@ -73,6 +73,7 @@ type APIError struct {
 	Provider   string        // openai or anthropic
 	Status     int           // HTTP status
 	Type       string        // of the error, eg: rate_limit_error
+	Param      string        // the param of the request refused, eg: reasoning_effort
 	Message    string        // without the API key
 	RetryAfter time.Duration // the Retry-After of the answer, 0 without it
 }
@@ -81,6 +82,9 @@ func (e *APIError) Error() string {
 	message := fmt.Sprintf("%s: HTTP %d", e.Provider, e.Status)
 	if e.Type != "" {
 		message += ": " + e.Type
+	}
+	if e.Param != "" {
+		message += ": the param " + e.Param
 	}
 	if e.Message != "" {
 		message += ": " + e.Message
@@ -118,14 +122,17 @@ func WithMaxTokens(tokens int) ProviderOption {
 	}
 }
 
-// The efforts of WithReasoningEffort.
-var reasoningEfforts = []string{"minimal", "low", "medium", "high"}
+// The efforts of WithReasoningEffort, the ones of the models of OpenAI: each
+// model takes some of them, eg: none and xhigh only the newer ones, minimal
+// only the older ones, the API refusing the others (see APIError.Param).
+var reasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // WithReasoningEffort sets how much the models that reason think before they
-// answer: minimal, low, medium or high, the default of the model when empty.
-// Less effort spends fewer output tokens, billed as the answer. It applies to
-// OpenAI (reasoning_effort); Anthropic answers through a forced tool call,
-// which extended thinking doesn't take, so it is ignored there.
+// answer: none, minimal, low, medium, high or xhigh, as the model takes them,
+// the default of the model when empty. Less effort spends fewer output
+// tokens, billed as the answer. It applies to OpenAI (reasoning_effort);
+// Anthropic answers through a forced tool call, which extended thinking
+// doesn't take, so it is ignored there.
 func WithReasoningEffort(effort string) ProviderOption {
 	return func(c *client) {
 		c.reasoning = strings.ToLower(strings.TrimSpace(effort))
@@ -223,14 +230,65 @@ func (c client) String() string {
 	return c.name + " " + c.model
 }
 
+// A request the API answers without running it, so without billing it (see
+// retriable), is sent again once, after its Retry-After or retryWait, when
+// that is retryMaxWait at most and leaves retryRoom before the deadline of the
+// request: the decision of the candle not lost to a moment of overload.
+var (
+	retryWait    = time.Second
+	retryMaxWait = 10 * time.Second
+	retryRoom    = 5 * time.Second
+)
+
+// retriable returns the answer of err when the API didn't run the request,
+// which is worth sending again: HTTP 429 (but the quota of the account spent),
+// 503 and 529 (Anthropic overloaded).
+func retriable(err error) (*APIError, bool) {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return nil, false
+	}
+	switch apiErr.Status {
+	case http.StatusTooManyRequests:
+		return apiErr, apiErr.Type != "insufficient_quota"
+	case http.StatusServiceUnavailable, 529:
+		return apiErr, true
+	}
+	return nil, false
+}
+
 // post sends body as JSON to path with headers, the credentials among them,
-// and returns the body of the answer. The failures are turned into ErrTimeout,
-// ErrUnavailable or an *APIError.
+// and returns the body of the answer, sent again once when the API didn't run
+// it, see retriable. The failures are turned into ErrTimeout, ErrUnavailable
+// or an *APIError.
 func (c client) post(ctx context.Context, path string, headers http.Header, body any) ([]byte, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
+	answer, err := c.send(ctx, path, headers, data)
+	apiErr, ok := retriable(err)
+	if !ok {
+		return answer, err
+	}
+	wait := apiErr.RetryAfter
+	if wait <= 0 {
+		wait = retryWait
+	}
+	if deadline, ok := ctx.Deadline(); wait > retryMaxWait || ok && time.Until(deadline) < wait+retryRoom {
+		return nil, err // the Trader pauses for its Retry-After
+	}
+	log.Warnf("[LLM] %s: %v: sent again in %s", c, err, wait)
+	select {
+	case <-ctx.Done():
+		return nil, err
+	case <-time.After(wait):
+	}
+	return c.send(ctx, path, headers, data)
+}
+
+// send sends data, JSON, to path with headers, see post.
+func (c client) send(ctx context.Context, path string, headers http.Header, data []byte) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
@@ -281,6 +339,7 @@ func (c client) apiError(response *http.Response, body []byte) *APIError {
 		Error struct {
 			Type    string          `json:"type"`
 			Code    json.RawMessage `json:"code"`
+			Param   string          `json:"param"`
 			Message string          `json:"message"`
 		} `json:"error"`
 	}
@@ -289,6 +348,7 @@ func (c client) apiError(response *http.Response, body []byte) *APIError {
 		if code := strings.Trim(string(answer.Error.Code), `"`); code != "" && code != "null" {
 			apiErr.Type = code // the code of OpenAI is the more precise, eg: insufficient_quota
 		}
+		apiErr.Param = c.redact(answer.Error.Param)
 		apiErr.Message = c.redact(answer.Error.Message)
 	}
 	return apiErr

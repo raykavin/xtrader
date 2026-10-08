@@ -585,3 +585,149 @@ func TestRKTrendConfluence_StopsAfterARestart(t *testing.T) {
 	require.NoError(t, err)
 	require.InDelta(t, 10000+100*7, quote, 1e-9, "stopped on the close of 107, under 108")
 }
+
+// B35: the positions a session opened before a restart count against its
+// MaxTrades, told by the order controller from the orders it stored; the next
+// session trades again.
+func TestORB_MaxTradesAfterARestart(t *testing.T) {
+	failed := ivCandle{close: 97.9, high: 99, low: 97.9, position: 0} // closes the breakout at 97.9
+	quote := 10000 - 100*2.1
+	for _, tt := range []struct {
+		name      string
+		maxTrades int
+		position  float64 // after the second breakout of the session
+	}{
+		{name: "the trade of the session before the restart counted", maxTrades: 1, position: 0},
+		{name: "the ones left still taken", maxTrades: 2, position: quote / 100},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configure := func(c *ORBConfig) { c.StopATR, c.MaxTrades = 3, tt.maxTrades }
+			r, _ := newORBRunner(t, configure)
+			bot := newTradingBot(t, r.wallet, r.step)
+			r.broker, r.settle = bot.broker(), bot.settle
+			r.feed(orbLong...)
+			r.feed(failed)
+
+			bot.restart()
+			r.s, r.broker = newORB(t, configure), bot.broker()
+			r.feed(ivCandle{close: 100, position: tt.position})
+		})
+	}
+
+	t.Run("the next session", func(t *testing.T) {
+		configure := func(c *ORBConfig) { c.StopATR = 3 }
+		r, _ := newORBRunner(t, configure)
+		bot := newTradingBot(t, r.wallet, r.step)
+		r.broker, r.settle = bot.broker(), bot.settle
+		r.feed(orbLong...)
+		r.feed(failed)
+
+		bot.restart()
+		r.s, r.broker = newORB(t, configure), bot.broker()
+		r.day = r.day.Add(24 * time.Hour)
+		r.feed(append(orbLongRange[:5:5], ivCandle{open: 98.5, close: 100, position: quote / 100})...)
+	})
+}
+
+// B35 on AsiaLondon: one trade per London session, a restart in between.
+func TestAsiaLondon_MaxTradesAfterARestart(t *testing.T) {
+	configure := func(c *AsiaLondonConfig) { c.StopATR, c.LondonEnd = 3, "12:00" }
+	r, _ := newALRunner(t, configure)
+	bot := newTradingBot(t, r.wallet, r.step)
+	r.broker, r.settle = bot.broker(), bot.settle
+	r.feed(alBreakout(98.5, nil, 0, 100)...)
+	r.feed(ivCandle{open: 100, close: 97.9, position: 0})
+
+	bot.restart()
+	r.s, r.broker = newAsiaLondon(t, configure), bot.broker()
+	r.feed(ivCandle{open: 97.9, close: 100, position: 0})
+}
+
+// The order controller tells the positions opened on a pair since a time, the
+// ones replayed from the storage after a restart included, a reversal as an
+// opening; PositionsReplayed the replayed ones only.
+func TestController_PositionsOpenedAfterARestart(t *testing.T) {
+	r, _ := newORBRunner(t, func(c *ORBConfig) { c.StopATR = 3 })
+	bot := newTradingBot(t, r.wallet, r.step)
+	r.broker, r.settle = bot.broker(), bot.settle
+	r.feed(orbLong...)
+	opened := r.df.Time[len(r.df.Time)-1]
+	r.feed(ivCandle{close: 97.9, high: 99, low: 97.9, position: 0})
+	require.Equal(t, 1, bot.ctl.PositionsOpened("BTCUSDT", opened))
+	require.Zero(t, bot.ctl.PositionsOpened("BTCUSDT", opened.Add(time.Second)))
+	require.Zero(t, bot.ctl.PositionsOpened("ETHUSDT", time.Time{}))
+	require.Zero(t, bot.ctl.PositionsReplayed("BTCUSDT", opened), "opened by this run")
+
+	bot.restart()
+	require.Equal(t, 1, bot.ctl.PositionsOpened("BTCUSDT", opened), "replayed from the storage")
+	require.Equal(t, 1, bot.ctl.PositionsReplayed("BTCUSDT", opened))
+}
+
+// manualTrade opens and closes a position at the market through the order
+// controller of bot, as the trade panel and Telegram do.
+func manualTrade(t *testing.T, bot *tradingBot) {
+	t.Helper()
+	_, err := bot.ctl.CreateOrderMarket(model.SideTypeBuy, "BTCUSDT", 1)
+	require.NoError(t, err)
+	_, err = bot.ctl.CreateOrderMarket(model.SideTypeSell, "BTCUSDT", 1)
+	require.NoError(t, err)
+	bot.settle()
+}
+
+// B35, without a restart: a manual position of the session (the trade panel
+// or Telegram, the same order controller), opened and closed before the
+// breakout, doesn't count against MaxTrades, as before the count after a
+// restart: the strategy counts its own entries.
+func TestORB_ManualTradeWithoutARestart(t *testing.T) {
+	r, _ := newORBRunner(t, func(c *ORBConfig) { c.StopATR = 3 })
+	bot := newTradingBot(t, r.wallet, r.step)
+	r.broker, r.settle = bot.broker(), bot.settle
+	r.feed(orbLongRange...)                                // the range, 10:00 to 10:15
+	r.feed(ivCandle{open: 98.2, close: 98.4, position: 0}) // 10:15, the trade session: no breakout yet
+	manualTrade(t, bot)
+	r.feed(ivCandle{open: 98.5, close: 100, position: 100}) // 10:20, the breakout: its entry
+}
+
+// B35 on AsiaLondon, without a restart: as TestORB_ManualTradeWithoutARestart.
+func TestAsiaLondon_ManualTradeWithoutARestart(t *testing.T) {
+	r, _ := newALRunner(t, func(c *AsiaLondonConfig) { c.StopATR = 3 })
+	bot := newTradingBot(t, r.wallet, r.step)
+	r.broker, r.settle = bot.broker(), bot.settle
+	r.feed(alLongAsia...)
+	r.feed(ivCandle{at: "07:00", open: 98.5, close: 98.6, position: 0}) // London: no breakout yet
+	manualTrade(t, bot)
+	r.feed(ivCandle{open: 98.6, close: 100, position: 100})
+}
+
+// B35, the limit of the count after a restart: the orders stored don't tell
+// who placed them, so a manual position of the session opened before a
+// restart counts against MaxTrades after it; one opened after it doesn't.
+func TestORB_ManualTradeAndARestart(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		before   bool    // the manual trade before the restart, else after it
+		position float64 // after the breakout
+	}{
+		{name: "before the restart: counted", before: true, position: 0},
+		{name: "after the restart: not counted", position: 100},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configure := func(c *ORBConfig) { c.StopATR = 3 }
+			r, _ := newORBRunner(t, configure)
+			bot := newTradingBot(t, r.wallet, r.step)
+			r.broker, r.settle = bot.broker(), bot.settle
+			r.feed(orbLongRange...)
+			r.feed(ivCandle{open: 98.2, close: 98.4, position: 0})
+			if tt.before {
+				manualTrade(t, bot)
+			}
+
+			bot.restart()
+			r.s, r.broker = newORB(t, configure), bot.broker()
+			if !tt.before {
+				manualTrade(t, bot)
+			}
+			r.feed(ivCandle{open: 98.5, close: 100, position: tt.position})
+		})
+	}
+}

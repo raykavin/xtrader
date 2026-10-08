@@ -57,9 +57,12 @@ func (i Importance) String() string {
 }
 
 // Event is a release of the economic calendar. Actual is NaN until it is
-// published, and Forecast and Previous when the calendar has none.
+// published, and Forecast and Previous when the calendar has none. A release
+// of a day rather than of a time (see TimeMode) has the start of its day, of
+// the trade server, as its Time.
 type Event struct {
 	Time       time.Time
+	TimeMode   TimeMode
 	Currency   string
 	Name       string
 	Code       string
@@ -68,13 +71,86 @@ type Event struct {
 	Actual     float64
 	Forecast   float64
 	Previous   float64
+	dayStart   bool // Time the start of its day on the trade server, see Timed
+}
+
+// TimeMode is how the calendar knows the time of a release (time_mode of the
+// events of MQL5): at a time, or only its day.
+type TimeMode int
+
+const (
+	TimeExact     TimeMode = iota // published at its time, the default
+	TimeAllDay                    // the event takes all day
+	TimeNone                      // the source publishes no time
+	TimeTentative                 // the day known, the time only once it happens
+)
+
+// timeModeOf reads the time_mode of an event of the MCP server of MetaTrader 5,
+// the description of ENUM_CALENDAR_EVENT_TIMEMODE, eg: "Source publishes an
+// exact time of an event", or its name, eg: CALENDAR_TIMEMODE_DATE. Anything
+// else, a missing one included, is TimeExact, as it was before it was read.
+func timeModeOf(value string) TimeMode {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case strings.Contains(lower, "tentative") || strings.Contains(lower, "a day of an event"):
+		return TimeTentative
+	case strings.Contains(lower, "notime") || strings.Contains(lower, "no time"):
+		return TimeNone
+	case strings.Contains(lower, "all day") || lower == "calendar_timemode_date":
+		return TimeAllDay
+	}
+	return TimeExact
+}
+
+func (m TimeMode) String() string {
+	switch m {
+	case TimeAllDay:
+		return "all_day"
+	case TimeNone:
+		return "no_time"
+	case TimeTentative:
+		return "tentative"
+	}
+	return "exact"
+}
+
+// Timed reports whether the release is at its Time, rather than some time of
+// its day: an event with an exact time, or a tentative one, or one without
+// time, once the calendar gives its time (any but the start of the day).
+func (e Event) Timed() bool {
+	switch e.TimeMode {
+	case TimeExact:
+		return true
+	case TimeAllDay:
+		return false
+	}
+	return !e.dayStart
+}
+
+// end returns when the release is over: its Time, or the end of its day when
+// it isn't Timed.
+func (e Event) end() time.Time {
+	if e.Timed() {
+		return e.Time
+	}
+	return e.Time.Add(24 * time.Hour)
+}
+
+// within reports whether the release is between from and to: its time, or
+// any time of its day when it isn't Timed.
+func (e Event) within(from, to time.Time) bool {
+	if e.Timed() {
+		return !e.Time.Before(from) && !e.Time.After(to)
+	}
+	return !e.end().Before(from) && !e.Time.After(to)
 }
 
 // calendarEvent is an Event as the model sees it, relative to the time of the
 // analysis, see CalendarContext.
 type calendarEvent struct {
 	Time       time.Time `json:"time"`
-	Minutes    int       `json:"minutes_from_now"` // negative for a release in the past
+	Minutes    int       `json:"minutes_from_now"`    // negative for a release in the past
+	TimeMode   string    `json:"time_mode,omitempty"` // all_day, no_time or tentative: some time of its day
 	Currency   string    `json:"currency"`
 	Name       string    `json:"event"`
 	Importance string    `json:"importance"`
@@ -96,10 +172,11 @@ type CalendarContext struct {
 
 // newsBlock returns the release of at least importance whose window, before
 // minutes before it to after minutes after it, holds at, if any: new entries
-// are refused inside it.
+// are refused inside it. A release without a time (see Event.Timed), whose
+// Time is only the start of its day, blocks nothing.
 func newsBlock(events []Event, at time.Time, before, after time.Duration, importance Importance) (Event, bool) {
 	for _, event := range events {
-		if event.Importance >= importance && !at.Before(event.Time.Add(-before)) && !at.After(event.Time.Add(after)) {
+		if event.Importance >= importance && event.Timed() && !at.Before(event.Time.Add(-before)) && !at.After(event.Time.Add(after)) {
 			return event, true
 		}
 	}
@@ -115,13 +192,20 @@ func calendarContext(events []Event, at time.Time, importance Importance, limit 
 		if event.Importance < importance {
 			continue
 		}
+		// a release of a day: its value hidden until the day is over, the
+		// time it was published unknown
 		actual := event.Actual
-		if event.Time.After(at) {
+		if event.end().After(at) {
 			actual = math.NaN()
+		}
+		mode := ""
+		if !event.Timed() {
+			mode = event.TimeMode.String()
 		}
 		cc.Events = append(cc.Events, calendarEvent{
 			Time:       event.Time.UTC(),
 			Minutes:    int(math.Round(event.Time.Sub(at).Minutes())),
+			TimeMode:   mode,
 			Currency:   event.Currency,
 			Name:       event.Name,
 			Importance: event.Importance.String(),
@@ -200,6 +284,7 @@ type mcpEventInfo struct {
 	Code       string `json:"event_code"`
 	Importance string `json:"importance"`
 	Unit       string `json:"unit"`
+	TimeMode   string `json:"time_mode"`
 }
 
 type mcpDay struct {
@@ -217,15 +302,30 @@ type mcpValue struct {
 }
 
 // The refresh of the cached calendar: the descriptions of the events, the
-// releases of the days not over yet, and a currency the calendar doesn't know.
-// A tool failing for another reason, eg: the terminal busy, is called again
-// once after mcpRetry, then the read fails, the next one calling it again.
+// releases of the days not over yet, the ones of the days over (dropped from
+// the cache then, a revision read again), and a currency the calendar doesn't
+// know. A tool failing for another reason, eg: the terminal busy, is called
+// again once after mcpRetry, then the read fails, the next one calling it
+// again.
 const (
 	mcpEventsTTL  = 24 * time.Hour
 	mcpDayTTL     = 5 * time.Minute
+	mcpDayOverTTL = 24 * time.Hour
 	mcpUnknownTTL = time.Hour
 	mcpRetry      = 500 * time.Millisecond
 )
+
+// The releases of a range of time are read at most mcpValuesLimit at a time:
+// a range the server truncates is read again in halves, down to
+// mcpValuesMinSpan, a range still truncated failing the read rather than
+// leaving releases out.
+const (
+	mcpValuesLimit   = 5000
+	mcpValuesMinSpan = 15 * time.Minute
+)
+
+// mcpTimeLayout is the layout of the times of the server, in its time zone.
+const mcpTimeLayout = "2006-01-02T15:04:05"
 
 // errNoCurrencyEvents is a currency without any event in the calendar:
 // unknown to it, or none read.
@@ -316,6 +416,8 @@ func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to 
 		return nil, fmt.Errorf("llm: the calendar has no event of the currencies: %s", strings.Join(skipped, "; "))
 	}
 
+	// a release read twice, eg: a server whose datetime_to is inclusive, once
+	seen := make(map[string]bool)
 	for day := c.serverDay(from); !day.After(c.serverDay(to)); day = day.AddDate(0, 0, 1) {
 		values, err := c.day(ctx, day)
 		if err != nil {
@@ -326,20 +428,17 @@ func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to 
 			if !ok {
 				continue
 			}
-			at, err := time.ParseInLocation("2006-01-02T15:04:05", value.Time, time.UTC)
-			if err != nil {
-				continue
-			}
-			at = at.Add(-c.offset) // server time into UTC
-			if at.Before(from) || at.After(to) {
+			server, err := time.ParseInLocation(mcpTimeLayout, value.Time, time.UTC)
+			if err != nil || seen[value.EventID+"@"+value.Time] {
 				continue
 			}
 			previous := value.Previous
 			if value.Revised != nil {
 				previous = value.Revised
 			}
-			events = append(events, Event{
-				Time:       at,
+			event := Event{
+				Time:       server.Add(-c.offset), // server time into UTC
+				TimeMode:   timeModeOf(info.TimeMode),
 				Currency:   currencyOf[value.EventID],
 				Name:       info.Name,
 				Code:       info.Code,
@@ -348,7 +447,13 @@ func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to 
 				Actual:     orNaN(value.Actual),
 				Forecast:   orNaN(value.Forecast),
 				Previous:   orNaN(previous),
-			})
+				dayStart:   server.Equal(server.Truncate(24 * time.Hour)),
+			}
+			if !event.within(from, to) {
+				continue
+			}
+			seen[value.EventID+"@"+value.Time] = true
+			events = append(events, event)
 		}
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Time.Before(events[j].Time) })
@@ -415,7 +520,8 @@ func (c *MCPCalendar) descriptions(ctx context.Context, currency string) (map[st
 }
 
 // day returns the releases of a day of the server, of every currency: the
-// cached ones of a day over, else read again every mcpDayTTL.
+// cached ones of a day over, read again after mcpDayOverTTL, else read again
+// every mcpDayTTL. The days read more than mcpDayOverTTL ago leave the cache.
 func (c *MCPCalendar) day(ctx context.Context, day time.Time) ([]mcpValue, error) {
 	key := day.Format(time.DateOnly)
 	now := c.now()
@@ -423,27 +529,69 @@ func (c *MCPCalendar) day(ctx context.Context, day time.Time) ([]mcpValue, error
 	c.mtx.Lock()
 	cached, ok := c.days[key]
 	c.mtx.Unlock()
-	if ok && (over || now.Sub(cached.read) < mcpDayTTL) {
+	if ok && (over && now.Sub(cached.read) < mcpDayOverTTL || now.Sub(cached.read) < mcpDayTTL) {
 		return cached.values, nil
 	}
 
+	values, err := c.values(ctx, day, day.AddDate(0, 0, 1))
+	if err != nil {
+		return nil, err
+	}
+	c.mtx.Lock()
+	for key, cached := range c.days {
+		if now.Sub(cached.read) >= mcpDayOverTTL {
+			delete(c.days, key)
+		}
+	}
+	c.days[key] = mcpDay{values: values, read: now}
+	c.mtx.Unlock()
+	return values, nil
+}
+
+// values reads the releases from from to to, times of the server, to
+// excluded: the ones the server gives outside the range left out, and a range
+// it truncates read again in halves, see mcpValuesLimit.
+func (c *MCPCalendar) values(ctx context.Context, from, to time.Time) ([]mcpValue, error) {
 	var answer struct {
 		mcpStatus
 		Truncated bool       `json:"truncated"`
 		Values    []mcpValue `json:"values"`
 	}
 	err := c.call(ctx, "economic_calendar_list_values", map[string]any{
-		"datetime_from": day.Format("2006-01-02T15:04:05"),
-		"datetime_to":   day.AddDate(0, 0, 1).Format("2006-01-02T15:04:05"),
-		"limit":         5000,
+		"datetime_from": from.Format(mcpTimeLayout),
+		"datetime_to":   to.Format(mcpTimeLayout),
+		"limit":         mcpValuesLimit,
 	}, &answer)
 	if err != nil {
 		return nil, err
 	}
-	c.mtx.Lock()
-	c.days[key] = mcpDay{values: answer.Values, read: now}
-	c.mtx.Unlock()
-	return answer.Values, nil
+	if answer.Truncated || len(answer.Values) >= mcpValuesLimit {
+		span := to.Sub(from)
+		if span <= mcpValuesMinSpan {
+			return nil, fmt.Errorf("llm: the calendar truncated its releases from %s to %s (server time), "+
+				"%d read", from.Format(mcpTimeLayout), to.Format(mcpTimeLayout), len(answer.Values))
+		}
+		middle := from.Add(span / 2)
+		first, err := c.values(ctx, from, middle)
+		if err != nil {
+			return nil, err
+		}
+		second, err := c.values(ctx, middle, to)
+		if err != nil {
+			return nil, err
+		}
+		return append(first, second...), nil
+	}
+
+	values := answer.Values[:0]
+	for _, value := range answer.Values {
+		at, err := time.ParseInLocation(mcpTimeLayout, value.Time, time.UTC)
+		if err == nil && (at.Before(from) || !at.Before(to)) {
+			continue // eg: a datetime_to inclusive, the release of the next range
+		}
+		values = append(values, value)
+	}
+	return values, nil
 }
 
 // call calls a tool of the calendar, decoding its result into out. A tool

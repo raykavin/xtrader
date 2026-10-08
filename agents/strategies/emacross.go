@@ -8,6 +8,12 @@ import (
 	"github.com/raykavin/xtrader/tools/log"
 )
 
+// CrossEMA buys the whole balance when an EMA(8) crosses over an SMA(21) and
+// sells it when it crosses back under.
+//
+// Deprecated: registered in no agent (the emacross of trendagent is a
+// SignalStrategy, see Signals), only the example of agents/backtesting uses
+// it. Kept until its removal is decided.
 type CrossEMA struct{}
 
 func (e CrossEMA) Timeframe() string {

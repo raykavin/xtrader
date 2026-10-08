@@ -99,25 +99,45 @@ func (in Inputs) Bracket(cfg *strategies.BracketConfig, timeframe *string) {
 	cfg.PositionSize = in.Lots
 }
 
+// strategyInputs are the flags of Run that only some strategies take: set
+// with a strategy that doesn't, they are refused (see checkInputs), even when
+// no strategy of the agent takes them, eg: -trailing-atr on intradayagent.
+var strategyInputs = append(slices.Clone(BracketInputs), "trailing-atr")
+
 // Signals returns the signal strategies of names, see strategies.NewSignal:
 // each takes the inputs of Inputs.Bracket, and -trailing-atr the ones trailing
-// their stop loss, eg: donchianatr.
+// their stop loss, eg: donchianatr (see TrailingSignals).
 func Signals(names ...string) []Strategy {
+	return signals(false, names)
+}
+
+// TrailingSignals is Signals, each strategy taking -trailing-atr, which trails
+// its stop loss (strategies.SignalConfig.TrailingATR): the strategies of
+// momentumagent, which took it before it was declared.
+func TrailingSignals(names ...string) []Strategy {
+	return signals(true, names)
+}
+
+// signals returns the signal strategies of names, the ones trailing their stop
+// loss by default, or all of them when trailing, taking -trailing-atr: set,
+// applied by the ones taking it only.
+func signals(trailing bool, names []string) []Strategy {
 	list := make([]Strategy, 0, len(names))
 	for _, name := range names {
 		about, ok := strategies.SignalAbout(name)
 		if !ok {
 			panic("runner: no signal strategy " + name)
 		}
+		trails := trailing || strategies.DefaultSignalConfig(name).TrailingATR > 0
 		inputs := BracketInputs
-		if strategies.DefaultSignalConfig(name).TrailingATR > 0 {
+		if trails {
 			inputs = append(slices.Clone(BracketInputs), "trailing-atr")
 		}
 		list = append(list, Strategy{Name: name, About: about, Inputs: inputs,
 			New: func(in Inputs) (strategy.Strategy, error) {
 				cfg := strategies.DefaultSignalConfig(name)
 				in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
-				if in.Set["trailing-atr"] {
+				if trails && in.Set["trailing-atr"] {
 					cfg.TrailingATR = in.TrailingATR
 				}
 				return strategies.NewSignal(name, cfg)
@@ -218,7 +238,7 @@ func run(agent Agent) error {
 		timeframe    = flag.String("timeframe", "1h", "strategy timeframe (the strategies with a stop loss and a take profit at the broker: default the strategy's)")
 		direction    = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
 		stopATR      = flag.Float64("stop-atr", 0, "stop from the entry close, in ATR: trendconfluence: checked on the close (0: off); the strategies with a stop loss at the broker: placed there (default: the strategy's)")
-		trailingATR  = flag.Float64("trailing-atr", 0, "trailing stop from the best price since the entry, in ATR (default: the strategy's)")
+		trailingATR  = flag.Float64("trailing-atr", 0, "trailing stop from the best price since the entry, in ATR, for the strategies that take it, eg: donchianatr, refused with the others (default: the strategy's)")
 		takeProfit   = flag.Float64("take-profit-atr", 0, "take profit at the broker from the entry close, in ATR (default: the strategy's); the signal strategies take 0 for none")
 		maxBars      = flag.Int("max-bars", 0, "close a trade still open after that many candles, 0 never (default: the strategy's)")
 		minATRPct    = flag.Float64("min-atr-pct", 0, "skip the entries while the ATR is under that % of the close, for the costs, eg: 0.025 for gold")
@@ -291,7 +311,7 @@ func run(agent Agent) error {
 	}
 	set := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if err := checkInputs(agent.Strategies, chosen.Name, set); err != nil {
+	if err := agent.CheckInputs(chosen.Name, set); err != nil {
 		return err
 	}
 
@@ -389,19 +409,35 @@ func run(agent Agent) error {
 	return fmt.Errorf("invalid mode %q: backtest, paper or live (a real account needs -mt5-live)", *mode)
 }
 
+// CheckInputs fails on a flag set that the strategy name of the agent doesn't
+// take, see checkInputs.
+func (a Agent) CheckInputs(name string, set map[string]bool) error {
+	return checkInputs(a.Strategies, name, set)
+}
+
 // checkInputs fails on a flag set that belongs to other strategies of the
-// agent than name: the inputs of each strategy are refused with the others.
+// agent than name: the inputs of each strategy are refused with the others,
+// and the inputs of Run that none of them takes (strategyInputs, eg:
+// -trailing-atr on intradayagent) refused too, rather than ignored.
 func checkInputs(list []Strategy, name string, set map[string]bool) error {
+	flags := make([]string, 0, len(set))
 	for flagName := range set {
+		flags = append(flags, flagName)
+	}
+	slices.Sort(flags) // the same error whatever the order of the map
+	for _, flagName := range flags {
 		var owners []string
 		for _, s := range list {
 			if slices.Contains(s.Inputs, flagName) {
 				owners = append(owners, s.Name)
 			}
 		}
-		if len(owners) > 0 && !slices.Contains(owners, name) {
+		switch {
+		case len(owners) > 0 && !slices.Contains(owners, name):
 			slices.Sort(owners)
 			return fmt.Errorf("-%s is an input of -strategy %s", flagName, strings.Join(owners, " and "))
+		case len(owners) == 0 && slices.Contains(strategyInputs, flagName):
+			return fmt.Errorf("-%s is an input of no strategy of the agent", flagName)
 		}
 	}
 	return nil

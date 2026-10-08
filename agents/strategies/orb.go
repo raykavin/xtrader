@@ -26,8 +26,13 @@ type ORBConfig struct {
 	SessionEnd   string
 
 	// A breakout is the first close beyond the range by BufferATR, in ATR of
-	// ATRLen candles, and MaxTrades is the number of positions opened per
-	// session at most.
+	// ATRLen candles, and MaxTrades is the number of positions the strategy
+	// opens per session at most. After a restart, the positions of the session
+	// opened before it count too, when the broker tells them
+	// (service.PositionOpenings, eg: the order controller, from the orders it
+	// stores): all the bot opened on the pair, a manual one (the trade panel,
+	// Telegram) included, which the storage doesn't tell apart. Without a
+	// restart, only the strategy's own count.
 	BufferATR float64
 	MaxTrades int
 

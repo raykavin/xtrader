@@ -9,6 +9,10 @@ import (
 	"github.com/raykavin/xtrader/model"
 )
 
+// Mail notifies the orders and errors of the bot by e-mail.
+//
+// Deprecated: no agent nor the controller uses it. Kept until its removal is
+// decided.
 type Mail struct {
 	auth smtp.Auth
 
@@ -66,6 +70,9 @@ func (t Mail) OnError(err error) {
 	t.Notify(message)
 }
 
+// MailParams are the SMTP server and the addresses of a Mail.
+//
+// Deprecated: see Mail.
 type MailParams struct {
 	SMTPServerPort    int
 	SMTPServerAddress string
@@ -75,6 +82,9 @@ type MailParams struct {
 	Password string
 }
 
+// NewMail returns a Mail sending with params.
+//
+// Deprecated: see Mail.
 func NewMail(params MailParams) Mail {
 	return Mail{
 		from:              params.From,

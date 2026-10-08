@@ -24,6 +24,6 @@ func main() {
 // agent returns the agent and its strategies, the first one its default, the
 // one of agentapi.DefaultStrategy for the kind momentum.
 func agent() runner.Agent {
-	return runner.Agent{Name: "momentumagent", Strategies: runner.Signals("adxema", "macdtrend", "emamacd",
+	return runner.Agent{Name: "momentumagent", Strategies: runner.TrailingSignals("adxema", "macdtrend", "emamacd",
 		"emarsiadx", "rsitrend", "stochpullback", "papullback")}
 }

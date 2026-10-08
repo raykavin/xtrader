@@ -130,6 +130,10 @@ func (c ScalpConfig) validate() error {
 // which must place them with the orders, see service.ProtectionBroker. A trade
 // ends at one of them, or at the market on the close back across the EMA or
 // after MaxBars candles. See ScalpConfig.
+//
+// Deprecated: registered in no agent; its trade (scalpTrade, adoptTrade) is
+// the one of Bracket, which stays. Kept until its registration or removal is
+// decided.
 type Scalp struct {
 	cfg    ScalpConfig
 	sizing rkSizing
@@ -185,6 +189,8 @@ func (t *scalpTrade) close(df *model.Dataframe, broker service.Broker, name stri
 }
 
 // NewScalp validates the configuration and creates the strategy.
+//
+// Deprecated: see Scalp.
 func NewScalp(cfg ScalpConfig) (*Scalp, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("scalp: %w", err)

@@ -10,6 +10,10 @@ import (
 	"github.com/raykavin/xtrader/tools/log"
 )
 
+// OCOSell buys on a crossover of the stochastic and protects the position with
+// an OCO sell.
+//
+// Deprecated: registered in no agent. Kept until its removal is decided.
 type OCOSell struct{}
 
 func (e OCOSell) Timeframe() string {

@@ -36,7 +36,11 @@ export function isClosedTrade(order: Order): boolean {
   return order.status === "FILLED" && (order.profit !== 0 || order.profit_value !== 0);
 }
 
-/** When the order filled, in Unix seconds: its last update, else its creation. */
+/**
+ * When the order filled, in Unix seconds: its updated_at, the time of the fill
+ * the exchange reported (eg: the deal of MT5), kept by the agent and the store
+ * once filled, so a trade never moves to another period; else its creation.
+ */
 export function closedAt(order: Order): number {
   return order.updated_at || order.created_at;
 }

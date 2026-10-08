@@ -127,6 +127,18 @@ type PositionLegs interface {
 	HeldLegs(pair string, side model.SideType) (legs []model.Order, opened time.Time, err error)
 }
 
+// PositionOpenings is implemented by the brokers that tell how many positions
+// the bot opened on a pair since a time before a restart, eg: the order
+// controller, from the fills of the storage it replays at the start: a
+// strategy limiting its entries per session, eg: ORB, counts its own entries
+// of the run and, after a restart, the ones of the session opened before it.
+// PositionsReplayed returns the fills of pair of the previous runs that opened
+// a position, or reversed one, at or after since; the storage doesn't tell
+// what placed them (a strategy, the trade panel, Telegram).
+type PositionOpenings interface {
+	PositionsReplayed(pair string, since time.Time) int
+}
+
 // PositionReporter is implemented by the exchanges that report the position the
 // bot holds on a pair apart from the rest of the account, eg: MT5, from the
 // positions of its magic number: the order controller checks the positions it

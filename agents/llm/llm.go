@@ -1646,7 +1646,7 @@ func (t *Trader) calendar(pair string, at time.Time, input *Input) string {
 
 	window := make([]Event, 0, len(events))
 	for _, event := range events {
-		if !event.Time.Before(at.Add(-t.cfg.CalendarBack)) && !event.Time.After(at.Add(t.cfg.CalendarAhead)) {
+		if event.within(at.Add(-t.cfg.CalendarBack), at.Add(t.cfg.CalendarAhead)) {
 			window = append(window, event)
 		}
 	}

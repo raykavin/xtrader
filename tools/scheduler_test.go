@@ -116,3 +116,30 @@ func TestScheduler(t *testing.T) {
 	// Verify that the condition is NOT removed on error
 	assert.Len(t, scheduler.orderConditions, 1)
 }
+
+// An order that always fails, eg: refused by the broker for good, is sent
+// MaxOrderAttempts times at most, once per candle its condition is met, and
+// the condition dropped, never sent again on each candle.
+func TestScheduler_FailingOrderDroppedAfterItsAttempts(t *testing.T) {
+	pair := "BTCUSDT"
+	scheduler := NewScheduler(pair)
+	broker := new(MockBroker)
+	broker.On("CreateOrderMarket", xtrader.SideTypeSell, pair, 2.0).Return(model.Order{}, assert.AnError)
+	broker.On("CreateOrderMarket", xtrader.SideTypeBuy, pair, 1.0).Return(model.Order{}, nil)
+
+	scheduler.SellWhen(2.0, func(*xtrader.Dataframe) bool { return true })
+	met := false
+	scheduler.BuyWhen(1.0, func(*xtrader.Dataframe) bool { return met })
+
+	df := &xtrader.Dataframe{Pair: pair, Close: xtrader.Series{75}}
+	for range MaxOrderAttempts + 5 {
+		scheduler.Update(df, broker)
+	}
+	broker.AssertNumberOfCalls(t, "CreateOrderMarket", MaxOrderAttempts)
+	assert.Len(t, scheduler.orderConditions, 1, "the condition not met kept")
+
+	met = true
+	scheduler.Update(df, broker)
+	broker.AssertCalled(t, "CreateOrderMarket", xtrader.SideTypeBuy, pair, 1.0)
+	assert.Empty(t, scheduler.orderConditions)
+}

@@ -103,12 +103,22 @@ type anthropicBlock struct {
 type anthropicAnswer struct {
 	Content    []anthropicBlock `json:"content"`
 	StopReason string           `json:"stop_reason"`
-	Usage      struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
+	Usage      anthropicUsage   `json:"usage"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// usage returns the tokens of the answer: input_tokens leaves out the ones
+// read from the cache, prompt tokens too, and the ones written to it, billed
+// apart, at a premium.
+func (u anthropicUsage) usage() Usage {
+	return Usage{Input: u.InputTokens + u.CacheReadInputTokens, Cached: u.CacheReadInputTokens,
+		CacheWritten: u.CacheCreationInputTokens, Output: u.OutputTokens}
 }
 
 // Analyze asks the model for the decision of the context. The answer is the
@@ -148,15 +158,17 @@ func (a *Anthropic) AnalyzeWith(ctx context.Context, system string, input Input)
 		return Decision{}, err
 	}
 
+	// the tokens are billed whatever the answer, one that can't be read
+	// included, when it tells them
 	var answer anthropicAnswer
 	if err := json.Unmarshal(data, &answer); err != nil {
+		var usage anthropicUsage
+		if usageIn(data, &usage) {
+			a.record(input, usage.usage())
+		}
 		return Decision{}, invalidAnswer(a.name, "%v", err)
 	}
-	// the tokens are billed whatever the answer; input_tokens leaves out the
-	// ones read from and written to the cache
-	a.record(input, Usage{Input: answer.Usage.InputTokens + answer.Usage.CacheReadInputTokens +
-		answer.Usage.CacheCreationInputTokens, Cached: answer.Usage.CacheReadInputTokens,
-		Output: answer.Usage.OutputTokens})
+	a.record(input, answer.Usage.usage())
 	switch answer.StopReason {
 	case "max_tokens":
 		return Decision{}, invalidAnswer(a.name, "cut at the max tokens (%d)", request.MaxTokens)

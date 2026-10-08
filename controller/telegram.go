@@ -62,11 +62,12 @@ type Telegram struct {
 	menu      *tb.ReplyMarkup
 	prompts   PromptStore
 	onChange  func() // after a change of the prompts, eg: Manager.Trigger
+	now       func() time.Time
 
 	mu       sync.Mutex
-	selected map[int64]string    // the agent of the commands, by user
-	editing  map[int64]string    // the prompt a user sends the content of, by user
-	relays   map[string]relaying // by agent
+	selected map[int64]string     // the agent of the commands, by user
+	editing  map[int64]promptEdit // the edit of a prompt in progress, by user
+	relays   map[string]relaying  // by agent
 }
 
 // relaying is the relay of the events of an agent, stopped by cancel.
@@ -89,7 +90,7 @@ func WithPrompts(prompts PromptStore, onChange func()) TelegramOption {
 // to serve it. Its errors never carry the token.
 func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...TelegramOption) (*Telegram, error) {
 	t := &Telegram{ctx: context.Background(), dashboard: dashboard, token: token, selected: make(map[int64]string),
-		editing: make(map[int64]string), relays: make(map[string]relaying)}
+		editing: make(map[int64]promptEdit), relays: make(map[string]relaying), now: time.Now}
 	t.SetUsers(users)
 	for _, option := range options {
 		option(t)
@@ -126,7 +127,8 @@ func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...T
 			tb.Command{Text: "/prompts", Description: "List the prompts of the LLM agents"},
 			tb.Command{Text: "/prompt", Description: "Show a prompt, eg: /prompt trend_following"},
 			tb.Command{Text: "/editprompt", Description: "Edit a prompt, eg: /editprompt trend_following, then send " +
-				"its new content, or a .txt file"},
+				"its new content, or a .txt file, and /confirm it"},
+			tb.Command{Text: "/confirm", Description: "Save the new content of the prompt edited, once shown"},
 			tb.Command{Text: "/useprompt", Description: "Switch the prompt of an LLM agent, from its next analysis, " +
 				"eg: /useprompt llm trend_following (default: the one of the agent)"},
 			tb.Command{Text: "/cancel", Description: "Give up the edit of a prompt"})
@@ -160,6 +162,7 @@ func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...T
 		client.Handle("/prompt", t.handlePrompt)
 		client.Handle("/editprompt", t.handleEditPrompt)
 		client.Handle("/useprompt", t.handleUsePrompt)
+		client.Handle("/confirm", t.handleConfirm)
 		client.Handle("/cancel", t.handleCancel)
 		client.Handle(tb.OnText, t.handleText)
 		client.Handle(tb.OnDocument, t.handleDocument)
@@ -490,8 +493,10 @@ func (t *Telegram) handleProfit(m *tb.Message) {
 	}
 }
 
-// closedAt returns when the order filled, in Unix seconds: its last update,
-// its creation for the ones filled at once.
+// closedAt returns when the order filled, in Unix seconds: its updated_at, the
+// time of the fill the exchange reported, kept by the agent and the store once
+// filled (a trade never moves to another period), its creation for the ones
+// filled at once.
 func closedAt(o ui.Order) int64 {
 	if o.UpdatedAt != 0 {
 		return o.UpdatedAt

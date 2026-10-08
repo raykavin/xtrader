@@ -39,7 +39,7 @@ const maxComment = 31
 // their reasoning efforts, the ones of the table.
 var (
 	providers        = []string{"openai", "anthropic"}
-	reasoningEfforts = []string{"minimal", "low", "medium", "high"}
+	reasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 )
 
 // llmParamPrefixes are the prefixes of the params of the language model of an

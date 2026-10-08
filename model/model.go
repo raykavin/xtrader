@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// TelegramSettings turn on the Telegram bot of the engine, see
+// notification.NewTelegram.
+//
+// Deprecated: no agent turns it on, they relay to the Telegram of the
+// controller. Kept until the removal of notification.NewTelegram is decided.
 type TelegramSettings struct {
 	Enabled bool
 	Token   string

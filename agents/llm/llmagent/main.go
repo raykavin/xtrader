@@ -86,7 +86,7 @@ func run() error {
 		modelName     = flag.String("llm-model", "", "model of the provider, eg: claude-sonnet-5 or gpt-5 (required)")
 		baseURL       = flag.String("llm-base-url", "", "base URL of the API of the provider, eg: a proxy (default: the provider's)")
 		maxTokens     = flag.Int("llm-max-tokens", 0, "tokens of an answer at most, the reasoning included (default 4096; 16000 for a model of anthropic that refuses the forced tool call, eg: claude-opus-5-5, as it thinks before it answers)")
-		reasoning     = flag.String("llm-reasoning", "", "effort of the models that reason, eg: gpt-5: minimal, low, medium or high; less spends fewer output tokens (default: the model's; ignored by anthropic)")
+		reasoning     = flag.String("llm-reasoning", "", "effort of the models that reason, none, minimal, low, medium, high or xhigh, as the model takes them (eg: minimal only the older ones, none and xhigh only the newer ones; the API refuses the others); less spends fewer output tokens (default: the model's; ignored by anthropic)")
 		timeout       = flag.Duration("llm-timeout", cfg.Timeout, "time a decision may take, the request to the provider")
 		consult       = flag.Duration("llm-consult-interval", 0, "time between the consultations of the model about each pair, eg: 10m or 2h, 10s at least, on a schedule of the clock (10m: at :00, :10, :20...): one falling on the close of a candle is the one of the close, the others, live only, on the candle in progress, the closes between them left out; each consultation is a billed request (default: one at each close of -timeframe)")
 		candles       = flag.Int("llm-candles", cfg.Candles, "candles of the context of the model, the last ones")

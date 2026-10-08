@@ -6,6 +6,7 @@ and no MetaTrader5.py lies on the path of the bridge.
 """
 
 import collections
+import http.client
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 import types
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -409,6 +411,41 @@ class RealAccountTest(BridgeTest):
         PACKAGE.trade_mode = 2
         self.assertEqual(200, self.order()[0])
         self.assertEqual(1, len(PACKAGE.sends))
+
+
+class TokenTest(BridgeTest):
+    def get(self, token):
+        """GET /health with the token header as raw bytes, None for none."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("GET", "/health")
+        if token is not None:
+            connection.putheader("X-Bridge-Token", token)
+        connection.endheaders()
+        return connection.getresponse().status
+
+    def test_the_token_alone_is_accepted(self):
+        self.assertEqual(200, self.get(TOKEN.encode()))
+        self.assertEqual(401, self.get(None))
+        self.assertEqual(401, self.get(b""))
+        self.assertEqual(401, self.get(b"secreT"))
+        self.assertEqual(401, self.get(TOKEN.encode() + b"x"))
+        self.assertEqual(401, self.get(TOKEN.encode()[:-1]))
+        self.assertEqual(401, self.get("s\u00e9cret".encode()), "not ASCII: refused, never a 500")
+
+    def test_compared_in_constant_time(self):
+        with unittest.mock.patch.object(mt5bridge.hmac, "compare_digest",
+                                        wraps=mt5bridge.hmac.compare_digest) as compare:
+            self.assertEqual(401, self.get(b"wrong"))
+            self.assertEqual(200, self.get(TOKEN.encode()))
+        self.assertEqual(2, compare.call_count)
+
+    def test_a_token_not_ascii(self):
+        mt5bridge.Handler.token = "s\u00e9nha"
+        self.addCleanup(setattr, mt5bridge.Handler, "token", TOKEN)
+        self.assertEqual(200, self.get("s\u00e9nha".encode()), "as a Go client sends it: UTF-8")
+        self.assertEqual(401, self.get("s\u00e9nha".encode("latin-1")))
+        self.assertEqual(401, self.get(b"senha"))
 
 
 if __name__ == "__main__":

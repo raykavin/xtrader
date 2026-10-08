@@ -9,8 +9,30 @@
 #
 # The environment (services/mt5/.env): MT5_LOGIN, MT5_SERVER, MT5_PASSWORD
 # (the terminal logs in with it), MT5_BRIDGE_TOKEN, MT5_ALLOW_REAL,
-# MT5_READ_ONLY, MT5_VNC_PASSWORD, MT5_ALGO_TRADING, MT5_MCP_FORWARD.
+# MT5_READ_ONLY, MT5_VNC_PASSWORD, MT5_ALGO_TRADING, MT5_MCP_FORWARD. The
+# switches take 1/true/yes or 0/false/no (any case; empty for their default):
+# any other value stops the container, never read as off.
 set -euo pipefail
+
+# switch NAME DEFAULT prints 1 or 0 for the switch NAME of the environment, or
+# fails with another value
+switch() {
+	local value="${!1:-$2}"
+	case "${value,,}" in
+	1 | true | yes) echo 1 ;;
+	0 | false | no) echo 0 ;;
+	*)
+		echo "mt5: $1=$value: not a switch, 1/true/yes or 0/false/no" >&2
+		return 1
+		;;
+	esac
+}
+
+# checked first, as root too: an invalid one starts nothing
+allow_real="$(switch MT5_ALLOW_REAL 0)"
+read_only="$(switch MT5_READ_ONLY 0)"
+algo_trading="$(switch MT5_ALGO_TRADING 1)"
+mcp_forward="$(switch MT5_MCP_FORWARD 1)"
 
 user=trader
 if [[ "$(id -u)" == 0 ]]; then
@@ -125,7 +147,7 @@ fi
 # which trading from the bridge needs: its data in its folder, /portable. Kept
 # on at a change of account (Account=0, its default turns it off then), which
 # the first login of a new terminal is, or another MT5_LOGIN
-if [[ "${MT5_ALGO_TRADING:-1}" != 0 ]]; then
+if [[ "$algo_trading" == 1 ]]; then
 	mkdir -p "$terminal_dir/Config"
 	ini_set "$terminal_dir/Config/common.ini" Experts Enabled 1
 	ini_set "$terminal_dir/Config/common.ini" Experts Api 0
@@ -134,12 +156,12 @@ fi
 
 # the MCP server of the terminal (the economic calendar of the agents) listens
 # on its loopback only: forwarded to the network of the compose, port 22347
-if [[ "${MT5_MCP_FORWARD:-1}" != 0 ]]; then
+if [[ "$mcp_forward" == 1 ]]; then
 	socat TCP-LISTEN:22347,fork,reuseaddr TCP:127.0.0.1:22346 &
 fi
 
 args=(--host 0.0.0.0 --portable)
-[[ "${MT5_ALLOW_REAL:-0}" == 1 ]] && args+=(--allow-real)
-[[ "${MT5_READ_ONLY:-0}" == 1 ]] && args+=(--read-only)
+[[ "$allow_real" == 1 ]] && args+=(--allow-real)
+[[ "$read_only" == 1 ]] && args+=(--read-only)
 log "the bridge of the account ${MT5_LOGIN:-?} on ${MT5_SERVER:-?}"
 exec /opt/xtrader/mt5bridge/run.sh "${args[@]}"

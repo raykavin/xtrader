@@ -1,4 +1,4 @@
-.PHONY: generate generate-check lint test test-short bridge-test release ui-install ui-build ui-dev ui-check ui-bundle
+.PHONY: generate generate-check lint test test-short bridge-test entrypoint-test release ui-install ui-build ui-dev ui-check ui-bundle
 
 generate:
 	go generate ./...
@@ -25,6 +25,11 @@ test-short:
 # tests themselves (never the real one); -B leaves no __pycache__.
 bridge-test:
 	python3 -B -m unittest discover -s tools/mt5bridge -v
+
+# The switches of the entrypoint of the image of MT5 (MT5_READ_ONLY and the
+# others), without Docker or Wine.
+entrypoint-test:
+	bash deploy/docker/images/mt5/entrypoint_test.sh
 
 release:
 	goreleaser build --snapshot

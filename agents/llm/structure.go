@@ -111,11 +111,13 @@ type pivot struct {
 }
 
 // computeStructure returns the structure of candles, oldest first, with atr
-// the ATR of each (NaN while unknown), nil with too few candles for a swing.
+// the ATR of each (NaN or 0 while unknown), nil with too few candles for a
+// swing.
 func computeStructure(candles []model.Candle, atr []float64) *Structure {
 	if len(candles) < 2*pivotStrength+1 {
 		return nil
 	}
+	atr = positiveATR(atr)
 	last := len(candles) - 1
 	price := candles[last].Close
 	width := lastKnown(atr)
@@ -401,6 +403,20 @@ func percentile(series []float64, v float64) float64 {
 		return math.NaN()
 	}
 	return float64(below) / float64(count) * 100
+}
+
+// positiveATR returns a copy of atr with the values at or below 0 unknown,
+// NaN: the ones talib writes while it warms up, eg: 0 over the first ATRLen
+// candles, which would weigh in the percentile as the quietest ones.
+func positiveATR(atr []float64) []float64 {
+	out := make([]float64, len(atr))
+	for i, v := range atr {
+		out[i] = v
+		if !(v > 0) {
+			out[i] = math.NaN()
+		}
+	}
+	return out
 }
 
 // lastKnown returns the last known value of series, NaN without any.

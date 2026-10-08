@@ -27,8 +27,9 @@ type AsiaLondonConfig struct {
 
 	// A breakout is the first close beyond the range by BufferATR, in ATR of
 	// ATRLen candles: above Asia High + buffer for a BUY, below Asia Low -
-	// buffer for a SELL. MaxTrades is the number of positions opened per
-	// London session at most.
+	// buffer for a SELL. MaxTrades is the number of positions the strategy
+	// opens per London session at most, the ones of the session opened before
+	// a restart counted as in ORBConfig.
 	BufferATR float64
 	MaxTrades int
 

@@ -40,6 +40,19 @@ type breakoutTrader struct {
 	traded  map[string]breakoutSession // the positions opened in the current trade session, by pair
 }
 
+// openedBefore returns the positions opened on pair since start before a
+// restart, when the broker tells them (service.PositionOpenings, eg: the order
+// controller, from the orders it stores), 0 elsewhere: they count against
+// MaxTrades too. The entries of the run are the strategy's own, counted by it:
+// a position opened by hand (the trade panel, Telegram) counts only once a
+// restart replays it, the storage not telling who opened it.
+func openedBefore(broker service.Broker, pair string, start time.Time) int {
+	if openings, ok := broker.(service.PositionOpenings); ok {
+		return openings.PositionsReplayed(pair, start)
+	}
+	return 0
+}
+
 // breakoutSession counts the positions opened in the trade session started at
 // start.
 type breakoutSession struct {
@@ -174,9 +187,11 @@ func (b *breakoutTrader) onCandle(df *model.Dataframe, broker service.Broker) {
 	}
 
 	_, _, start, _ := b.rules.layout.sessions(df.Time[len(df.Time)-1])
-	traded := b.traded[df.Pair]
-	if !traded.start.Equal(start) {
-		traded = breakoutSession{start: start}
+	traded, ok := b.traded[df.Pair]
+	if !ok || !traded.start.Equal(start) {
+		// a new session, or the first one of the run: its positions opened
+		// before a restart, if any
+		traded = breakoutSession{start: start, trades: openedBefore(broker, df.Pair, start)}
 	}
 	if traded.trades >= b.rules.maxTrades {
 		return

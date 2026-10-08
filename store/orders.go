@@ -37,9 +37,18 @@ type orderRow struct {
 func (orderRow) TableName() string { return "orders" }
 
 // orderColumns are the columns an order rewrites: all but its keys and
-// creation.
+// creation, and updated_at, see fillTime.
 var orderColumns = []string{"exchange_id", "pair", "side", "type", "status", "price", "quantity", "fee", "stop",
-	"group_id", "ref_price", "profit", "profit_value", "updated_at"}
+	"group_id", "ref_price", "profit", "profit_value"}
+
+// fillTime is the updated_at of an order rewritten: the one of the copy, but
+// the one of a fill already written, kept: when it filled, the time the
+// accounting periods count a trade closed by (see Store.Periods), never moved
+// by a later copy of the same fill, eg: written again with another time.
+var fillTime = clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{
+	SQL:  "CASE WHEN orders.status = ? AND EXCLUDED.status = ? THEN orders.updated_at ELSE EXCLUDED.updated_at END",
+	Vars: []interface{}{string(model.OrderStatusTypeFilled), string(model.OrderStatusTypeFilled)},
+}}
 
 func rowOfOrder(agentID int64, o model.Order) orderRow {
 	return orderRow{AgentID: agentID, ID: o.ID, ExchangeID: o.ExchangeID, Pair: o.Pair, Side: string(o.Side),
@@ -73,7 +82,8 @@ var laterState = clause.Where{Exprs: []clause.Expression{clause.Expr{
 // SaveOrders writes the orders of the agent of id: each one replacing the one
 // of its ID when it is a later state of it (see model.Order.Supersedes: the
 // copy of an order a bot wrote late never takes back a fill written before
-// it, the same state written again changing nothing), or, unless overwrite,
+// it, the same state written again changing nothing; a fill written again
+// keeping the time of the first, see fillTime), or, unless overwrite,
 // kept only when missing (an import never replaces what the agent wrote
 // since).
 func (s *Store) SaveOrders(ctx context.Context, id int64, orders []model.Order, overwrite bool) error {
@@ -86,8 +96,8 @@ func (s *Store) SaveOrders(ctx context.Context, id int64, orders []model.Order, 
 	}
 	conflict := clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}, {Name: "id"}}, DoNothing: true}
 	if overwrite {
-		conflict = clause.OnConflict{Columns: conflict.Columns, DoUpdates: clause.AssignmentColumns(orderColumns),
-			Where: laterState}
+		conflict = clause.OnConflict{Columns: conflict.Columns,
+			DoUpdates: append(clause.AssignmentColumns(orderColumns), fillTime), Where: laterState}
 	}
 	result := s.conn(ctx).Clauses(conflict).Create(&rows)
 	if result.Error != nil {
