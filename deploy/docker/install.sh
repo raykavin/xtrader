@@ -66,7 +66,7 @@ done
 # volume of 0700, eg: of a umask of 077, stops postgres from starting
 chmod 755 "$target/services/postgres/data"
 # the configurations: the ones there already kept
-for file in controller/config/config.yml migrator/config/config.yml migrator/config/agents.yml; do
+for file in controller/config/config.yml migrator/config/config.yml; do
 	mkdir -p "$(dirname "$target/services/$file")"
 	if [[ ! -f "$target/services/$file" ]]; then
 		install -m 644 "$here/services/$file" "$target/services/$file"

@@ -13,11 +13,10 @@
 // The lines of the agents are shown prefixed with their name.
 //
 // The dashboard needs a user of the database: bootstrap in config.yml creates
-// the first one on an empty database, or cmd/migrator import brings the one of
-// the previous version. Telegram, its token and the users it answers, the
-// agents, their prompts and the users are set on the dashboard, applied at
-// once: an agent enabled is launched, one disabled stopped, a prompt switched
-// from the next analysis of the agent.
+// the first one on an empty database. Telegram, its token and the users it
+// answers, the agents, their prompts and the users are set on the dashboard,
+// applied at once: an agent enabled is launched, one disabled stopped, a
+// prompt switched from the next analysis of the agent.
 //
 // services of config.yml are the processes of the host the agents need, eg:
 // the bridge of MT5 out of a container, launched before the agents and stopped

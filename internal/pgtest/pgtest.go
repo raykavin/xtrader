@@ -68,13 +68,48 @@ func Migrated(t *testing.T, root string) string {
 }
 
 // Migrate applies the migrations and the seeds of the repository at root to
-// the database of dsn.
+// the database of dsn. The agents the seeds add (sql/seeds/0003_agents.sql)
+// are taken out again, the tests starting without any: the ones there before
+// are kept. MigrateSeeded keeps them.
 func Migrate(t *testing.T, dsn, root string) {
+	t.Helper()
+	migrateTo(t, dsn, root, false)
+}
+
+// MigrateSeeded is Migrate keeping the agents of the seeds.
+func MigrateSeeded(t *testing.T, dsn, root string) {
+	t.Helper()
+	migrateTo(t, dsn, root, true)
+}
+
+func migrateTo(t *testing.T, dsn, root string, seededAgents bool) {
 	t.Helper()
 	m, err := migrate.New(migrate.MigrateConfig{DSN: dsn, Dialector: "postgres",
 		MigrationsPath: filepath.Join(root, "sql", "migrations"), PopulationPath: filepath.Join(root, "sql", "seeds")})
 	require.NoError(t, err)
 	ctx := context.Background()
 	require.NoError(t, m.Migrate(ctx))
+	if seededAgents {
+		require.NoError(t, m.Populate(ctx))
+		return
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: glog.Discard})
+	require.NoError(t, err)
+	defer func() {
+		if sql, err := db.DB(); err == nil {
+			_ = sql.Close()
+		}
+	}()
+	var last int64 // the agents up to it there before the seeds
+	require.NoError(t, db.Raw("SELECT COALESCE(MAX(id), 0) FROM agents").Scan(&last).Error)
 	require.NoError(t, m.Populate(ctx))
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		for _, table := range []string{"agent_llm_settings", "agent_accounts"} {
+			if err := tx.Exec("DELETE FROM "+table+" WHERE agent_id > ?", last).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Exec("DELETE FROM agents WHERE id > ?", last).Error
+	}))
 }

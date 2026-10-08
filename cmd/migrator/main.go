@@ -2,29 +2,14 @@
 // configs/config.yml, the one of the controller:
 //
 //	# the migrations of sql/migrations, then the seeds of sql/seeds (the
-//	# prompts, the Telegram bot off), run again harmlessly
+//	# Telegram bot off, the prompts and the agents of a new database, off and
+//	# without their secrets), run again harmlessly
 //	go run ./cmd/migrator -config configs/config.yml up
-//	# the settings and the data of the previous version, once: the agents of
-//	# its agents.yml, the users, Telegram and the keys of its environment file,
-//	# the orders, decisions and journals of its data/ (read from copies); run
-//	# again, only what is missing, what the dashboard deleted or changed left
-//	# as it is; the data of an agent that has orders already is a conflict
-//	# (nothing imported) unless -force, which moves its order IDs
-//	go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
-//		-env ~/.config/automator/automator.env
-//	# the same, nothing written: what would be imported
-//	go run ./cmd/migrator -config configs/config.yml import -agents agents.yml -env automator.env -dry-run
-//	# the same into the containers (deploy/docker), whose terminal is the
-//	# service mt5: the agents.yml, the environment file and the data/ of the
-//	# host copied to services/migrator/config/import, the bridge of every
-//	# agent and the MCP server of the calendars replaced by the ones of mt5
-//	docker compose run --rm migrator migrator -config /app/config/config.yml import \
-//		-agents /app/config/import/agents.yml -env /app/config/import/import.env \
-//		-bridge http://mt5:18812 -calendar http://mt5:22347/mcp
 //
-// The controller never migrates: it checks the version of the schema when it
-// starts, and asks for this command when it is behind. The secrets imported
-// are encrypted with the secrets_key of the configuration, never printed.
+// The settings live in the database only: the agents, their secrets, the
+// users and Telegram are changed on the page of the settings of the
+// dashboard. The controller never migrates: it checks the version of the
+// schema when it starts, and asks for this command when it is behind.
 package main
 
 import (
@@ -48,9 +33,8 @@ func main() {
 		"migrations and secrets key")
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
-		_, _ = fmt.Fprintf(out, "usage: %s [-config file] up | import [flags]\n\n", os.Args[0])
-		_, _ = fmt.Fprintln(out, "  up      apply the migrations and the seeds")
-		_, _ = fmt.Fprintln(out, "  import  import the settings and the data of the previous version (import -h)")
+		_, _ = fmt.Fprintf(out, "usage: %s [-config file] up\n\n", os.Args[0])
+		_, _ = fmt.Fprintln(out, "  up  apply the migrations and the seeds")
 		_, _ = fmt.Fprintln(out)
 		flag.PrintDefaults()
 	}
@@ -69,8 +53,6 @@ func main() {
 	switch flag.Arg(0) {
 	case "up":
 		err = up(ctx, cfg)
-	case "import":
-		err = runImport(ctx, cfg, flag.Args()[1:], os.Stdout)
 	default:
 		flag.Usage()
 		os.Exit(2)

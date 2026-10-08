@@ -118,15 +118,6 @@ type TelegramUser struct {
 	Name       string `json:"name"`
 }
 
-// LegacyImport is a file of the previous version the migrator imported, or
-// what it imported of its settings: an agent ("agent:<name>"), the user of the
-// dashboard ("user:<username>") and Telegram ("env:TELEGRAM").
-type LegacyImport struct {
-	Source     string    `gorm:"primaryKey" json:"source"`
-	Details    Params    `gorm:"type:jsonb" json:"details"`
-	ImportedAt time.Time `gorm:"autoCreateTime" json:"imported_at"`
-}
-
 // Params are settings by name, a JSON object of strings.
 type Params map[string]string
 
