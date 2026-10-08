@@ -127,11 +127,13 @@ type DecisionLink struct {
 }
 
 // Remembered is a decision of the journal of an LLM agent for the memory of
-// its prompt, of GET /journal/memory: the candle it was taken on, and its
+// its prompt, of GET /journal/memory: the candle it was taken on, when (the
+// time of its entry; zero from a controller of a version before it), and its
 // answer.
 type Remembered struct {
 	Pair       string    `json:"pair"`
 	Candle     time.Time `json:"candle"`
+	At         time.Time `json:"at"`
 	Action     string    `json:"action"`
 	Confidence float64   `json:"confidence"`
 	Reason     string    `json:"reason"`

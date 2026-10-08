@@ -101,7 +101,8 @@ func TestJournal(t *testing.T) {
 	f.set(func(f *fakeController) {
 		f.memory = []agentapi.Remembered{
 			{Pair: "XAUUSDm", Candle: candle, Action: "WAIT", Confidence: 0.4, Reason: "one"},
-			{Pair: "XAUUSDm", Candle: candle.Add(time.Minute), Action: "HOLD", Confidence: 0.6, Reason: "two"},
+			{Pair: "XAUUSDm", Candle: candle.Add(time.Minute), At: candle.Add(90 * time.Second), Action: "HOLD",
+				Confidence: 0.6, Reason: "two"},
 			{Pair: "BTCUSDm", Candle: candle, Action: "WAIT", Confidence: 0.3, Reason: "btc"},
 		}
 	})
@@ -141,6 +142,8 @@ func TestJournal(t *testing.T) {
 	assert.Equal(t, []string{"XAUUSDm:two", "BTCUSDm:btc", "XAUUSDm:three"}, reasons)
 	assert.Equal(t, llm.ActionExit, recent[2].Action)
 	assert.Equal(t, input.Time, recent[2].Candle.UTC())
+	assert.Equal(t, candle.Add(90*time.Second), recent[0].At.UTC(), "when it was taken, of the controller")
+	assert.Equal(t, candle.Add(3*time.Minute), recent[2].At.UTC(), "and of the outbox")
 }
 
 func TestPrompts(t *testing.T) {

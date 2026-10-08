@@ -326,6 +326,7 @@ func TestInternalAPI_OnlyTheAgentOfTheToken(t *testing.T) {
 	internalCall(t, srv, token, http.MethodGet, "/journal/memory?per_pair=20", nil, &memory)
 	require.Len(t, memory, 1)
 	assert.Equal(t, "the trend", memory[0].Reason)
+	assert.True(t, memory[0].At.Equal(at), "when it was taken")
 	resp = internalCall(t, srv, otherToken, http.MethodGet, "/decisions/"+decision.ID, nil, nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "never the decisions of another")
 	stored, err := c.store.Agent(ctx, llm.ID)

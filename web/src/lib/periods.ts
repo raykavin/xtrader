@@ -88,18 +88,75 @@ export function periodResults(periods: AgentPeriod[], snapshots: Snapshot[]): Pe
   return results;
 }
 
+/** Digits grouped by thousands with dots, eg: 1.000 or 12.345.678: not from 0, which 0.500 is a decimal. */
+const thousands = /^[1-9]\d{0,2}(\.\d{3})+$/;
+
 /**
- * The amount typed, eg: 1.234,56, 1234,56, 1.000 or 1234.56; null unless a
- * number from 0. A comma is the decimal separator, the dots then those of
- * thousands, as they are when grouping 3 digits each.
+ * The amount typed, eg: 1.234,56, 1234,56, 1.000, 0.500 or 1234.56; null
+ * unless a number from 0. A comma is the decimal separator, the dots before it
+ * then those of thousands, grouping 3 digits each; without a comma, dots
+ * grouping 3 digits from 1 are those of thousands too, else a dot is the
+ * decimal separator: 0.500 is half. An amount of another grouping, eg:
+ * 0.500,00 or 1.23,4, is ambiguous and refused.
  */
 export function parseAmount(text: string): number | null {
   let value = text.trim().replace(/\s/g, "");
   if (value === "") return null;
-  if (value.includes(",") || /^\d{1,3}(\.\d{3})+$/.test(value)) {
-    value = value.replace(/\./g, "").replace(",", ".");
+  if (value.includes(",")) {
+    const [integer = "", decimals, ...more] = value.split(",");
+    if (more.length > 0 || !/^\d+$/.test(decimals ?? "")) return null;
+    if (!/^\d+$/.test(integer) && !thousands.test(integer)) return null;
+    value = `${integer.replace(/\./g, "")}.${decimals}`;
+  } else if (thousands.test(value)) {
+    value = value.replace(/\./g, "");
   }
   if (!/^\d+(\.\d+)?$/.test(value)) return null;
   const amount = Number(value);
   return Number.isFinite(amount) ? amount : null;
+}
+
+/**
+ * The periods once period started, as the controller lists them: it first,
+ * the one current until then ending as it starts. A period listed already is
+ * left as it is.
+ */
+export function withPeriod(periods: AgentPeriod[] | null, period: AgentPeriod): AgentPeriod[] {
+  const listed = periods ?? [];
+  if (listed.some((p) => p.id === period.id)) return listed;
+  return [
+    period,
+    ...listed.map((p, i) =>
+      i === 0 && p.ended_at === undefined ? { ...p, ended_at: period.started_at } : p,
+    ),
+  ];
+}
+
+/** What a reset of the results did, see resetPeriods. */
+export interface ResetOutcome {
+  /** The period it started. */
+  period: AgentPeriod;
+  /** The periods to show: the ones read again, else the ones shown with the new one. */
+  periods: AgentPeriod[];
+  /** Why the periods couldn't be read again, the reset done; null when they were. */
+  stale: string | null;
+}
+
+/**
+ * Resets the results by reset, the request of a new period, then reads the
+ * periods again by reread. A failed reset throws: nothing changed. A failed
+ * reading doesn't, the reset being done: the periods shown get the new one,
+ * stale telling why they weren't read, so that the reset isn't repeated.
+ */
+export async function resetPeriods(
+  periods: AgentPeriod[] | null,
+  reset: () => Promise<AgentPeriod>,
+  reread: () => Promise<AgentPeriod[]>,
+): Promise<ResetOutcome> {
+  const period = await reset();
+  try {
+    return { period, periods: await reread(), stale: null };
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    return { period, periods: withPeriod(periods, period), stale: why };
+  }
 }

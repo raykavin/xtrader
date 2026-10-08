@@ -330,3 +330,149 @@ func TestMT5ControllerRestart(t *testing.T) {
 	require.Equal(t, 2.0, statuses[tp.ID].Quantity)
 	require.Equal(t, model.OrderStatusTypeCanceled, statuses[sl.ID].Status)
 }
+
+// m5cStored returns the stored order id.
+func m5cStored(t *testing.T, st storage.Storage, id int64) model.Order {
+	t.Helper()
+	orders, err := st.Orders()
+	require.NoError(t, err)
+	for _, stored := range orders {
+		if stored.ID == id {
+			return *stored
+		}
+	}
+	t.Fatalf("no order %d stored", id)
+	return model.Order{}
+}
+
+// B6: a protected long closed by its stop loss while the history of the
+// terminal lags beyond mt5ResolveWait: its legs stay NEW in the order
+// controller while the exits are awaited (ExitsAwaited), never settled
+// CANCELED meanwhile, then, once the history lists the exit, the stop loss
+// FILLED at its price with the loss in the results of the controller, and the
+// loss booked by ClosedProfit for the position the stop loss closed
+// (FillPositions), as the daily limits read them.
+func TestMT5Controller_StopLossHitHistoryLate(t *testing.T) {
+	const wait = 200 * time.Millisecond
+	fake := exchange.NewMT5TestFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m, err := exchange.NewMT5(ctx, fake.Options(exchange.MT5TestHistoryWaits(wait, time.Minute))...)
+	require.NoError(t, err)
+	st, err := storage.FromMemory()
+	require.NoError(t, err)
+	c := order.NewController(ctx, m, st, order.NewOrderFeed())
+
+	orders, err := c.CreateOrderMarketProtected(model.SideTypeBuy, m5cPair, 2, 4280, 4300)
+	require.NoError(t, err)
+	require.Len(t, orders, 3)
+	entry := orders[0]
+	tp, sl := m5cLegs(orders[1:])
+	_, awaited := m.ExitsAwaited(m5cPair)
+	require.False(t, awaited)
+
+	fake.HoldHistory()
+	fake.TriggerSL(entry.ExchangeID, 4280.5)
+	require.Eventually(t, func() bool { _, awaited := m.ExitsAwaited(m5cPair); return awaited }, 5*time.Second,
+		5*time.Millisecond, "the position out of the book, its exit awaited")
+	for deadline := time.Now().Add(5 * wait); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		c.UpdateOrders()
+		for _, leg := range []model.Order{tp, sl} {
+			require.Equal(t, model.OrderStatusTypeNew, m5cStored(t, st, leg.ID).Status,
+				"the leg %s settled before the exit shows", leg.Type)
+		}
+	}
+	_, known := m.ClosedProfit(sl, entry)
+	require.False(t, known)
+	_, awaited = m.ExitsAwaited(m5cPair)
+	require.True(t, awaited, "still awaited past mt5ResolveWait")
+
+	fake.ReleaseHistory()
+	stopped := m5cSettle(t, c, st, sl.ID, model.OrderStatusTypeFilled)
+	require.Equal(t, 4280.5, stopped.Price)
+	require.Equal(t, 2.0, stopped.Quantity)
+	m5cSettle(t, c, st, tp.ID, model.OrderStatusTypeCanceled)
+	loss := (4280.5 - entry.Price) * 2
+	require.Negative(t, loss)
+	require.Len(t, c.Results[m5cPair].LoseLong, 1)
+	require.InDelta(t, loss, c.Results[m5cPair].LoseLong[0], 1e-9)
+	require.InDelta(t, loss, m5cStored(t, st, sl.ID).ProfitValue, 1e-9, "stored with the stop loss")
+
+	opened, closed, ok := m.FillPositions(stopped)
+	require.True(t, ok)
+	require.Zero(t, opened)
+	require.Equal(t, []int64{entry.ExchangeID}, closed, "the stop loss closes the position of the entry")
+	booked, known := m.ClosedProfit(stopped, entry)
+	require.True(t, known, "booked once the history lists the exit")
+	require.InDelta(t, loss, booked, 0.01)
+	_, awaited = m.ExitsAwaited(m5cPair)
+	require.False(t, awaited)
+}
+
+// B6: the bot restarted while the exit of a position closed by its stop loss
+// isn't in the history yet: the new adapter awaits it from its entry, as the
+// one that saw it close would (ExitsAwaited, from the start), its legs NEW in
+// the order controller rather than CANCELED, then the stop loss FILLED with
+// the loss once the history lists the exit. A position closed with its exits
+// in the history, and one open, aren't awaited.
+func TestMT5Controller_RestartDuringHistoryLag(t *testing.T) {
+	const wait = 200 * time.Millisecond
+	fake := exchange.NewMT5TestFake(t)
+	st, err := storage.FromMemory()
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	first, err := exchange.NewMT5(ctx, fake.Options(exchange.MT5TestHistoryWaits(wait, time.Minute))...)
+	require.NoError(t, err)
+	c := order.NewController(ctx, first, st, order.NewOrderFeed())
+	_, err = c.CreateOrderMarket(model.SideTypeBuy, m5cPair, 1) // closed with its exit in the history
+	require.NoError(t, err)
+	_, err = c.CreateOrderMarket(model.SideTypeSell, m5cPair, 1)
+	require.NoError(t, err)
+	orders, err := c.CreateOrderMarketProtected(model.SideTypeBuy, m5cPair, 2, 4280, 4300)
+	require.NoError(t, err)
+	entry := orders[0]
+	tp, sl := m5cLegs(orders[1:])
+	_, err = first.CreateOrderLimitProtected(model.SideTypeBuy, m5cPair, 1, 4200, 4100, 4300) // pending, not awaited
+	require.NoError(t, err)
+
+	fake.HoldHistory()
+	fake.TriggerSL(entry.ExchangeID, 4280.5)
+	require.Eventually(t, func() bool { _, awaited := first.ExitsAwaited(m5cPair); return awaited }, 5*time.Second,
+		5*time.Millisecond)
+	cancel()
+
+	restart := time.Now()
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	second, err := exchange.NewMT5(ctx, fake.Options(exchange.MT5TestHistoryWaits(wait, time.Minute))...)
+	require.NoError(t, err)
+	since, awaited := second.ExitsAwaited(m5cPair)
+	require.True(t, awaited, "awaited from the start")
+	require.False(t, since.Before(restart), "its close noticed at the start: %s, restarted %s", since, restart)
+	c = order.NewController(ctx, second, st, order.NewOrderFeed())
+	c.Start() // the stored orders followed again
+	t.Cleanup(c.Stop)
+	for deadline := time.Now().Add(4 * wait); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		c.UpdateOrders()
+		for _, leg := range []model.Order{tp, sl} {
+			require.Equal(t, model.OrderStatusTypeNew, m5cStored(t, st, leg.ID).Status,
+				"the leg %s settled before the exit shows", leg.Type)
+		}
+	}
+	_, known := second.ClosedProfit(m5cStored(t, st, sl.ID), entry)
+	require.False(t, known)
+	_, awaited = second.ExitsAwaited(m5cPair)
+	require.True(t, awaited, "still awaited past mt5ResolveWait")
+
+	fake.ReleaseHistory()
+	stopped := m5cSettle(t, c, st, sl.ID, model.OrderStatusTypeFilled)
+	require.Equal(t, 4280.5, stopped.Price)
+	m5cSettle(t, c, st, tp.ID, model.OrderStatusTypeCanceled)
+	loss := (4280.5 - entry.Price) * 2
+	require.InDelta(t, loss, stopped.ProfitValue, 1e-9)
+	booked, known := second.ClosedProfit(stopped, entry)
+	require.True(t, known, "booked once the history lists the exit")
+	require.InDelta(t, loss, booked, 0.01)
+	require.Eventually(t, func() bool { _, awaited := second.ExitsAwaited(m5cPair); return !awaited }, 5*time.Second,
+		5*time.Millisecond, "nothing awaited any more")
+}

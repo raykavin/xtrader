@@ -89,3 +89,16 @@ func TestRun_TradesTheBookOfItsSettings(t *testing.T) {
 }
 
 func ptrTo[T any](value T) *T { return &value }
+
+// B7: launched with a lot of a decimal comma for two pairs, "1,5", the agent
+// refuses to start, never reading it as 1 lot of the first pair and 5 of the
+// second, nor connecting to the bridge.
+func TestRun_LotWithADecimalCommaRefused(t *testing.T) {
+	trend := Agent{Name: "trendagent", Strategies: Signals("emacross", "ema200")}
+	cfg := agentapi.Config{ID: 2, Name: "cross", Kind: "trend", Mode: "live",
+		Params:  map[string]string{"strategy": "emacross", "pair": "XAUUSDm;BTCUSDm", "lot": "1,5"},
+		Account: &agentapi.Account{Magic: ptrTo(int64(42))}}
+	requests, err := launchedRun(t, trend, cfg)
+	require.ErrorContains(t, err, `-lot: "1,5" is ambiguous, the comma may be a decimal one`)
+	require.Zero(t, requests, "never connected")
+}

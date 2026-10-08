@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/internal/flaglist"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/tools/log"
@@ -138,6 +139,16 @@ func lotsToUnits(lots, contracts map[string]float64) error {
 		lots[pair] = math.Round(lot*contract*1e9) / 1e9 // without the float noise, eg: 0.07 x 100
 	}
 	return nil
+}
+
+// sizesOf reads the flag name of a list of sizes (see flaglist.Sizes) and maps
+// them to the pairs (see sizesByPair).
+func sizesOf(name string, pairs []string, value string) (map[string]float64, error) {
+	sizes, err := flaglist.Sizes(name, value)
+	if err != nil {
+		return nil, err
+	}
+	return sizesByPair(name, pairs, sizes)
 }
 
 // sizesByPair maps the positive sizes of the flag name to the pairs: one for

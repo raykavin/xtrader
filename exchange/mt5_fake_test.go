@@ -96,6 +96,7 @@ type m5fDeal struct {
 	volume     float64
 	price      float64
 	profit     float64
+	commission float64
 	symbol     string
 	comment    string
 }
@@ -156,6 +157,7 @@ type m5fFake struct {
 	failures      []m5fFailure
 	results       []m5fResult       // answers of the next trade requests, not executed
 	resultsAt     map[int]m5fResult // answers of the trade requests of those numbers, not executed
+	withoutDeal   map[int]bool      // the trade requests of those numbers answered without their deal
 	trades        int               // trade requests received
 	zeroPrice     bool              // answer the market deals without their price
 	drift         float64           // added to the prices after every market deal
@@ -169,7 +171,23 @@ type m5fFake struct {
 	tradeDelay  time.Duration // waited by the trade requests before their deadline is checked, as for the terminal
 	loseAnswers int           // next trade requests executed whose answer is lost (the connection closed)
 	stripTags   bool          // the comments of the trade requests recorded without their tag, as by a broker
+
+	held       bool          // the history made since holdHistory is not listed yet, as by a lagging terminal
+	heldDeal   int64         // the last deal listed while held
+	heldTicket int64         // the last order of the history listed while held
+	clock      time.Duration // the clock of the trade server ahead of the bot's, negative when behind
+
+	// the share of the profit of a close-by on the deal of its position, the
+	// rest on the one of its position_by: the whole by default, as on MT5 (the
+	// deal of the position_by with a profit of 0, see the close-by of
+	// testdata/mt5/deals.json); m5fCloseBySplitBy for none
+	closeBySplit float64
+	commission   float64 // of the entry deals, per lot (negative), 0 for none
 }
+
+// m5fCloseBySplitBy is a closeBySplit putting the whole profit of a close-by
+// on the deal of its position_by.
+const m5fCloseBySplitBy = -1
 
 func m5fTestdata(t *testing.T, name string) []byte {
 	t.Helper()
@@ -262,8 +280,33 @@ func newM5FAdapter(t *testing.T, f *m5fFake, extra ...MT5Option) *MT5 {
 	return m
 }
 
+// nowMs is the time of the trade server, in milliseconds. The caller holds
+// f.mu.
 func (f *m5fFake) nowMs() int64 {
-	return time.Now().UnixMilli()
+	return time.Now().Add(f.clock).UnixMilli()
+}
+
+// setServerClock sets the clock of the trade server, which times the deals and
+// the orders, ahead of the bot's (negative when behind).
+func (f *m5fFake) setServerClock(ahead time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clock = ahead
+}
+
+// holdHistory leaves the deals and the orders of the history made from now on
+// out of GET /deals and /history_orders, as a terminal whose history lags,
+// until releaseHistory.
+func (f *m5fFake) holdHistory() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held, f.heldDeal, f.heldTicket = true, f.nextDeal, f.nextTicket
+}
+
+func (f *m5fFake) releaseHistory() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held = false
 }
 
 func (f *m5fFake) newTicketLocked() int64 {
@@ -363,6 +406,17 @@ func (f *m5fFake) resultAt(n, retcode int, comment string) {
 		f.resultsAt = make(map[int]m5fResult)
 	}
 	f.resultsAt[f.trades+n] = m5fResult{retcode: retcode, comment: comment}
+}
+
+// answerWithoutDeal executes the n-th trade request from now on (1 for the next
+// one), answering it without the ticket of its deal, as an answer may come.
+func (f *m5fFake) answerWithoutDeal(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.withoutDeal == nil {
+		f.withoutDeal = make(map[int]bool)
+	}
+	f.withoutDeal[f.trades+n] = true
 }
 
 func (f *m5fFake) setZeroPrice(zero bool) {
@@ -663,7 +717,9 @@ func (f *m5fFake) dealLocked(order int64, p *m5fPosition, kind, entry, reason in
 	d := &m5fDeal{ticket: f.newDealLocked(), order: order, timeMsc: f.nowMs(), kind: kind, entry: entry,
 		magic: magic, positionID: p.ticket, reason: reason, volume: volume, price: price, symbol: p.symbol,
 		comment: comment}
-	if entry != mt5EntryIn {
+	if entry == mt5EntryIn {
+		d.commission = math.Round(f.commission*volume*100) / 100
+	} else {
 		sign := 1.0
 		if p.kind == mt5TypeSell {
 			sign = -1
@@ -954,12 +1010,15 @@ func (f *m5fFake) dealsLocked(query map[string][]string) (int, any) {
 	}
 	deals := []map[string]any{}
 	for _, d := range f.deals {
+		if f.held && d.ticket > f.heldDeal {
+			continue
+		}
 		if at := d.timeMsc / 1000; at >= from && at <= to {
 			deals = append(deals, map[string]any{
 				"ticket": d.ticket, "order": d.order, "time": d.timeMsc / 1000, "time_msc": d.timeMsc, "type": d.kind,
 				"entry": d.entry, "magic": d.magic, "position_id": d.positionID, "reason": d.reason,
-				"volume": d.volume, "price": d.price, "commission": 0.0, "swap": 0.0, "profit": d.profit, "fee": 0.0,
-				"symbol": d.symbol, "comment": d.comment, "external_id": "",
+				"volume": d.volume, "price": d.price, "commission": d.commission, "swap": 0.0, "profit": d.profit,
+				"fee": 0.0, "symbol": d.symbol, "comment": d.comment, "external_id": "",
 			})
 		}
 	}
@@ -974,6 +1033,9 @@ func (f *m5fFake) historyLocked(query map[string][]string) (int, any) {
 	}
 	orders := []map[string]any{}
 	for _, o := range f.history {
+		if f.held && o.ticket > f.heldTicket {
+			continue
+		}
 		if at := o.setupMsc / 1000; at >= from && at <= to {
 			orders = append(orders, m5fOrderJSON(o))
 		}
@@ -1077,6 +1139,10 @@ func (f *m5fFake) tradeLocked(path string, body map[string]any, raw []byte) (int
 		return http.StatusOK, result
 	}
 	code, comment := f.executeLocked(body, result)
+	if f.withoutDeal[f.trades] {
+		delete(f.withoutDeal, f.trades)
+		result["deal"] = 0
+	}
 	if code != mt5CodeDone && code != mt5CodePlaced {
 		result["retcode"], result["comment"] = code, comment
 	}
@@ -1221,11 +1287,22 @@ func (f *m5fFake) executeLocked(body map[string]any, result map[string]any) (int
 			reason: mt5ReasonExpert, volumeInitial: volume, priceOpen: by.priceOpen, symbol: p.symbol,
 			comment: comment}
 		f.history = append(f.history, order)
-		// each closed at the open price of the other
+		// each closed at the open price of the other, the profit of the
+		// difference split between them (see closeBySplit)
 		first := f.dealLocked(order.ticket, p, 1-p.kind, mt5EntryOutBy, mt5ReasonExpert, volume, by.priceOpen,
 			magic, comment)
-		f.dealLocked(order.ticket, by, 1-by.kind, mt5EntryOutBy, mt5ReasonExpert, volume, p.priceOpen, magic,
-			comment)
+		second := f.dealLocked(order.ticket, by, 1-by.kind, mt5EntryOutBy, mt5ReasonExpert, volume, p.priceOpen,
+			magic, comment)
+		share := f.closeBySplit
+		switch share {
+		case 0:
+			share = 1
+		case m5fCloseBySplitBy:
+			share = 0
+		}
+		profit := first.profit
+		first.profit = math.Round(profit*share*100) / 100
+		second.profit = math.Round((profit-first.profit)*100) / 100
 		f.reduceLocked(p, volume)
 		f.reduceLocked(by, volume)
 		result["order"], result["deal"], result["volume"] = order.ticket, first.ticket, volume
@@ -1310,6 +1387,13 @@ type MT5TestFake struct {
 	f *m5fFake
 }
 
+// MT5TestHistoryWaits sets how long the outcome of an order or a position
+// gone from the book is awaited (mt5ResolveWait) and the overlap of the reads
+// of the history, for the tests of package exchange_test.
+func MT5TestHistoryWaits(resolve, overlap time.Duration) MT5Option {
+	return withMT5HistoryWaits(resolve, overlap)
+}
+
 // NewMT5TestFake starts a fake bridge, stopped when the test ends.
 func NewMT5TestFake(t *testing.T) *MT5TestFake {
 	return &MT5TestFake{f: newM5F(t)}
@@ -1329,6 +1413,13 @@ func (x *MT5TestFake) TriggerSL(position int64, price float64) { x.f.triggerSL(p
 
 // TriggerTP closes a position by its take profit.
 func (x *MT5TestFake) TriggerTP(position int64) { x.f.triggerTP(position) }
+
+// HoldHistory leaves the history made from now on out of the lists of the
+// bridge, as a terminal whose history lags, until ReleaseHistory.
+func (x *MT5TestFake) HoldHistory() { x.f.holdHistory() }
+
+// ReleaseHistory lists the history held since HoldHistory.
+func (x *MT5TestFake) ReleaseHistory() { x.f.releaseHistory() }
 
 // NetLots returns the net lots of the bot's positions of symbol.
 func (x *MT5TestFake) NetLots(symbol string) float64 { return x.f.netLots(symbol, m5fMagic) }

@@ -217,6 +217,7 @@ func TestJournal_AppendsOnceAndRemembersPerPair(t *testing.T) {
 	require.Equal(t, "the trend", remembered[1].Reason)
 	require.Equal(t, 0.7, remembered[1].Confidence)
 	require.True(t, remembered[1].Candle.Equal(time.Date(2026, 9, 28, 12, 30, 0, 0, time.UTC)))
+	require.True(t, remembered[1].At.Equal(time.Date(2026, 9, 28, 12, 31, 0, 0, time.UTC)), "when it was taken")
 
 	var count int64
 	require.NoError(t, s.db.Table("journal_entries").Count(&count).Error)

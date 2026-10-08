@@ -177,7 +177,7 @@ func (j *Journal) Recent(perPair int) ([]llm.Remembered, error) {
 	}
 	var list []llm.Remembered
 	for _, r := range stored {
-		list = append(list, llm.Remembered{Pair: r.Pair, Candle: r.Candle, Action: llm.Action(r.Action),
+		list = append(list, llm.Remembered{Pair: r.Pair, Candle: r.Candle, At: r.At, Action: llm.Action(r.Action),
 			Confidence: r.Confidence, Reason: r.Reason})
 	}
 	pending, err := j.outbox.Pending(agentapi.KindJournal)
@@ -186,8 +186,9 @@ func (j *Journal) Recent(perPair int) ([]llm.Remembered, error) {
 	}
 	for _, record := range pending {
 		var entry struct {
-			Pair  string `json:"pair"`
-			Error string `json:"error"`
+			At    time.Time `json:"at"`
+			Pair  string    `json:"pair"`
+			Error string    `json:"error"`
 			Input struct {
 				Time time.Time `json:"time"`
 			} `json:"input"`
@@ -200,7 +201,7 @@ func (j *Journal) Recent(perPair int) ([]llm.Remembered, error) {
 		if json.Unmarshal(record.Payload, &entry) != nil || entry.Decision == nil || entry.Error != "" {
 			continue
 		}
-		list = append(list, llm.Remembered{Pair: entry.Pair, Candle: entry.Input.Time,
+		list = append(list, llm.Remembered{Pair: entry.Pair, Candle: entry.Input.Time, At: entry.At,
 			Action: entry.Decision.Action, Confidence: entry.Decision.Confidence, Reason: entry.Decision.Reason})
 	}
 

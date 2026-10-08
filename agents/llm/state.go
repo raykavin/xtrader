@@ -87,6 +87,10 @@ func (t *Trader) promptState(p Prompt) (*promptState, error) {
 	if _, _, _, err := StrategyDailyLimits(content); err != nil {
 		return nil, err
 	}
+	for _, line := range textDailyLines(content) {
+		log.Warnf("[LLM] the prompt %s: the line %q is in the text, after the header: sent to the model, not a "+
+			"daily limit the agent applies", describePrompt(p.Ref), line)
+	}
 	state, err := newPromptState(t.cfg.withPrompt(content, t.overrides), p.Ref, systemPrompt(content))
 	if err != nil {
 		return nil, err
@@ -99,6 +103,19 @@ func (t *Trader) promptState(p Prompt) (*promptState, error) {
 			"raise its warmup (llm-warmup)", state.need, t.warmup)
 	}
 	return state, nil
+}
+
+// CheckPromptAccount checks the prompt the Trader analyzes with against the
+// account of SetAccountReporter, set after the prompt was applied, eg: the one
+// it was made with: daily limits in a currency other than the one of the
+// account, when known, refuse it, as a prompt of SetPromptSource is. Once the
+// reporter is set, before the bot runs.
+func (t *Trader) CheckPromptAccount() error {
+	st := t.state.Load()
+	if err := t.checkDailyCurrency(st.daily); err != nil {
+		return fmt.Errorf("llm: the prompt %s: %w", describePrompt(st.ref), err)
+	}
+	return nil
 }
 
 // SetPromptSource sets where the Trader reads the prompt it analyzes with, eg:

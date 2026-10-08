@@ -85,7 +85,7 @@ func run() error {
 		providerName  = flag.String("llm-provider", "", "openai or anthropic, the API key read from "+llm.OpenAIKeyEnv+" or "+llm.AnthropicKeyEnv)
 		modelName     = flag.String("llm-model", "", "model of the provider, eg: claude-sonnet-5 or gpt-5 (required)")
 		baseURL       = flag.String("llm-base-url", "", "base URL of the API of the provider, eg: a proxy (default: the provider's)")
-		maxTokens     = flag.Int("llm-max-tokens", 0, "tokens of an answer at most, the reasoning included (default 4096)")
+		maxTokens     = flag.Int("llm-max-tokens", 0, "tokens of an answer at most, the reasoning included (default 4096; 16000 for a model of anthropic that refuses the forced tool call, eg: claude-opus-5-5, as it thinks before it answers)")
 		reasoning     = flag.String("llm-reasoning", "", "effort of the models that reason, eg: gpt-5: minimal, low, medium or high; less spends fewer output tokens (default: the model's; ignored by anthropic)")
 		timeout       = flag.Duration("llm-timeout", cfg.Timeout, "time a decision may take, the request to the provider")
 		consult       = flag.Duration("llm-consult-interval", 0, "time between the consultations of the model about each pair, eg: 10m or 2h, 10s at least, on a schedule of the clock (10m: at :00, :10, :20...): one falling on the close of a candle is the one of the close, the others, live only, on the candle in progress, the closes between them left out; each consultation is a billed request (default: one at each close of -timeframe)")
@@ -117,7 +117,7 @@ func run() error {
 		pairList      = flag.String("pair", agentapi.DefaultPair, "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
 		timeframe     = flag.String("timeframe", cfg.Timeframe, "timeframe of the candles, one decision per candle close")
 		direction     = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
-		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01")
+		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01; the decimals with . (a decimal comma, eg: 1,5, is refused)")
 		fraction      = flag.Float64("position-fraction", cfg.PositionFraction, "share of the free balance each position commits (0-1], without -lot")
 		leverage      = flag.Float64("leverage", cfg.Leverage, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
 		minValue      = flag.Float64("min-position-value", cfg.MinPositionValue, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
@@ -137,8 +137,8 @@ func run() error {
 		mt5Poll       = flag.Duration("mt5-poll", 0, "mt5: how often the account and the candles are polled (default 1s)")
 		calendarURL   = flag.String("calendar-mcp", "", "URL of the MCP server of the MetaTrader 5 terminal, eg: http://127.0.0.1:22346/mcp, for the economic calendar of the context; its token from "+calendarTokenEnv+", or the settings of the controller (default: no calendar)")
 		calendarCur   = flag.String("calendar-currencies", "", "currencies of the calendar, separated by ;, eg: USD;EUR (default: the ones of the pair)")
-		calendarAhd   = flag.Duration("calendar-ahead", cfg.CalendarAhead, "releases of the calendar in the context up to this long after the close")
-		calendarBck   = flag.Duration("calendar-back", cfg.CalendarBack, "releases of the calendar in the context from this long before the close")
+		calendarAhd   = flag.Duration("calendar-ahead", cfg.CalendarAhead, "releases of the calendar in the context up to this long after the analysis (the close, or now on the candle in progress)")
+		calendarBck   = flag.Duration("calendar-back", cfg.CalendarBack, "releases of the calendar in the context from this long before the analysis")
 		calendarImp   = flag.String("calendar-importance", cfg.CalendarImportance.String(), "releases of the calendar in the context of at least this importance: low, medium or high")
 		calendarOff   = flag.Duration("calendar-server-offset", 0, "how far the time of the trade server is from UTC, eg: 2h (Exness: 0)")
 		blockBefore   = flag.Duration("news-block-before", cfg.NewsBlockBefore, "no new entry from this long before a release of -news-block-importance (0 and -news-block-after 0: never)")
@@ -235,7 +235,7 @@ func run() error {
 	if len(pairs) == 0 {
 		return errors.New("-pair: no pair to trade")
 	}
-	lots, err := sizesByPair("-lot", pairs, list(*lotList))
+	lots, err := sizesOf("-lot", pairs, *lotList)
 	if err != nil {
 		return err
 	}
@@ -279,6 +279,7 @@ func run() error {
 	cfg.Language = *language
 	cfg.Timeout = *timeout
 	cfg.ConsultInterval = *consult
+	cfg.DayZone = llm.LocalZone() // the operational day of the daily limits, by the name of its zone
 	cfg.Direction = strategies.RKDirection(*direction)
 	cfg.MinPositionValue = *minValue
 	cfg.PositionFraction = *fraction
@@ -289,8 +290,9 @@ func run() error {
 	}
 	cfg.PositionSize = lots // shared: the MT5 lots are converted into units before the bot starts
 	trader, err := llm.New(cfg, provider, llm.WithPrompt(prompt, overrides))
-	if agent != nil {
-		// the controller shows what came of the prompt of the settings
+	if agent != nil && (err != nil || *mode != "live") {
+		// the controller shows what came of the prompt of the settings; live,
+		// once checked against the account too, see checkPromptAccount
 		agent.Prompts().ReportPrompt(prompt.Ref, err)
 	}
 	if err != nil {
@@ -313,7 +315,7 @@ func run() error {
 		trader.WarmupPeriod())
 	if gain, loss, currency, _ := llm.StrategyDailyLimits(prompt.Content); gain > 0 || loss > 0 {
 		log.Infof("[SETUP] LLM: daily limits of each pair, gain %g %s, loss %g %s, the day from midnight %s (live on "+
-			"MT5 only)", gain, currency, loss, currency, time.Local)
+			"MT5 only)", gain, currency, loss, currency, cfg.DayZone)
 	}
 
 	settings := xtrader.Settings{Pairs: pairs}
@@ -534,19 +536,9 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 		return err
 	}
 
-	var extra []ui.Option
-	if mt5, ok := broker.(*exchange.MT5); ok {
-		// the profit of the position as the terminal shows it, polled already
-		extra = append(extra, ui.WithBrokerPositions(func(pair string) (ui.BrokerPosition, bool) {
-			position, open := mt5.OpenPosition(pair)
-			return ui.BrokerPosition{Side: string(position.Side), Quantity: position.Quantity, Entry: position.Entry,
-				Profit: position.Profit, Currency: position.Currency}, open
-		}))
-		// the account and the profits as the terminal books them, in the
-		// currency of the account, eg: BRL: on the dashboard, and for the
-		// daily limits of the prompts and the day of the context
-		extra = append(extra, ui.WithAccountReporter(mt5))
-		trader.SetAccountReporter(mt5)
+	extra, err := startAccount(trader, broker, agent.Prompts())
+	if err != nil {
+		return err
 	}
 	chart, err := dash.chart(trader, nil, extra...)
 	if err != nil {
@@ -585,6 +577,52 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 		}()
 	}
 	return agent.Serve(ctx, apply, bot.Run)
+}
+
+// accountBroker is a broker reporting the account and the results of the
+// trades as the terminal books them, and the positions open: the MT5 adapter.
+type accountBroker interface {
+	service.AccountReporter
+	OpenPosition(pair string) (exchange.MT5OpenPosition, bool)
+}
+
+var _ accountBroker = (*exchange.MT5)(nil)
+
+// startAccount sets the account of broker, when it reports one (see
+// accountBroker), as the one of the daily limits of trader and of the
+// dashboard (the options returned), then checks the prompt trader starts with
+// against it, telling the controller what came of it: see checkPromptAccount.
+// Live, the status of that prompt waits for it (see run).
+func startAccount(trader *llm.Trader, broker any, prompts llm.PromptReporter) ([]ui.Option, error) {
+	var extra []ui.Option
+	if account, ok := broker.(accountBroker); ok {
+		// the profit of the position as the terminal shows it, polled already
+		extra = append(extra, ui.WithBrokerPositions(func(pair string) (ui.BrokerPosition, bool) {
+			position, open := account.OpenPosition(pair)
+			return ui.BrokerPosition{Side: string(position.Side), Quantity: position.Quantity, Entry: position.Entry,
+				Profit: position.Profit, Currency: position.Currency}, open
+		}))
+		// the account and the profits as the terminal books them, in the
+		// currency of the account, eg: BRL: on the dashboard, and for the
+		// daily limits of the prompts and the day of the context
+		extra = append(extra, ui.WithAccountReporter(account))
+		trader.SetAccountReporter(account)
+	}
+	if err := checkPromptAccount(trader, prompts); err != nil {
+		return nil, err
+	}
+	return extra, nil
+}
+
+// checkPromptAccount checks the prompt trader starts with against the account,
+// once its reporter is set (see llm.Trader.SetAccountReporter): its daily
+// limits in a currency other than the one of the account refuse it. What came
+// of it is told to the controller, as for a prompt switched; refused, the
+// agent stops, as with a prompt it can't analyze with.
+func checkPromptAccount(trader *llm.Trader, prompts llm.PromptReporter) error {
+	err := trader.CheckPromptAccount()
+	prompts.ReportPrompt(trader.Prompt(), err)
+	return err
 }
 
 // dashboard holds the options of the API served to the web dashboard.

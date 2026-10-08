@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchAgentPeriods, fetchPairs, fetchSnapshot, resetAgentResults } from "../api/client";
 import type { AgentPeriod, AgentSettings, Snapshot } from "../api/types";
 import { formatMoney, formatNumber, formatPercent, formatTime, signClass } from "../lib/format";
-import { type PeriodResult, parseAmount, periodResults } from "../lib/periods";
+import { type PeriodResult, parseAmount, periodResults, resetPeriods } from "../lib/periods";
 import { ConfirmButton } from "./ConfirmButton";
 
 interface Props {
@@ -157,6 +157,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
   const [currency, setCurrency] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [stale, setStale] = useState<string | null>(null);
 
   useEffect(() => {
     const element = dialog.current;
@@ -215,13 +216,23 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
     setBusy(true);
     setError(null);
     setFeedback(null);
+    setStale(null);
     try {
-      const period = await resetAgentResults(agent.name, { deposit: amount, currency: code });
-      setPeriods(await fetchAgentPeriods(agent.name));
+      const outcome = await resetPeriods(
+        periods,
+        () => resetAgentResults(agent.name, { deposit: amount, currency: code }),
+        () => fetchAgentPeriods(agent.name),
+      );
+      setPeriods(outcome.periods);
       setDeposit("");
       setFeedback(
-        `Resultados redefinidos às ${formatTime(period.started_at)} UTC: os cards contam as operações fechadas a partir de agora.`,
+        `Resultados redefinidos às ${formatTime(outcome.period.started_at)} UTC: os cards contam as operações fechadas a partir de agora.`,
       );
+      if (outcome.stale !== null) {
+        setStale(
+          `A redefinição foi feita, mas a lista de períodos não pôde ser atualizada (${outcome.stale}): não a repita; feche e abra de novo para conferir.`,
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -305,6 +316,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
             />
           </div>
           {feedback && <p className="control-feedback ok">{feedback}</p>}
+          {stale && <div className="banner">{stale}</div>}
         </section>
 
         {earlier.length > 0 && (

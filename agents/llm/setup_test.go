@@ -2,6 +2,7 @@ package llm
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -282,4 +283,49 @@ func TestTrader_RecoversStoredPosition(t *testing.T) {
 	b := newTraderRunner(t, nil, 10)
 	b.step(100, decide(ActionHold, 0.7, nil, nil, nil))
 	require.Equal(t, []Action{ActionHold, ActionExit}, b.provider.last().Rules.Actions)
+}
+
+// A position found held whose entry is newer than the open legs of the stored
+// orders, eg: a long opened by another channel, without legs, while the legs
+// of a long closed at the broker by its stop loss are NEW, its exit not in
+// the history yet (see the MT5 adapter): those legs aren't taken for its stop
+// loss and take profit. With the broker telling the positions (see
+// fillPositions), the legs protecting its position are, never the ones of
+// another, even placed after its entry.
+func TestTrader_RecoverSkipsStaleLegs(t *testing.T) {
+	r := newTraderRunner(t, nil, 0.1)
+	at := r.df.Time[len(r.df.Time)-1]
+	stored := []model.Order{
+		filled(1, model.SideTypeBuy, 95, 0.1, at.Add(-2*time.Hour)),
+		legOf(2, 1, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeNew, 93, 0.1, at.Add(-2*time.Hour)),
+		legOf(3, 1, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeNew, 104, 0.1,
+			at.Add(-2*time.Hour)),
+		filled(4, model.SideTypeBuy, 100, 0.1, at.Add(-time.Minute)), // the long held, without legs
+	}
+	r.trader.SetOrderSource(func(string) ([]model.Order, error) { return stored, nil })
+	r.step(100, decide(ActionHold, 0.6, nil, nil, nil))
+	in := r.provider.last()
+	require.NotNil(t, in.Position)
+	require.Equal(t, number(100), in.Position.Entry)
+	require.True(t, math.IsNaN(float64(in.Position.StopLoss)), "not the stop loss of the long closed")
+	require.True(t, math.IsNaN(float64(in.Position.TakeProfit)), "nor its take profit")
+	require.Equal(t, []Action{ActionHold, ActionExit}, in.Rules.Actions, "no leg of its own to move")
+
+	b := newTraderRunner(t, nil, 0.1)
+	b.trader.SetAccountReporter(&linkedReporter{fakeReporter: &fakeReporter{profits: map[int64]float64{}},
+		links: map[int64][2][]int64{1: {{11}, nil}, 4: {{44}, nil}, 5: {nil, {44}}, 6: {nil, {44}}, 7: {nil, {11}},
+			8: {nil, {11}}}})
+	stored = append(stored[:1:1], stored[3],
+		legOf(5, 5, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeNew, 97, 0.1, at), // of 44
+		legOf(6, 5, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeNew, 103, 0.1, at),
+		// of 11, moved later, before it closed
+		legOf(7, 7, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeNew, 94, 0.1, at),
+		legOf(8, 7, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeNew, 105, 0.1, at))
+	slices.Reverse(stored) // the order of the storage doesn't matter
+	b.trader.SetOrderSource(func(string) ([]model.Order, error) { return stored, nil })
+	b.step(100, decide(ActionHold, 0.6, nil, nil, nil))
+	in = b.provider.last()
+	require.Equal(t, number(100), in.Position.Entry)
+	require.Equal(t, number(97), in.Position.StopLoss, "the legs of its position")
+	require.Equal(t, number(103), in.Position.TakeProfit)
 }

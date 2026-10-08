@@ -30,10 +30,12 @@ type JournalEntry struct {
 }
 
 // Remembered is a decision of the journal of an LLM agent for the memory of
-// its prompt: the candle it was taken on, and its answer.
+// its prompt: the candle it was taken on, when (the time of its entry), and
+// its answer.
 type Remembered struct {
 	Pair       string    `json:"pair"`
 	Candle     time.Time `json:"candle"`
+	At         time.Time `json:"at"`
 	Action     string    `json:"action"`
 	Confidence float64   `json:"confidence"`
 	Reason     string    `json:"reason"`
@@ -123,7 +125,8 @@ func (s *Store) AppendJournal(ctx context.Context, id int64, entries []JournalEn
 // a decision left out: the memory of its prompt, see agents/llm.
 func (s *Store) JournalMemory(ctx context.Context, id int64, perPair int) ([]Remembered, error) {
 	var remembered []Remembered
-	err := s.conn(ctx).Raw(`SELECT pair, (input->>'time')::timestamptz AS candle, decision->>'action' AS action,
+	err := s.conn(ctx).Raw(`SELECT pair, (input->>'time')::timestamptz AS candle, ranked.at AS at,
+			decision->>'action' AS action,
 			COALESCE((decision->>'confidence')::float8, 0) AS confidence,
 			btrim(COALESCE(decision->>'reason', '')) AS reason
 		FROM (

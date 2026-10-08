@@ -1,0 +1,604 @@
+{
+  "adxdonchian": {
+    "indicators": [
+      "donchian 20",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "d987fc6230081a3a643e7f91de4fef54014c9c1ff3a5a6042dff9f30cf457c31"
+  },
+  "adxema": {
+    "indicators": [
+      "ema 50",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "c6ce03b74416814164d51d9d082ae0600214b3774e0ee92af1cca6dd2eec2c46"
+  },
+  "asialondon": {
+    "indicators": [
+      "range 00:00 07:00 10:00 Europe/London",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "df97b8c4f3100dc756aa0340008621b088053686c877b2bd20b76996263180de"
+  },
+  "atrbreakout": {
+    "indicators": [
+      "atr 14 50",
+      "donchian 20"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "7aeabc5bf9203ee3eb3996fc03371419647a74081209987747778196bd262276"
+  },
+  "atrtrailing": {
+    "indicators": [
+      "chandelier 22 3",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "f8f53dcaec84c8def7800564cb11025063d188a1816d5b76601805503aace96f"
+  },
+  "bbbreakout": {
+    "indicators": [
+      "bb",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "03407919d0e62f24ba991acf9475601a92dcd4f8a5cd50131c8548addf205d5b"
+  },
+  "breakout": {
+    "indicators": [
+      "ema",
+      "sma",
+      "atr",
+      "adx",
+      "bb",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "b86b3357bd84ec7250fa6cc6b2f3ac12e031af52d17444b65ce8408390e1ef37"
+  },
+  "channel": {
+    "indicators": [
+      "donchian 55",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "2a6b8cc42991bb033b8704471289ac882d2b9982ac833930c37ef6a9b0336151"
+  },
+  "default": {
+    "indicators": null,
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "e3e0ec7231ca982b3212557911434b662e98fdaab7cc5d5952b5e30a88bc7a6c"
+  },
+  "donchian": {
+    "indicators": [
+      "donchian 20",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "334f327e2e47e790659b66ac262b27733c07ee114f8d6ba16f4920e27e5fc854"
+  },
+  "donchianatr": {
+    "indicators": [
+      "donchian 20",
+      "atr"
+    ],
+    "take_profit": "optional",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "405f38f785cbd184948376f038b3950244655d77845eacdc8eb7713b6fe97d53"
+  },
+  "ema200": {
+    "indicators": [
+      "ema 200",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "44a4a6556f9f75432f6506c8985415b5d3a7561162ccca96c744334b4aa11d6a"
+  },
+  "emacross": {
+    "indicators": [
+      "ema 9 21",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "426aa10cb0d20c0f80e6bce7cb4c74520a8ff15ea235c3842c19561144f97a34"
+  },
+  "emamacd": {
+    "indicators": [
+      "ema 9 21",
+      "macd",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "a996fb4398a361c718555b4420698cf7f151f05ec7b0d36aa071958cb70825e4"
+  },
+  "emapullback": {
+    "indicators": [
+      "ema 20 50",
+      "rsi",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "c7b97a35161272214a08901f46cff52bbf6882a37aee18c4743949310633931b"
+  },
+  "emarsiadx": {
+    "indicators": [
+      "ema 9 21",
+      "rsi",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "c44a19293c5c5aed89ee01b9ba1b7ae1a0bb498a67627b5ec8966253d0fc907f"
+  },
+  "emasupertrend": {
+    "indicators": [
+      "supertrend 10 3",
+      "ema 200",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "a3b8d59f2dccd98d5cdc75af5ebf4f6096d9a93474bb3abdd9ee993c9bfda479"
+  },
+  "highlow": {
+    "indicators": [
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "2bc4a2fba46074b61365b2b5b1e528e023e38a99de6428913a09f4a4b7d53e98"
+  },
+  "ichimoku": {
+    "indicators": [
+      "ichimoku 9 26 52",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "5cbe295267392729a27a746027ca6ebd0a9c48876d836ad59e3f7de8db14246f"
+  },
+  "ichimokuadx": {
+    "indicators": [
+      "ichimoku 9 26 52",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "ac889c6f1214658992ae7859efaaf46498fe4f64a87da10df458669fc216b114"
+  },
+  "keltner": {
+    "indicators": [
+      "keltner 20 10 2",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "2024fb111a12d9beda0cb87d41f9631debfe058a23a140d103d03bfb478a05b7"
+  },
+  "macdtrend": {
+    "indicators": [
+      "macd",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "00e330c0893a2964cbde98c3c7fa03e0279c05bddc2e8d67ee85125db47c31d9"
+  },
+  "matrend": {
+    "indicators": [
+      "ema 9 21",
+      "sma 200",
+      "atr"
+    ],
+    "take_profit": "optional",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 7,
+    "text_sha256": "8203c112c4fbc3a8657f998d914d72d8c521ef952831496bdfbf543ae22c91de"
+  },
+  "mean_reversion": {
+    "indicators": [
+      "ema",
+      "rsi",
+      "atr",
+      "adx",
+      "bb",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "2825e8ac5dbf90d7afc8a14ffa0e405a05ab23e50ae9d4a98c319433a87dbf05"
+  },
+  "momentumbreakout": {
+    "indicators": [
+      "donchian 20",
+      "roc 10",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "3c307862c60333845bf3f618ded383623b6de689342423ba4ee7f62eb20403ca"
+  },
+  "mtfema": {
+    "indicators": [
+      "ema 20 50",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "d2a1c617531991585f6ec7bbf713be29ce3c617a7d494ee321e5e696c92c917a"
+  },
+  "mtftrend": {
+    "indicators": [
+      "ema 20 50",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "38963c906e279bf86063b0512403333d4e2ba854c023e69cd821cccc74218012"
+  },
+  "orb": {
+    "indicators": [
+      "range 09:30 09:45 12:00 America/New_York",
+      "vwap 09:30 America/New_York",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "722a5effe4c4c8ec474c5679a7474b3a1f5bc31bd838f4efe64b94c9a8f217c2"
+  },
+  "papullback": {
+    "indicators": [
+      "ema 50",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "976bdbdea47bb70c4c0329f5cffdc491a57eda78d1bca81d04dfe1f659f6be5e"
+  },
+  "prompts/default.txt": {
+    "indicators": null,
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "e3e0ec7231ca982b3212557911434b662e98fdaab7cc5d5952b5e30a88bc7a6c"
+  },
+  "psarema": {
+    "indicators": [
+      "psar 0.02 0.2",
+      "ema 50",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "fefa4585145d4c50335f2f24755514affca580682ef106e7465c8da0e85d67b6"
+  },
+  "ribbon": {
+    "indicators": [
+      "ema 8 13 21 34 55",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "92a447d67deee48371b5369d50fc80be63127e21d0d11ed515de42c6468823e6"
+  },
+  "rsitrend": {
+    "indicators": [
+      "ema 50",
+      "rsi",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "d69cc6bba37d7a55cb71ec8908ca8121fb72606be9e4da14392ec7dd107130f7"
+  },
+  "scalp_1m": {
+    "indicators": [
+      "ema",
+      "sma",
+      "rsi",
+      "atr",
+      "adx",
+      "macd",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 7,
+    "text_sha256": "6107a275c3581041fa1c5c58dbb76c899a8f9caee1584b4287e8c9af90f20c9a"
+  },
+  "scalp_1m_btc": {
+    "indicators": [
+      "ema",
+      "sma",
+      "rsi",
+      "atr",
+      "adx",
+      "macd",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 8,
+    "text_sha256": "9825d8cfc25d51cdd82a97d77d8463908237606ce16977b839ddf0e941a11483"
+  },
+  "stochpullback": {
+    "indicators": [
+      "ema 50",
+      "stoch 14 3 3",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "e050d6f53741e8bd3c28070d232a2e445ef4721e0ac0b17147b9ff1aa020bca4"
+  },
+  "supertrend": {
+    "indicators": [
+      "supertrend 10 3",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "c1784eafdc6d846fb09a7bedc77dd8adabccf5c6a06fe4b117b8d61ec376a746"
+  },
+  "support_resistance": {
+    "indicators": [
+      "atr",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 7,
+    "text_sha256": "ededf4b5172ba8ac07109d8aedd49834e5ef44a56c2e15457696bd2133ca6bda"
+  },
+  "sweep": {
+    "indicators": [
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "0122b2921ea1e69e128b1e6d99e04f45974450d1731d91057b49ec95858fd4ef"
+  },
+  "trend_following": {
+    "indicators": [
+      "atr",
+      "volume"
+    ],
+    "take_profit": "none",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "9fcf186f50db5b021eeb561d0458ddfea715bcb79b8af40cecf8df8355ca650b"
+  },
+  "trendconfluence": {
+    "indicators": [
+      "ema 9 21",
+      "sma 200",
+      "macd",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "optional",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 7,
+    "text_sha256": "00cf3b5d37eb2dea7fb94ab6ecc54520bb3011ff6063b9d4c2feaba7c7d27418"
+  },
+  "volumebreakout": {
+    "indicators": [
+      "donchian 20",
+      "volume",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "2d2edbcf34cf1e9b217d321b07559f5c2b818c34979d31bfe65804a16d70e09d"
+  },
+  "vwap": {
+    "indicators": [
+      "vwap 00:00 UTC",
+      "rsi",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 6,
+    "text_sha256": "9cd85a68b2ed9d797bf0b1411da37b44142070eaba12a97bf49f0c81d2ff644a"
+  },
+  "zscore": {
+    "indicators": [
+      "bb",
+      "adx",
+      "atr"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 5,
+    "text_sha256": "47adaef0ccb51318865e3f9dfc657e031f5e0c302e47a17dc481ea8d8dac4095"
+  }
+}
