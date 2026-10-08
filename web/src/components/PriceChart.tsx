@@ -23,7 +23,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Candle, Indicator, Metric, Order, Snapshot } from "../api/types";
 import { type DraggableLine, LineDragger } from "../chart/dragLines";
 import { type TradeLine, TradeLinesPrimitive } from "../chart/tradeLines";
-import { formatCompact, formatPercent, formatPrice, formatProfit, LOCALE } from "../lib/format";
+import {
+  formatChartPrice,
+  formatCompact,
+  formatPercent,
+  formatProfit,
+  LOCALE,
+} from "../lib/format";
 import { positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
@@ -128,6 +134,14 @@ function metricData(metric: Metric): (LineData<Time> | HistogramData<Time>)[] {
   return out;
 }
 
+// The formats of the series, each its own: a formatter of the localization
+// of the chart would take the place of all of them. The chart sizes its
+// scales for the label of the crosshair of any value, the panes all as wide
+// as the widest: the prices as the broker quotes them (see formatChartPrice),
+// the values of the indicators in short, eg: 12.000 or 13,57, never wider.
+const priceFormat = { type: "custom" as const, formatter: formatChartPrice };
+const indicatorFormat = { type: "custom" as const, formatter: formatCompact };
+
 function createMetricSeries(
   chart: IChartApi,
   metric: Metric,
@@ -141,7 +155,13 @@ function createMetricSeries(
     case "waterfall":
       return chart.addSeries(
         HistogramSeries,
-        { color, priceLineVisible: false, lastValueVisible: false, title: metric.name },
+        {
+          color,
+          priceFormat: indicatorFormat,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: metric.name,
+        },
         paneIndex,
       );
     case "scatter":
@@ -149,6 +169,7 @@ function createMetricSeries(
         LineSeries,
         {
           color,
+          priceFormat: indicatorFormat,
           lineVisible: false,
           pointMarkersVisible: true,
           pointMarkersRadius: 2,
@@ -163,6 +184,7 @@ function createMetricSeries(
         LineSeries,
         {
           color,
+          priceFormat: indicatorFormat,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -269,7 +291,7 @@ function chartOptions(palette: Palette) {
       vertLine: { color: palette.crosshair, labelBackgroundColor: palette.crosshair },
       horzLine: { color: palette.crosshair, labelBackgroundColor: palette.crosshair },
     },
-    localization: { locale: LOCALE, priceFormatter: formatPrice },
+    localization: { locale: LOCALE },
     // Keep the candles above the volume histogram (bottom ~18% of the pane).
     rightPriceScale: { borderColor: palette.border, scaleMargins: { top: 0.08, bottom: 0.22 } },
     timeScale: {
@@ -279,6 +301,36 @@ function chartOptions(palette: Palette) {
       rightOffset: 5,
     },
   };
+}
+
+// The price scales of every pane fit to their data again, as when the chart
+// was created: a scale the user dragged or zoomed keeps its range otherwise,
+// eg: the one of the pair shown before.
+function autoScale(chart: IChartApi) {
+  chart.priceScale("volume").applyOptions({ autoScale: true });
+  for (const [index] of chart.panes().entries()) {
+    chart.priceScale("right", index).applyOptions({ autoScale: true });
+  }
+}
+
+/** A crosshair, of the button that brings the chart to the current price. */
+function CrosshairIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="12" cy="12" r="7" />
+      <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
+    </svg>
+  );
 }
 
 export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrder }: Props) {
@@ -292,6 +344,8 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
   const layoutRef = useRef(layoutKey);
   layoutRef.current = layoutKey;
   const [moveError, setMoveError] = useState<string | null>(null);
+  // the width of the price scale, the button of the current price beside it
+  const [scaleWidth, setScaleWidth] = useState(0);
 
   // Create / destroy the chart with the container.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the chart is created once; theme and data are applied by the effects below
@@ -302,6 +356,7 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     const chart = createChart(container, chartOptions(palette));
 
     const candles = chart.addSeries(CandlestickSeries, {
+      priceFormat,
       upColor: palette.up,
       downColor: palette.down,
       borderVisible: false,
@@ -588,12 +643,27 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     state.tradeLines.setLines(buildTradeLines(snapshot.orders, snapshot.candles, palette));
 
     if (!incremental) {
+      autoScale(state.chart); // the prices of this pair, whatever the scale of the one before
       state.chart.timeScale().fitContent();
     }
+    // drawn on the next frame: the width of its price scale known then
+    const frame = window.requestAnimationFrame(() => {
+      const width = stateRef.current?.chart.priceScale("right").width() ?? 0;
+      setScaleWidth((previous) => (previous === width ? previous : width));
+    });
     state.pair = snapshot.pair;
     state.candleCount = snapshot.candles.length;
     state.indicators = indicators;
+    return () => window.cancelAnimationFrame(frame);
   }, [snapshot, theme, layoutKey]);
+
+  // The last candle at the right edge, the price scales fit to the data.
+  const goLive = () => {
+    const state = stateRef.current;
+    if (!state) return;
+    autoScale(state.chart);
+    state.chart.timeScale().scrollToRealTime();
+  };
 
   return (
     <section className="card chart-card">
@@ -615,7 +685,19 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
           ))}
         </span>
       </div>
-      <div ref={containerRef} className="chart price-chart" />
+      <div className="chart-frame">
+        <div ref={containerRef} className="chart price-chart" />
+        <button
+          type="button"
+          className="icon-button chart-live"
+          style={{ right: scaleWidth + 8 }}
+          title="Ir para o preço atual"
+          aria-label="Ir para o preço atual"
+          onClick={goLive}
+        >
+          <CrosshairIcon />
+        </button>
+      </div>
     </section>
   );
 }

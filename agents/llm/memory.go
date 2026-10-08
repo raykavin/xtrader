@@ -104,13 +104,27 @@ func (t *Trader) memory(pair string, at time.Time) *Memory {
 	return memory
 }
 
-// closedTrade is a trade of the fills of a pair, see closedTrades.
+// closedTrade is a trade of the fills of a pair, see closedTrades: its side,
+// its size closed, its average entry and its exit, what exited it, and the
+// fills that opened it (the first one) and closed it.
 type closedTrade struct {
 	side           model.SideType
+	size           float64
 	entry, exit    float64
 	exitBy         string
 	resultPct      float64
 	opened, closed time.Time
+	open, close    model.Order
+}
+
+// openTrade is the position the fills of a pair leave open, see tradesOf: its
+// side, its size, its average entry, and the fill that opened it.
+type openTrade struct {
+	side   model.SideType
+	size   float64
+	entry  float64
+	opened time.Time
+	open   model.Order
 }
 
 // closedTrades returns the trades the fills of orders closed, oldest first:
@@ -118,6 +132,15 @@ type closedTrade struct {
 // the ones of the other, the exit by a stop loss, a take profit (a grouped
 // limit order), or else at the market.
 func closedTrades(orders []model.Order) []closedTrade {
+	closed, _, _ := tradesOf(orders)
+	return closed
+}
+
+// tradesOf returns the trades the fills of orders closed, oldest first (see
+// closedTrades), the position they leave open, nil when flat, and the role of
+// each fill: "entry", opening or adding to a position, or "exit", closing (a
+// part of) one.
+func tradesOf(orders []model.Order) ([]closedTrade, *openTrade, map[int64]string) {
 	var fills []model.Order
 	for _, order := range orders {
 		if order.Status == model.OrderStatusTypeFilled && order.Quantity > 0 && order.Price > 0 {
@@ -132,8 +155,10 @@ func closedTrades(orders []model.Order) []closedTrade {
 	})
 
 	var trades []closedTrade
+	roles := make(map[int64]string, len(fills))
 	var net, entry float64 // net signed, positive long; the average price of the open side
 	var opened time.Time
+	var opener model.Order // the fill that opened the open side
 	for _, fill := range fills {
 		signed := fill.Quantity
 		if fill.Side == model.SideTypeSell {
@@ -142,19 +167,23 @@ func closedTrades(orders []model.Order) []closedTrade {
 		switch {
 		case net == 0 || math.Signbit(net) == math.Signbit(signed):
 			if net == 0 {
-				opened = fill.UpdatedAt
+				opened, opener = fill.UpdatedAt, fill
 			}
 			entry = (entry*math.Abs(net) + fill.Price*math.Abs(signed)) / (math.Abs(net) + math.Abs(signed))
 			net += signed
+			roles[fill.ID] = "entry"
 		default:
 			side := model.SideTypeBuy
 			if net < 0 {
 				side = model.SideTypeSell
 			}
-			trades = append(trades, closedTrade{side: side, entry: entry, exit: fill.Price, exitBy: exitBy(fill),
-				resultPct: sideSign(side) * (fill.Price/entry - 1) * 100, opened: opened, closed: fill.UpdatedAt})
+			trades = append(trades, closedTrade{side: side, size: math.Min(math.Abs(signed), math.Abs(net)),
+				entry: entry, exit: fill.Price, exitBy: exitBy(fill),
+				resultPct: sideSign(side) * (fill.Price/entry - 1) * 100, opened: opened, closed: fill.UpdatedAt,
+				open: opener, close: fill})
+			roles[fill.ID] = "exit"
 			if math.Abs(signed) > math.Abs(net)+1e-12 { // a reversal: the rest opens at its price
-				entry, opened = fill.Price, fill.UpdatedAt
+				entry, opened, opener = fill.Price, fill.UpdatedAt, fill
 			}
 			net += signed
 		}
@@ -162,7 +191,15 @@ func closedTrades(orders []model.Order) []closedTrade {
 			net, entry = 0, 0
 		}
 	}
-	return trades
+	var open *openTrade
+	if net != 0 {
+		side := model.SideTypeBuy
+		if net < 0 {
+			side = model.SideTypeSell
+		}
+		open = &openTrade{side: side, size: math.Abs(net), entry: entry, opened: opened, open: opener}
+	}
+	return trades, open, roles
 }
 
 // exitBy names what the fill closing a trade was.

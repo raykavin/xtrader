@@ -61,6 +61,51 @@ func TestAnthropic_AnalyzeWith(t *testing.T) {
 	require.Equal(t, defaultSystemPrompt, provider.system)
 }
 
+// A model that refuses the forced call of the tool, eg: claude-opus-5-5: the
+// request asked again with the tool left to it, asked to answer with it, as
+// the next ones.
+func TestAnthropic_ForcedToolRefused(t *testing.T) {
+	var choices []anthropicToolChoice
+	var messages []string
+	server := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		var request anthropicRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		choices = append(choices, request.ToolChoice)
+		messages = append(messages, request.Messages[0].Content)
+		w.Header().Set("Content-Type", "application/json")
+		if request.ToolChoice.Type != "auto" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type": "error", "error": {"type": "invalid_request_error",
+				"message": "tool_choice: type \"tool\" and \"any\" are not supported for this model."}}`))
+			return
+		}
+		_, _ = w.Write([]byte(anthropicBody(longDecision)))
+	})
+	provider, err := NewAnthropic("claude-test", testKey, WithBaseURL(server.URL))
+	require.NoError(t, err)
+
+	d, err := provider.Analyze(context.Background(), testInput(nil, flatActions...))
+	require.NoError(t, err)
+	require.Equal(t, ActionEnterLong, d.Action)
+	require.Equal(t, []anthropicToolChoice{{Type: "tool", Name: "trading_decision"}, {Type: "auto"}}, choices)
+	require.False(t, strings.HasSuffix(messages[0], answerWithTheTool))
+	require.True(t, strings.HasSuffix(messages[1], answerWithTheTool), "asked to answer with the tool")
+
+	_, err = provider.Analyze(context.Background(), testInput(nil, flatActions...))
+	require.NoError(t, err)
+	require.Len(t, choices, 3, "the next ones left to the model at once")
+	require.Equal(t, anthropicToolChoice{Type: "auto"}, choices[2])
+
+	// another bad request isn't asked again
+	other := answering(t, http.StatusBadRequest, `{"type": "error", "error": {"type": "invalid_request_error",
+		"message": "tools.0.input_schema: JSON schema is invalid"}}`)
+	bad, err := NewAnthropic("claude-test", testKey, WithBaseURL(other.URL))
+	require.NoError(t, err)
+	_, err = bad.Analyze(context.Background(), testInput(nil, flatActions...))
+	require.ErrorContains(t, err, "input_schema")
+	require.False(t, bad.auto.Load())
+}
+
 func TestAnthropic_Answers(t *testing.T) {
 	tests := []struct {
 		name   string

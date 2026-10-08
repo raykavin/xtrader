@@ -31,15 +31,15 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 - [Uso](#uso)
   - [Painel web](#painel-web)
   - [Agentes e parâmetros](#agentes-e-parâmetros)
+  - [Redefinir os resultados](#redefinir-os-resultados)
   - [Prompts](#prompts)
+  - [Limites diários](#limites-diários)
   - [Telegram](#telegram)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Migração da versão anterior](#migração-da-versão-anterior)
 - [Desenvolvimento](#desenvolvimento)
 - [API](#api)
 - [Segurança](#segurança)
-- [Contribuidores](#contribuidores)
-- [Créditos](#créditos)
 
 ## Recursos
 
@@ -57,13 +57,16 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - memória das últimas decisões e operações.
 - **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem.
 - **Quando consultar:** uma decisão por fechamento de candle ou, com `llm-consult-interval`, numa agenda própria (por exemplo, a cada 10 min). Há também a **reanálise sob demanda**, pelo painel ou pelo Telegram, com uma nota para o modelo.
+- **Início do agente:** ao (re)iniciar, os ativos são analisados de uma vez, em paralelo, com as mesmas regras das outras análises: um ativo sem entrada possível (por exemplo, com a tendência maior exigida e mista) não é consultado, e a análise aparece no painel como "Não consultado", com o motivo. Cada decisão é aplicada no tick seguinte do ativo.
 - **Prompts:** editáveis e trocados com o agente rodando. A troca vale a partir da próxima análise, e cada decisão registra o prompt e a versão usados.
 - **Proteções:**
   - confiança mínima;
   - risco:retorno mínimo;
   - spread máximo em ATR;
   - distância mínima do stop;
-  - bloqueio perto de notícias de alto impacto.
+  - bloqueio perto de notícias de alto impacto;
+  - limites diários de ganho e de perda por ativo, definidos no prompt (veja [Limites diários](#limites-diários)).
+- **Histórico do dia:** o contexto leva as posições e as ordens do ativo no dia operacional (`daily_history`), com o resultado de cada posição.
 - **Calendário econômico:** lido pelo servidor MCP do terminal MT5.
 
 ### Agentes de estratégia
@@ -87,14 +90,15 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 ### Painel web
 
 - **Painel:**
-  - gráfico de preço com as ordens e as linhas de stop e take profit;
+  - gráfico de preço com as ordens e as linhas de stop e take profit, e um botão (ícone de mira, no topo) que volta ao candle e ao preço atuais;
   - estatísticas e curva de patrimônio;
   - boleta de ordens;
-  - decisões do modelo, com o contexto de cada uma;
+  - decisões do modelo, com o contexto de cada uma, e as análises em que o modelo não foi consultado ("Não consultado"), com o motivo;
   - histórico de ordens.
 - **Bot:** iniciar e parar o bot de cada agente no card do topo.
 - **Configurações, em abas:**
   - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, excluir, ligar e desligar, reiniciar e definir os segredos.
+  - **Resultados** (botão no card do agente): os resultados por período e a redefinição deles. Veja [Redefinir os resultados](#redefinir-os-resultados).
   - **Prompts:** editor com histórico de versões.
   - **Telegram:** liga e desliga o bot, token e IDs autorizados.
   - **Usuários.**
@@ -107,7 +111,8 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - prompts com versões;
   - agentes, contas MT5 e configuração dos modelos;
   - Telegram;
-  - ordens, decisões com anexos e journal.
+  - ordens, decisões com anexos e journal;
+  - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM.
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
 
@@ -243,17 +248,17 @@ Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entr
 
 **Quais mudanças valem na hora:** num agente rodando, **Ativo**, **Painel de trading**, **Controle via Telegram** e o prompt. As demais ficam como "reinício pendente", aplicadas pelo botão **Reiniciar**.
 
-**Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`.
+**Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`. Nas listas, os itens são separados por `;` (a vírgula continua aceita).
 
 | Nome                   | Valor                                             | Efeito                                                                                  |
 | ---------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `pair`                 | `BTCUSDm,XAUUSDm`                                 | pares operados pelo agente                                                              |
+| `pair`                 | `BTCUSDm;XAUUSDm`                                 | pares operados pelo agente                                                              |
 | `timeframe`            | `30m`                                             | timeframe dos candles                                                                   |
-| `lot`                  | `0.01` ou `BTCUSDm=0.03,XAUUSDm=0.01`             | lote fixo: um para todos ou um por par                                                  |
+| `lot`                  | `0.01` ou `BTCUSDm=0.03;XAUUSDm=0.01`             | lote fixo: um para todos ou um por par                                                  |
 | `leverage`             | `400`                                             | teto de segurança: recusa uma posição maior que saldo × alavancagem                     |
 | `llm-consult-interval` | `10m`                                             | consulta ao modelo a cada 10 min (mínimo de 10s); sem ele, uma por fechamento de candle |
 | `llm-timeout`          | `2m`                                              | tempo máximo de uma requisição ao modelo                                                |
-| `llm-correlated`       | `XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm` | mercados correlacionados de cada par (ou uma lista única, como `USTECm,DXYm`)           |
+| `llm-correlated`       | `XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm` | mercados correlacionados de cada par (ou uma lista única, como `USTECm;DXYm`)           |
 | `llm-candles`          | `60`                                              | candles recentes enviados ao modelo                                                     |
 | `llm-setup`            | `free` ou `trend_pullback`                        | modo de decisão do modelo                                                               |
 
@@ -264,12 +269,46 @@ Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entr
 - Com um intervalo maior que o timeframe, os fechamentos do meio são pulados.
 - Cada consulta é uma requisição cobrada.
 
+### Redefinir os resultados
+
+Em **Configurações → Agentes**, o botão **Resultados** do card do agente mostra os resultados por período e permite redefini-los.
+
+- **O que zera:** Operações, Taxa de acerto, Lucro líquido e Fator de lucro de todos os ativos do agente. Depois da redefinição, os cards do painel e o `/profit` do Telegram contam só as operações fechadas a partir dela, pela hora de fechamento.
+- **Depósito:** é o saldo inicial do novo período, na moeda informada (a da conta, por exemplo BRL). É um saldo único do agente: os resultados de todos os ativos somam nele, sem divisão entre ativos.
+- **O que não muda:**
+  - as ordens continuam no histórico;
+  - posições abertas e ordens pendentes seguem na corretora, e uma posição aberta na hora da redefinição conta no novo período quando fechar;
+  - os limites diários e a memória do LLM continuam considerando todas as operações.
+- **Períodos anteriores:** ficam guardados no banco (`agent_periods`) e aparecem no mesmo diálogo, cada um com depósito, resultado por ativo e saldo final. Os resultados vêm das ordens do agente, então só aparecem com ele executando.
+
 ### Prompts
 
 - **Onde ficam:** no banco, com histórico de versões. Os 43 de exemplo vêm pelo seed.
 - **Cabeçalho:** as linhas `# Indicators:` e `# Take profit:` definem os indicadores enviados e o tratamento do take profit.
 - **Troca:** pelo card do agente ou pelo Telegram (`/useprompt`), com o agente rodando, a partir da próxima análise.
 - **Prompt inválido para o agente:** é recusado, o anterior continua, e o motivo aparece no card.
+
+#### Limites diários
+
+Um prompt pode definir limites diários do resultado de cada ativo, no cabeçalho, na moeda da conta:
+
+```none
+# Daily gain limit: 250 BRL
+# Daily loss limit: 150 BRL
+```
+
+- **Resultado do dia:** a soma dos resultados das posições do ativo fechadas no dia operacional, como a corretora registra, com swap, comissão e taxa. Uma posição conta no dia em que fecha.
+- **Dia operacional:** começa à meia-noite do fuso do agente, o `TZ` do `.env` (America/Belem na stack).
+- **Ao atingir um limite:**
+  - novas entradas no ativo ficam bloqueadas até o dia seguinte;
+  - o modelo nem é consultado sem posição, inclusive nas reanálises;
+  - uma entrada devolvida pelo modelo é recusada;
+  - os outros ativos seguem livres.
+- **Posição aberta:** continua gerenciada normalmente. O limite não força saída nem mexe no stop ou no alvo, e o resultado dela conta quando fecha.
+- **Fechamento sem resultado registrado:** enquanto a corretora não registra o resultado de um fechamento do dia, as entradas esperam, em geral por segundos.
+- **Operações manuais:** as da boleta e do Telegram contam no resultado, mas não são bloqueadas.
+- **Moeda:** os limites precisam estar na moeda da conta; senão, o prompt é recusado.
+- **Onde vale:** só em live no MT5, onde a corretora registra os resultados. Em backtest e paper, os limites não são aplicados, e um aviso vai para o log.
 
 ### Telegram
 
@@ -347,6 +386,7 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - `/api/auth/login`, `/api/auth/logout` e `/api/auth/session`;
   - `/api/agents` e `/api/agents/{agente}/…`: proxy da API de cada agente (snapshot, eventos SSE, controles, decisões);
   - `/api/settings/agents[/{nome}[/restart]]`, `/api/prompts[/{id}]`, `/api/settings/telegram[/users[/{id}]]` e `/api/users[/{id}]`;
+  - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory` e `outbox`.
 

@@ -178,6 +178,11 @@ func TestTrader_ReanalysisRefused(t *testing.T) {
 	require.Equal(t, []string{"🔄 Reanalysis of BTCUSDT 15m, asked from telegram: the model wasn't asked: no " +
 		"position fits the balance and the sizing"}, *messages)
 	require.False(t, r.trader.reanalysisPending(testPair), "answered, not retried on every tick")
+	d := r.lastDecision()
+	require.Equal(t, OutcomeSkipped, d.Outcome, "kept, not asked")
+	require.Equal(t, SkipSize, d.Reason)
+	require.Equal(t, TriggerReanalysis, d.Trigger)
+	require.Equal(t, string(ui.ChannelTelegram), d.RequestedBy)
 }
 
 // The journal keeps the trigger and the channel of a reanalysis, in the shape

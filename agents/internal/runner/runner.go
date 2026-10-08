@@ -204,7 +204,7 @@ func run(agent Agent) error {
 		mt5Size      = flag.String("mt5-size", "lot", "mt5: how -lot is read, lot (MT5 lots, converted into units of the base asset with the contract size of the pair) or unit")
 		mt5CSize     = flag.String("mt5-contract-size", "", "mt5 backtest: units of the base asset in a lot, to convert -lot, eg: 100 for XAUUSDm; one for all the pairs, one per pair in the order of -pair, or one by pair, eg: XAUUSDm=100 (default: the ones the package knows)")
 		mt5Poll      = flag.Duration("mt5-poll", 0, "mt5: how often the account and the candles are polled (default 1s)")
-		pairList     = flag.String("pair", "XAUUSDm", "pairs to trade, comma separated, eg: XAUUSDm,BTCUSDm")
+		pairList     = flag.String("pair", "XAUUSDm", "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
 		timeframe    = flag.String("timeframe", "1h", "strategy timeframe (the strategies with a stop loss and a take profit at the broker: default the strategy's)")
 		direction    = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
 		stopATR      = flag.Float64("stop-atr", 0, "stop from the entry close, in ATR: trendconfluence: checked on the close (0: off); the strategies with a stop loss at the broker: placed there (default: the strategy's)")
@@ -217,9 +217,9 @@ func run(agent Agent) error {
 		minValue     = flag.Float64("min-position-value", 10, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
 		fee          = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value; MT5 CFDs charge the spread instead: half of it over the price, eg: 0.0003")
 		fraction     = flag.Float64("position-fraction", 1, "share of the free balance each position commits (0-1]")
-		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, comma separated in the order of -pair, or one by pair, eg: BTCUSDm=0.03,XAUUSDm=0.01")
+		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01")
 		leverage     = flag.Float64("leverage", 1, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
-		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, comma separated in the order of -pair")
+		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")
 		tradePanel   = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot without it)")
@@ -779,10 +779,11 @@ func newPaperWallet(ctx context.Context, pairs []string, feed service.Feeder,
 	), nil
 }
 
-// list splits a comma separated flag, dropping the blanks.
+// list splits a flag of a list, its items separated by ";" (or "," as
+// before), dropping the blanks.
 func list(value string) []string {
 	var items []string
-	for _, item := range strings.Split(value, ",") {
+	for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ';' || r == ',' }) {
 		if item = strings.TrimSpace(item); item != "" {
 			items = append(items, item)
 		}

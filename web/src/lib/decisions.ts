@@ -18,11 +18,29 @@ const outcomes: Record<string, string> = {
   ignored: "Ignorada: confiança baixa",
   refused: "Recusada pelas regras",
   failed: "Sem decisão",
+  skipped: "Não consultado",
+};
+
+// why an analysis didn't ask the model (see the Skip constants of
+// agents/llm/decisions.go), the code in the reason of a skipped one
+const skips: Record<string, string> = {
+  position: "Não foi possível ler a posição na corretora",
+  close_retry: "Um fechamento que falhou foi tentado de novo",
+  protection: "A corretora não aceita stop e alvo na ordem",
+  daily_limit: "Entradas bloqueadas pelo limite diário do ativo",
+  news: "Entradas bloqueadas perto de notícia de alta importância",
+  size: "Sem lote para o ativo ou saldo insuficiente",
+  spread: "Spread acima do máximo permitido",
+  setup: "Sem tendência para o setup de pullback",
+  direction: "A direção configurada não permite entrada",
+  higher_trend: "Sem tendência definida nos timeframes maiores (exigida para entrar)",
+  against_trend: "Entradas permitidas só contra a tendência dos timeframes maiores",
+  rate_limited: "Provedor do modelo com limite de requisições",
 };
 
 const triggers: Record<string, string> = {
   candle: "Fechamento do candle",
-  start: "Início do bot",
+  start: "Início do agente",
   reanalysis: "Reanálise",
   interval: "Intervalo de consulta",
 };
@@ -48,6 +66,21 @@ export const decisionActionLabel = (action: string | undefined) =>
 export const decisionOutcomeLabel = (outcome: string) => label(outcomes, outcome);
 export const noteKindLabel = (kind: string) => label(noteKinds, kind);
 export const levelKindLabel = (kind: string) => label(levelKinds, kind);
+
+/** Whether the analysis didn't ask the model, see decisionReason. */
+export const isSkipped = (decision: Decision) => decision.outcome === "skipped";
+
+/**
+ * The justification of a decision: the one of the model, or else its error;
+ * why the model wasn't asked for a skipped analysis, in Portuguese, its
+ * detail kept in the error.
+ */
+export function decisionReason(decision: Decision): string {
+  if (isSkipped(decision)) {
+    return skips[decision.reason ?? ""] ?? decision.error ?? decision.reason ?? "—";
+  }
+  return decision.reason || decision.error || "—";
+}
 
 /** Why the model was asked, with the channel of the reanalysis it answers. */
 export function decisionTriggerLabel(decision: Decision): string {

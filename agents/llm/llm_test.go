@@ -145,6 +145,19 @@ func (r *traderRunner) step(close float64, answers ...answer) {
 	require.Empty(r.t, r.provider.answers, "answers not asked")
 }
 
+// startAsked waits for the model asked about the start of pair, apart (see
+// startApart): its decision is applied on the next candle of the pair.
+func (r *traderRunner) startAsked(pair string) {
+	r.t.Helper()
+	s, ok := r.trader.starting[pair]
+	require.True(r.t, ok, "the start of %s not asked apart", pair)
+	select {
+	case <-s.done:
+	case <-time.After(10 * time.Second):
+		r.t.Fatalf("the model still asked about the start of %s", pair)
+	}
+}
+
 // position returns the asset held.
 func (r *traderRunner) position() float64 {
 	r.t.Helper()

@@ -29,13 +29,38 @@ const (
 
 // The outcomes of a decision, see ui.Decision: applied (WAIT and HOLD
 // included), ignored under the min confidence, refused by the rules of its
-// context, or failed without a decision.
+// context, or failed without a decision; skipped, an analysis that didn't ask
+// the model, its Reason the code of why (one of the Skip constants) and its
+// Error the detail.
 const (
 	OutcomeApplied = "applied"
 	OutcomeIgnored = "ignored"
 	OutcomeRefused = "refused"
 	OutcomeFailed  = "failed"
+	OutcomeSkipped = "skipped"
 )
+
+// The codes of why an analysis didn't ask the model, see OutcomeSkipped.
+const (
+	SkipPosition     = "position"      // the position unread from the broker
+	SkipCloseRetry   = "close_retry"   // a close that failed, retried first
+	SkipProtection   = "protection"    // the broker can't place the legs with the order
+	SkipDailyLimit   = "daily_limit"   // the entries refused by a daily limit
+	SkipNews         = "news"          // the entries refused around a release
+	SkipSize         = "size"          // no position fits the balance and the sizing
+	SkipSpread       = "spread"        // the spread wider than allowed
+	SkipSetup        = "setup"         // no trend for the setup
+	SkipDirection    = "direction"     // no entry the direction of the positions allows
+	SkipHigherTrend  = "higher_trend"  // no trend of the higher timeframes, one required
+	SkipAgainstTrend = "against_trend" // the entries allowed all against the higher trend
+	SkipRateLimited  = "rate_limited"  // the provider rate limited
+)
+
+// skip is why an analysis doesn't ask the model, see Trader.prepare: its code,
+// one of the Skip constants, and its detail; none for the zero value.
+type skip struct {
+	code, detail string
+}
 
 // Note is a note the provider returned with a decision beside its
 // justification: Kind text, words of the model beside the decision; reasoning,
@@ -533,6 +558,30 @@ func (t *Trader) keep(d ui.Decision, attachments []Attachment) {
 // decisionRecord returns the record of the decision asked with input at at,
 // see ui.Decision: refused when err is a decision breaking the rules, failed
 // for any other error, its outcome left to apply otherwise.
+// skipRecord returns the record of the analysis of the closed candles of df,
+// at price, that didn't ask the model for s (see OutcomeSkipped), trigger
+// telling why it ran, requested the reanalysis it answers, if any, and tr the
+// position followed, if any.
+func (t *Trader) skipRecord(df *model.Dataframe, st *promptState, trigger string, requested *reanalysis,
+	price float64, tr *trade, s skip) ui.Decision {
+
+	at := t.now()
+	record := ui.Decision{ID: decisionID(at, df.Pair), Pair: df.Pair, Timeframe: t.cfg.Timeframe,
+		DecidedAt: at.Unix(), Trigger: trigger, Prompt: st.decisionPrompt(), Price: price, Reason: s.code,
+		Outcome: OutcomeSkipped, Error: s.detail, Levels: []ui.Level{}, Notes: []ui.DecisionNote{},
+		Attachments: []ui.DecisionAttachment{}, OrderIDs: []int64{}}
+	if len(df.Time) > 0 {
+		record.Candle = df.Time[len(df.Time)-1].Unix()
+	}
+	if requested != nil {
+		record.RequestedBy, record.RequestNote = string(requested.channel), requested.note
+	}
+	if tr != nil {
+		record.Position = describeSide(tr.side)
+	}
+	return record
+}
+
 func (t *Trader) decisionRecord(st *promptState, input Input, trigger, requestedBy string, at time.Time,
 	latency time.Duration, d Decision, err error) ui.Decision {
 

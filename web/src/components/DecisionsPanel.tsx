@@ -4,9 +4,11 @@ import type { Decision } from "../api/types";
 import {
   decisionActionLabel,
   decisionOutcomeLabel,
+  decisionReason,
   decisionTone,
   decisionTriggerLabel,
   formatConfidence,
+  isSkipped,
   type ReanalysisState,
   reanalysisButton,
 } from "../lib/decisions";
@@ -143,8 +145,11 @@ export function DecisionsPanel({
                       {decisionOutcomeLabel(decision.outcome)}
                     </span>
                   </td>
-                  <td className="decision-cell" title={decision.reason || decision.error}>
-                    {decision.reason || decision.error || "—"}
+                  <td
+                    className="decision-cell"
+                    title={isSkipped(decision) ? decision.error : decision.reason || decision.error}
+                  >
+                    {decisionReason(decision)}
                   </td>
                   <td className="num">
                     <button type="button" className="table-btn" onClick={() => onShow(decision.id)}>

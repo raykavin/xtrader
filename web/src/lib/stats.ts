@@ -17,6 +17,9 @@ export interface Stats {
   profitCurrency: string;
   /** Gross profit / gross loss; Infinity when there are no losses. */
   profitFactor: number;
+  /** The sums of the wins and of the losses (positive), in profitCurrency. */
+  grossProfit: number;
+  grossLoss: number;
   /** Average profit per closed trade (fraction, e.g. 0.012). */
   avgReturn: number;
   initialEquity: number;
@@ -33,6 +36,29 @@ export function isClosedTrade(order: Order): boolean {
   return order.status === "FILLED" && (order.profit !== 0 || order.profit_value !== 0);
 }
 
+/** When the order filled, in Unix seconds: its last update, else its creation. */
+export function closedAt(order: Order): number {
+  return order.updated_at || order.created_at;
+}
+
+/**
+ * The trades counted, by their close: from since (the start of the accounting
+ * period of the agent, see AgentPeriod) until before until, each optional.
+ */
+export interface StatsWindow {
+  since?: number;
+  until?: number;
+}
+
+/** Whether the trade closed within window. */
+function within(order: Order, window: StatsWindow): boolean {
+  const at = closedAt(order);
+  return (
+    (window.since === undefined || at >= window.since) &&
+    (window.until === undefined || at < window.until)
+  );
+}
+
 export function maxDrawdown(points: Point[]): number {
   let peak = Number.NEGATIVE_INFINITY;
   let worst = 0;
@@ -46,8 +72,12 @@ export function maxDrawdown(points: Point[]): number {
   return worst;
 }
 
-export function computeStats(snapshot: Snapshot): Stats {
-  const closed = snapshot.orders.filter(isClosedTrade);
+/**
+ * The stats of the snapshot: of the trades closed within window, all of them
+ * by default; the equity and buy & hold over the candles, whatever it.
+ */
+export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stats {
+  const closed = snapshot.orders.filter((o) => isClosedTrade(o) && within(o, window));
   // as the account booked them when it did for all, else the core's
   const booked = closed.every((o) => o.account_profit !== undefined);
   const value = (o: Order) => (booked ? (o.account_profit ?? 0) : o.profit_value);
@@ -87,6 +117,8 @@ export function computeStats(snapshot: Snapshot): Stats {
     profitCurrency,
     profitFactor:
       grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Number.POSITIVE_INFINITY : 0,
+    grossProfit,
+    grossLoss,
     avgReturn,
     initialEquity,
     finalEquity,

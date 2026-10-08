@@ -295,7 +295,12 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     });
   }, [agent]);
 
-  const stats = useMemo(() => (snapshot ? computeStats(snapshot) : null), [snapshot]);
+  // the trades closed since the last reset of the results of the agent count
+  const since = agents.find((a) => a.name === agent)?.period?.started_at;
+  const stats = useMemo(
+    () => (snapshot ? computeStats(snapshot, { since }) : null),
+    [snapshot, since],
+  );
   const pnl = useMemo(() => (snapshot ? positionPnL(snapshot) : null), [snapshot]);
   const interactive = controls?.enabled === true;
   const ticket = useMemo(() => ({ levels, onLevel: setLevel }), [levels, setLevel]);
@@ -328,7 +333,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         )}
         {snapshot && stats && (
           <div className={loading ? "content loading" : "content"}>
-            <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} />
+            <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} since={since} />
             <div className="trade-area">
               <PriceChart
                 snapshot={snapshot}

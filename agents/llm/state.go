@@ -23,6 +23,7 @@ type promptState struct {
 	need               int               // the warmup the prompt needs
 	takeProfitOptional bool              // see Config.TakeProfitOptional
 	noTakeProfit       bool              // see Config.NoTakeProfit
+	daily              dailyLimits       // see Config.DailyGain
 }
 
 // newPromptState returns the state of the prompt ref, with the instructions
@@ -36,7 +37,8 @@ func newPromptState(cfg Config, ref ui.DecisionPrompt, system string) (*promptSt
 	lookback, need := sizing(cfg, extras)
 	return &promptState{ref: ref, system: system, indicators: slices.Clone(cfg.Indicators), extras: extras,
 		lookback: lookback, need: need, takeProfitOptional: cfg.TakeProfitOptional,
-		noTakeProfit: cfg.NoTakeProfit}, nil
+		noTakeProfit: cfg.NoTakeProfit,
+		daily:        dailyLimits{gain: cfg.DailyGain, loss: cfg.DailyLoss, currency: cfg.DailyCurrency}}, nil
 }
 
 // sizing returns the candles the indicators of cfg need, the groups and the
@@ -72,7 +74,8 @@ func (s *promptState) decisionPrompt() *ui.DecisionPrompt {
 // promptState returns the state of the prompt p with the Config of the
 // Trader and its overrides, refusing a prompt the Trader can't analyze with:
 // an indicator unknown, a take profit its rules don't take, eg: none with a
-// min risk:reward, or more history than the candles it keeps.
+// min risk:reward, more history than the candles it keeps, or daily limits
+// unreadable or in a currency other than the one of the account.
 func (t *Trader) promptState(p Prompt) (*promptState, error) {
 	content := p.Content
 	if content == "" {
@@ -81,8 +84,14 @@ func (t *Trader) promptState(p Prompt) (*promptState, error) {
 	if err := CheckPrompt(content); err != nil {
 		return nil, err
 	}
+	if _, _, _, err := StrategyDailyLimits(content); err != nil {
+		return nil, err
+	}
 	state, err := newPromptState(t.cfg.withPrompt(content, t.overrides), p.Ref, systemPrompt(content))
 	if err != nil {
+		return nil, err
+	}
+	if err := t.checkDailyCurrency(state.daily); err != nil {
 		return nil, err
 	}
 	if t.warmup > 0 && state.need > t.warmup {

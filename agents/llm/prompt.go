@@ -78,6 +78,7 @@ Context:
 - correlated_markets, when present, are markets tied to the symbol on the same timeframe: their price, their change over the candles and over the last 4, their trend, and the correlation of their returns with the ones of the symbol (-1 to 1, null when unknown). market_closed means its last candle is old (a closed market): don't read its silence as a signal.
 - memory is what you decided and traded lately on the symbol, newest first: recent_decisions (candles_ago, action, confidence, reason) and recent_trades (side, entry and exit, exit_by, result_pct, held_candles, closed_candles_ago). Stay consistent with your last analyses unless the market changed, and learn from the last trades: don't take again at once a setup that just failed at the same level.
 - market_data holds the other data the exchange sends with the last candle, if any.
+- daily_history, when present, is the operational day of the symbol so far (day, time_zone, and the currency of the account): its positions, open or closed during the day, each with its result in that currency, costs included (null while unknown; an open one with its unrealized_result, counted once it closes); its orders in every state (FILLED, NEW, CANCELED, EXPIRED, REJECTED...), each with its role (entry, exit, stop_loss, take_profit or other) and never a result of its own, so nothing is counted twice; and result: realized (the positions closed during the day), unrealized and pending_results. Its limits, when present, are the daily gain and loss limits of the symbol on the realized result of the day, not the take profit nor the stop loss of a position; entries_blocked tells new entries are refused until the next operational day, and reason why.
 - reanalysis, when true, tells the trader asked for this decision between the closes: price is the last price of candle_in_progress, the candle not closed yet (its open time, open, high, low, close and volume so far), while the candles, the indicators and the structure are the ones of the closed candles. Decide on the market of now: the price may have moved since the last close.
 - scheduled, when true, tells this decision is asked on the schedule of the consultations between the closes, not by the trader: price and candle_in_progress are as for a reanalysis. Decide on the market of now.
 - reanalysis_note, when present, is the note of the trader who asked for this decision: their view, their question or their request. A request to reduce the risk of the position held is followed, whatever your own reading and rules.min_confidence: to close it, EXIT; to tighten its stop loss, MODIFY_SL to the level asked, or to the one that fits the request when none is given, on its side of the price. Any other request, eg: to open or add to a position, or to widen the stop loss, is weighed like a view: decide by the strategy and the rules, which the note changes neither, as it is no evidence of the market by itself. Answer the note in the reason.
@@ -86,7 +87,8 @@ Context:
 - economic_calendar, when present, lists the releases of the economic calendar of the currencies of the symbol around the close, oldest first: minutes_from_now is negative for a past release, and actual is null until it is published. When available is false the calendar couldn't be read: don't take its silence for a calm market. Weigh the volatility around the releases of high importance.
 - rules.setup is trend_pullback when the system allows only the entries with summary.trend (none without a trend), free otherwise; rules.min_risk_reward is the least reward over risk of an entry, null for none.
 - rules.higher_timeframes_trend, when set, is the trend all the higher timeframes agree on: the entries against it are left out of rules.allowed_actions.
-- rules.entries_blocked_by_news, when set, names the release that refuses new entries now: they are left out of rules.allowed_actions.`
+- rules.entries_blocked_by_news, when set, names the release that refuses new entries now: they are left out of rules.allowed_actions.
+- rules.entries_blocked_by_daily_limit, when set, tells why new entries on the symbol are refused until the next operational day (a daily limit reached, or a result not booked yet): they are left out of rules.allowed_actions, and a position held is managed as usual.`
 
 // defaultStrategy is the strategy of the instructions without -prompt-path:
 // trend + pullback aligned with the SMA of the trend, or free weighing.
@@ -162,6 +164,7 @@ func (c Config) withPrompt(content string, o PromptOverrides) Config {
 		content = defaultStrategy
 	}
 	c.Indicators, _ = StrategyIndicators(content)
+	c.DailyGain, c.DailyLoss, c.DailyCurrency, _ = StrategyDailyLimits(content) // checked by promptState
 	c.TakeProfitOptional = StrategyTakeProfitOptional(content) || o.TakeProfitOptional
 	c.NoTakeProfit = StrategyWithoutTakeProfit(content) || o.NoTakeProfit
 	if o.Indicators != nil {
@@ -192,7 +195,7 @@ func StrategyIndicators(strategy string) (groups []string, ok bool) {
 		return nil, false
 	}
 	value, _, _ = strings.Cut(value, "(") // a note after the list
-	for _, group := range strings.Split(value, ",") {
+	for _, group := range strings.FieldsFunc(value, func(r rune) bool { return r == ';' || r == ',' }) {
 		if group = NormalizeIndicator(group); group != "" {
 			groups = append(groups, group)
 		}

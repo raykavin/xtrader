@@ -163,11 +163,14 @@ type PairsResponse struct {
 }
 
 // AgentStatus is an agent of the dashboard, a bot serving its API at Address.
-// Online tells whether the API answers.
+// Online tells whether the API answers. Period is its accounting period, the
+// cards of the dashboard counting the trades closed since its start: absent
+// before the first reset of its results, all of them counted.
 type AgentStatus struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Online  bool   `json:"online"`
+	Name    string       `json:"name"`
+	Address string       `json:"address"`
+	Online  bool         `json:"online"`
+	Period  *AgentPeriod `json:"period,omitempty"`
 }
 
 // AgentsResponse lists the agents of the dashboard, in the order of its
@@ -312,8 +315,10 @@ type BalanceResponse struct {
 // latency, the position held then, what the model answered
 // with its justification (Reason), its levels, its notes and its attachments,
 // and what came of it (Outcome: applied; ignored, its confidence under the
-// minimum; refused, breaking the rules of the context; failed, no answer),
-// with the orders it placed or moved.
+// minimum; refused, breaking the rules of the context; failed, no answer;
+// skipped, an analysis that didn't ask the model, eg: no entry to open while
+// flat, Reason then the code of why and Error its detail), with the orders it
+// placed or moved.
 type Decision struct {
 	ID          string               `json:"id"`
 	Pair        string               `json:"pair"`
@@ -515,6 +520,39 @@ type AgentSettingsRequest struct {
 	LLMAPIKey       *string              `json:"llm_api_key,omitempty"`
 	BridgeToken     *string              `json:"bridge_token,omitempty"`
 	CalendarToken   *string              `json:"calendar_token,omitempty"`
+}
+
+// AgentPeriod is an accounting period of an agent: the cards of the dashboard
+// (trades, win rate, net profit, profit factor) count the trades closed from
+// StartedAt, the close of their order, until EndedAt, the start of the next
+// period, absent for the current one; Deposit, in Currency, is the balance it
+// started with, and CreatedBy the user who started it. The orders, the open
+// positions and the pending orders are untouched: a period only tells which
+// results count. Times in Unix seconds.
+type AgentPeriod struct {
+	ID        int64   `json:"id"`
+	StartedAt int64   `json:"started_at"`
+	EndedAt   *int64  `json:"ended_at,omitempty"`
+	Deposit   float64 `json:"deposit"`
+	Currency  string  `json:"currency"`
+	CreatedBy string  `json:"created_by,omitempty"`
+}
+
+// AgentPeriodsResponse is the payload of GET
+// /api/settings/agents/{name}/periods: the periods of the agent, the current
+// one first, none before the first reset of its results.
+type AgentPeriodsResponse struct {
+	Periods []AgentPeriod `json:"periods"`
+}
+
+// AgentPeriodRequest is the payload of POST
+// /api/settings/agents/{name}/periods, the reset of the results of every pair
+// of the agent: a period starting now, answered with it (201), Deposit (from 0,
+// rounded to cents) in Currency (a code of 3 letters, eg: BRL) the balance it
+// starts with.
+type AgentPeriodRequest struct {
+	Deposit  float64 `json:"deposit"`
+	Currency string  `json:"currency"`
 }
 
 // AgentAccountRequest is a change of the account of an agent, of the fields

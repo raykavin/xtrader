@@ -47,6 +47,17 @@ func TestSizesByPair(t *testing.T) {
 	}
 }
 
+func TestList(t *testing.T) {
+	require.Equal(t, []string{"BTCUSDm", "XAUUSDm"}, list("BTCUSDm;XAUUSDm"))
+	require.Equal(t, []string{"BTCUSDm", "XAUUSDm"}, list(" BTCUSDm , XAUUSDm "), "the comma of before")
+	require.Equal(t, []string{"a", "b", "c"}, list("a;b,c;;"), "both, the blanks dropped")
+	require.Equal(t, []string{"GOLD", "BTCUSD"}, list(" GOLD, ,BTCUSD,"))
+	require.Nil(t, list(""))
+	sizes, err := sizesByPair("-lot", []string{"BTCUSDm", "XAUUSDm"}, list("BTCUSDm=0.03;XAUUSDm=0.01"))
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"BTCUSDm": 0.03, "XAUUSDm": 0.01}, sizes)
+}
+
 func TestCorrelatedByPair(t *testing.T) {
 	pairs := []string{"BTCUSDm", "XAUUSDm"}
 	byPair, err := correlatedByPair(pairs, "")
@@ -59,7 +70,16 @@ func TestCorrelatedByPair(t *testing.T) {
 	require.Equal(t, map[string][]string{"BTCUSDm": {"USTECm", "XAUUSDm", "DXYm"}, "XAUUSDm": {"USTECm", "DXYm"}},
 		byPair)
 
+	byPair, err = correlatedByPair(pairs, "USTECm;XAUUSDm; DXYm")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"BTCUSDm": {"USTECm", "XAUUSDm", "DXYm"}, "XAUUSDm": {"USTECm", "DXYm"}},
+		byPair, "separated by ;")
+
 	// the ones of each pair, a pair without any left out
+	byPair, err = correlatedByPair(pairs, "XAUUSDm=USTECm+DXYm, BTCUSDm=XAUUSDm+DXYm+USTECm")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"XAUUSDm": {"USTECm", "DXYm"}, "BTCUSDm": {"XAUUSDm", "DXYm", "USTECm"}},
+		byPair, "the pairs separated by , too")
 	byPair, err = correlatedByPair(pairs, "XAUUSDm=USTECm+DXYm; BTCUSDm = XAUUSDm + DXYm + USTECm ;")
 	require.NoError(t, err)
 	require.Equal(t, map[string][]string{"XAUUSDm": {"USTECm", "DXYm"}, "BTCUSDm": {"XAUUSDm", "DXYm", "USTECm"}},
@@ -73,7 +93,7 @@ func TestCorrelatedByPair(t *testing.T) {
 		"XAUUSDm=DXYm;XAUUSDm=USTEC": "XAUUSDm twice",
 		"XAUUSDm=XAUUSDm+DXYm":       "XAUUSDm among its own markets",
 		"XAUUSDm=":                   "no market for XAUUSDm",
-		"XAUUSDm=DXYm,USTECm":        "joined by +",
+		"XAUUSDm=DXYm,USTECm":        `"USTECm" isn't PAIR=MARKET+MARKET`,
 		"XAUUSDm=DXYm=USTECm":        "isn't PAIR=MARKET+MARKET",
 		"=DXYm":                      "isn't PAIR=MARKET+MARKET",
 	} {
@@ -154,11 +174,6 @@ func TestCheckVenue(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
-}
-
-func TestList(t *testing.T) {
-	require.Equal(t, []string{"GOLD", "BTCUSD"}, list(" GOLD, ,BTCUSD,"))
-	require.Nil(t, list(""))
 }
 
 func TestCalendarConfig(t *testing.T) {

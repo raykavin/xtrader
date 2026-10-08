@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/raykavin/xtrader/tools/log"
 )
@@ -18,8 +20,11 @@ const (
 // Anthropic is the Provider of the Claude models of Anthropic, through the
 // Messages API. The answer is forced into a tool whose input schema is the one
 // of a Decision: the model answers with the call of the tool, never with text.
+// A model that refuses the forced call, eg: claude-opus-5-5, is left the tool,
+// asked to answer with it.
 type Anthropic struct {
 	client
+	auto atomic.Bool // the model refused the forced call of the tool: left to it
 }
 
 // NewAnthropic creates the provider of Anthropic answering with model, eg: the
@@ -49,7 +54,7 @@ type anthropicTool struct {
 
 type anthropicToolChoice struct {
 	Type string `json:"type"`
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 type anthropicRequest struct {
@@ -100,17 +105,16 @@ func (a *Anthropic) AnalyzeWith(ctx context.Context, system string, input Input)
 		return Decision{}, err
 	}
 
-	request := anthropicRequest{
-		Model:     a.model,
-		MaxTokens: a.maxTokens,
-		System:    system,
-		Messages:  []anthropicMessage{{Role: "user", Content: message}},
-		Tools: []anthropicTool{{Name: decisionName, Description: decisionDescription,
-			InputSchema: decisionSchema}},
-		ToolChoice: anthropicToolChoice{Type: "tool", Name: decisionName},
-	}
 	headers := http.Header{"X-Api-Key": {a.apiKey}, "Anthropic-Version": {anthropicVersion}}
-	data, err := a.post(ctx, "/messages", headers, request)
+	forced := !a.auto.Load()
+	data, err := a.post(ctx, "/messages", headers, a.request(system, message, forced))
+	if forced && refusesForcedTool(err) {
+		if !a.auto.Swap(true) {
+			log.Warnf("[LLM] anthropic: %s refuses the forced call of the %s tool: the tool is left to it, "+
+				"asked to answer with it", a.model, decisionName)
+		}
+		data, err = a.post(ctx, "/messages", headers, a.request(system, message, false))
+	}
 	if err != nil {
 		return Decision{}, err
 	}
@@ -156,4 +160,37 @@ func (a *Anthropic) AnalyzeWith(ctx context.Context, system string, input Input)
 	}
 	return Decision{}, invalidAnswer(a.name, "no call of the %s tool (stop reason %q)", decisionName,
 		answer.StopReason)
+}
+
+// answerWithTheTool asks the model to answer with the tool of the decision,
+// when left to it.
+const answerWithTheTool = "\n\nAnswer only with a call of the " + decisionName + " tool."
+
+// request is the request of the decision of message, with the instructions
+// system: the tool of the decision forced, or left to the model, asked to
+// answer with it.
+func (a *Anthropic) request(system, message string, forced bool) anthropicRequest {
+	choice := anthropicToolChoice{Type: "tool", Name: decisionName}
+	if !forced {
+		choice = anthropicToolChoice{Type: "auto"}
+		message += answerWithTheTool
+	}
+	return anthropicRequest{
+		Model:     a.model,
+		MaxTokens: a.maxTokens,
+		System:    system,
+		Messages:  []anthropicMessage{{Role: "user", Content: message}},
+		Tools: []anthropicTool{{Name: decisionName, Description: decisionDescription,
+			InputSchema: decisionSchema}},
+		ToolChoice: choice,
+	}
+}
+
+// refusesForcedTool reports whether err is the refusal of the forced call of a
+// tool, eg: tool_choice: type "tool" and "any" are not supported for this
+// model.
+func refusesForcedTool(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest &&
+		strings.Contains(apiErr.Message, "tool_choice")
 }

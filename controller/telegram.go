@@ -428,7 +428,8 @@ func (t *Telegram) handleBalance(m *tb.Message) {
 }
 
 // handleProfit summarizes the trades closed on each pair, as the dashboard
-// counts them.
+// counts them: since the start of the current period of the agent, after a
+// reset of its results.
 func (t *Telegram) handleProfit(m *tb.Message) {
 	a, ok := t.agentOf(m)
 	if !ok {
@@ -439,32 +440,50 @@ func (t *Telegram) handleProfit(m *tb.Message) {
 		return
 	}
 
+	since, _ := t.dashboard.currentPeriod(t.ctx, a.Name)
 	summaries := 0
 	for _, pair := range pairs.Pairs {
 		var snapshot ui.Snapshot
 		if !t.call(m, a, http.MethodGet, pair+"/snapshot", nil, &snapshot) {
 			return
 		}
-		if summary, ok := profitSummary(snapshot); ok {
+		if summary, ok := profitSummary(snapshot, since); ok {
 			t.reply(m, a, summary)
 			summaries++
 		}
 	}
 	if summaries == 0 {
-		t.reply(m, a, "No trades registered.")
+		message := "No trades registered."
+		if !since.IsZero() {
+			message = "No trades closed since " + since.UTC().Format("2006-01-02 15:04") + " UTC."
+		}
+		t.reply(m, a, message)
 	}
 }
 
+// closedAt returns when the order filled, in Unix seconds: its last update,
+// its creation for the ones filled at once.
+func closedAt(o ui.Order) int64 {
+	if o.UpdatedAt != 0 {
+		return o.UpdatedAt
+	}
+	return o.CreatedAt
+}
+
 // profitSummary sums up the trades closed on the pair of the snapshot, the
-// orders filled with a profit, as the dashboard does: as the account booked
-// them, in its currency, when it did for all (eg: MT5), else the ones of the
-// core, in the quote. It reports false without any.
-func profitSummary(snapshot ui.Snapshot) (string, bool) {
+// orders filled with a profit, from since (the start of the current period of
+// the agent, zero for all of them), as the dashboard does: as the account
+// booked them, in its currency, when it did for all (eg: MT5), else the ones
+// of the core, in the quote. It reports false without any.
+func profitSummary(snapshot ui.Snapshot, since time.Time) (string, bool) {
 	var closed []ui.Order
 	booked := true
 	for _, o := range snapshot.Orders {
 		if o.Status != string(model.OrderStatusTypeFilled) || (o.Profit == 0 && o.ProfitValue == 0) {
 			continue
+		}
+		if !since.IsZero() && closedAt(o) < since.Unix() {
+			continue // closed before the current period
 		}
 		closed = append(closed, o)
 		booked = booked && o.AccountProfit != nil
@@ -501,8 +520,12 @@ func profitSummary(snapshot ui.Snapshot) (string, bool) {
 	} else if grossProfit == 0 {
 		factor = "0.00"
 	}
-	return fmt.Sprintf("PAIR: %s\nTrades: %d (%d wins, %d losses, %.1f%%)\nProfit: %.2f %s\nProfit factor: %s",
-		snapshot.Pair, trades, wins, losses, float64(wins)/float64(trades)*100, profit, currency, factor), true
+	summary := fmt.Sprintf("PAIR: %s\nTrades: %d (%d wins, %d losses, %.1f%%)\nProfit: %.2f %s\nProfit factor: %s",
+		snapshot.Pair, trades, wins, losses, float64(wins)/float64(trades)*100, profit, currency, factor)
+	if !since.IsZero() {
+		summary += "\nSince: " + since.UTC().Format("2006-01-02 15:04") + " UTC"
+	}
+	return summary, true
 }
 
 // handleOrder creates the market order of /buy or /sell with the control panel

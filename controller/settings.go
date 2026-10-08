@@ -45,6 +45,8 @@ func (s *settings) routes(r chi.Router) {
 	r.Patch("/settings/agents/{name}", s.handleAgent)
 	r.Delete("/settings/agents/{name}", s.handleDeleteAgent)
 	r.Post("/settings/agents/{name}/restart", s.handleRestart)
+	r.Get("/settings/agents/{name}/periods", s.handlePeriods)
+	r.Post("/settings/agents/{name}/periods", s.handleStartPeriod)
 	r.Get("/prompts", s.handlePrompts)
 	r.Post("/prompts", s.handleCreatePrompt)
 	r.Get("/prompts/{id}", s.handlePrompt)
