@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -749,4 +751,47 @@ func TestTelegramProfitHandleSendFailure(t *testing.T) {
 	server.failOn = "sendMessage"
 
 	require.NotPanics(t, func() { notifier.ProfitHandle(message("/profit")) })
+}
+
+// /profit reads the results under the lock of the controller: the orders
+// filling meanwhile, eg: of the strategy, write them (run with -race).
+func TestTelegramProfitHandle_WhileOrdersFill(t *testing.T) {
+	server := newTelegramServer(t)
+	exch := &mocks.Exchange{}
+	var id atomic.Int64
+	exch.On("CreateOrderMarket", model.SideTypeBuy, mock.Anything, 1.0).
+		Return(func(side model.SideType, pair string, size float64) model.Order {
+			return model.Order{ExchangeID: id.Add(1), Pair: pair, Side: side, Quantity: size, Price: 100,
+				Status: model.OrderStatusTypeFilled, Type: model.OrderTypeMarket}
+		}, nil)
+	notifier, controller := newTestTelegram(t, server, exch)
+
+	const pairs = 50
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range pairs {
+			pair := fmt.Sprintf("P%dUSDT", i) // a new pair: a new entry of the results
+			controller.OnCandle(model.Candle{Pair: pair, Close: 100})
+			_, err := controller.CreateOrderMarket(model.SideTypeBuy, pair, 1)
+			assert.NoError(t, err)
+		}
+	}()
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+		}
+		notifier.ProfitHandle(message("/profit"))
+	}
+
+	server.mu.Lock()
+	server.calls["sendMessage"] = nil
+	server.mu.Unlock()
+	notifier.ProfitHandle(message("/profit"))
+	sent := server.sent()
+	require.Len(t, sent, pairs)
+	assert.Contains(t, sent[0], "*PAIR*: `P0USDT`", "in the order of the pairs")
+	assert.Contains(t, sent[1], "*PAIR*: `P10USDT`")
 }

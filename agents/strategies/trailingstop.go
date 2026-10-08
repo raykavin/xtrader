@@ -15,6 +15,11 @@ type trailing struct {
 	scheduler    map[string]*tools.Scheduler
 }
 
+// NewTrailing returns a strategy buying on a crossover of an EMA(8) over an
+// SMA(21), its position closed by a trailing stop on the partial candles.
+//
+// Deprecated: registered in no agent, with tools.TrailingStop and
+// tools.Scheduler. Kept until its removal is decided.
 func NewTrailing(pairs []string) strategy.HighFrequencyStrategy {
 	strategy := &trailing{
 		trailingStop: make(map[string]*tools.TrailingStop),

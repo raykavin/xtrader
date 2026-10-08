@@ -312,6 +312,12 @@ func (c *Chart) OnOrder(order model.Order) {
 		c.orderIDs[order.Pair] = set.NewLinkedHashSetINT64()
 	}
 	c.orderIDs[order.Pair].Add(order.ID)
+	// a fill published again keeps its time, the one the accounting periods
+	// count the trade closed by, as the store does
+	if was, ok := c.orderByID[order.ID]; ok && was.Status == model.OrderStatusTypeFilled &&
+		order.Status == model.OrderStatusTypeFilled {
+		order.UpdatedAt = was.UpdatedAt
+	}
 	c.orderByID[order.ID] = order
 
 	c.events.publish("order", OrderEvent{

@@ -53,6 +53,7 @@ an error after order_send (502, 503) leaves the outcome unknown.
 
 import argparse
 import datetime as dt
+import hmac
 import ipaddress
 import json
 import os
@@ -303,7 +304,13 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorized(self):
-        return not self.token or self.headers.get("X-Bridge-Token") == self.token
+        """Whether the request carries the token, compared in constant time:
+        as bytes, the header as received (http.server decodes it as latin-1),
+        the token as UTF-8, as a Go client sends it."""
+        if not self.token:
+            return True
+        given = self.headers.get("X-Bridge-Token") or ""
+        return hmac.compare_digest(given.encode("latin-1", "replace"), self.token.encode("utf-8"))
 
     def request_deadline(self):
         """The deadline of the request as a time.monotonic(): the earliest of

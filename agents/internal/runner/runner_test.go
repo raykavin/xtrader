@@ -3,6 +3,7 @@ package runner
 import (
 	"hash/fnv"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,28 @@ func TestCheckInputs(t *testing.T) {
 	require.NoError(t, checkInputs(list, "emacross", map[string]bool{"stop-atr": true, "fast-ema": true}))
 }
 
+// M12a: an input of Run that no strategy of the agent takes is refused rather
+// than ignored, eg: -trailing-atr on intradayagent; the flags of every strategy
+// (-pair, -lot...) are not inputs.
+func TestCheckInputs_NoStrategyTakesIt(t *testing.T) {
+	intraday := Agent{Name: "intradayagent", Strategies: []Strategy{
+		{Name: "orb", Inputs: append([]string{"session"}, BracketInputs...)},
+		{Name: "zscore", Inputs: append([]string{"entry-z"}, BracketInputs...)},
+	}}
+	require.ErrorContains(t, intraday.CheckInputs("orb", map[string]bool{"trailing-atr": true, "pair": true}),
+		"-trailing-atr is an input of no strategy of the agent")
+	require.NoError(t, intraday.CheckInputs("orb", map[string]bool{"stop-atr": true, "session": true, "lot": true}))
+
+	trend := Agent{Name: "trendagent", Strategies: []Strategy{
+		{Name: "matrend", Inputs: []string{"trailing-atr", "max-distance"}},
+	}}
+	for _, name := range []string{"take-profit-atr", "max-bars", "min-atr-pct", "stop-atr"} {
+		require.ErrorContains(t, trend.CheckInputs("matrend", map[string]bool{name: true}),
+			"-"+name+" is an input of no strategy of the agent")
+	}
+	require.NoError(t, trend.CheckInputs("matrend", map[string]bool{"trailing-atr": true, "direction": true}))
+}
+
 func TestInputsBracket(t *testing.T) {
 	cfg, timeframe := strategies.DefaultBracketConfig(), "5m"
 	in := Inputs{Set: map[string]bool{"take-profit-atr": true}, Timeframe: "1h", Direction: strategies.RKDirectionBuyOnly,
@@ -180,6 +203,28 @@ func TestSignals(t *testing.T) {
 	_, err = list[0].New(in)
 	require.ErrorContains(t, err, "emacross", "-stop-atr 0: no stop loss")
 	require.Panics(t, func() { Signals("nothing") })
+}
+
+// M12a: -trailing-atr is applied by the signal strategies taking it only (see
+// TrailingSignals): set with emacross of Signals, which refuses it (see
+// checkInputs), it changes nothing; TrailingSignals applies it to every one.
+func TestSignals_TrailingATR(t *testing.T) {
+	in := Inputs{Set: map[string]bool{"trailing-atr": true}, Direction: strategies.RKDirectionBoth,
+		TrailingATR: -1, MinValue: 10, Fraction: 1, Leverage: 1}
+	plain, trailing := Signals("emacross", "donchianatr"), TrailingSignals("emacross")
+	require.Equal(t, BracketInputs, plain[0].Inputs)
+	_, err := plain[0].New(in)
+	require.NoError(t, err, "not applied")
+	_, err = plain[1].New(in)
+	require.ErrorContains(t, err, "trailing", "applied")
+
+	require.Equal(t, append(slices.Clone(BracketInputs), "trailing-atr"), trailing[0].Inputs)
+	_, err = trailing[0].New(in)
+	require.ErrorContains(t, err, "trailing", "applied")
+	in.TrailingATR = 2
+	_, err = trailing[0].New(in)
+	require.NoError(t, err)
+	require.Panics(t, func() { TrailingSignals("nothing") })
 }
 
 func TestMT5Comment(t *testing.T) {

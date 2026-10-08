@@ -50,6 +50,27 @@ var (
 	warnEvery     = 5 * time.Minute
 )
 
+// The records of the outbox are all in memory, as in its file. Rather than
+// warned about, the records not reaching the controller are an error of the
+// log once it is out of reach for alertDown, or the outbox holds alertRecords
+// or alertBytes: none is dropped (each is the state of an order, a decision
+// or a call to the model), the memory of the agent growing until the
+// controller is back.
+var (
+	alertDown          = time.Hour
+	alertRecords       = 10000
+	alertBytes   int64 = 128 << 20
+)
+
+// A record set apart for good is kept for a look deadKeep since it was, and
+// deadMax of them at most, the oldest dropped first, see Outbox.pruneDead,
+// checked every pruneEvery.
+var (
+	deadKeep   = 7 * 24 * time.Hour
+	deadMax    = 1000
+	pruneEvery = time.Hour
+)
+
 // A batch failing poisonAfter times in a row, or for poisonFor, is halved on
 // each failure since, down to its first record alone, which is held apart
 // once it failed alone for holdAfter, poisonAfter times in a row right after
@@ -128,6 +149,8 @@ type Outbox struct {
 	pending  int          // the records not sent
 	setApart int          // the records refused for good
 	held     []heldRecord // the records held apart, by Seq
+	dead     []deadRecord // the records set apart, by Seq
+	pruned   time.Time    // when the records set apart were pruned last
 
 	wake chan struct{} // a record added
 
@@ -160,6 +183,19 @@ type heldRecord struct {
 	kind, key string
 	tried     time.Time
 	wait      time.Duration
+}
+
+// deadRecord is a record set apart for good, see Outbox.bury: since buried, the
+// time the outbox opened for one of an older outbox, which didn't keep it.
+type deadRecord struct {
+	seq    uint64
+	buried time.Time
+}
+
+// buriedRecord is a record set apart in the file of the outbox, with when.
+type buriedRecord struct {
+	agentapi.Record
+	Buried time.Time `json:"buried_at,omitzero"`
 }
 
 // OpenOutbox opens the outbox of file, eg: data/outbox/llm-3.db, its records
@@ -200,6 +236,11 @@ func openOutboxFile(file string, client sender, quarantine bool) (*Outbox, error
 	if len(o.held) > 0 {
 		log.Warnf("[SETUP] the outbox %s holds %d records held apart, failing again and again: sent again once "+
 			"the controller writes records of their kind", file, len(o.held))
+	}
+	o.pruneDead()
+	if records, bytes := o.footprint(); records >= alertRecords || bytes >= alertBytes {
+		log.Errorf("[SETUP] the outbox %s holds %d records, %s, all in memory: the controller didn't take them "+
+			"for long", file, records, mib(bytes))
 	}
 	return o, nil
 }
@@ -242,6 +283,9 @@ func (o *Outbox) open(quarantine bool) error {
 			o.seq = max(o.seq, seq)
 			if prefix == deadPrefix {
 				o.setApart++
+				var record buriedRecord
+				_ = json.Unmarshal([]byte(value), &record)
+				o.dead = append(o.dead, deadRecord{seq: seq, buried: record.Buried})
 				return true
 			}
 			var record agentapi.Record
@@ -263,6 +307,10 @@ func (o *Outbox) open(quarantine bool) error {
 		} else {
 			err = setApartUnreadable(db, unreadable)
 			o.setApart += len(unreadable)
+			for _, key := range unreadable {
+				_, seq, _ := parseKey(key)
+				o.dead = append(o.dead, deadRecord{seq: seq})
+			}
 			log.Errorf("remote: the records %s of the outbox %s can't be read: set apart, never sent to the "+
 				"controller", strings.Join(unreadable, ", "), o.file)
 		}
@@ -620,6 +668,9 @@ func (o *Outbox) Run(ctx context.Context) error {
 			continue
 		}
 		delay = retryDelay
+		if time.Since(o.prunedAt()) >= pruneEvery {
+			o.pruneDead()
+		}
 		if sent > 0 {
 			o.compact()
 			continue
@@ -963,7 +1014,8 @@ func (o *Outbox) remove(records []agentapi.Record, acked uint64) (int, error) {
 func (o *Outbox) bury(record agentapi.Record, from, how string) error {
 	log.Errorf("remote: the %s record %s, %s: set apart for good, kept in the outbox %s, never sent", record.Kind,
 		record.Key, how, o.file)
-	err := o.move(record, from, deadPrefix)
+	buried := time.Now()
+	err := o.move(record, from, deadPrefix, buried)
 	if err == nil {
 		o.mu.Lock()
 		if from == heldPrefix {
@@ -972,9 +1024,56 @@ func (o *Outbox) bury(record agentapi.Record, from, how string) error {
 			o.pending--
 		}
 		o.setApart++
+		o.dead = append(o.dead, deadRecord{seq: record.Seq, buried: buried})
 		o.mu.Unlock()
+		if len(o.dead) > deadMax {
+			o.pruneDead()
+		}
 	}
 	return err
+}
+
+// pruneDead drops the records set apart deadKeep ago, and the oldest past
+// deadMax, logged. A record set apart by an older outbox, which didn't keep
+// when, is kept deadKeep since the outbox opened.
+func (o *Outbox) pruneDead() {
+	now := time.Now()
+	o.mu.Lock()
+	o.pruned = now
+	var drop []deadRecord
+	for i := range o.dead {
+		if o.dead[i].buried.IsZero() {
+			o.dead[i].buried = now
+		}
+		if now.Sub(o.dead[i].buried) >= deadKeep || len(o.dead)-i > deadMax {
+			drop = append(drop, o.dead[i])
+		}
+	}
+	o.mu.Unlock()
+	if len(drop) == 0 {
+		return
+	}
+	err := o.update(func(tx *buntdb.Tx) error {
+		for _, dead := range drop {
+			if _, err := tx.Delete(recordKey(deadPrefix, dead.seq)); err != nil &&
+				!errors.Is(err, buntdb.ErrNotFound) {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errNotOnDisk) {
+		log.Warnf("remote: the outbox %s: the records set apart long ago: %v", o.file, err)
+		return
+	}
+	o.mu.Lock()
+	o.dead = slices.DeleteFunc(o.dead, func(d deadRecord) bool {
+		return slices.ContainsFunc(drop, func(dropped deadRecord) bool { return dropped.seq == d.seq })
+	})
+	o.setApart -= len(drop)
+	o.mu.Unlock()
+	log.Warnf("remote: the outbox %s: %d records set apart for good dropped, set apart %s ago or more, or past "+
+		"the %d kept", o.file, len(drop), deadKeep, deadMax)
 }
 
 // hold holds the record not sent failing again and again apart, see send,
@@ -985,7 +1084,7 @@ func (o *Outbox) hold(record agentapi.Record, how string) error {
 	log.Errorf("remote: the %s record %s, %s: held apart, kept in the outbox %s, the next ones sent: sent again "+
 		"once the controller writes records of its kind, in %s at least", record.Kind, record.Key, how, o.file,
 		heldRetry)
-	err := o.move(record, pendingPrefix, heldPrefix)
+	err := o.move(record, pendingPrefix, heldPrefix, time.Time{})
 	if err == nil {
 		o.mu.Lock()
 		o.pending--
@@ -996,9 +1095,10 @@ func (o *Outbox) hold(record agentapi.Record, how string) error {
 	return err
 }
 
-// move moves the record of the keys of from to the ones of to, as it is.
-func (o *Outbox) move(record agentapi.Record, from, to string) error {
-	encoded, err := json.Marshal(record)
+// move moves the record of the keys of from to the ones of to, as it is: set
+// apart, with when it was buried.
+func (o *Outbox) move(record agentapi.Record, from, to string, buried time.Time) error {
+	encoded, err := json.Marshal(buriedRecord{Record: record, Buried: buried})
 	if err != nil {
 		return err
 	}
@@ -1190,16 +1290,52 @@ func (o *Outbox) compact() {
 }
 
 // failed warns of the records not reaching the controller, now and then
-// while it lasts.
+// while it lasts: an error once it lasts alertDown, or the outbox holds
+// alertRecords or alertBytes.
 func (o *Outbox) failed(err error) {
 	now := time.Now()
 	if o.failing.IsZero() {
 		o.failing = now
 	}
-	if now.Sub(o.warned) >= warnEvery {
-		o.warned = now
-		log.Warnf("remote: the records don't reach the controller, kept until they do: %v", err)
+	if now.Sub(o.warned) < warnEvery {
+		return
 	}
+	o.warned = now
+	records, bytes := o.footprint()
+	down := now.Sub(o.failing)
+	if down >= alertDown || records >= alertRecords || bytes >= alertBytes {
+		log.Errorf("remote: the records don't reach the controller for %s: the outbox %s holds %d records, %s, "+
+			"all in memory, growing until it is back: %v", down.Round(time.Second), o.file, records, mib(bytes),
+			err)
+		return
+	}
+	log.Warnf("remote: the records don't reach the controller, kept until they do: %v", err)
+}
+
+// footprint returns how many records the outbox holds, of every kind, and
+// their bytes, all in memory.
+func (o *Outbox) footprint() (int, int64) {
+	records, bytes := 0, int64(0)
+	_ = o.view(func(tx *buntdb.Tx) error {
+		return tx.AscendKeys("*", func(key, value string) bool {
+			records++
+			bytes += int64(len(key) + len(value))
+			return true
+		})
+	})
+	return records, bytes
+}
+
+// prunedAt returns when the records set apart were pruned last.
+func (o *Outbox) prunedAt() time.Time {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.pruned
+}
+
+// mib returns bytes in MiB, eg: 12.5 MiB.
+func mib(bytes int64) string {
+	return strconv.FormatFloat(float64(bytes)/(1<<20), 'f', 1, 64) + " MiB"
 }
 
 // recovered tells of the records reaching the controller again.

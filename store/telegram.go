@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm/clause"
 )
@@ -27,25 +28,35 @@ func (s *Store) TelegramToken(ctx context.Context) (string, error) {
 // SetTelegram changes the settings of the Telegram bot: enabled when set, and
 // its token, see Secret; the one kept, sealed by a version before the places
 // of the secrets (see unseal), sealed again for its place as it is written.
+// The row is locked from its read to its write, and only the columns changed
+// are written: two changes at once, eg: the switch and the token, both apply.
 func (s *Store) SetTelegram(ctx context.Context, enabled *bool, token Secret) error {
-	settings, _, err := s.Telegram(ctx)
-	if err != nil {
-		return err
-	}
-	if enabled != nil {
-		settings.Enabled = *enabled
-	}
-	if token == nil {
-		if kept, placed, err := s.unseal(telegramToken(), settings.Token); err == nil && !placed {
-			token = &kept
+	return s.Transaction(ctx, func(ctx context.Context) error {
+		err := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&TelegramSettings{ID: 1}).Error
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.sealInto(&settings.Token, telegramToken(), token); err != nil {
-		return err
-	}
-	settings.ID = 1
-	return s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"enabled", "token", "updated_at"})}).Create(&settings).Error
+		var settings TelegramSettings
+		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&settings, 1).Error; err != nil {
+			return err
+		}
+		columns := map[string]interface{}{"updated_at": time.Now()}
+		if enabled != nil {
+			columns["enabled"] = *enabled
+		}
+		if token == nil {
+			if kept, placed, err := s.unseal(telegramToken(), settings.Token); err == nil && !placed {
+				token = &kept
+			}
+		}
+		if token != nil {
+			if err := s.sealInto(&settings.Token, telegramToken(), token); err != nil {
+				return err
+			}
+			columns["token"] = settings.Token
+		}
+		return s.conn(ctx).Model(&TelegramSettings{}).Where("id = 1").Updates(columns).Error
+	})
 }
 
 // TelegramUsers returns the Telegram users the bot answers, by their ID.

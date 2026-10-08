@@ -53,7 +53,11 @@ const providerOptions: SelectOption[] = llmProviders.map((provider) => ({
 
 const effortOptions: SelectOption[] = [
   { value: "", label: "—", hint: "o do modelo" },
-  ...reasoningEfforts.map((effort) => ({ value: effort, label: effort })),
+  ...reasoningEfforts.map((effort) =>
+    effort === "none"
+      ? { value: effort, label: effort, hint: "sem raciocínio" }
+      : { value: effort, label: effort },
+  ),
 ];
 
 /** A model of each provider, the example of the field of the model. */

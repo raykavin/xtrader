@@ -50,7 +50,8 @@ var m5fTimeframes = map[string]bool{"M1": true, "M3": true, "M5": true, "M10": t
 	"H1": true, "H2": true, "H4": true, "D1": true, "W1": true, "MN1": true}
 
 type m5fPosition struct {
-	ticket    int64
+	ticket    int64 // its identifier, the key of positions
+	live      int64 // its ticket since a service operation (reticket), 0 for ticket
 	timeMsc   int64
 	kind      int
 	magic     int64
@@ -123,6 +124,12 @@ type m5fFailure struct {
 	body         string
 }
 
+// m5fHold is a request held before it is handled, see holdNext.
+type m5fHold struct {
+	method, path, key string
+	reached, released chan struct{}
+}
+
 type m5fResult struct {
 	retcode int
 	comment string
@@ -166,6 +173,8 @@ type m5fFake struct {
 	afterSnapshot func()                // runs after the next GET /orders, eg: to fill an order between the two reads
 	after         map[string]func()     // run after the next request of their method and path
 	failing       map[string]m5fFailure // the answers of every request of their method and path, until cleared
+	hold          *m5fHold              // the next request it matches, held before it is handled, see holdNext
+	hidden        map[int64]bool        // positions left out of GET /positions, as by a lagging terminal
 
 	login       int64         // of --login: the trade requests on another account are refused (409)
 	tradeDelay  time.Duration // waited by the trade requests before their deadline is checked, as for the terminal
@@ -376,6 +385,32 @@ func (f *m5fFake) setFailing(method, path string, status int, body string) {
 	f.failing[method+" "+path] = m5fFailure{method: method, path: path, status: status, body: body}
 }
 
+// holdNext holds the next request of method to path with key in its query,
+// before it is handled, until release (called when the test ends too):
+// reached is closed once it arrives.
+func (f *m5fFake) holdNext(method, path, key string) (reached <-chan struct{}, release func()) {
+	hold := &m5fHold{method: method, path: path, key: key, reached: make(chan struct{}),
+		released: make(chan struct{})}
+	f.mu.Lock()
+	f.hold = hold
+	f.mu.Unlock()
+	var once sync.Once
+	release = func() { once.Do(func() { close(hold.released) }) }
+	f.t.Cleanup(release)
+	return hold.reached, release
+}
+
+// hidePosition leaves the position of ticket out of GET /positions, or back in
+// it, as a terminal that lists it late.
+func (f *m5fFake) hidePosition(ticket int64, hidden bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hidden == nil {
+		f.hidden = make(map[int64]bool)
+	}
+	f.hidden[ticket] = hidden
+}
+
 func (f *m5fFake) clearFailing(method, path string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -488,6 +523,38 @@ func (f *m5fFake) clearRequests() {
 	f.requests = nil
 }
 
+// liveTicket is the ticket of the position, which the trade requests take:
+// its identifier unless a service operation gave it another (reticket).
+func (p *m5fPosition) liveTicket() int64 {
+	if p.live != 0 {
+		return p.live
+	}
+	return p.ticket
+}
+
+// byTicketLocked returns the open position of a ticket of a trade request:
+// never by its identifier once its ticket differs, as on MT5.
+func (f *m5fFake) byTicketLocked(ticket int64) (*m5fPosition, bool) {
+	for _, p := range f.positions {
+		if p.liveTicket() == ticket {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+// reticket gives an open position a new ticket, its identifier kept, as a
+// service operation of the server does (eg: a swap charged by reopening it),
+// and returns it.
+func (f *m5fFake) reticket(identifier int64) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.positions[identifier]
+	require.True(f.t, ok, "no position %d", identifier)
+	p.live = f.newTicketLocked()
+	return p.live
+}
+
 // position returns a copy of an open position.
 func (f *m5fFake) position(ticket int64) (m5fPosition, bool) {
 	f.mu.Lock()
@@ -582,21 +649,60 @@ func (f *m5fFake) placePending(symbol string, kind int, volume, price, sl, tp fl
 	return o.ticket
 }
 
-// fillPending fills a pending order at its price: it opens a position of its
-// ticket, with its levels, magic and comment.
+// fillPending fills a pending order at its price, the rest of it when it was
+// filled in part: it opens a position of its ticket, with its levels, magic
+// and comment, or adds to it.
 func (f *m5fFake) fillPending(ticket int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	o, ok := f.orders[ticket]
 	require.True(f.t, ok, "no pending order %d", ticket)
+	volume := o.volumeCurrent
+	if volume <= 0 {
+		volume = o.volumeInitial
+	}
 	delete(f.orders, ticket)
 	o.state, o.doneMsc, o.positionID, o.volumeCurrent, o.priceCurrent = mt5StateFilled, f.nowMs(), ticket, 0,
 		o.priceOpen
 	f.history = append(f.history, o)
-	p := &m5fPosition{ticket: ticket, timeMsc: f.nowMs(), kind: o.kind % 2, magic: o.magic, reason: mt5ReasonExpert,
-		volume: o.volumeInitial, priceOpen: o.priceOpen, sl: o.sl, tp: o.tp, symbol: o.symbol, comment: o.comment}
-	f.positions[ticket] = p
-	f.dealLocked(ticket, p, p.kind, mt5EntryIn, mt5ReasonExpert, p.volume, p.priceOpen, o.magic, o.comment)
+	f.executePendingLocked(o, volume)
+}
+
+// fillPendingPartly fills volume of a pending order at its price: its position
+// opened or added to, the order left in the book with the rest, partially
+// filled.
+func (f *m5fFake) fillPendingPartly(ticket int64, volume float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o, ok := f.orders[ticket]
+	require.True(f.t, ok, "no pending order %d", ticket)
+	require.Less(f.t, volume, o.volumeCurrent, "a part of the order %d", ticket)
+	o.volumeCurrent = math.Round((o.volumeCurrent-volume)*1e8) / 1e8
+	o.state, o.positionID, o.priceCurrent = mt5StatePartial, ticket, o.priceOpen
+	f.executePendingLocked(o, volume)
+}
+
+// executePendingLocked executes volume of a pending order: the position of its
+// ticket opened or added to, and the entry deal.
+func (f *m5fFake) executePendingLocked(o *m5fOrder, volume float64) {
+	p, ok := f.positions[o.ticket]
+	if !ok {
+		p = &m5fPosition{ticket: o.ticket, timeMsc: f.nowMs(), kind: o.kind % 2, magic: o.magic,
+			reason: mt5ReasonExpert, priceOpen: o.priceOpen, sl: o.sl, tp: o.tp, symbol: o.symbol, comment: o.comment}
+		f.positions[o.ticket] = p
+	}
+	p.volume = math.Round((p.volume+volume)*1e8) / 1e8
+	f.dealLocked(o.ticket, p, p.kind, mt5EntryIn, mt5ReasonExpert, volume, o.priceOpen, o.magic, o.comment)
+}
+
+// setPendingState sets the state of a pending order of the book, eg: PLACED
+// while executed in part, as a server may list it.
+func (f *m5fFake) setPendingState(ticket int64, state int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o, ok := f.orders[ticket]
+	require.True(f.t, ok, "no pending order %d", ticket)
+	o.state = state
 }
 
 // expirePending expires a pending order.
@@ -757,6 +863,18 @@ func (f *m5fFake) reduceLocked(p *m5fPosition, volume float64) {
 
 // serveHTTP answers a request as the bridge does.
 func (f *m5fFake) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	hold := f.hold
+	if hold != nil && hold.method == r.Method && hold.path == r.URL.Path && r.URL.Query().Has(hold.key) {
+		f.hold = nil
+	} else {
+		hold = nil
+	}
+	f.mu.Unlock()
+	if hold != nil {
+		close(hold.reached)
+		<-hold.released
+	}
 	received := time.Now()
 	data, _ := io.ReadAll(r.Body)
 	if r.Method == http.MethodPost && r.URL.Path == "/order" {
@@ -945,7 +1063,7 @@ func (f *m5fFake) positionJSONLocked(p *m5fPosition) map[string]any {
 		sign = -1
 	}
 	return map[string]any{
-		"ticket": p.ticket, "time": p.timeMsc / 1000, "time_msc": p.timeMsc, "time_update": p.timeMsc / 1000,
+		"ticket": p.liveTicket(), "time": p.timeMsc / 1000, "time_msc": p.timeMsc, "time_update": p.timeMsc / 1000,
 		"time_update_msc": p.timeMsc, "type": p.kind, "magic": p.magic, "identifier": p.ticket, "reason": p.reason,
 		"volume": p.volume, "price_open": p.priceOpen, "sl": p.sl, "tp": p.tp, "price_current": current,
 		"swap": 0.0, "profit": math.Round(sign*(current-p.priceOpen)*p.volume*f.symbols[p.symbol].contract*100) / 100,
@@ -956,7 +1074,7 @@ func (f *m5fFake) positionJSONLocked(p *m5fPosition) map[string]any {
 func (f *m5fFake) positionsJSONLocked(symbol string) []map[string]any {
 	tickets := make([]int64, 0, len(f.positions))
 	for ticket, p := range f.positions {
-		if symbol == "" || p.symbol == symbol {
+		if (symbol == "" || p.symbol == symbol) && !f.hidden[ticket] {
 			tickets = append(tickets, ticket)
 		}
 	}
@@ -1183,7 +1301,7 @@ func (f *m5fFake) executeLocked(body map[string]any, result map[string]any) (int
 		}
 		price := f.marketPriceLocked(symbolName, kind)
 		if ticket := int64(m5fNumber(body, "position")); ticket != 0 {
-			p, ok := f.positions[ticket]
+			p, ok := f.byTicketLocked(ticket)
 			switch {
 			case !ok || p.symbol != symbolName || p.kind == kind:
 				return mt5CodeInvalid, "Invalid request"
@@ -1239,7 +1357,7 @@ func (f *m5fFake) executeLocked(body map[string]any, result map[string]any) (int
 		result["order"], result["volume"], result["price"] = o.ticket, volume, price
 		return mt5CodeDone, ""
 	case mt5ActionSLTP:
-		p, ok := f.positions[int64(m5fNumber(body, "position"))]
+		p, ok := f.byTicketLocked(int64(m5fNumber(body, "position")))
 		if !ok {
 			return mt5CodeInvalid, "Invalid request"
 		}
@@ -1275,8 +1393,8 @@ func (f *m5fFake) executeLocked(body map[string]any, result map[string]any) (int
 		result["order"] = o.ticket
 		return mt5CodeDone, ""
 	case mt5ActionCloseBy:
-		p, ok1 := f.positions[int64(m5fNumber(body, "position"))]
-		by, ok2 := f.positions[int64(m5fNumber(body, "position_by"))]
+		p, ok1 := f.byTicketLocked(int64(m5fNumber(body, "position")))
+		by, ok2 := f.byTicketLocked(int64(m5fNumber(body, "position_by")))
 		if !ok1 || !ok2 || p.symbol != by.symbol || p.kind == by.kind {
 			return mt5CodeInvalid, "Invalid request"
 		}
@@ -1408,6 +1526,12 @@ func (x *MT5TestFake) SetPrice(symbol string, bid, ask float64) { x.f.setPrice(s
 // FillPending fills a pending order at its price.
 func (x *MT5TestFake) FillPending(ticket int64) { x.f.fillPending(ticket) }
 
+// FillPendingPartly fills lots of a pending order at its price, the rest left
+// in the book.
+func (x *MT5TestFake) FillPendingPartly(ticket int64, lots float64) {
+	x.f.fillPendingPartly(ticket, lots)
+}
+
 // TriggerSL closes a position by its stop loss at price, its level when 0.
 func (x *MT5TestFake) TriggerSL(position int64, price float64) { x.f.triggerSL(position, price) }
 
@@ -1423,6 +1547,25 @@ func (x *MT5TestFake) HoldHistory() { x.f.holdHistory() }
 
 // ReleaseHistory lists the history held since HoldHistory.
 func (x *MT5TestFake) ReleaseHistory() { x.f.releaseHistory() }
+
+// HoldNext holds the next request of method to path with key in its query,
+// before it is handled, until release: reached is closed once it arrives.
+func (x *MT5TestFake) HoldNext(method, path, key string) (reached <-chan struct{}, release func()) {
+	return x.f.holdNext(method, path, key)
+}
+
+// FailReads answers every GET of path with a 503 of the terminal, until
+// ClearFailedReads.
+func (x *MT5TestFake) FailReads(path string) {
+	x.f.setFailing(http.MethodGet, path, http.StatusServiceUnavailable, `{"error":"terminal busy"}`)
+}
+
+// ClearFailedReads ends FailReads of path.
+func (x *MT5TestFake) ClearFailedReads(path string) { x.f.clearFailing(http.MethodGet, path) }
+
+// MT5TestPoll reads the account into the book of m once, as its poll does,
+// for the tests of package exchange_test whose adapter polls seldom.
+func MT5TestPoll(m *MT5) error { return m.poll(m.ctx) }
 
 // NetLots returns the net lots of the bot's positions of symbol.
 func (x *MT5TestFake) NetLots(symbol string) float64 { return x.f.netLots(symbol, m5fMagic) }

@@ -103,6 +103,9 @@ func TestSaveOrders_AsSupersedesTells(t *testing.T) {
 			want := prev
 			if next.Supersedes(prev) {
 				want = next
+				if prev.Status == model.OrderStatusTypeFilled && next.Status == model.OrderStatusTypeFilled {
+					want.UpdatedAt = prev.UpdatedAt // the time of the fill kept, see fillTime
+				}
 			}
 			what := fmt.Sprintf("%s at %s, then %s at %s", prev.Status, prev.UpdatedAt.Format(time.TimeOnly),
 				next.Status, next.UpdatedAt.Format(time.TimeOnly))
@@ -146,4 +149,39 @@ func TestSaveOrders_TheWarningTellsTheOrdersKeptAlone(t *testing.T) {
 	require.NotContains(t, warnings[0], "order 2")
 	require.Equal(t, filled, storedOrder(t, s, agent.ID, 1))
 	require.Equal(t, moved, storedOrder(t, s, agent.ID, 2))
+}
+
+// R17j: a fill written again with a later time, eg: a later copy of it, keeps
+// the time of the first, the one the accounting periods count the trade
+// closed by; the rest of the copy is written.
+func TestSaveOrders_AFillWrittenAgainKeepsItsTime(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	agent := llmAgent(t, s, "llm")
+
+	created := time.Date(2026, 10, 6, 23, 0, 0, 0, time.UTC)
+	exit := model.Order{ID: 1, ExchangeID: 9001, Pair: "XAUUSDm", Side: model.SideTypeSell,
+		Type: model.OrderTypeStopLoss, Status: model.OrderStatusTypeNew, Price: 1990, Quantity: 1, CreatedAt: created,
+		UpdatedAt: created}
+	require.NoError(t, s.SaveOrders(ctx, agent.ID, []model.Order{exit}, true))
+	filled := exit
+	filled.Status, filled.UpdatedAt = model.OrderStatusTypeFilled, created.Add(59*time.Minute) // 23:59
+	filled.Profit, filled.ProfitValue = -0.005, -10
+	require.NoError(t, s.SaveOrders(ctx, agent.ID, []model.Order{filled}, true))
+
+	again := filled
+	again.UpdatedAt, again.Price = created.Add(2*time.Hour), 1989.5 // the next day
+	require.NoError(t, s.SaveOrders(ctx, agent.ID, []model.Order{again}, true))
+	want := again
+	want.UpdatedAt = filled.UpdatedAt
+	require.Equal(t, want, storedOrder(t, s, agent.ID, 1), "the time of the fill kept, the rest written")
+
+	// an order ended otherwise takes the time of its fill, the first
+	canceled := exit
+	canceled.ID, canceled.Status, canceled.UpdatedAt = 2, model.OrderStatusTypeCanceled, created.Add(time.Minute)
+	require.NoError(t, s.SaveOrders(ctx, agent.ID, []model.Order{canceled}, true))
+	late := filled
+	late.ID = 2
+	require.NoError(t, s.SaveOrders(ctx, agent.ID, []model.Order{late}, true))
+	require.Equal(t, late, storedOrder(t, s, agent.ID, 2))
 }

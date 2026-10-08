@@ -251,7 +251,7 @@ export const agentModes = ["live", "paper"];
 export const llmProviders = ["openai", "anthropic"];
 
 /** The reasoning efforts of a language model; none, the one of the model. */
-export const reasoningEfforts = ["minimal", "low", "medium", "high"];
+export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh"];
 
 /** The length of the comment of the orders of an agent at most: the longest MT5 keeps. */
 export const maxComment = 31;

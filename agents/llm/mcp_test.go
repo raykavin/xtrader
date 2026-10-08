@@ -47,6 +47,11 @@ type fakeMCP struct {
 	failInitialized int
 	staleInit       int           // the initialize requests sent with a session
 	initDelay       time.Duration // before an initialize is answered, set before the calls
+
+	ranges    []string // the ranges of the values read, from-to
+	page      int      // the most values answered at a time, the rest truncated, when > 0
+	inclusive bool     // datetime_to taken as inclusive, the release at it answered
+	moreUSD   []string // more events of USD, JSON objects
 }
 
 func newFakeMCP(t *testing.T) *fakeMCP {
@@ -145,10 +150,15 @@ func (f *fakeMCP) handle(w http.ResponseWriter, r *http.Request) {
 			f.refuse(w, *message.ID)
 			return
 		}
+		more := ""
+		for _, event := range f.moreUSD {
+			more += ",\n" + event
+		}
 		f.text(w, *message.ID, false, `{ "ok": true, "count": 3, "events": [
-			{"id": "840020013", "importance": "High importance", "unit": "Percentage", "name": "CPI (Mensal)", "event_code": "cpi-mm"},
+			{"id": "840020013", "importance": "High importance", "unit": "Percentage", "name": "CPI (Mensal)", "event_code": "cpi-mm", "time_mode": "Source publishes an exact time of an event"},
 			{"id": "840020014", "importance": "Medium importance", "unit": "Percentage", "name": "Vendas", "event_code": "retail-sales"},
-			{"id": "840099999", "importance": "Low importance", "unit": "None", "name": "Leilão", "event_code": "auction"}]}`)
+			{"id": "840099999", "importance": "Low importance", "unit": "None", "name": "Leilão", "event_code": "auction"}`+
+			more+`]}`)
 	case "economic_calendar_list_values":
 		from := fmt.Sprint(call.Arguments["datetime_from"])
 		day := from[:10]
@@ -160,9 +170,27 @@ func (f *fakeMCP) handle(w http.ResponseWriter, r *http.Request) {
 		require.NoError(f.t, err)
 		start, err := time.Parse("2006-01-02T15:04:05", from)
 		require.NoError(f.t, err)
-		require.Equal(f.t, 24*time.Hour, to.Sub(start), "a day at a time")
-		data, _ := json.Marshal(map[string]any{"ok": true, "count": len(f.values[day]), "truncated": false,
-			"values": f.values[day]})
+		require.True(f.t, to.After(start) && to.Sub(start) <= 24*time.Hour, "a day at most at a time")
+		f.ranges = append(f.ranges, from[11:16]+"-"+to.Format("15:04"))
+		values := []mcpValue{}
+		for _, day := range []string{day, to.Format(time.DateOnly)} {
+			for _, value := range f.values[day] {
+				at, err := time.Parse("2006-01-02T15:04:05", value.Time)
+				require.NoError(f.t, err)
+				if !at.Before(start) && (at.Before(to) || f.inclusive && at.Equal(to)) {
+					values = append(values, value)
+				}
+			}
+			if to.Format(time.DateOnly) == day {
+				break
+			}
+		}
+		truncated := f.page > 0 && len(values) > f.page
+		if truncated {
+			values = values[:f.page]
+		}
+		data, _ := json.Marshal(map[string]any{"ok": true, "count": len(values), "truncated": truncated,
+			"values": values})
 		f.text(w, *message.ID, false, string(data))
 	default:
 		f.t.Fatalf("tool %s called", call.Name)

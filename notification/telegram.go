@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,13 @@ func authorizedUser(settings model.Settings) func(*tb.Update) bool {
 	}
 }
 
+// NewTelegram returns the Telegram bot of the engine: its orders, errors and
+// commands, eg: /buy, /profit, for the users of settings.Telegram.
+//
+// Deprecated: the engine creates it only with settings.Telegram.Enabled,
+// which no agent sets: the agents relay their orders, messages and errors to
+// the Telegram of the controller (controller/telegram.go), which drives them.
+// Kept until its removal is decided.
 func NewTelegram(controller *order.Controller, settings model.Settings, options ...Option) (service.Telegram, error) {
 	menu := &tb.ReplyMarkup{ResizeReplyKeyboard: true}
 	poller := &tb.LongPoller{Timeout: 10 * time.Second}
@@ -219,7 +227,8 @@ func (t telegram) HelpHandle(m *tb.Message) {
 }
 
 func (t telegram) ProfitHandle(m *tb.Message) {
-	if len(t.orderController.Results) == 0 {
+	summaries := t.orderController.Summaries() // read under its lock: the orders fill meanwhile
+	if len(summaries) == 0 {
 		_, err := t.client.Send(m.Sender, "No trades registered.")
 		if err != nil {
 			log.Error(err)
@@ -227,8 +236,13 @@ func (t telegram) ProfitHandle(m *tb.Message) {
 		return
 	}
 
-	for pair, summary := range t.orderController.Results {
-		_, err := t.client.Send(m.Sender, fmt.Sprintf("*PAIR*: `%s`\n`%s`", pair, summary.String()))
+	pairs := make([]string, 0, len(summaries))
+	for pair := range summaries {
+		pairs = append(pairs, pair)
+	}
+	sort.Strings(pairs)
+	for _, pair := range pairs {
+		_, err := t.client.Send(m.Sender, fmt.Sprintf("*PAIR*: `%s`\n`%s`", pair, summaries[pair]))
 		if err != nil {
 			log.Error(err)
 		}

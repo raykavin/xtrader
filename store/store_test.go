@@ -120,3 +120,46 @@ func TestTransaction_RollsBackAndIsJoined(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, count, "both rolled back")
 }
+
+func TestSeeds_ConcurrentPopulatesSerialized(t *testing.T) {
+	// two migrators at once (eg: two controllers starting): the second one
+	// waits for the seeds of the first, then inserts nothing, instead of
+	// failing on uq_prompts_name; a few rounds, the race being narrow
+	for round := range 3 {
+		dsn := testDatabase(t)
+		schema, err := migrate.New(migrate.MigrateConfig{DSN: dsn, Dialector: "postgres",
+			MigrationsPath: filepath.Join("..", "sql", "migrations")})
+		require.NoError(t, err)
+		require.NoError(t, schema.Migrate(context.Background()))
+
+		const migrators = 4
+		populates := make([]*migrate.Migrator, migrators)
+		for i := range populates {
+			populates[i], err = migrate.New(migrate.MigrateConfig{DSN: dsn, Dialector: "postgres",
+				MigrationsPath: filepath.Join("..", "sql", "migrations"),
+				PopulationPath: filepath.Join("..", "sql", "seeds")})
+			require.NoError(t, err)
+		}
+		start := make(chan struct{})
+		errs := make(chan error, migrators)
+		for _, m := range populates {
+			go func() {
+				<-start
+				errs <- m.Populate(context.Background())
+			}()
+		}
+		close(start)
+		for range migrators {
+			require.NoError(t, <-errs, "round %d", round)
+		}
+
+		s, err := Open(config.Database{DSN: dsn, MaxOpenConns: 2, LogLevel: "silent"}, testKey)
+		require.NoError(t, err)
+		var prompts, versions int64
+		require.NoError(t, s.db.Table("prompts").Count(&prompts).Error)
+		require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
+		_ = s.Close()
+		require.EqualValues(t, 43, prompts, "each prompt seeded once")
+		require.Equal(t, prompts, versions)
+	}
+}

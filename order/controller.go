@@ -399,13 +399,17 @@ type Controller struct {
 	storage        storage.Storage
 	orderFeed      *Feed
 	notifier       service.Notifier
-	Results        map[string]*summary
+	Results        map[string]*summary // under mtx while the bot runs, see Summaries
 	lastPrice      map[string]float64
 	tickerInterval time.Duration
 	finish         chan bool
 	status         Status
 
 	position map[string]*Position
+	// openings holds when the fills of each pair opened a position, or
+	// reversed one, the stored ones replayed by restore included, the last
+	// openingsKept of them, see PositionsOpened and PositionsReplayed.
+	openings map[string][]opening
 
 	// pending holds the orders waiting for an update from the exchange, keyed
 	// by their storage id: the ones created by this controller plus, once
@@ -477,6 +481,7 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 		tickerInterval: time.Second,
 		finish:         make(chan bool),
 		position:       make(map[string]*Position),
+		openings:       make(map[string][]opening),
 		pending:        make(map[int64]model.Order),
 		movedAt:        make(map[int64]uint64),
 		unstored:       make(map[int64]model.Order),
@@ -789,13 +794,16 @@ func (c *Controller) updatePosition(o *model.Order) {
 			Side:      o.Side,
 			Entry:     *o,
 		}
+		c.opened(o.Pair, filledAt(o))
 		return
 	}
 
-	entry := position.Entry // before a reversal replaces it
+	entry, side := position.Entry, position.Side // before a reversal replaces them
 	result, closed := position.Update(o)
 	if closed {
 		delete(c.position, o.Pair)
+	} else if position.Side != side {
+		c.opened(o.Pair, position.CreatedAt)
 	}
 
 	if result != nil {
@@ -1339,6 +1347,21 @@ func (c *Controller) exchangeOrder(order model.Order) (model.Order, error) {
 	return c.exchange.Order(order.Pair, order.ExchangeID)
 }
 
+// Summaries returns the results of each pair, as their table, read under
+// c.mtx: Results is written as the orders fill, so read it directly only once
+// the bot stopped, eg: at the end of a backtest. The exclusive lock, as the
+// table may write the spare capacity of the slices of a summary (see
+// rebuildCache).
+func (c *Controller) Summaries() map[string]string {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	summaries := make(map[string]string, len(c.Results))
+	for pair, summary := range c.Results {
+		summaries[pair] = summary.String()
+	}
+	return summaries
+}
+
 func (c *Controller) Status() Status {
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
@@ -1716,6 +1739,56 @@ func (c *Controller) HeldLegs(pair string, side model.SideType) ([]model.Order, 
 	}
 	sort.Slice(legs, func(i, j int) bool { return legs[i].ID < legs[j].ID })
 	return legs, opened, nil
+}
+
+// openingsKept is how many openings of a pair PositionsOpened tells, the last
+// ones: plenty for the entries of a session.
+const openingsKept = 1000
+
+// opening is a fill that opened a position, or reversed one, at at: replayed
+// when restore replayed it from the storage, a fill of a previous run.
+type opening struct {
+	at       time.Time
+	replayed bool
+}
+
+// opened records a position of pair opened at at, see PositionsOpened.
+// Must be called while holding c.mtx, or from restore.
+func (c *Controller) opened(pair string, at time.Time) {
+	openings := append(c.openings[pair], opening{at: at, replayed: c.restoring})
+	if len(openings) > openingsKept {
+		openings = slices.Delete(openings, 0, len(openings)-openingsKept)
+	}
+	c.openings[pair] = openings
+}
+
+// PositionsOpened returns how many fills of pair opened a position, or reversed
+// one, at or after since: from the fills the controller settled, the ones of
+// the storage replayed at the start (see restore) included, whatever placed
+// them (a strategy, the trade panel, Telegram).
+func (c *Controller) PositionsOpened(pair string, since time.Time) int {
+	return c.countOpenings(pair, since, false)
+}
+
+// PositionsReplayed is PositionsOpened of the fills of the storage replayed at
+// the start only (see restore): the positions opened by the previous runs, see
+// service.PositionOpenings.
+func (c *Controller) PositionsReplayed(pair string, since time.Time) int {
+	return c.countOpenings(pair, since, true)
+}
+
+// countOpenings counts the openings of pair at or after since, the replayed
+// ones only when replayed.
+func (c *Controller) countOpenings(pair string, since time.Time, replayed bool) int {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+	n := 0
+	for _, o := range c.openings[pair] {
+		if !o.at.Before(since) && (o.replayed || !replayed) {
+			n++
+		}
+	}
+	return n
 }
 
 // fillPositions is implemented by the exchanges that tell the positions a fill

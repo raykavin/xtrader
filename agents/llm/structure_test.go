@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/raykavin/xtrader/indicator"
 	"github.com/raykavin/xtrader/model"
 )
 
@@ -149,6 +150,38 @@ func TestPercentile(t *testing.T) {
 	require.Equal(t, 100.0, percentile([]float64{1, math.NaN(), 3}, 3))
 	require.True(t, math.IsNaN(percentile([]float64{math.NaN()}, 1)))
 	require.True(t, math.IsNaN(percentile([]float64{1}, math.NaN())))
+}
+
+// B37: with a short warmup, the window reaches back to the first ATRLen
+// candles, where talib writes 0 rather than NaN: those zeros aren't ATRs, the
+// percentile leaves them out rather than counting them as the quietest ones.
+func TestComputeStructure_ATRPercentileShortWarmup(t *testing.T) {
+	const n, length = 40, 14
+	base := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
+	candles := make([]model.Candle, n)
+	high, low, closes := make([]float64, n), make([]float64, n), make([]float64, n)
+	for i := range candles {
+		width := 5 - 4*float64(i)/(n-1) // narrowing: the last ATR the lowest
+		candles[i] = model.Candle{Time: base.Add(time.Duration(i) * time.Hour), Open: 100, Close: 100,
+			High: 100 + width, Low: 100 - width, Volume: 1}
+		high[i], low[i], closes[i] = candles[i].High, candles[i].Low, candles[i].Close
+	}
+	atr := indicator.ATR(high, low, closes, length)
+	require.Zero(t, atr[0], "talib warming up")
+	zeros := 0
+	for _, v := range atr {
+		if v == 0 {
+			zeros++
+		}
+	}
+	require.Positive(t, zeros)
+
+	s := computeStructure(candles, atr)
+	require.NotNil(t, s)
+	require.InDelta(t, 100/float64(n-zeros), float64(s.ATRPercentile), 1e-3, "the lowest of the known ATRs")
+
+	// all of them warming up: unknown
+	require.True(t, math.IsNaN(float64(computeStructure(candles[:length], atr[:length]).ATRPercentile)))
 }
 
 // The derived numbers go with 4 significant digits, and a zone of a single

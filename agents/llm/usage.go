@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"bytes"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -9,20 +11,39 @@ import (
 
 // Usage is the tokens of the answers of a provider: Input the tokens of the
 // prompts, Cached the ones of them read from the cache of the provider, billed
-// at a discount, Output the tokens answered, and Reasoning the ones of them
-// the model spent reasoning, billed as output but not shown.
+// at a discount, CacheWritten the ones of the prompts written to the cache
+// (Anthropic), apart from Input, billed at a premium, Output the tokens
+// answered, and Reasoning the ones of them the model spent reasoning, billed
+// as output but not shown (OpenAI; Anthropic doesn't tell them apart).
 type Usage struct {
-	Input     int
-	Cached    int
-	Output    int
-	Reasoning int
+	Input        int
+	Cached       int
+	CacheWritten int
+	Output       int
+	Reasoning    int
 }
 
 func (u *Usage) add(other Usage) {
 	u.Input += other.Input
 	u.Cached += other.Cached
+	u.CacheWritten += other.CacheWritten
 	u.Output += other.Output
 	u.Reasoning += other.Reasoning
+}
+
+// usageIn decodes into usage the last "usage" object of data, the body of an
+// answer that isn't valid JSON as a whole, eg: cut short, or of another shape,
+// and reports whether it could: the tokens are billed all the same.
+func usageIn(data []byte, usage any) bool {
+	at := bytes.LastIndex(data, []byte(`"usage"`))
+	if at < 0 {
+		return false
+	}
+	rest := bytes.TrimLeft(data[at+len(`"usage"`):], " \t\r\n")
+	if !bytes.HasPrefix(rest, []byte(":")) {
+		return false
+	}
+	return json.NewDecoder(bytes.NewReader(rest[1:])).Decode(usage) == nil
 }
 
 // usageMeter sums the usage of a provider over the day, in UTC, as the bills
@@ -69,9 +90,10 @@ func (c client) record(in Input, usage Usage) {
 		return
 	}
 	today, requests := c.usage.add(usage)
-	log.Infof("[LLM] %s %s | %s | tokens: in %d (cached %d), out %d (reasoning %d) | today: %d requests, "+
-		"in %d (cached %d), out %d (reasoning %d)", in.Symbol, in.Timeframe, c, usage.Input, usage.Cached,
-		usage.Output, usage.Reasoning, requests, today.Input, today.Cached, today.Output, today.Reasoning)
+	log.Infof("[LLM] %s %s | %s | tokens: in %d (cached %d), cache written %d, out %d (reasoning %d) | today: "+
+		"%d requests, in %d (cached %d), cache written %d, out %d (reasoning %d)", in.Symbol, in.Timeframe, c,
+		usage.Input, usage.Cached, usage.CacheWritten, usage.Output, usage.Reasoning, requests, today.Input,
+		today.Cached, today.CacheWritten, today.Output, today.Reasoning)
 }
 
 // TodayUsage returns the tokens the provider used today, in UTC, and the count

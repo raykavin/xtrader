@@ -697,12 +697,26 @@ func rateOfChange(close []float64, length int) []float64 {
 	return out
 }
 
+// atClock returns the time the clock of loc shows at, a time of day, on the
+// day of local: by the wall clock, not a duration from the midnight, which
+// is 1h off on the days the daylight saving time starts or ends.
+func atClock(local time.Time, days int, at time.Duration, loc *time.Location) time.Time {
+	return time.Date(local.Year(), local.Month(), local.Day()+days, int(at/time.Hour), int(at%time.Hour/time.Minute),
+		int(at%time.Minute/time.Second), int(at%time.Second), loc)
+}
+
+// clockOf returns the time of day the clock of local shows.
+func clockOf(local time.Time) time.Duration {
+	return time.Duration(local.Hour())*time.Hour + time.Duration(local.Minute())*time.Minute +
+		time.Duration(local.Second())*time.Second + time.Duration(local.Nanosecond())
+}
+
 // lastAnchor returns the last time of day at, in loc, at or before t.
 func lastAnchor(t time.Time, at time.Duration, loc *time.Location) time.Time {
 	local := t.In(loc)
-	anchor := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).Add(at)
+	anchor := atClock(local, 0, at, loc)
 	if anchor.After(t) {
-		anchor = time.Date(local.Year(), local.Month(), local.Day()-1, 0, 0, 0, 0, loc).Add(at)
+		anchor = atClock(local, -1, at, loc)
 	}
 	return anchor
 }
@@ -765,9 +779,9 @@ func sessionRange(times []time.Time, high, low []float64, start, end, until time
 		midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 		if !midnight.Equal(day) {
 			day, seen = midnight, false
-			covered = !times[0].After(midnight.Add(start))
+			covered = !times[0].After(atClock(local, 0, start, loc))
 		}
-		clock := local.Sub(midnight)
+		clock := clockOf(local)
 		switch {
 		case clock >= start && clock < end:
 			if !seen {

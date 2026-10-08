@@ -147,9 +147,10 @@ type Agents struct {
 	// or /app/bin/llmagent in the container.
 	Commands map[string]string `mapstructure:"commands"`
 
-	// Env holds the variables of their environment besides PATH, HOME, TZ and
-	// LANG, eg: GOCACHE=/tmp/go-cache for go run: never a secret, they get
-	// theirs from the controller.
+	// Env holds the variables of their environment besides PATH, HOME, USER,
+	// LOGNAME, TZ, LANG, LC_ALL and TMPDIR, eg: GOCACHE=/tmp/go-cache for go
+	// run: never a secret, they get theirs from the controller. The services
+	// don't get it.
 	Env Env `mapstructure:"env"`
 
 	// StopTimeout is how long an agent stopped has before it is killed.
@@ -161,7 +162,9 @@ type Agents struct {
 // Health, a URL, answers, whatever its status, it is up, or after Wait at most
 // (3 minutes by default). One answering already isn't launched, nor stopped.
 // StopTimeout is how long it has to exit once interrupted before it is killed
-// (10 seconds by default).
+// (10 seconds by default). Its environment is the base one of the agents
+// (PATH, HOME, USER, LOGNAME, TZ, LANG, LC_ALL and TMPDIR) plus Env, never the
+// Env of Agents.
 type Service struct {
 	Name        string        `mapstructure:"name"`
 	Exec        string        `mapstructure:"exec"`

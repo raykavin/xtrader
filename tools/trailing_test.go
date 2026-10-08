@@ -51,3 +51,45 @@ func TestTrailingStop_Update(t *testing.T) {
 	require.True(t, ts.Update(stop+difference))
 	require.True(t, ts.Update(stop-difference))
 }
+
+// A stop above the price trails a SELL: it moves down with a lower price,
+// never up, and is reached at or above it.
+func TestTrailingStop_UpdateSell(t *testing.T) {
+	ts := tools.NewTrailingStop()
+	ts.Start(100, 110)
+
+	require.False(t, ts.Update(105), "a higher price below the stop")
+	require.False(t, ts.Update(90), "a better price moves the stop down to 100")
+	require.False(t, ts.Update(95), "the stop isn't moved back up")
+	require.False(t, ts.Update(99.9))
+	require.True(t, ts.Update(100))
+	require.True(t, ts.Update(120))
+}
+
+// A BUY is still trailed as before: the stop moves up with a higher price.
+func TestTrailingStop_UpdateBuyNotTakenForASell(t *testing.T) {
+	ts := tools.NewTrailingStop()
+	ts.Start(100, 90)
+
+	require.False(t, ts.Update(110), "the stop moved up to 100")
+	require.False(t, ts.Update(105), "the stop isn't moved back down")
+	require.True(t, ts.Update(100))
+}
+
+// The stop keeps its distance from the best price: a price back from a worse
+// one, still below the best, doesn't move it.
+func TestTrailingStop_UpdateFromTheBestPrice(t *testing.T) {
+	ts := tools.NewTrailingStop()
+	ts.Start(100, 90)
+
+	require.False(t, ts.Update(95))
+	require.False(t, ts.Update(100), "back to the best price: the stop stays at 90")
+	require.False(t, ts.Update(91))
+	require.True(t, ts.Update(90))
+
+	ts.Start(100, 110)
+	require.False(t, ts.Update(105))
+	require.False(t, ts.Update(100), "back to the best price: the stop stays at 110")
+	require.False(t, ts.Update(109))
+	require.True(t, ts.Update(110))
+}

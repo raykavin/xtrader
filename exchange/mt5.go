@@ -230,6 +230,7 @@ const (
 	mt5CodeMarketClosed  = 10018
 	mt5CodeNoMoney       = 10019
 	mt5CodeNoChanges     = 10025
+	mt5CodeFrozen        = 10029
 	mt5CodeInvalidFill   = 10030
 )
 
@@ -325,6 +326,8 @@ func mt5RetcodeName(code int) string {
 		return "market closed"
 	case mt5CodeNoMoney:
 		return "no money"
+	case mt5CodeFrozen:
+		return "frozen"
 	case mt5CodeInvalidFill:
 		return "invalid filling"
 	}
@@ -591,7 +594,9 @@ type mt5Symbol struct {
 	FillingMode    int     `json:"filling_mode"`
 	ExecMode       int     `json:"trade_exemode"`
 	OrderMode      int     `json:"order_mode"`
-	StopsLevel     int     `json:"trade_stops_level"`
+	StopsLevel     int     `json:"trade_stops_level"`  // points between the market and a new level or pending price
+	FreezeLevel    int     `json:"trade_freeze_level"` // points from the market within which nothing is modified
+	TickSize       float64 `json:"trade_tick_size"`    // the step of the prices, a multiple of point
 	CurrencyBase   string  `json:"currency_base"`
 	CurrencyProfit string  `json:"currency_profit"`
 	CurrencyMargin string  `json:"currency_margin"`
@@ -851,7 +856,7 @@ func (s mt5Symbol) assetInfo(base string) model.AssetInfo {
 		MaxQuantity:        s.VolumeMax * contract,
 		StepSize:           step,
 		MaxPrice:           math.MaxFloat64,
-		TickSize:           s.Point,
+		TickSize:           s.tick(),
 		QuotePrecision:     s.Digits,
 		BaseAssetPrecision: int(model.NumDecPlaces(mt5Clean(step))),
 	}
@@ -907,11 +912,24 @@ func (s mt5Symbol) units(lots float64) float64 {
 	return units
 }
 
-// price rounds a price to the digits of the symbol, as MT5 takes them; 0 stays
-// 0.
+// tick returns the step of the prices of the symbol: its tick size, else its
+// point.
+func (s mt5Symbol) tick() float64 {
+	if s.TickSize > 0 {
+		return s.TickSize
+	}
+	return s.Point
+}
+
+// price rounds a price to the tick size of the symbol, when it has one coarser
+// than its point (eg: 0.25 for an index), and to its digits, as MT5 takes
+// them; 0 stays 0.
 func (s mt5Symbol) price(price float64) float64 {
 	if price == 0 || s.Name == "" {
 		return price
+	}
+	if s.TickSize > 0 && s.TickSize > s.Point*(1+1e-9) {
+		price = math.Round(price/s.TickSize) * s.TickSize
 	}
 	return mt5Round(price, s.Digits)
 }

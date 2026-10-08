@@ -77,16 +77,23 @@ type openAIAnswer struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens        int `json:"prompt_tokens"`
-		CompletionTokens    int `json:"completion_tokens"`
-		PromptTokensDetails struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"prompt_tokens_details"`
-		CompletionTokensDetails struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"completion_tokens_details"`
-	} `json:"usage"`
+	Usage openAIUsage `json:"usage"`
+}
+
+type openAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+func (u openAIUsage) usage() Usage {
+	return Usage{Input: u.PromptTokens, Cached: u.PromptTokensDetails.CachedTokens, Output: u.CompletionTokens,
+		Reasoning: u.CompletionTokensDetails.ReasoningTokens}
 }
 
 // Analyze asks the model for the decision of the context. The answer is the
@@ -120,13 +127,17 @@ func (o *OpenAI) AnalyzeWith(ctx context.Context, system string, input Input) (D
 		return Decision{}, err
 	}
 
+	// the tokens are billed whatever the answer, one that can't be read
+	// included, when it tells them
 	var answer openAIAnswer
 	if err := json.Unmarshal(data, &answer); err != nil {
+		var usage openAIUsage
+		if usageIn(data, &usage) {
+			o.record(input, usage.usage())
+		}
 		return Decision{}, invalidAnswer(o.name, "%v", err)
 	}
-	// the tokens are billed whatever the answer
-	o.record(input, Usage{Input: answer.Usage.PromptTokens, Cached: answer.Usage.PromptTokensDetails.CachedTokens,
-		Output: answer.Usage.CompletionTokens, Reasoning: answer.Usage.CompletionTokensDetails.ReasoningTokens})
+	o.record(input, answer.Usage.usage())
 	if len(answer.Choices) == 0 {
 		return Decision{}, invalidAnswer(o.name, "no choice")
 	}

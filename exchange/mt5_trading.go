@@ -98,12 +98,24 @@ type mt5Position struct {
 }
 
 // id is the identifier of the position, the ticket of the order that opened
-// it.
+// it: stable for its whole life, the key of the book and of the history (the
+// position_id of its deals and orders).
 func (p mt5Position) id() int64 {
 	if p.Identifier != 0 {
 		return p.Identifier
 	}
 	return p.Ticket
+}
+
+// ticket is the ticket of the position, which the trade requests closing or
+// modifying it take (position, position_by): usually its identifier, but the
+// server may give it another one in a service operation, eg: a swap charged by
+// reopening it.
+func (p mt5Position) ticket() int64 {
+	if p.Ticket != 0 {
+		return p.Ticket
+	}
+	return p.Identifier
 }
 
 func (p mt5Position) opened() time.Time {
@@ -218,8 +230,9 @@ type mt5Final struct {
 // mt5Gone is a position or a pending order gone from the book whose outcome is
 // awaited in the history: when it left, and the setup of a pending order.
 type mt5Gone struct {
-	at    time.Time
-	setup time.Time
+	at      time.Time
+	setup   time.Time
+	partial bool // a pending order executed in part, or maybe: resolved by its final state in the history
 }
 
 // mt5Awaited is a position of the bot whose exits are awaited from the
@@ -262,6 +275,7 @@ type mt5Book struct {
 	gone       map[int64]mt5Gone     // bot's positions and pending orders gone, outcome unknown yet, by ticket
 	finals     map[int64]mt5Final    // pending orders out of the book as the adapter learned it, by ticket
 	fills      map[int64]bool        // positions opened by the fill of a pending order, by identifier
+	partial    map[int64]time.Time   // bot's pending orders out of the book executed in part, or maybe, since, by ticket
 	deals      map[int64]mt5Deal     // deals of the traded symbols, by ticket
 	entries    map[int64]mt5Deal     // entry deal of each position, by position_id
 	exits      map[int64][]mt5Deal   // exit deals of each position, oldest first, by position_id
@@ -313,6 +327,7 @@ func newMT5Book() *mt5Book {
 		gone:         make(map[int64]mt5Gone),
 		finals:       make(map[int64]mt5Final),
 		fills:        make(map[int64]bool),
+		partial:      make(map[int64]time.Time),
 		deals:        make(map[int64]mt5Deal),
 		entries:      make(map[int64]mt5Deal),
 		exits:        make(map[int64][]mt5Deal),
@@ -488,6 +503,13 @@ func (m *MT5) applySnapshot(started time.Time, positions []mt5Position, orders [
 			if _, pending := b.orders[id]; pending {
 				b.fills[id] = true
 			}
+			// removed by Cancel, a part of it executed: its position seen after
+			// the read of Cancel, eg: the account unread (executedBeforeRemoval)
+			if final, ok := b.finals[id]; ok && final.state == mt5StateCanceled && m.ours(final.order.Magic,
+				final.order.Symbol) {
+				b.fills[id] = true
+				m.executedInPart(final.order, now)
+			}
 		}
 		b.positions[id] = position
 		delete(b.closed, id)
@@ -529,11 +551,21 @@ func (m *MT5) applySnapshot(started time.Time, positions []mt5Position, orders [
 			continue
 		}
 		delete(b.orders, ticket)
-		_, open := b.positions[ticket]
-		_, closed := b.closed[ticket]
-		if open || closed {
+		position, open := b.positions[ticket]
+		if !open {
+			position, open = b.closed[ticket]
+		}
+		if open {
 			b.finals[ticket] = mt5Final{order: order, state: mt5StateFilled, at: now}
 			b.fills[ticket] = true
+			// executed in part while pending, or the position smaller than the
+			// order: its rest may have been canceled, which only the history tells
+			symbol := m.instrument(order.Symbol)
+			if m.ours(order.Magic, order.Symbol) && (symbol.steps(order.VolumeCurrent) <
+				symbol.steps(order.VolumeInitial) || symbol.steps(m.openingVolume(position)) <
+				symbol.steps(order.VolumeInitial)) {
+				m.executedInPart(order, now)
+			}
 			continue
 		}
 		if m.ours(order.Magic, order.Symbol) {
@@ -581,11 +613,40 @@ func (m *MT5) unresolved() (waiting bool, since time.Time) {
 	return waiting, since
 }
 
+// executedInPart records that the pending order of the bot, out of the book
+// since now, was executed in part, or may have been: its fill is told by its
+// final state in the history (see partialFill), read for it meanwhile (gone).
+// The caller holds the lock of the book.
+func (m *MT5) executedInPart(order mt5Order, now time.Time) {
+	b := m.book
+	if _, ok := b.partial[order.Ticket]; !ok {
+		b.partial[order.Ticket] = now
+	}
+	b.gone[order.Ticket] = mt5Gone{at: now, setup: order.setup(), partial: true}
+}
+
+// maybeExecuted reports whether the pending order ticket of the bot, out of the
+// book, may have been executed in part, unknown yet: no position of it in the
+// book, no final state of it in the history, awaited (see executedInPart and
+// executedBeforeRemoval). The caller holds the lock of the book.
+func (m *MT5) maybeExecuted(ticket int64) bool {
+	b := m.book
+	if gone, ok := b.gone[ticket]; !ok || !gone.partial {
+		return false
+	}
+	history, ok := b.history[ticket]
+	return !ok || !mt5Status(history.State).Final()
+}
+
 // resolved reports whether the history shows what happened to the ticket gone:
 // the exits of its position, or the final state of its pending order. The
 // caller holds the lock of the book.
 func (m *MT5) resolved(ticket int64) bool {
 	b := m.book
+	if gone, ok := b.gone[ticket]; ok && gone.partial {
+		order, ok := b.history[ticket]
+		return ok && mt5Status(order.State).Final()
+	}
 	if _, open := b.positions[ticket]; open {
 		return true // a pending order filled
 	}
@@ -895,6 +956,11 @@ func (m *MT5) prune(horizon time.Time) {
 			delete(b.finals, ticket)
 		}
 	}
+	for ticket, since := range b.partial {
+		if since.Before(horizon) {
+			delete(b.partial, ticket)
+		}
+	}
 	b.historyFrom = horizon
 }
 
@@ -1158,8 +1224,8 @@ func (m *MT5) closeBy(ctx context.Context, fill, oldest mt5Position) error {
 	request := map[string]any{
 		"action":      mt5ActionCloseBy,
 		"symbol":      fill.Symbol,
-		"position":    fill.id(),
-		"position_by": oldest.id(),
+		"position":    fill.ticket(),
+		"position_by": oldest.ticket(),
 		"magic":       m.magic,
 		"comment":     m.comment,
 	}
@@ -1222,6 +1288,9 @@ func (m *MT5) trade(ctx context.Context, request map[string]any) (mt5Result, err
 	if err := m.checkUnsettled(request); err != nil {
 		return mt5Result{}, err
 	}
+	if err := m.checkStops(ctx, request); err != nil {
+		return mt5Result{}, err
+	}
 	if _, ok := request["comment"]; ok {
 		request["comment"] = m.tagComment()
 	}
@@ -1246,6 +1315,189 @@ func (m *MT5) trade(ctx context.Context, request map[string]any) (mt5Result, err
 	}
 	return mt5Result{}, &MT5Error{Method: "POST", Path: "/order", Status: 200, Retcode: result.Retcode,
 		Message: result.Comment}
+}
+
+// checkStops refuses, before it is sent, a trade request that the server would
+// refuse for the stops level or the freeze level of its symbol (see the
+// requirements of MT5 on SYMBOL_TRADE_STOPS_LEVEL and SYMBOL_TRADE_FREEZE_LEVEL):
+//   - a new stop loss or take profit closer than the stops level to its
+//     reference: the bid for a buy position, the ask for a sell one, the price
+//     of a pending order (invalid stops, ErrInvalidProtection);
+//   - the price of a pending order closer than the stops level to the market
+//     it is triggered by (invalid price);
+//   - a modification of a pending order whose price, or of a position one of
+//     whose levels, is within the freeze level of the market (frozen).
+//
+// The answer is an *MT5Error not sent, with the retcode the server would give
+// and the distances. Only the levels and prices that change are checked; the
+// closes and the removals never are, the server deciding. A symbol without
+// either level (eg: on Exness) reads no tick; a tick unreadable leaves the
+// check to the server.
+func (m *MT5) checkStops(ctx context.Context, request map[string]any) error {
+	pair, _ := request["symbol"].(string)
+	symbol := m.instrument(pair)
+	if (symbol.StopsLevel <= 0 && symbol.FreezeLevel <= 0) || symbol.Point <= 0 {
+		return nil
+	}
+	action, _ := request["action"].(int)
+	price, _ := request["price"].(float64)
+	sl, _ := request["sl"].(float64)
+	tp, _ := request["tp"].(float64)
+	var (
+		kind                   int // of the position (buy 0, sell 1) or of the pending order
+		pending, modify        bool
+		oldPrice, oldSL, oldTP float64
+	)
+	b := m.book
+	switch action {
+	case mt5ActionDeal:
+		if _, closing := request["position"]; closing {
+			return nil
+		}
+		kind, _ = request["type"].(int)
+	case mt5ActionPending:
+		kind, _ = request["type"].(int)
+		pending = true
+	case mt5ActionModify:
+		ticket, _ := request["order"].(int64)
+		b.mtx.RLock()
+		order, ok := b.orders[ticket]
+		b.mtx.RUnlock()
+		if !ok {
+			return nil
+		}
+		kind, pending, modify = order.Type, true, true
+		oldPrice, oldSL, oldTP = order.PriceOpen, order.SL, order.TP
+	case mt5ActionSLTP:
+		ticket, _ := request["position"].(int64)
+		position, ok := m.positionOfTicket(ticket, false)
+		if !ok {
+			return nil
+		}
+		kind, modify = position.Type, true
+		oldSL, oldTP = position.SL, position.TP
+	default:
+		return nil
+	}
+	tick, err := m.tick(ctx, pair)
+	if err != nil {
+		log.Warnf("[MT5] the stops level of %s not checked: %v", pair, err)
+		return nil
+	}
+	refuse := func(code int, format string, args ...any) error {
+		return &MT5Error{Method: "POST", Path: "/order", Status: http.StatusOK, Retcode: code, NotSent: true,
+			Message: "not sent: " + fmt.Sprintf(format, args...)}
+	}
+	// points from a to b, negative when b is short of a
+	points := func(a, b float64) int64 { return int64(math.Round((b - a) / symbol.Point)) }
+	sell := kind%2 == 1
+	// the market a pending order of kind is triggered by, and the points of
+	// its price beyond it on the side it must stand
+	market := func(at float64) (float64, int64) {
+		switch kind {
+		case mt5TypeBuyLimit:
+			return tick.Ask, points(at, tick.Ask)
+		case mt5TypeBuyStop:
+			return tick.Ask, points(tick.Ask, at)
+		case mt5TypeSellLimit:
+			return tick.Bid, points(tick.Bid, at)
+		}
+		return tick.Bid, points(at, tick.Bid)
+	}
+	// the points of a stop loss and of a take profit from reference, on the
+	// side each must stand
+	distances := func(reference, stop, profit float64) (int64, int64) {
+		if sell {
+			return points(reference, stop), points(profit, reference)
+		}
+		return points(stop, reference), points(reference, profit)
+	}
+	reference := tick.Bid
+	if sell {
+		reference = tick.Ask
+	}
+
+	if freeze := int64(symbol.FreezeLevel); modify && freeze > 0 {
+		if pending {
+			if at, away := market(oldPrice); away <= freeze {
+				return refuse(mt5CodeFrozen, "the pending order %v of %s at %v is %d points from the market %v, "+
+					"within its freeze level of %d points", request["order"], pair, oldPrice, away, at, freeze)
+			}
+		} else {
+			stopAway, profitAway := distances(reference, oldSL, oldTP)
+			switch {
+			case oldSL != 0 && stopAway <= freeze:
+				return refuse(mt5CodeFrozen, "the stop loss %v of the position %v of %s is %d points from the "+
+					"market %v, within its freeze level of %d points", oldSL, request["position"], pair, stopAway,
+					reference, freeze)
+			case oldTP != 0 && profitAway <= freeze:
+				return refuse(mt5CodeFrozen, "the take profit %v of the position %v of %s is %d points from the "+
+					"market %v, within its freeze level of %d points", oldTP, request["position"], pair,
+					profitAway, reference, freeze)
+			}
+		}
+	}
+
+	stops := int64(symbol.StopsLevel)
+	if stops <= 0 {
+		return nil
+	}
+	moved := !modify || price != oldPrice
+	if pending {
+		reference = price
+		if moved {
+			if at, away := market(price); away < stops {
+				return refuse(mt5CodeInvalidPrice, "the price %v of the %s order is %d points from the market "+
+					"%v, short of the stops level of %d points of %s", price, mt5PendingName(kind), away, at,
+					stops, pair)
+			}
+		}
+	}
+	stopAway, profitAway := distances(reference, sl, tp)
+	switch {
+	case sl != 0 && (moved || sl != oldSL) && stopAway < stops:
+		return refuse(mt5CodeInvalidStops, "the stop loss %v is %d points from %v, short of the stops level of "+
+			"%d points of %s", sl, stopAway, reference, stops, pair)
+	case tp != 0 && (moved || tp != oldTP) && profitAway < stops:
+		return refuse(mt5CodeInvalidStops, "the take profit %v is %d points from %v, short of the stops level "+
+			"of %d points of %s", tp, profitAway, reference, stops, pair)
+	}
+	return nil
+}
+
+// mt5PendingName names a type of pending order.
+func mt5PendingName(kind int) string {
+	switch kind {
+	case mt5TypeBuyLimit:
+		return "buy limit"
+	case mt5TypeSellLimit:
+		return "sell limit"
+	case mt5TypeBuyStop:
+		return "buy stop"
+	case mt5TypeSellStop:
+		return "sell stop"
+	}
+	return "pending"
+}
+
+// positionOfTicket returns the position of ticket in the book, see
+// mt5Position.ticket: an open one, or one closed too when closed.
+func (m *MT5) positionOfTicket(ticket int64, closed bool) (mt5Position, bool) {
+	b := m.book
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+	known := []map[int64]mt5Position{b.positions}
+	if closed {
+		known = append(known, b.closed)
+	}
+	for _, positions := range known {
+		for _, position := range positions {
+			if position.ticket() == ticket {
+				return position, true
+			}
+		}
+	}
+	return mt5Position{}, false
 }
 
 // mt5TagLength is the length of the tag of a trade request, and mt5TagSpace
@@ -1483,7 +1735,8 @@ func (m *MT5) lookupTrade(ctx context.Context, request map[string]any, sent time
 	done := mt5Result{Retcode: mt5CodeDone}
 	action, _ := request["action"].(int)
 	ticket, _ := request["order"].(int64)
-	position, _ := request["position"].(int64)
+	positionTicket, _ := request["position"].(int64)
+	position := m.positionID(positionTicket, positions) // of the deals and orders of the history
 	sl, _ := request["sl"].(float64)
 	tp, _ := request["tp"].(float64)
 	switch action {
@@ -1602,8 +1855,26 @@ func (m *MT5) lookupTrade(ctx context.Context, request map[string]any, sent time
 	return mt5Result{}, mt5TradeAbsent, nil
 }
 
+// positionID returns the identifier of the position of ticket: the one of the
+// open positions or of the book with that ticket, else ticket, which usually is
+// its identifier too (see mt5Position.ticket).
+func (m *MT5) positionID(ticket int64, positions []mt5Position) int64 {
+	if ticket == 0 {
+		return 0
+	}
+	for _, open := range positions {
+		if open.ticket() == ticket {
+			return open.id()
+		}
+	}
+	if position, ok := m.positionOfTicket(ticket, true); ok {
+		return position.id()
+	}
+	return ticket
+}
+
 // marketRequest returns the trade request of a market order of lots on side at
-// the price of tick, closing position when not 0.
+// the price of tick, closing the position of that ticket when not 0.
 func (m *MT5) marketRequest(pair string, side model.SideType, lots float64, tick mt5Tick,
 	position int64) map[string]any {
 	symbol := m.instruments[pair]
@@ -1710,7 +1981,7 @@ func (m *MT5) closePosition(ctx context.Context, position mt5Position, lots floa
 	pair := position.Symbol
 	side := mt5Opposite(mt5Side(position.Type))
 	sent := time.Now()
-	result, err := m.trade(ctx, m.marketRequest(pair, side, lots, tick, position.id()))
+	result, err := m.trade(ctx, m.marketRequest(pair, side, lots, tick, position.ticket()))
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -1825,7 +2096,7 @@ func (m *MT5) setLevels(ctx context.Context, position mt5Position, stop, profit 
 	request := map[string]any{
 		"action":   mt5ActionSLTP,
 		"symbol":   position.Symbol,
-		"position": position.id(),
+		"position": position.ticket(),
 		"sl":       stop,
 		"tp":       profit,
 		"magic":    m.magic,
@@ -1998,17 +2269,21 @@ func (e *MT5ProtectionError) Unwrap() error {
 }
 
 // removePending removes a pending order (TRADE_ACTION_REMOVE) and moves it out
-// of the book as canceled. A request refused as invalid is ErrOrderNotOpen: the
-// order was filled or canceled meanwhile.
-func (m *MT5) removePending(ctx context.Context, order mt5Order) error {
+// of the book as canceled, executed in part or maybe (executedInPart): never
+// CANCELED until a part executed is ruled out, by Cancel reading the account
+// (see executedBeforeRemoval) or by the history. executed reports a part the
+// book knew executed: a position of its ticket, or its volume. A request
+// refused as invalid is ErrOrderNotOpen: the order was filled or canceled
+// meanwhile.
+func (m *MT5) removePending(ctx context.Context, order mt5Order) (executed bool, err error) {
 	request := map[string]any{"action": mt5ActionRemove, "order": order.Ticket, "symbol": order.Symbol}
 	if _, err := m.trade(ctx, request); err != nil {
 		var mt5Err *MT5Error
 		if errors.As(err, &mt5Err) && mt5Err.Retcode == mt5CodeInvalid {
 			m.requestPoll()
-			return fmt.Errorf("%w: %v", ErrOrderNotOpen, err)
+			return false, fmt.Errorf("%w: %v", ErrOrderNotOpen, err)
 		}
-		return err
+		return false, err
 	}
 	b := m.book
 	b.mtx.Lock()
@@ -2017,8 +2292,11 @@ func (m *MT5) removePending(ctx context.Context, order mt5Order) error {
 	delete(b.orders, order.Ticket)
 	b.finals[order.Ticket] = mt5Final{order: order, state: mt5StateCanceled, at: now}
 	b.touched[order.Ticket] = now
+	_, open := b.positions[order.Ticket]
+	symbol := m.instrument(order.Symbol)
+	m.executedInPart(order, now) // its rest removed, or maybe the whole of it
 	b.accountAt = time.Time{}
-	return nil
+	return open || symbol.steps(order.VolumeCurrent) < symbol.steps(order.VolumeInitial), nil
 }
 
 // mt5Wallet is the account as xtrader sees it, in the account currency.
@@ -3203,15 +3481,19 @@ func (m *MT5) Order(pair string, id int64) (model.Order, error) {
 
 // OrderSince returns an order created at since, from the book, see
 // service.OrderHistory:
-//  1. canceled by Cancel: CANCELED;
+//  1. canceled by Cancel: CANCELED, unless a part of it was executed, or may
+//     have been (step 4);
 //  2. a leg (known, or rebuilt: a hashed id matching mt5LegID with a ticket of
 //     the bot in the book, see findLeg): legOrder;
 //  3. a market order known: FILLED as returned;
 //  4. a ticket: pending while in the book (NEW or PARTIALLY_FILLED); FILLED
 //     when a position of its ticket, or its deals, are known, at the average
 //     price of its deals (or the open price of its position), UpdatedAt the
-//     time of the last one; else CANCELED, EXPIRED or REJECTED as its state in
-//     the orders of the history;
+//     time of the last one, PARTIALLY_FILLED while the rest of a pending order
+//     executed in part may have been executed too, then FILLED with what was
+//     (see partialFill); PENDING_CANCEL while a part of a pending order removed
+//     by Cancel may have been executed, unknown (see maybeExecuted); else
+//     CANCELED, EXPIRED or REJECTED as its state in the orders of the history;
 //  5. a ticket the book doesn't know: ensureHistory(since), one read at most,
 //     then step 4 again; a pending order of the adapter gone from the book
 //     stays NEW while its outcome is awaited (mt5ResolveWait), then CANCELED;
@@ -3225,6 +3507,16 @@ func (m *MT5) OrderSince(pair string, id int64, since time.Time) (model.Order, e
 	}
 	known, isKnown := m.known(id)
 	switch {
+	case isKnown && known.canceled && known.leg == "" && mt5IsTicket(id):
+		// executed in part before it was canceled: what was executed, or
+		// PENDING_CANCEL while it may have been
+		if order, found := m.ticketOrder(pair, id, known, true); found &&
+			(order.Status == model.OrderStatusTypeFilled || mt5OpenStatus(order.Status)) {
+			return order, nil
+		}
+		order := known.order
+		order.Status = model.OrderStatusTypeCanceled
+		return order, nil
 	case isKnown && known.canceled:
 		order := known.order
 		order.Status = model.OrderStatusTypeCanceled
@@ -3289,6 +3581,9 @@ func (m *MT5) ticketOrder(pair string, id int64, known mt5Known, isKnown bool) (
 
 	if pending, ok := b.orders[id]; ok {
 		book := m.pendingOrder(pending)
+		if symbol := m.instrument(pair); symbol.steps(pending.VolumeCurrent) < symbol.steps(pending.VolumeInitial) {
+			book.Status = model.OrderStatusTypePartiallyFilled // executed in part so far
+		}
 		if !isKnown {
 			return book, true
 		}
@@ -3346,6 +3641,21 @@ func (m *MT5) ticketOrder(pair string, id int64, known mt5Known, isKnown bool) (
 			}
 		}
 		order.Status = model.OrderStatusTypeFilled
+		if lots, final, partial := m.partialFill(id, volume, position, open); partial && final {
+			order.Quantity = symbol.units(lots) // the rest canceled or expired
+		} else if partial {
+			order.Status = model.OrderStatusTypePartiallyFilled // until the history tells its fill
+		}
+		return order, true
+	}
+
+	if m.maybeExecuted(id) {
+		// removed by Cancel, a part of it maybe executed: neither filled nor
+		// canceled until the book or the history tell
+		if final, ok := b.finals[id]; ok && !isKnown {
+			order = m.pendingOrder(final.order)
+		}
+		order.Status = model.OrderStatusTypePendingCancel
 		return order, true
 	}
 
@@ -3371,6 +3681,48 @@ func (m *MT5) ticketOrder(pair string, id int64, known mt5Known, isKnown bool) (
 		return order, true
 	}
 	return model.Order{}, false
+}
+
+// partialFill tells whether the pending order id, filled at least in part (with
+// the lots of its deals, or the position it opened), was executed in part: its
+// rest canceled or expired, partial and final with the lots executed, as its
+// final state in the history tells (volume_initial - volume_current); or
+// maybe, partial and not final, while the history doesn't tell it yet (see
+// executedInPart), then, after mt5ResolveWait, final with the lots of its
+// deals or of its position when fewer than the order's. The caller holds the
+// lock of the book.
+func (m *MT5) partialFill(id int64, dealt float64, position mt5Position, open bool) (lots float64, final,
+	partial bool) {
+	b := m.book
+	history, inHistory := b.history[id]
+	symbol := m.instrument(history.Symbol)
+	if inHistory && mt5Status(history.State).Final() && history.VolumeInitial > 0 {
+		executed := history.VolumeInitial - history.VolumeCurrent
+		if history.State == mt5StateFilled {
+			executed = history.VolumeInitial
+		}
+		if steps := symbol.steps(executed); steps > 0 && steps < symbol.steps(history.VolumeInitial) {
+			return symbol.lotsOf(steps), true, true
+		}
+		return 0, false, false
+	}
+	since, ok := b.partial[id]
+	switch {
+	case !ok:
+		return 0, false, false
+	case time.Since(since) < m.resolveWait:
+		return 0, false, true
+	}
+	lots = dealt
+	if lots <= 0 && open {
+		lots = m.openingVolume(position)
+	}
+	requested := b.finals[id].order.VolumeInitial
+	symbol = m.instrument(b.finals[id].order.Symbol)
+	if steps := symbol.steps(lots); steps > 0 && steps < symbol.steps(requested) {
+		return symbol.lotsOf(steps), true, true
+	}
+	return 0, false, false
 }
 
 // openingVolume returns the lots a position opened with: its volume plus the
@@ -3542,7 +3894,8 @@ func (m *MT5) legOrder(known mt5Known, since time.Time) (model.Order, error) {
 //     its level (reason SL for the stop loss, TP for the take profit), their
 //     volume, UpdatedAt the last one; CANCELED when they closed otherwise (a
 //     market order, a close-by, a stop out, the other leg), or when its entry
-//     left the book without fill.
+//     left the book without fill (NEW while a part of it may have been
+//     executed, see maybeExecuted).
 //
 // A position closed whose exits are not all in the history leaves the leg NEW
 // while they are awaited (see awaiting), or unknown after, as is an entry
@@ -3615,7 +3968,7 @@ func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 				last = mt5Later(last, history.done())
 				continue
 			}
-			if final, ok := b.finals[ticket]; ok && final.state == mt5StateCanceled {
+			if final, ok := b.finals[ticket]; ok && final.state == mt5StateCanceled && !m.maybeExecuted(ticket) {
 				kind = final.order.Type
 				last = mt5Later(last, final.at)
 				continue
@@ -3762,8 +4115,11 @@ func (m *MT5) lookup(order model.Order) (mt5Known, bool) {
 // Cancel removes a pending order and the legs protecting the position it would
 // open, or removes the protection of the positions or of the pending order of
 // a leg (both legs: SLTP with both levels 0 on each position, or MODIFY of the
-// pending order keeping its price and expiry). A filled or canceled order is
-// ErrOrderNotOpen, in an OrderError.
+// pending order keeping its price and expiry). A pending order executed in
+// part keeps its legs, protecting its position: the order reports what it
+// executed (see OrderSince), PENDING_CANCEL while unknown, eg: the account
+// unread after the removal (see executedBeforeRemoval). A filled or canceled
+// order is ErrOrderNotOpen, in an OrderError.
 func (m *MT5) Cancel(order model.Order) error {
 	if m.dataOnly {
 		return m.errDataOnly("Cancel")
@@ -3794,13 +4150,69 @@ func (m *MT5) Cancel(order model.Order) error {
 	if !isPending {
 		return fail(fmt.Errorf("mt5: order %d is not pending: %w", order.ExchangeID, ErrOrderNotOpen))
 	}
-	if err := m.removePending(m.ctx, pending); err != nil {
+	executed, err := m.removePending(m.ctx, pending)
+	if err != nil {
 		return fail(err)
 	}
 	m.remember(known)
 	m.canceled(known)
+	if executed {
+		log.Warnf("[MT5] the pending order %d of %s was canceled after it was executed in part: its position "+
+			"stays, with its levels", known.ticket, pending.Symbol)
+	} else {
+		executed = m.executedBeforeRemoval(pending)
+	}
+	if executed {
+		// its position stays, or may, with the levels of the order: so do its
+		// legs, and the order reports what it executed (OrderSince)
+		return nil
+	}
 	m.canceledLegs(known.ticket, nil, pending.Symbol, pending.Type, pending.VolumeInitial, pending.SL, pending.TP)
 	return nil
+}
+
+// executedBeforeRemoval reports whether the pending order just removed, none
+// of it executed as the book knew, was, or may have been, executed in part
+// since the last snapshot: it reads the positions of the account, when nothing
+// more of it can be executed (one GET per Cancel of such an order). A position
+// of its ticket goes in the book: executed. None, the order was canceled whole,
+// its mark of removePending dropped: CANCELED. A read that fails leaves it
+// unknown, marked: the order PENDING_CANCEL and its legs kept, until the book
+// (a position of its ticket in a snapshot, see applySnapshot) or the history
+// (its final state, executed volume included) tell, see OrderSince.
+func (m *MT5) executedBeforeRemoval(order mt5Order) bool {
+	var positions []mt5Position
+	if err := m.get(m.ctx, "/positions", url.Values{"symbol": {order.Symbol}}, &positions); err != nil {
+		log.Warnf("[MT5] the pending order %d of %s was canceled, the account unread after it (%v): whether a "+
+			"part of it was executed is told by the next reads of the account and of the history, its legs kept "+
+			"meanwhile", order.Ticket, order.Symbol, err)
+		return true
+	}
+	b := m.book
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	for _, position := range positions {
+		if position.id() != order.Ticket {
+			continue
+		}
+		now := time.Now()
+		b.positions[order.Ticket] = position
+		delete(b.closed, order.Ticket)
+		b.touched[order.Ticket] = now
+		b.fills[order.Ticket] = true
+		m.executedInPart(order, now)
+		log.Warnf("[MT5] the pending order %d of %s was canceled after it was executed in part: its position "+
+			"stays, with its levels", order.Ticket, order.Symbol)
+		return true
+	}
+	_, open := b.positions[order.Ticket]
+	_, closed := b.closed[order.Ticket]
+	if open || closed {
+		return true // its position seen by a snapshot meanwhile
+	}
+	delete(b.partial, order.Ticket)
+	delete(b.gone, order.Ticket)
+	return false
 }
 
 // cancelProtection removes the stop loss and the take profit of the positions

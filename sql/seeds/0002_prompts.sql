@@ -1,3 +1,9 @@
+-- Serialized with the seeds of any other migrator running at once (eg: two
+-- controllers starting): the file runs as one implicit transaction, holding
+-- the lock to its end, and the statements after it see what the other one
+-- inserted. The same key in every seed file.
+SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
+
 -- The prompts of the LLM agents, the strategies the model trades, the default
 -- one as agents/llm/prompts/default.txt embeds it: each inserted once, when no
 -- prompt has its name, so the seeds, run again on every migration, never

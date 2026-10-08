@@ -206,6 +206,62 @@ func TestSessionRange(t *testing.T) {
 	require.True(t, math.IsNaN(late[1]))
 }
 
+// The range and the anchor of the VWAP by the wall clock on the days the
+// daylight saving time starts and ends, and on a normal day: not a duration
+// from the midnight, 1h off on those days.
+func TestSessionRange_DaylightSavingTime(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	for _, day := range []struct {
+		name string
+		date time.Time
+	}{
+		{"the start of the daylight saving time", time.Date(2026, 3, 8, 0, 0, 0, 0, ny)},
+		{"the end of the daylight saving time", time.Date(2026, 11, 1, 0, 0, 0, 0, ny)},
+		{"a normal day", time.Date(2026, 9, 25, 0, 0, 0, 0, ny)},
+	} {
+		t.Run(day.name, func(t *testing.T) {
+			// 15m candles from 09:00 to 12:30 New York; the candle of 09:30 the high
+			// of the range, a higher one at 10:30
+			first := time.Date(day.date.Year(), day.date.Month(), day.date.Day(), 9, 0, 0, 0, ny)
+			var times []time.Time
+			var high, low, closes, volume []float64
+			for i := range 15 {
+				at := first.Add(time.Duration(i) * 15 * time.Minute)
+				times = append(times, at)
+				h, l := 100.0, 90.0
+				switch at.In(ny).Format("15:04") {
+				case "09:30":
+					h, l = 200, 80
+				case "10:30":
+					h, l = 300, 70
+				}
+				high, low = append(high, h), append(low, l)
+				closes, volume = append(closes, (h+l)/2), append(volume, 1)
+			}
+			highs, lows := sessionRange(times, high, low, 9*time.Hour+30*time.Minute, 9*time.Hour+45*time.Minute,
+				12*time.Hour, ny)
+			for i, at := range times {
+				clock := at.In(ny).Format("15:04")
+				switch {
+				case clock < "09:45" || clock >= "12:00":
+					require.True(t, math.IsNaN(highs[i]), "%s: out of the trading", clock)
+				default:
+					require.Equal(t, 200.0, highs[i], "%s: the high of the candle of 09:30", clock)
+					require.Equal(t, 80.0, lows[i], "%s", clock)
+				}
+			}
+
+			// anchored at 09:30: NaN before it, the candle of 09:30 the first one
+			vwap := anchoredVWAP(times, high, low, closes, volume, 9*time.Hour+30*time.Minute, ny)
+			require.True(t, math.IsNaN(vwap[1]), "09:15: the day before isn't covered")
+			require.InDelta(t, (200+80+140)/3.0, vwap[2], 1e-9, "09:30: anchored again")
+			require.Equal(t, time.Date(day.date.Year(), day.date.Month(), day.date.Day(), 9, 30, 0, 0, ny),
+				lastAnchor(times[3], 9*time.Hour+30*time.Minute, ny))
+		})
+	}
+}
+
 // An entry without a take profit, when the rules allow it: the stop loss alone
 // at the broker, and no risk:reward.
 func TestTrader_TakeProfitOptional(t *testing.T) {

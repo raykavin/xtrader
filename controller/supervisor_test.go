@@ -334,3 +334,32 @@ func TestSupervisor_TheLastStartReleasedOnceForgotten(t *testing.T) {
 		t.Fatal("Stop returned before the release")
 	}
 }
+
+// A service gets the base environment and its env only (M12d): neither the
+// env of the agents nor the rest of the environment of the controller, as
+// configs/config.example.yml tells.
+func TestStartServices_TheEnvironmentIsTheBaseOneAndTheirs(t *testing.T) {
+	t.Setenv("XTRADER_SECRETS_KEY", "the-secrets-key")
+	t.Setenv("GOFLAGS", "-mod=mod") // eg: of agents.env too
+	s, stdout, _ := testSupervisor(t, time.Second)
+	service := config.Service{Name: "mt5bridge", Exec: os.Args[0], Args: []string{fakeBotPrefix + "env"},
+		Env: config.Env{"MT5_BRIDGE_TOKEN=the-token"}}
+	launched, err := StartServices(context.Background(), s, []config.Service{service}, os.TempDir())
+	require.NoError(t, err)
+	require.Equal(t, []string{"mt5bridge"}, launched)
+	require.Eventually(t, func() bool { return strings.Contains(stdout.String(), "MT5_BRIDGE_TOKEN") },
+		5*time.Second, 10*time.Millisecond)
+
+	var names []string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if variable, ok := strings.CutPrefix(line, "[mt5bridge] "); ok && strings.Contains(variable, "=") {
+			names = append(names, variable[:strings.Index(variable, "=")])
+		}
+	}
+	allowed := append(slices.Clone(baseEnv), "MT5_BRIDGE_TOKEN", envLaunch)
+	for _, name := range names {
+		assert.Contains(t, allowed, name)
+	}
+	assert.Contains(t, names, "PATH")
+	assert.Contains(t, stdout.String(), "[mt5bridge] MT5_BRIDGE_TOKEN=the-token\n")
+}
