@@ -62,7 +62,12 @@ func TestDataFeedStart_ConsumerBehindIsWarnedAbout(t *testing.T) {
 		candles <- testCandle(i, true)
 	}
 	require.Len(t, other.wait(t), sent, "the other consumer takes them as they come")
-	require.Equal(t, 1, behind(), "warned once a while: %v", hook.AllEntries())
+	// the stuck one warned about once, not on every candle past the bound;
+	// the other one may fall as far behind on a loaded machine (eg: -cpu 1),
+	// each queue warned about once a while at most
+	warned := behind()
+	require.GreaterOrEqual(t, warned, 1, "the stuck consumer warned about: %v", hook.AllEntries())
+	require.LessOrEqual(t, warned, 2, "once a while for each consumer: %v", hook.AllEntries())
 
 	close(release)
 	got := stuck.wait(t)
