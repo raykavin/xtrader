@@ -251,10 +251,11 @@ func (d *Dashboard) handleAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // statuses returns the agents, in the order of the configuration, probing their
-// API at once.
+// API at once, with their current period.
 func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 	agents := d.agents.list()
 	statuses := make([]ui.AgentStatus, len(agents))
+	periods := d.currentPeriods(ctx)
 
 	var wg sync.WaitGroup
 	for i, a := range agents {
@@ -262,6 +263,10 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 		go func() {
 			defer wg.Done()
 			statuses[i] = ui.AgentStatus{Name: a.Name, Address: a.Address, Online: d.online(ctx, a)}
+			if period, ok := periods[a.Name]; ok {
+				current := uiPeriod(period, nil)
+				statuses[i].Period = &current
+			}
 		}()
 	}
 	wg.Wait()

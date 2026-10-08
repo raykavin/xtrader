@@ -2,6 +2,9 @@ import { csrfToken } from "../lib/settings";
 import { APIError } from "./errors";
 import type {
   AgentCreateRequest,
+  AgentPeriod,
+  AgentPeriodRequest,
+  AgentPeriodsResponse,
   AgentSettings,
   AgentSettingsRequest,
   AgentSettingsResponse,
@@ -276,6 +279,22 @@ export function deleteAgent(name: string): Promise<void> {
 /** Restarts an agent, eg: to apply the settings waiting for it. */
 export function restartAgent(name: string): Promise<AgentSettings> {
   return postJSON<AgentSettings>(`/settings/agents/${encodeURIComponent(name)}/restart`);
+}
+
+/** The accounting periods of an agent, the current one first: none before its first reset. */
+export function fetchAgentPeriods(name: string, signal?: AbortSignal): Promise<AgentPeriod[]> {
+  return getJSON<AgentPeriodsResponse>(
+    `/settings/agents/${encodeURIComponent(name)}/periods`,
+    signal,
+  ).then((r) => r.periods);
+}
+
+/**
+ * Resets the results of every pair of the agent: a period starting now, its
+ * deposit the balance it starts with. The orders and the positions don't change.
+ */
+export function resetAgentResults(name: string, request: AgentPeriodRequest): Promise<AgentPeriod> {
+  return postJSON<AgentPeriod>(`/settings/agents/${encodeURIComponent(name)}/periods`, request);
 }
 
 /** The prompts of the LLM agents, without their content, by name. */

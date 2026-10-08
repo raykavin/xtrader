@@ -421,3 +421,23 @@ func TestJournalTrigger(t *testing.T) {
 	require.Equal(t, TriggerStart, journalTrigger(candle.Add(28*time.Minute), candle, "15m"), "a restart at 13:43")
 	require.Equal(t, TriggerCandle, journalTrigger(candle.Add(time.Hour), candle, "x"), "the period unknown")
 }
+
+// An analysis that doesn't ask the model is kept, skipped, with why: the code
+// of its reason and its detail; never in the memory of the model.
+func TestTrader_SkippedAnalysisKept(t *testing.T) {
+	r := newTraderRunner(t, func(c *Config) { c.HigherTrendRequired = true }, 0) // no feeder: no higher trend
+	r.step(100)
+	require.Empty(t, r.provider.inputs)
+	d := r.lastDecision()
+	require.Equal(t, OutcomeSkipped, d.Outcome)
+	require.Equal(t, SkipHigherTrend, d.Reason)
+	require.Equal(t, "the candles of the higher timeframes are missing, and their trend is required for an entry",
+		d.Error)
+	require.Equal(t, TriggerCandle, d.Trigger)
+	require.Equal(t, r.df.Time[len(r.df.Time)-1].Unix(), d.Candle)
+	require.Equal(t, r.df.Close.Last(0), d.Price)
+	require.Empty(t, d.Action)
+	require.Empty(t, d.Model, "the model not asked")
+	require.Empty(t, d.Position)
+	require.Empty(t, r.trader.remembered[testPair], "not in the memory of the model")
+}

@@ -347,7 +347,7 @@ describe("the fields of an agent", () => {
       );
     }
     for (const [value, name] of [
-      ["BTCUSDm=0.03,XAUUSDm=0.01", "lot"],
+      ["BTCUSDm=0.03;XAUUSDm=0.01", "lot"],
       ["XAUUSDm=USTECm+DXYm", "llm-correlated"],
       ["lottery", "lot"],
     ] as [string, string][]) {

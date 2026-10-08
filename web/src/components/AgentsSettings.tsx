@@ -11,6 +11,7 @@ import {
   tradePanelHint,
 } from "../lib/settings";
 import { AgentForm } from "./AgentForm";
+import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
@@ -158,6 +159,7 @@ function AgentCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState(false);
   const state = agentState(agent);
   const status = promptStatusLabel(agent.prompt_status);
   const summary = agentSummary(agent);
@@ -326,6 +328,15 @@ function AgentCard({
           <button
             type="button"
             className="mini-btn"
+            aria-label={`Resultados de ${agent.name}`}
+            title="Os resultados por período, e a redefinição deles"
+            onClick={() => setResults(true)}
+          >
+            Resultados
+          </button>
+          <button
+            type="button"
+            className="mini-btn"
             aria-label={`Editar ${agent.name}`}
             disabled={busy}
             onClick={onEdit}
@@ -354,6 +365,7 @@ function AgentCard({
           {error}
         </p>
       )}
+      {results && <AgentResultsDialog agent={agent} onClose={() => setResults(false)} />}
     </article>
   );
 }

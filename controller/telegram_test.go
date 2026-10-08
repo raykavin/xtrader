@@ -404,13 +404,13 @@ func TestTelegram_Profit(t *testing.T) {
 }
 
 func TestProfitSummary(t *testing.T) {
-	_, ok := profitSummary(ui.Snapshot{Pair: "ETHUSDT"})
+	_, ok := profitSummary(ui.Snapshot{Pair: "ETHUSDT"}, time.Time{})
 	assert.False(t, ok)
 
 	summary, ok := profitSummary(ui.Snapshot{Pair: "ETHUSDT", Quote: "USDT", Orders: []ui.Order{
 		{Status: "FILLED", Profit: 0.01, ProfitValue: 5},
 		{Status: "CANCELED", Profit: -0.5, ProfitValue: -100},
-	}})
+	}}, time.Time{})
 	assert.True(t, ok)
 	assert.Contains(t, summary, "Trades: 1 (1 wins, 0 losses, 100.0%)\nProfit: 5.00 USDT\nProfit factor: ∞")
 
@@ -420,15 +420,39 @@ func TestProfitSummary(t *testing.T) {
 		{Status: "FILLED", Profit: -0.002, ProfitValue: -14.49, AccountProfit: booked(-75.1), AccountCurrency: "BRL"},
 		{Status: "FILLED", Profit: 0.0015, ProfitValue: 12.74, AccountProfit: booked(66.02), AccountCurrency: "BRL"},
 	}
-	summary, ok = profitSummary(ui.Snapshot{Pair: "BTCUSDm", Quote: "USD", AccountCurrency: "BRL", Orders: orders})
+	summary, ok = profitSummary(ui.Snapshot{Pair: "BTCUSDm", Quote: "USD", AccountCurrency: "BRL", Orders: orders},
+		time.Time{})
 	assert.True(t, ok)
 	assert.Contains(t, summary, "Trades: 2 (1 wins, 1 losses, 50.0%)\nProfit: -9.08 BRL\nProfit factor: 0.88")
 
 	// the ones of the core, in the quote, when some are unknown
 	orders[1].AccountProfit, orders[1].AccountCurrency = nil, ""
-	summary, ok = profitSummary(ui.Snapshot{Pair: "BTCUSDm", Quote: "USD", AccountCurrency: "BRL", Orders: orders})
+	summary, ok = profitSummary(ui.Snapshot{Pair: "BTCUSDm", Quote: "USD", AccountCurrency: "BRL", Orders: orders},
+		time.Time{})
 	assert.True(t, ok)
 	assert.Contains(t, summary, "Profit: -1.75 USD\nProfit factor: 0.88")
+}
+
+// After a reset of the results of the agent, only the trades closed since the
+// start of its current period count: their close, the last update of their
+// order, at or after it.
+func TestProfitSummary_SinceThePeriod(t *testing.T) {
+	start := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	orders := []ui.Order{
+		{Status: "FILLED", Profit: -0.01, ProfitValue: -50, CreatedAt: start.Add(-2 * time.Hour).Unix(),
+			UpdatedAt: start.Add(-time.Second).Unix()},
+		{Status: "FILLED", Profit: 0.02, ProfitValue: 30, CreatedAt: start.Add(-time.Hour).Unix(),
+			UpdatedAt: start.Unix()}, // opened before, closed at the start: the new period
+		{Status: "FILLED", Profit: 0.01, ProfitValue: 10, CreatedAt: start.Add(time.Hour).Unix()},
+		{Status: "FILLED", CreatedAt: start.Add(-3 * time.Hour).Unix()}, // an entry, without a profit
+	}
+	summary, ok := profitSummary(ui.Snapshot{Pair: "XAUUSDm", Quote: "USD", Orders: orders}, start)
+	assert.True(t, ok)
+	assert.Equal(t, "PAIR: XAUUSDm\nTrades: 2 (2 wins, 0 losses, 100.0%)\nProfit: 40.00 USD\nProfit factor: ∞\n"+
+		"Since: 2026-10-02 12:00 UTC", summary)
+
+	_, ok = profitSummary(ui.Snapshot{Pair: "XAUUSDm", Quote: "USD", Orders: orders[:1]}, start)
+	assert.False(t, ok, "none since the start")
 }
 
 func TestTelegram_Help(t *testing.T) {

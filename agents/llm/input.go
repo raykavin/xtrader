@@ -47,6 +47,11 @@ type Input struct {
 	Correlated       []Correlated `json:"correlated_markets,omitempty"`
 	Memory           *Memory      `json:"memory,omitempty"`
 
+	// Daily is the operational day of the symbol so far: its positions, its
+	// orders and its result, with the daily limits of the prompt, see
+	// DailyHistory. Absent without the orders of the bot.
+	Daily *DailyHistory `json:"daily_history,omitempty"`
+
 	// Reanalysis tells that the decision is asked on demand between the
 	// closes, see Trader.Reanalyze: Price is the last price of
 	// CandleInProgress, the candle not closed yet, and the other data are the
@@ -190,6 +195,12 @@ type Rules struct {
 	// EntriesBlockedBy names the release of the calendar that refuses new
 	// entries now, left out of Actions, see Config.NewsBlockBefore.
 	EntriesBlockedBy string `json:"entries_blocked_by_news,omitempty"`
+
+	// EntriesBlockedByDailyLimit tells why the new entries on the symbol are
+	// refused until the next operational day, see Config.DailyGain: a daily
+	// limit reached, or a result unknown yet; a position held is managed as
+	// usual.
+	EntriesBlockedByDailyLimit string `json:"entries_blocked_by_daily_limit,omitempty"`
 }
 
 // number is a number of the context, written with 8 significant digits, and

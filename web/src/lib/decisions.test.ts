@@ -5,6 +5,7 @@ import {
   DECISIONS,
   decisionActionLabel,
   decisionOutcomeLabel,
+  decisionReason,
   decisionTone,
   decisionTriggerLabel,
   formatConfidence,
@@ -69,7 +70,29 @@ describe("labels", () => {
     expect(decisionTriggerLabel(decision({ trigger: "candle", requested_by: "web" }))).toBe(
       "Fechamento do candle (via painel)",
     );
-    expect(decisionTriggerLabel(decision({ trigger: "start" }))).toBe("Início do bot");
+    expect(decisionTriggerLabel(decision({ trigger: "start" }))).toBe("Início do agente");
+  });
+
+  it("tells why the model wasn't asked, in Portuguese, the detail kept", () => {
+    const skipped = decision({
+      action: undefined,
+      outcome: "skipped",
+      reason: "higher_trend",
+      error:
+        "the trend of the higher timeframes is mixed, and their trend is required for an entry",
+    });
+    expect(decisionOutcomeLabel("skipped")).toBe("Não consultado");
+    expect(decisionReason(skipped)).toBe(
+      "Sem tendência definida nos timeframes maiores (exigida para entrar)",
+    );
+    expect(decisionReason({ ...skipped, reason: "news" })).toBe(
+      "Entradas bloqueadas perto de notícia de alta importância",
+    );
+    expect(decisionReason({ ...skipped, reason: "unknown" })).toBe(skipped.error);
+
+    // a decision of the model: its justification, or else its error
+    expect(decisionReason(decision({ reason: "Pullback rejeitado" }))).toBe("Pullback rejeitado");
+    expect(decisionReason(decision({ reason: undefined, error: "timeout" }))).toBe("timeout");
   });
 
   it("shows the confidence without a sign", () => {

@@ -49,6 +49,41 @@ function snapshot(partial: Partial<Snapshot> = {}): Snapshot {
   };
 }
 
+describe("computeStats within a period", () => {
+  // closed at 100 (-10), 200 (+30, opened at 50) and 300 (+5); 150 an entry, without a profit
+  const orders = [
+    order({ id: 1, profit: -0.01, profit_value: -10, created_at: 90, updated_at: 100 }),
+    order({ id: 2, created_at: 150, updated_at: 150 }),
+    order({ id: 3, profit: 0.03, profit_value: 30, created_at: 50, updated_at: 200 }),
+    order({ id: 4, profit: 0.005, profit_value: 5, created_at: 300, updated_at: 0 }),
+  ];
+
+  it("counts the trades closed from the start of the period, by their close", () => {
+    const stats = computeStats(snapshot({ orders }), { since: 200 });
+    expect(stats.trades).toBe(2);
+    expect(stats.wins).toBe(2);
+    expect(stats.losses).toBe(0);
+    expect(stats.totalProfit).toBe(35);
+    expect(stats.profitFactor).toBe(Number.POSITIVE_INFINITY);
+    expect(stats.grossProfit).toBe(35);
+    expect(stats.grossLoss).toBe(0);
+  });
+
+  it("counts the ones of a period ended, before the next one", () => {
+    const stats = computeStats(snapshot({ orders }), { since: 100, until: 200 });
+    expect(stats.trades).toBe(1);
+    expect(stats.totalProfit).toBe(-10);
+    expect(stats.grossLoss).toBe(10);
+  });
+
+  it("counts them all without a period", () => {
+    const stats = computeStats(snapshot({ orders }));
+    expect(stats.trades).toBe(3);
+    expect(stats.totalProfit).toBe(25);
+    expect(stats.profitFactor).toBe(3.5);
+  });
+});
+
 describe("maxDrawdown", () => {
   it("returns 0 for flat or rising curves", () => {
     expect(maxDrawdown([])).toBe(0);

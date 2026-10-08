@@ -4,10 +4,12 @@ import type { Decision } from "../api/types";
 import {
   decisionActionLabel,
   decisionOutcomeLabel,
+  decisionReason,
   decisionTone,
   decisionTriggerLabel,
   formatConfidence,
   isImage,
+  isSkipped,
   levelKindLabel,
   noteKindLabel,
 } from "../lib/decisions";
@@ -105,7 +107,7 @@ function DecisionDetails({
       </div>
 
       <dl className="decision-meta">
-        <dt>Decidida em</dt>
+        <dt>{isSkipped(decision) ? "Analisada em" : "Decidida em"}</dt>
         <dd className="mono">{formatTime(decision.decided_at)} UTC</dd>
         <dt>Candle</dt>
         <dd className="mono">
@@ -115,7 +117,13 @@ function DecisionDetails({
         <dd>{decisionTriggerLabel(decision)}</dd>
         <dt>Modelo</dt>
         <dd>
-          {decision.model} <small>({formatNumber(decision.latency_ms / 1000)} s)</small>
+          {isSkipped(decision) ? (
+            "não consultado"
+          ) : (
+            <>
+              {decision.model} <small>({formatNumber(decision.latency_ms / 1000)} s)</small>
+            </>
+          )}
         </dd>
         {decision.prompt && (
           <>
@@ -144,15 +152,23 @@ function DecisionDetails({
         </section>
       )}
 
-      <section className="decision-section">
-        <h3>Justificativa</h3>
-        {decision.reason ? (
-          <p className="decision-reason">{decision.reason}</p>
-        ) : (
-          <p className="empty">—</p>
-        )}
-        {decision.error && <p className="decision-error">{decision.error}</p>}
-      </section>
+      {isSkipped(decision) ? (
+        <section className="decision-section">
+          <h3>Por que o modelo não foi consultado</h3>
+          <p className="decision-reason">{decisionReason(decision)}</p>
+          {decision.error && <p className="decision-detail">{decision.error}</p>}
+        </section>
+      ) : (
+        <section className="decision-section">
+          <h3>Justificativa</h3>
+          {decision.reason ? (
+            <p className="decision-reason">{decision.reason}</p>
+          ) : (
+            <p className="empty">—</p>
+          )}
+          {decision.error && <p className="decision-error">{decision.error}</p>}
+        </section>
+      )}
 
       {levels.length > 0 && (
         <section className="decision-section">

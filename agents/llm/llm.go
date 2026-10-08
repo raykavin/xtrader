@@ -98,6 +98,21 @@ type Config struct {
 	// Timeout bounds each decision: the request to the provider.
 	Timeout time.Duration
 
+	// DailyGain and DailyLoss are the daily limits of the result of each pair,
+	// in DailyCurrency, the one of the account, 0 for none: once the positions
+	// of a pair closed during the operational day (from the midnight of
+	// DayZone) made DailyGain, or lost DailyLoss, as the broker books them,
+	// costs included, the new entries on the pair are refused until the next
+	// day, in the reanalyses too; the positions held are managed as usual.
+	// Read from the header of the prompt, see StrategyDailyLimits, and applied
+	// with the results of SetAccountReporter only.
+	DailyGain, DailyLoss float64
+	DailyCurrency        string
+
+	// DayZone is the time zone of the operational day of the daily limits,
+	// time.Local (the TZ of the agent) when nil.
+	DayZone *time.Location
+
 	// ConsultInterval is the time between the consultations of the model
 	// about each pair, on a schedule of the clock (eg: 10m at :00, :10,
 	// :20...), 0 for one at each close of Timeframe. A consultation falling
@@ -314,6 +329,11 @@ func (c Config) validate() error {
 		return errors.New("the language of the reasons is required")
 	case c.Timeout <= 0:
 		return errors.New("timeout must be positive")
+	case c.DailyGain < 0 || c.DailyLoss < 0:
+		return errors.New("the daily limits can't be negative")
+	case (c.DailyGain > 0 || c.DailyLoss > 0) && !currencyRegexp.MatchString(c.DailyCurrency):
+		return fmt.Errorf("the daily limits need the currency of the account, a code of 3 letters, eg: BRL, not %q",
+			c.DailyCurrency)
 	case c.ConsultInterval < 0 || (c.ConsultInterval > 0 && c.ConsultInterval < minConsultInterval):
 		return fmt.Errorf("the consult interval must be 0 (at each close) or at least %s", minConsultInterval)
 	case c.MinPositionValue <= 0:
@@ -381,9 +401,15 @@ type Trader struct {
 	handled  map[string]time.Time // the last candle handled, by pair: one request per candle at most
 	// the slot of ConsultInterval consulted last, by pair: one consultation per slot
 	consulted map[string]time.Time
-	history   map[string]int // the candles of history skipped in a row, by pair, see Config.Live
+	starting  map[string]*starting // the decisions of the start asked apart, by pair, see startApart
+	history   map[string]int       // the candles of history skipped in a row, by pair, see Config.Live
 
 	orders func(pair string) ([]model.Order, error) // the stored orders of a pair, see SetOrderSource
+
+	reporter    service.AccountReporter // the results the broker books, see SetAccountReporter
+	currencyMtx sync.Mutex
+	currency    string            // of the account, once read, see accountCurrency
+	dailyWarned ui.DecisionPrompt // the prompt whose daily limits were told unapplied
 
 	feeder     CandleSource            // of the higher timeframes and the correlated markets, see SetFeeder
 	fetched    map[string]fetched      // the candles read of the feeder, see fetch
@@ -517,6 +543,7 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 		trades:    make(map[string]*trade),
 		handled:   make(map[string]time.Time),
 		consulted: make(map[string]time.Time),
+		starting:  make(map[string]*starting),
 		history:   make(map[string]int),
 		levels:    make(map[string][]Level),
 		now:       time.Now,
@@ -657,6 +684,7 @@ func (t *Trader) chart(df *model.Dataframe, st *promptState) []strategy.ChartInd
 }
 
 func (t *Trader) OnCandle(df *model.Dataframe, broker service.Broker) {
+	t.finishStart(df.Pair, broker, true) // the decision of the start first, asked before the close
 	t.onClose(df, broker, TriggerCandle)
 }
 
@@ -703,6 +731,10 @@ func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger str
 			t.consulted[df.Pair] = closed
 		}
 	}
+	if trigger == TriggerStart {
+		t.startApart(df, broker)
+		return
+	}
 	t.analyze(df, broker, analysis{trigger: trigger, market: df})
 }
 
@@ -721,39 +753,64 @@ type analysis struct {
 // whatever comes of it. A reanalysis asked before it, or while it runs, is
 // answered by it, its result notified, see SetNotifier.
 func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysis) {
+	p, result := t.prepare(df, broker, run)
+	if p != nil {
+		result = t.finish(p, broker, t.request(p.st, p.input, t.now()))
+	}
+	t.endAnalysis(df.Pair, result)
+}
+
+// prepared is an analysis ready to ask the model, see prepare: its candles,
+// its market, its prompt, the position followed, its context, and why it is
+// asked.
+type prepared struct {
+	df, market  *model.Dataframe
+	st          *promptState
+	trade       *trade
+	input       Input
+	trigger     string
+	requestedBy string
+}
+
+// prepare begins the analysis of the closed candles of df, at the market of
+// run (see analyze), up to the context the model is asked with, and returns
+// it; nil, with the result of the analysis, when the model isn't asked: flat
+// without any entry to open, a close that failed retried first, or the provider
+// rate limited, the analysis kept then with why (see OutcomeSkipped). The
+// caller ends the analysis, see endAnalysis.
+func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysis) (*prepared, string) {
 	st := t.refreshPrompt(df) // the analysis goes on with it, whatever the switches meanwhile
 	requested := t.beginAnalysis(df.Pair)
-	result := ""
-	defer func() { t.endAnalysis(df.Pair, result) }()
 
 	price := run.market.Close.Last(0)
+	var trade *trade
+	skipped := func(s skip) (*prepared, string) {
+		t.keep(t.skipRecord(df, st, run.trigger, requested, price, trade, s), nil)
+		return nil, "the model wasn't asked: " + s.detail
+	}
 	asset, quote, err := broker.Position(df.Pair)
 	if err != nil {
 		log.Error(err)
-		result = "the model wasn't asked: the position: " + err.Error()
-		return
+		return skipped(skip{SkipPosition, "the position: " + err.Error()})
 	}
 
-	trade := t.follow(df.Pair, heldSide(asset*price, t.cfg.MinPositionValue), !run.inProgress)
+	trade = t.follow(df.Pair, heldSide(asset*price, t.cfg.MinPositionValue), !run.inProgress)
 	if trade != nil && trade.exiting {
 		// a close that failed, the position left without its legs
 		log.Infof("[LLM] %s %s | RETRY | close %f", df.Pair, t.cfg.Timeframe, price)
 		t.close(run.market, broker, trade)
-		result = "the model wasn't asked: a close that failed was retried first"
-		return
+		return skipped(skip{SkipCloseRetry, "a close that failed was retried first"})
 	}
 
 	input, why := t.context(df, run.market, broker, st, trade, asset, quote, price)
-	if why != "" {
-		result = "the model wasn't asked: " + why
-		return // flat without any entry to open: nothing to ask
+	if why.code != "" {
+		return skipped(why) // flat without any entry to open: nothing to ask
 	}
 	if now, until := t.now(), t.pausedUntil(); now.Before(until) {
 		log.Debugf("[LLM] %s %s | %s | rate limited for %s", df.Pair, t.cfg.Timeframe, t.name,
 			until.Sub(now).Round(time.Second))
-		result = fmt.Sprintf("the model wasn't asked: %s is rate limited for %s", t.name,
-			until.Sub(now).Round(time.Second))
-		return
+		return skipped(skip{SkipRateLimited, fmt.Sprintf("%s is rate limited for %s", t.name,
+			until.Sub(now).Round(time.Second))})
 	}
 
 	t.enrich(df, &input, st)
@@ -771,25 +828,30 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 			input.CandleInProgress.Time = run.market.Time[last].UTC()
 		}
 	}
-	if why := t.higherTrend(df.Pair, &input); why != "" {
-		result = "the model wasn't asked: " + why
-		return // only WAIT left: nothing to ask
+	if why := t.higherTrend(df.Pair, &input); why.code != "" {
+		return skipped(why) // only WAIT left: nothing to ask
 	}
 
-	requestedBy := ""
+	p := &prepared{df: df, market: run.market, st: st, trade: trade, input: input, trigger: run.trigger}
 	if requested != nil {
-		requestedBy = string(requested.channel)
+		p.requestedBy = string(requested.channel)
 	}
-	decision, kept, err := t.decide(st, input, run.trigger, requestedBy)
+	return p, ""
+}
+
+// finish concludes the analysis p with the reply of the model: its decision,
+// validated and kept, applied to the broker. It returns the result of the
+// analysis, see endAnalysis.
+func (t *Trader) finish(p *prepared, broker service.Broker, r reply) string {
+	decision, kept, err := t.conclude(p.st, p.input, p.trigger, p.requestedBy, r)
 	if err != nil {
 		t.keep(kept, decision.Attachments)
-		result = describeDecision(kept)
-		return // no decision, no trade
+		return describeDecision(kept) // no decision, no trade
 	}
 	t.levelsMtx.Lock()
-	t.levels[df.Pair] = decision.Levels
+	t.levels[p.df.Pair] = decision.Levels
 	t.levelsMtx.Unlock()
-	orders, outcome := t.apply(run.market, broker, input, trade, decision)
+	orders, outcome := t.apply(p.market, broker, p.st, p.input, p.trade, decision)
 	kept.Outcome = outcome
 	for _, order := range orders {
 		if order.ID > 0 { // numbered by the order controller of the bot, the broker of the strategies
@@ -797,7 +859,64 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 		}
 	}
 	t.keep(kept, decision.Attachments)
-	result = describeDecision(kept)
+	return describeDecision(kept)
+}
+
+// starting is the decision of the start of a pair, the model asked apart (see
+// startApart): its analysis, and the reply of the model, set once done is
+// closed.
+type starting struct {
+	prepared *prepared
+	reply    reply
+	done     chan struct{}
+}
+
+// startApart begins the decision of the start on the closed candles of df, as
+// any analysis (see prepare), the model asked apart: the pairs of the agent
+// are asked at once, the first candle in progress of each of them coming
+// within seconds, rather than one after another. Its decision is applied in
+// the flow of the strategy, on the next candle of the pair, see finishStart.
+func (t *Trader) startApart(df *model.Dataframe, broker service.Broker) {
+	if interval := t.cfg.ConsultInterval; interval > 0 {
+		t.consulted[df.Pair] = t.now().Truncate(interval) // the slot of the start, consulted
+	}
+	p, result := t.prepare(df, broker, analysis{trigger: TriggerStart, market: df})
+	if p == nil {
+		t.endAnalysis(df.Pair, result)
+		return
+	}
+	s := &starting{prepared: p, done: make(chan struct{})}
+	t.starting[df.Pair] = s
+	at := t.now()
+	go func() {
+		defer close(s.done)
+		s.reply = t.request(p.st, p.input, at)
+	}()
+}
+
+// finishStart applies the decision of the start of pair, once the model
+// answered, waiting for it with wait, and reports whether none is left to
+// apply. The slot of the consult interval it ends in is consulted.
+func (t *Trader) finishStart(pair string, broker service.Broker, wait bool) bool {
+	s, ok := t.starting[pair]
+	if !ok {
+		return true
+	}
+	if wait {
+		<-s.done
+	} else {
+		select {
+		case <-s.done:
+		default:
+			return false
+		}
+	}
+	delete(t.starting, pair)
+	t.endAnalysis(pair, t.finish(s.prepared, broker, s.reply))
+	if interval := t.cfg.ConsultInterval; interval > 0 {
+		t.consulted[pair] = t.now().Truncate(interval)
+	}
+	return true
 }
 
 // OnPartialCandle asks the model on the candles in progress, live only: once
@@ -805,11 +924,18 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 // decision (and the levels on the chart) of the start rather than at the next
 // close, a whole period later; on the one after a reanalysis is asked, at its
 // price, see Reanalyze; and on the first one of each slot of ConsultInterval
-// starting within the candle in progress, its slots at the closes left to
-// them. The candles in progress are otherwise left to their close.
+// starting within the candle in progress, the close taking the slot it falls
+// on, even when its candle is still handed in progress past it, the close
+// late: the model is never asked twice at the close. The decision of the
+// start, asked apart for the pairs to be asked at once (see startApart), is
+// applied on the next one, and takes the slots it is asked in. The candles in
+// progress are otherwise left to their close.
 func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 	if !t.cfg.Live || len(df.Close) < 2 {
 		return
+	}
+	if !t.finishStart(df.Pair, broker, false) {
+		return // the model still asked about the start of the pair
 	}
 	if _, started := t.handled[df.Pair]; !started {
 		t.onClose(closed(df), broker, TriggerStart)
@@ -821,7 +947,11 @@ func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 	}
 	if interval := t.cfg.ConsultInterval; interval > 0 && len(df.Time) == len(df.Close) {
 		slot := t.now().Truncate(interval)
-		if opened := df.Time[len(df.Time)-1]; slot.After(opened) && t.consulted[df.Pair].Before(slot) {
+		opened := df.Time[len(df.Time)-1]
+		// within the candle in progress only: a slot at or past its close is the
+		// one of the close, asked once it comes
+		within := slot.After(opened) && (t.period <= 0 || slot.Before(opened.Add(t.period)))
+		if within && t.consulted[df.Pair].Before(slot) {
 			t.consulted[df.Pair] = slot
 			t.analyze(closed(df), broker, analysis{trigger: TriggerInterval, market: df, inProgress: true})
 		}
@@ -951,24 +1081,42 @@ func (t *Trader) recover(pair string, tr *trade) {
 	}
 }
 
-// decide asks the provider for the decision of the context, validated against
-// it whatever the provider, as any Provider may be plugged in, and returns it
-// with its record (see ui.Decision), trigger telling why it was asked and
-// requestedBy the channel of the reanalysis it answers. A decision refused, or
-// an answer failed, returns an error, with the record of the refusal, or of the
-// failure, the justification of the decision refused included.
-func (t *Trader) decide(st *promptState, input Input, trigger, requestedBy string) (Decision, ui.Decision, error) {
+// reply is the answer of the model to a context, see request: its decision or
+// its error, when it was asked, and how long it took.
+type reply struct {
+	decision Decision
+	err      error
+	at       time.Time
+	latency  time.Duration
+}
+
+// request asks the provider for the decision of input with the instructions of
+// st, asked at at, bounded by the timeout. It touches no state of the Trader:
+// it may run apart, see startApart.
+func (t *Trader) request(st *promptState, input Input, at time.Time) reply {
 	ctx, cancel := context.WithTimeout(context.Background(), t.cfg.Timeout)
 	defer cancel()
-
-	at := t.now()
+	r := reply{at: at}
 	start := time.Now()
-	decision, err := t.ask(ctx, st, input)
+	r.decision, r.err = t.ask(ctx, st, input)
+	r.latency = time.Since(start).Round(time.Millisecond)
+	return r
+}
+
+// conclude validates the reply r of the provider against its context input,
+// whatever the provider, as any Provider may be plugged in, and returns its
+// decision with its record (see ui.Decision), trigger telling why it was asked
+// and requestedBy the channel of the reanalysis it answers. A decision
+// refused, or an answer failed, returns an error, with the record of the
+// refusal, or of the failure, the justification of the decision refused
+// included.
+func (t *Trader) conclude(st *promptState, input Input, trigger, requestedBy string, r reply) (Decision, ui.Decision,
+	error) {
+	decision, err, latency := r.decision, r.err, r.latency
 	if err == nil {
 		err = decision.Validate(input)
 	}
-	latency := time.Since(start).Round(time.Millisecond)
-	kept := t.decisionRecord(st, input, trigger, requestedBy, at, latency, decision, err)
+	kept := t.decisionRecord(st, input, trigger, requestedBy, r.at, latency, decision, err)
 	t.record(st, input, latency, decision, err, kept.ID, trigger, requestedBy)
 	if err != nil {
 		var apiErr *APIError
@@ -997,7 +1145,7 @@ func (t *Trader) ask(ctx context.Context, st *promptState, input Input) (Decisio
 // apply hands the decision to the broker, and returns the orders it placed or
 // moved with its outcome: WAIT and HOLD keep things as they are, and the
 // decisions trading under MinConfidence are ignored.
-func (t *Trader) apply(df *model.Dataframe, broker service.Broker, input Input, tr *trade,
+func (t *Trader) apply(df *model.Dataframe, broker service.Broker, st *promptState, input Input, tr *trade,
 	d Decision) ([]model.Order, string) {
 
 	if d.Action.trades() && d.Confidence < t.cfg.MinConfidence {
@@ -1013,6 +1161,12 @@ func (t *Trader) apply(df *model.Dataframe, broker service.Broker, input Input, 
 	var orders []model.Order
 	switch d.Action {
 	case ActionEnterLong, ActionEnterShort:
+		// the daily limits again, whatever the decision: a close booked since
+		// the context was read
+		if _, limited := t.daily(df.Pair, st, t.dayClock(df)); limited != "" {
+			log.Infof("[LLM] %s %s | %s refused: %s", df.Pair, t.cfg.Timeframe, d.Action, limited)
+			return nil, OutcomeRefused
+		}
 		profit := 0.0 // none: the stop loss alone, see Config.TakeProfitOptional
 		if d.TakeProfit != nil {
 			profit = *d.TakeProfit
@@ -1055,11 +1209,11 @@ func reducesRisk(in Input, d Decision) bool {
 
 // context returns the context of the decision on the closed candles of df, at
 // closePrice, the price of now, the quotes of market, and why there is nothing
-// to decide, empty when there is: flat without any entry to open, eg: the
-// balance too low for a position, or a broker that can't place the stop loss
-// and take profit with the order.
+// to decide (see skip), none when there is: flat without any entry to open,
+// eg: the balance too low for a position, or a broker that can't place the
+// stop loss and take profit with the order.
 func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st *promptState, tr *trade, asset,
-	quote, closePrice float64) (Input, string) {
+	quote, closePrice float64) (Input, skip) {
 
 	nan := number(math.NaN())
 	candles := t.candles(df)
@@ -1118,22 +1272,30 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 	}
 	t.quotes(market, &input)
 	blocked := t.calendar(df.Pair, &input)
+	day, limited := t.daily(df.Pair, st, t.dayClock(df))
+	input.Daily = day
+	input.Rules.EntriesBlockedByDailyLimit = limited
 
 	_, canProtect := broker.(service.ProtectionBroker)
 	if tr == nil {
 		input.Rules.Actions = []Action{ActionWait}
 		if !canProtect {
 			log.Errorf("llm: the broker can't place the stop loss and take profit with the order")
-			return input, "the broker can't place the stop loss and take profit with the order"
+			return input, skip{SkipProtection, "the broker can't place the stop loss and take profit with the order"}
+		}
+		if limited != "" {
+			// only WAIT left until the next day: nothing to ask
+			log.Infof("[LLM] %s %s | no entry: %s", df.Pair, t.cfg.Timeframe, limited)
+			return input, skip{SkipDailyLimit, "no entry: " + limited}
 		}
 		if blocked != "" {
 			// only WAIT left: nothing to ask
 			log.Infof("[LLM] %s %s | no entry: %s", df.Pair, t.cfg.Timeframe, blocked)
-			return input, "no entry around the release " + blocked
+			return input, skip{SkipNews, "no entry around the release " + blocked}
 		}
 		size, ok := t.size(df.Pair, quote, closePrice)
 		if !ok {
-			return input, "no position fits the balance and the sizing"
+			return input, skip{SkipSize, "no position fits the balance and the sizing"}
 		}
 		input.EntrySize = number(size)
 		entries, why := t.entries(df, input)
@@ -1144,14 +1306,14 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 		}
 		if len(input.Rules.Actions) == 1 {
 			// only WAIT left: nothing to ask
-			if why == "" {
-				why = "no entry the direction of the positions allows"
+			if why.code == "" {
+				why = skip{SkipDirection, "no entry the direction of the positions allows"}
 			} else {
-				log.Infof("[LLM] %s %s | no entry: %s", df.Pair, t.cfg.Timeframe, why)
+				log.Infof("[LLM] %s %s | no entry: %s", df.Pair, t.cfg.Timeframe, why.detail)
 			}
 			return input, why
 		}
-		return input, ""
+		return input, skip{}
 	}
 
 	position := &Position{Side: tr.side, Size: number(math.Abs(asset)), Entry: nan, StopLoss: nan, TakeProfit: nan,
@@ -1188,7 +1350,7 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 			input.Rules.Actions = append(input.Rules.Actions, ActionModifyTP)
 		}
 	}
-	return input, ""
+	return input, skip{}
 }
 
 // setup returns the setup of the Trader, SetupFree when unset.
@@ -1202,21 +1364,23 @@ func (t *Trader) setup() string {
 // entries returns the entries the model may choose from when flat, and why
 // there is none: SetupTrendPullback leaves only the one with the trend of
 // Summary.Trend, and a spread wider than MaxSpreadATR none.
-func (t *Trader) entries(df *model.Dataframe, input Input) ([]Action, string) {
+func (t *Trader) entries(df *model.Dataframe, input Input) ([]Action, skip) {
 	spread, atr := float64(input.Spread), last(df, "llm_atr")
 	if t.cfg.MaxSpreadATR > 0 && known(spread) && known(atr) && atr > 0 && spread > t.cfg.MaxSpreadATR*atr {
-		return nil, fmt.Sprintf("the spread %g is wider than %g ATR (%g)", spread, t.cfg.MaxSpreadATR, atr)
+		return nil, skip{SkipSpread, fmt.Sprintf("the spread %g is wider than %g ATR (%g)", spread,
+			t.cfg.MaxSpreadATR, atr)}
 	}
 	if t.setup() != SetupTrendPullback {
-		return []Action{ActionEnterLong, ActionEnterShort}, ""
+		return []Action{ActionEnterLong, ActionEnterShort}, skip{}
 	}
 	switch input.Summary.Trend {
 	case "up":
-		return []Action{ActionEnterLong}, ""
+		return []Action{ActionEnterLong}, skip{}
 	case "down":
-		return []Action{ActionEnterShort}, ""
+		return []Action{ActionEnterShort}, skip{}
 	}
-	return nil, "no trend for the trend pullback setup (the close and the EMAs not on the same side of the SMA)"
+	return nil, skip{SkipSetup,
+		"no trend for the trend pullback setup (the close and the EMAs not on the same side of the SMA)"}
 }
 
 // calendar adds the economic calendar to the context of the candle, when the
@@ -1314,12 +1478,12 @@ func window(df *model.Dataframe, n int) Candles {
 // to the entries of input, flat: when all the higher timeframes of the context
 // trend the same way, up or down, the entry against it is left out of the
 // allowed actions; without a trend they agree on, the filter leaves them all
-// and the requirement none. It returns why the model isn't to be asked, empty
-// when it is: not with WAIT left alone.
-func (t *Trader) higherTrend(pair string, input *Input) string {
+// and the requirement none. It returns why the model isn't to be asked (see
+// skip), none when it is: not with WAIT left alone.
+func (t *Trader) higherTrend(pair string, input *Input) skip {
 	required := t.cfg.HigherTrendRequired
 	if (!t.cfg.HigherTrendFilter && !required) || input.Position != nil {
-		return "" // a position held: no filter
+		return skip{} // a position held: no filter
 	}
 	frames := input.HigherTimeframes
 	var trend, why string
@@ -1339,11 +1503,11 @@ func (t *Trader) higherTrend(pair string, input *Input) string {
 	}
 	if trend == "" {
 		if !required {
-			return "" // no trend to filter with
+			return skip{} // no trend to filter with
 		}
 		why += ", and their trend is required for an entry"
 		log.Infof("[LLM] %s %s | no entry: %s", pair, t.cfg.Timeframe, why)
-		return why
+		return skip{SkipHigherTrend, why}
 	}
 
 	against := ActionEnterShort
@@ -1357,9 +1521,9 @@ func (t *Trader) higherTrend(pair string, input *Input) string {
 	if len(input.Rules.Actions) <= 1 {
 		log.Infof("[LLM] %s %s | no entry: the higher timeframes trend %s, against the entries allowed", pair,
 			t.cfg.Timeframe, trend)
-		return "only WAIT is left, against the trend of the higher timeframes"
+		return skip{SkipAgainstTrend, "only WAIT is left, against the trend of the higher timeframes"}
 	}
-	return ""
+	return skip{}
 }
 
 // The volumes of Instrument.Volume.

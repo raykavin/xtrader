@@ -176,12 +176,15 @@ export interface PairsResponse {
 }
 /**
  * AgentStatus is an agent of the dashboard, a bot serving its API at Address.
- * Online tells whether the API answers.
+ * Online tells whether the API answers. Period is its accounting period, the
+ * cards of the dashboard counting the trades closed since its start: absent
+ * before the first reset of its results, all of them counted.
  */
 export interface AgentStatus {
   name: string;
   address: string;
   online: boolean;
+  period?: AgentPeriod;
 }
 /**
  * AgentsResponse lists the agents of the dashboard, in the order of its
@@ -342,8 +345,10 @@ export interface BalanceResponse {
  * latency, the position held then, what the model answered
  * with its justification (Reason), its levels, its notes and its attachments,
  * and what came of it (Outcome: applied; ignored, its confidence under the
- * minimum; refused, breaking the rules of the context; failed, no answer),
- * with the orders it placed or moved.
+ * minimum; refused, breaking the rules of the context; failed, no answer;
+ * skipped, an analysis that didn't ask the model, eg: no entry to open while
+ * flat, Reason then the code of why and Error its detail), with the orders it
+ * placed or moved.
  */
 export interface Decision {
   id: string;
@@ -562,6 +567,42 @@ export interface AgentSettingsRequest {
   llm_api_key?: string;
   bridge_token?: string;
   calendar_token?: string;
+}
+/**
+ * AgentPeriod is an accounting period of an agent: the cards of the dashboard
+ * (trades, win rate, net profit, profit factor) count the trades closed from
+ * StartedAt, the close of their order, until EndedAt, the start of the next
+ * period, absent for the current one; Deposit, in Currency, is the balance it
+ * started with, and CreatedBy the user who started it. The orders, the open
+ * positions and the pending orders are untouched: a period only tells which
+ * results count. Times in Unix seconds.
+ */
+export interface AgentPeriod {
+  id: number /* int64 */;
+  started_at: number /* int64 */;
+  ended_at?: number /* int64 */;
+  deposit: number /* float64 */;
+  currency: string;
+  created_by?: string;
+}
+/**
+ * AgentPeriodsResponse is the payload of GET
+ * /api/settings/agents/{name}/periods: the periods of the agent, the current
+ * one first, none before the first reset of its results.
+ */
+export interface AgentPeriodsResponse {
+  periods: AgentPeriod[];
+}
+/**
+ * AgentPeriodRequest is the payload of POST
+ * /api/settings/agents/{name}/periods, the reset of the results of every pair
+ * of the agent: a period starting now, answered with it (201), Deposit (from 0,
+ * rounded to cents) in Currency (a code of 3 letters, eg: BRL) the balance it
+ * starts with.
+ */
+export interface AgentPeriodRequest {
+  deposit: number /* float64 */;
+  currency: string;
 }
 /**
  * AgentAccountRequest is a change of the account of an agent, of the fields

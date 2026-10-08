@@ -94,3 +94,69 @@ func TestTrader_ConsultIntervalBelowTheTimeframe(t *testing.T) {
 	require.Equal(t, TriggerCandle, r.lastDecision().Trigger)
 	require.False(t, r.provider.last().Scheduled)
 }
+
+// The close late, its candle still handed in progress past its close: the
+// slot it falls on is left to the close, the model asked once.
+func TestTrader_ConsultIntervalLeavesTheCloseToTheClose(t *testing.T) {
+	r, _ := liveRunner(t, nil, 0)
+	r.trader.cfg.ConsultInterval = 5 * time.Minute
+	r.inProgress(101.2)
+	opened := r.df.Time[len(r.df.Time)-1]
+	asked := len(r.provider.inputs)
+
+	r.trader.now = func() time.Time { return opened.Add(15*time.Minute + 12*time.Second) } // past its close
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Len(t, r.provider.inputs, asked, "the slot of the close: not asked on the candle in progress")
+
+	r.trader.now = func() time.Time { return opened.Add(14*time.Minute + 59*time.Second) }
+	r.provider.answers = []answer{decide(ActionWait, 0.5, nil, nil, nil)}
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Len(t, r.provider.inputs, asked+1, "the slot of 10 minutes, within the candle")
+	require.Equal(t, TriggerInterval, r.lastDecision().Trigger)
+}
+
+// The decision of the start takes its slot: the model isn't asked again in it.
+func TestTrader_ConsultIntervalAfterTheStart(t *testing.T) {
+	r, _ := liveRunner(t, nil, 0)
+	r.trader.cfg.ConsultInterval = 5 * time.Minute
+	r.inProgress(101.2) // its clock 7 minutes after its open
+	opened := r.df.Time[len(r.df.Time)-1]
+	delete(r.trader.handled, testPair) // a start
+	asked := len(r.provider.inputs)
+
+	r.provider.answers = []answer{decide(ActionWait, 0.5, nil, nil, nil)}
+	r.trader.OnPartialCandle(r.df, r.broker)
+	r.startAsked(testPair)
+	require.Len(t, r.provider.inputs, asked+1, "the start")
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Equal(t, TriggerStart, r.lastDecision().Trigger, "applied")
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Len(t, r.provider.inputs, asked+1, "its slot taken by the start")
+
+	r.trader.now = func() time.Time { return opened.Add(10*time.Minute + time.Second) }
+	r.provider.answers = []answer{decide(ActionWait, 0.5, nil, nil, nil)}
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Len(t, r.provider.inputs, asked+2, "the next slot")
+	require.Equal(t, TriggerInterval, r.lastDecision().Trigger)
+}
+
+// The decision of the start answered in the next slot: that slot taken too,
+// the model not asked again on the tick that applies it.
+func TestTrader_ConsultIntervalStartAnsweredInTheNextSlot(t *testing.T) {
+	r, _ := liveRunner(t, nil, 0)
+	r.trader.cfg.ConsultInterval = 5 * time.Minute
+	r.inProgress(101.2) // its clock 7 minutes after its open
+	opened := r.df.Time[len(r.df.Time)-1]
+	delete(r.trader.handled, testPair) // a start
+	asked := len(r.provider.inputs)
+
+	r.provider.answers = []answer{decide(ActionWait, 0.5, nil, nil, nil)}
+	r.trader.OnPartialCandle(r.df, r.broker)
+	r.startAsked(testPair)
+	r.trader.now = func() time.Time { return opened.Add(10*time.Minute + time.Second) }
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Equal(t, TriggerStart, r.lastDecision().Trigger)
+	require.Len(t, r.provider.inputs, asked+1, "the slot it was answered in taken")
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Len(t, r.provider.inputs, asked+1)
+}

@@ -194,9 +194,16 @@ func TestTrader_FirstQueryAtStart(t *testing.T) {
 
 	r.provider.answers = []answer{decide(ActionWait, 0.4, nil, nil, nil)}
 	r.trader.OnPartialCandle(r.df, r.broker)
+	r.startAsked(testPair)
 	require.Len(t, r.provider.inputs, 1)
 	require.Equal(t, closedAt, r.provider.last().Time, "the candle closed before the one in progress")
+	decisions, err := r.trader.Decisions(testPair, 1)
+	require.NoError(t, err)
+	require.Empty(t, decisions, "applied on the next candle in progress")
 
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Equal(t, TriggerStart, r.lastDecision().Trigger)
+	require.Empty(t, r.trader.starting)
 	r.trader.OnPartialCandle(r.df, r.broker)
 	require.Len(t, r.provider.inputs, 1, "once")
 

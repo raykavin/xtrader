@@ -5,6 +5,7 @@ import {
   formatPrice,
   formatProfit,
   formatQuantity,
+  formatTime,
   signClass,
 } from "../lib/format";
 import type { PositionPnL, Stats } from "../lib/stats";
@@ -17,6 +18,8 @@ interface Props {
   theme: Theme;
   /** The open position and its profit, null when flat, see positionPnL. */
   pnl?: PositionPnL | null;
+  /** The start of the accounting period of the agent the trades count from, see AgentPeriod. */
+  since?: number;
 }
 
 interface Tile {
@@ -27,7 +30,7 @@ interface Tile {
   hint?: string;
 }
 
-export function StatsBar({ stats, snapshot, theme, pnl = null }: Props) {
+export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
   const hasEquity = snapshot.equity_values.length > 0;
   const palette = palettes[theme];
 
@@ -77,7 +80,9 @@ export function StatsBar({ stats, snapshot, theme, pnl = null }: Props) {
     {
       label: "Operações",
       value: String(stats.trades),
-      hint: `${stats.wins} ganhas · ${stats.losses} perdidas`,
+      hint:
+        `${stats.wins} ganhas · ${stats.losses} perdidas` +
+        (since !== undefined ? ` · desde ${formatTime(since)} UTC` : ""),
     },
     {
       label: "Taxa de acerto",

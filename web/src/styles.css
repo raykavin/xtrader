@@ -938,6 +938,31 @@ tbody tr:last-child td {
   margin-top: auto;
 }
 
+/* the chart and the buttons over it, in its top corner; the chart takes the
+   right padding of its card, its price scale, as wide as its labels, a couple
+   of pixels from the border */
+.chart-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  margin-right: calc(2px - var(--space-5));
+}
+
+.chart-live {
+  position: absolute;
+  top: var(--space-2);
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+}
+
+.chart-live:hover {
+  color: var(--accent);
+}
+
 /* the chart fills its card; contain keeps its canvas, sized in pixels, from
    holding the card at a former height */
 .trade-area .price-chart {
@@ -1549,6 +1574,12 @@ tbody tr:last-child td {
   background: color-mix(in srgb, var(--neg) 10%, transparent);
 }
 
+.badge.outcome.skipped {
+  color: var(--muted);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+
 .decisions .decision-cell {
   max-width: 520px;
   overflow: hidden;
@@ -1737,6 +1768,13 @@ tbody tr:last-child td {
 .decision-section .decision-error {
   margin-top: var(--space-2);
   color: var(--neg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.decision-section .decision-detail {
+  margin-top: var(--space-2);
+  color: var(--muted);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -2774,6 +2812,81 @@ tbody tr:last-child td {
 /* the dialog of an agent, new or edited */
 .agent-dialog {
   width: min(760px, calc(100vw - 2 * var(--space-4)));
+}
+
+/* the results of an agent by accounting period, and their reset */
+.results-dialog {
+  width: min(720px, calc(100vw - 2 * var(--space-4)));
+}
+
+.results-dialog .decision-head small {
+  margin-left: var(--space-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.results-heading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.results-period {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.results-window {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.results-period .table-wrap {
+  margin: 0;
+  padding: 0;
+}
+
+.results-dialog tfoot th,
+.results-dialog tfoot td {
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 0;
+}
+
+.results-reset {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.results-reset h3 {
+  margin: 0;
+}
+
+.results-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.results-fields .settings-input {
+  min-width: 160px;
+}
+
+.results-currency .settings-input {
+  width: 84px;
+  min-width: 0;
+}
+
+.results-fields .settings-input[aria-invalid="true"] {
+  border-color: var(--neg);
 }
 
 .agent-dialog .decision-head small {

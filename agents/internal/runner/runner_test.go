@@ -15,6 +15,13 @@ import (
 	"github.com/raykavin/xtrader/service"
 )
 
+func TestList(t *testing.T) {
+	require.Equal(t, []string{"GOLD", "BTCUSD"}, list("GOLD;BTCUSD"))
+	require.Equal(t, []string{"GOLD", "BTCUSD"}, list("GOLD, BTCUSD"), "the comma of before")
+	require.Equal(t, []string{"GOLD=0.01", "BTCUSD=0.03"}, list("GOLD=0.01;BTCUSD=0.03;"))
+	require.Nil(t, list(" ; "))
+}
+
 func TestLotsByPair(t *testing.T) {
 	pairs := []string{"GOLD", "BTCUSD"}
 
