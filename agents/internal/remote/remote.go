@@ -33,10 +33,13 @@ const flushTimeout = 10 * time.Second
 
 // Agent is an agent launched by the controller: its settings, the key of its
 // API for this start (see ui.WithAPIKey), and what it keeps through the
-// controller once Open.
+// controller once Open. With QuarantineOutbox, eg: the flag
+// -outbox-quarantine, Open moves an outbox that can't be read aside rather
+// than failing, see OpenOutbox.
 type Agent struct {
-	Config agentapi.Config
-	APIKey string
+	Config           agentapi.Config
+	APIKey           string
+	QuarantineOutbox bool
 
 	client  *Client
 	outbox  *Outbox
@@ -152,8 +155,13 @@ func (a *Agent) Args() []string {
 // Open opens the outbox of the agent in dir, eg: data/outbox, a file named
 // after it and its ID, eg: llm-3.db: a new agent taking the name of one
 // deleted never sends the records the other left. Before its records are kept.
+// A file that can't be read fails with ErrOutboxCorrupt, unless
+// QuarantineOutbox: then it is moved aside, to <file>.corrupt-<time>, and the
+// agent starts with an empty outbox (the records of a file read but those it
+// can't, set apart).
 func (a *Agent) Open(dir string) error {
-	outbox, err := OpenOutbox(filepath.Join(dir, fmt.Sprintf("%s-%d.db", a.Config.Name, a.Config.ID)), a.client)
+	outbox, err := openOutboxFile(filepath.Join(dir, fmt.Sprintf("%s-%d.db", a.Config.Name, a.Config.ID)),
+		a.client, a.QuarantineOutbox)
 	if err != nil {
 		return err
 	}

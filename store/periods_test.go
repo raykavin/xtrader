@@ -2,11 +2,20 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/raykavin/gobox/database/migrate"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+
+	"github.com/raykavin/xtrader/config"
 )
 
 // Each reset starts a period of the agent, the earlier ones kept in their
@@ -117,4 +126,110 @@ func TestCurrentPeriods_LeavesTheDeletedAgentsOut(t *testing.T) {
 	var kept int64
 	require.NoError(t, s.db.Model(&Period{}).Where("agent_id = ?", llm.ID).Count(&kept).Error)
 	require.EqualValues(t, 1, kept)
+}
+
+// migratedTo applies the migrations of sql/migrations up to version to the
+// database of dsn, as cmd/migrator did when that was the last one.
+func migratedTo(t *testing.T, dsn string, version int) {
+	t.Helper()
+	dir := t.TempDir()
+	names, err := filepath.Glob(filepath.Join("..", "sql", "migrations", "*.sql"))
+	require.NoError(t, err)
+	for _, name := range names {
+		var number int
+		_, err := fmt.Sscanf(filepath.Base(name), "%06d_", &number)
+		require.NoError(t, err)
+		if number > version {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, filepath.Base(name)), data, 0o600))
+	}
+	m, err := migrate.New(migrate.MigrateConfig{DSN: dsn, Dialector: "postgres", MigrationsPath: dir})
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(context.Background()))
+}
+
+// The deposits of the periods in cents exactly from the migration 16 on: the
+// ones kept before rounded to the cent, as numbers in JSON still; the
+// migration down keeps them.
+func TestMigration16_TheDepositsInCents(t *testing.T) {
+	dsn := testDatabase(t)
+	migratedTo(t, dsn, 15)
+	s, err := Open(config.Database{DSN: dsn, MaxOpenConns: 2, LogLevel: "silent"}, testKey)
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+	llmAgent(t, s, "llm")
+	first, err := s.StartPeriod(ctx, "llm", 1000.005, "BRL", "admin")
+	require.NoError(t, err)
+	second, err := s.StartPeriod(ctx, "llm", 0.1+0.2, "BRL", "admin")
+	require.NoError(t, err)
+	most, err := s.StartPeriod(ctx, "llm", maxDeposit, "BRL", "admin")
+	require.NoError(t, err)
+	// one written otherwise, beyond the cent
+	require.NoError(t, s.db.Exec("UPDATE agent_periods SET deposit = 12.345678 WHERE id = ?", second.ID).Error)
+	type period struct {
+		ID      int64
+		Deposit string
+	}
+	var before []period
+	require.NoError(t, s.db.Raw("SELECT id, deposit::text FROM agent_periods ORDER BY id").Scan(&before).Error)
+
+	migrated(t, dsn)
+	require.NoError(t, s.CheckSchema(ctx))
+	var column struct {
+		DataType         string
+		NumericPrecision int
+		NumericScale     int
+	}
+	require.NoError(t, s.db.Raw("SELECT data_type, numeric_precision, numeric_scale FROM information_schema.columns "+
+		"WHERE table_name = 'agent_periods' AND column_name = 'deposit'").Scan(&column).Error)
+	require.Equal(t, "numeric", column.DataType)
+	require.Equal(t, 16, column.NumericPrecision)
+	require.Equal(t, 2, column.NumericScale)
+
+	periods, err := s.Periods(ctx, "llm")
+	require.NoError(t, err)
+	require.Len(t, periods, 3, "the periods kept: %v", before)
+	deposits := map[int64]float64{}
+	for _, p := range periods {
+		deposits[p.ID] = p.Deposit
+	}
+	require.Equal(t, map[int64]float64{first.ID: 1000.01, second.ID: 12.35, most.ID: maxDeposit}, deposits)
+	data, err := json.Marshal(periods[len(periods)-1])
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"deposit":1000.01,`, "a number")
+	current, err := s.CurrentPeriods(ctx)
+	require.NoError(t, err)
+	require.Equal(t, maxDeposit, current["llm"].Deposit)
+
+	next, err := s.StartPeriod(ctx, "llm", 2500.555, "USD", "admin")
+	require.NoError(t, err)
+	periods, err = s.Periods(ctx, "llm")
+	require.NoError(t, err)
+	require.Equal(t, next.ID, periods[0].ID)
+	require.Equal(t, 2500.56, periods[0].Deposit)
+	err = s.db.Exec("UPDATE agent_periods SET deposit = -1 WHERE id = ?", next.ID).Error
+	require.ErrorIs(t, err, gorm.ErrCheckConstraintViolated, "never below 0")
+
+	down, err := os.ReadFile(filepath.Join("..", "sql", "migrations",
+		"000016_alter_agent_periods_deposit_numeric.down.sql"))
+	require.NoError(t, err)
+	require.NoError(t, s.db.Exec(string(down)).Error)
+	var after []period
+	require.NoError(t, s.db.Raw("SELECT id, deposit::text FROM agent_periods ORDER BY id").Scan(&after).Error)
+	require.Equal(t, []period{{first.ID, "1000.01"}, {second.ID, "12.35"}, {most.ID, "1000000000000"},
+		{next.ID, "2500.56"}}, after, "down, the cents kept")
+	require.True(t, strings.Contains(before[1].Deposit, "12.345678"), "beyond the cent before: %v", before)
+}
+
+// The deposits are rounded to the cent as written, half up.
+func TestCents_AsWritten(t *testing.T) {
+	for amount, want := range map[float64]float64{0: 0, 0.004: 0, 0.005: 0.01, 1000.005: 1000.01, 2500.555: 2500.56,
+		1.115: 1.12, 0.1 + 0.2: 0.3, 12.345678: 12.35, 99.994999: 99.99, 1e-7: 0, 1e12: 1e12,
+		999999999999.995: 1e12, 7: 7} {
+		require.Equal(t, want, cents(amount), "%v", amount)
+	}
 }

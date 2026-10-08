@@ -39,3 +39,42 @@ func TestOrder_Finite(t *testing.T) {
 	require.Empty(t, fields)
 	require.Equal(t, finite, same)
 }
+
+func TestOrder_SupersedesNeverGoesBack(t *testing.T) {
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	state := func(status OrderStatusType, updated time.Time) Order {
+		return Order{ID: 1, Status: status, UpdatedAt: updated}
+	}
+	for _, c := range []struct {
+		name      string
+		prev, o   Order
+		supersede bool
+	}{
+		{"a later move", state(OrderStatusTypeNew, at), state(OrderStatusTypeNew, at.Add(time.Second)), true},
+		{"the same state again", state(OrderStatusTypeFilled, at), state(OrderStatusTypeFilled, at), true},
+		{"an older open state", state(OrderStatusTypeNew, at), state(OrderStatusTypePendingCancel,
+			at.Add(-time.Second)), false},
+		{"open after the fill", state(OrderStatusTypeFilled, at), state(OrderStatusTypeNew, at.Add(time.Hour)),
+			false},
+		{"pending cancel after the cancel", state(OrderStatusTypeCanceled, at),
+			state(OrderStatusTypePendingCancel, at.Add(time.Hour)), false},
+		{"the fill at the time of the broker, before the move", state(OrderStatusTypeNew, at),
+			state(OrderStatusTypeFilled, at.Add(-time.Second)), true},
+		{"an older final state", state(OrderStatusTypeFilled, at), state(OrderStatusTypeCanceled,
+			at.Add(-time.Second)), false},
+		{"a later final state", state(OrderStatusTypeCanceled, at), state(OrderStatusTypeExpired,
+			at.Add(time.Second)), true},
+		{"older by less than the microsecond kept", state(OrderStatusTypeNew, at.Add(999)), state(OrderStatusTypeNew,
+			at.Add(1)), true},
+	} {
+		require.Equal(t, c.supersede, c.o.Supersedes(c.prev), c.name)
+	}
+	for _, status := range []OrderStatusType{OrderStatusTypeFilled, OrderStatusTypeCanceled, OrderStatusTypeRejected,
+		OrderStatusTypeExpired} {
+		require.True(t, status.Final(), status)
+	}
+	for _, status := range []OrderStatusType{OrderStatusTypeNew, OrderStatusTypePartiallyFilled,
+		OrderStatusTypePendingCancel, ""} {
+		require.False(t, status.Final(), status)
+	}
+}

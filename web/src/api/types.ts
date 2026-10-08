@@ -475,7 +475,8 @@ export interface ErrorResponse {
  * tells that it exited without Restart: launched again once restarted,
  * enabled again, its settings changed after it exited, or the controller
  * started again. LaunchError tells why the controller didn't launch it,
- * eg: another agent running trades the same positions on MT5. Params are the
+ * eg: another agent running trades the same positions on MT5. Outbox tells
+ * what its outbox holds not written yet, see AgentOutbox. Params are the
  * flags of its settings that no field holds, by name, the ones of its
  * language model included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}.
  * Model names its language model, eg: openai gpt-5, and LLM holds it, for an
@@ -498,6 +499,7 @@ export interface AgentSettings {
   exited?: boolean;
   last_exit?: string;
   launch_error?: string;
+  outbox?: AgentOutbox;
   params: { [key: string]: string};
   account?: AgentAccountSettings;
   llm?: AgentLLMSettings;
@@ -505,6 +507,22 @@ export interface AgentSettings {
   prompt_id?: number /* int64 */;
   prompt_status?: AgentPromptStatus;
   secrets: AgentSecretsPresent;
+}
+/**
+ * AgentOutbox is what the outbox of an agent holds, as it told the
+ * controller with its last batch of records: the records not written to the
+ * database yet, Since in Unix seconds when the oldest of them was written by
+ * the agent, absent when unknown, Failing when that batch wasn't written, the
+ * records the controller refused for good, set apart in the outbox, and the
+ * ones it failed again and again, held apart there, sent again now and then.
+ * Absent for an outbox sent whole.
+ */
+export interface AgentOutbox {
+  pending: number /* int */;
+  since?: number /* int64 */;
+  failing?: boolean;
+  set_apart?: number /* int */;
+  held?: number /* int */;
 }
 /**
  * AgentAccountSettings is the trading account of an agent: the URL of the

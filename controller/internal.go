@@ -58,6 +58,7 @@ func (m *Manager) InternalHandler() http.Handler {
 		r.Get("/decision-links", m.handleDecisionLinks)
 		r.Get("/journal/memory", m.handleJournalMemory)
 		r.Post("/outbox", m.handleOutbox)
+		r.Post("/outbox/check", m.handleOutboxCheck)
 	})
 	return r
 }
@@ -295,8 +296,25 @@ func (m *Manager) handleJournalMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOutbox writes a batch of records of the agent in a single
-// transaction: 422 names the record refused for good, none written.
+// transaction: 422 names the record refused for good, none written. What the
+// outbox of the agent holds is kept for the dashboard, see Manager.Outbox.
 func (m *Manager) handleOutbox(w http.ResponseWriter, r *http.Request) {
+	m.serveOutbox(w, r, false)
+}
+
+// handleOutboxCheck answers a batch of records of the agent as handleOutbox
+// would, none written: the agent checks that the records after one failing
+// again and again are written, before setting that one apart.
+func (m *Manager) handleOutboxCheck(w http.ResponseWriter, r *http.Request) {
+	m.serveOutbox(w, r, true)
+}
+
+// errChecked rolls back the records of a check, see handleOutboxCheck.
+var errChecked = errors.New("checked")
+
+// serveOutbox writes a batch of records of the agent, or rolls them back once
+// written when it checks them, see handleOutbox.
+func (m *Manager) serveOutbox(w http.ResponseWriter, r *http.Request, check bool) {
 	var request agentapi.OutboxRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
@@ -313,16 +331,28 @@ func (m *Manager) handleOutbox(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if check {
+			return errChecked
+		}
 		return nil
 	})
+	if errors.Is(err, errChecked) {
+		err = nil
+	}
+	what := "the records"
+	if check {
+		what = "the records checked, none written"
+	} else {
+		m.backlogs.report(id, request, err == nil)
+	}
 	switch {
 	case refused >= 0:
-		log.Warnf("controller: agent %d: a %s record refused: %v", id, request.Records[refused].Kind, err)
+		log.Warnf("controller: agent %d: %s: a %s record refused: %v", id, what, request.Records[refused].Kind, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(agentapi.OutboxError{Index: refused, Error: err.Error()})
 	case err != nil:
-		log.Errorf("controller: agent %d: the records: %v", id, err)
+		log.Errorf("controller: agent %d: %s: %v", id, what, err)
 		writeJSONError(w, http.StatusServiceUnavailable, "the records can't be written now")
 	default:
 		var acked uint64
@@ -388,8 +418,11 @@ func refusedRecord(err error) bool {
 		errors.Is(err, gorm.ErrCheckConstraintViolated), errors.Is(err, gorm.ErrForeignKeyViolated):
 		return true
 	case errors.As(err, &pgErr):
-		// data exceptions and integrity constraint violations
-		return strings.HasPrefix(pgErr.Code, "22") || strings.HasPrefix(pgErr.Code, "23")
+		// data exceptions, integrity constraint violations, and the limits of
+		// the database, eg: an index row too large (54000): the same data fails
+		// the same way again
+		return strings.HasPrefix(pgErr.Code, "22") || strings.HasPrefix(pgErr.Code, "23") ||
+			strings.HasPrefix(pgErr.Code, "54")
 	}
 	return false
 }

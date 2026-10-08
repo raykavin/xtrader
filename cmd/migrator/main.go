@@ -6,7 +6,10 @@
 //	go run ./cmd/migrator -config configs/config.yml up
 //	# the settings and the data of the previous version, once: the agents of
 //	# its agents.yml, the users, Telegram and the keys of its environment file,
-//	# the orders, decisions and journals of its data/ (read from copies)
+//	# the orders, decisions and journals of its data/ (read from copies); run
+//	# again, only what is missing, what the dashboard deleted or changed left
+//	# as it is; the data of an agent that has orders already is a conflict
+//	# (nothing imported) unless -force, which moves its order IDs
 //	go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
 //		-env ~/.config/automator/automator.env
 //	# the same, nothing written: what would be imported

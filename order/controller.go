@@ -352,6 +352,12 @@ func (p *Position) Update(order *model.Order) (result *Result, finished bool) {
 // slow call, eg: an MT5 trade request whose answer was lost, looked for in the
 // account, holds the orders of its pair only, while UpdateOrders, the reads
 // and the orders of the other pairs go on.
+//
+// The states of an order are recorded under mtx, never one older than the one
+// recorded: an end (filled, canceled, rejected, expired) is never undone by a
+// move or a cancel answered after it (see record), nor a move by a state
+// UpdateOrders read before it (see updateOrders); the order feed takes them in
+// the order they are recorded (see publish).
 type Controller struct {
 	mtx            sync.RWMutex // the state below, never held during a call to the exchange
 	updateMtx      sync.Mutex   // serializes UpdateOrders, so a fill is never settled twice
@@ -378,6 +384,17 @@ type Controller struct {
 	// by their storage id: the ones created by this controller plus, once
 	// started, the open orders left in storage by a previous run.
 	pending map[int64]model.Order
+	// moves numbers the changes of the pending orders recorded apart from
+	// UpdateOrders, by a move or a cancel (see record), and movedAt holds the
+	// number of the last one of each pending order changed: the state of an
+	// order UpdateOrders read before it is read again, see updateOrders.
+	moves   uint64
+	movedAt map[int64]uint64
+
+	// the orders handed to the order feed, by pair, in the order they are
+	// recorded, see publish
+	feedMtx    sync.Mutex
+	feedQueues map[string]*feedQueue
 
 	// restoring is set while restore replays the stored fills: they settle
 	// the positions and the results quietly, notified already.
@@ -426,6 +443,7 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 		finish:         make(chan bool),
 		position:       make(map[string]*Position),
 		pending:        make(map[int64]model.Order),
+		movedAt:        make(map[int64]uint64),
 		unstored:       make(map[int64]model.Order),
 	}
 	c.restore()
@@ -812,6 +830,7 @@ func (c *Controller) updateOrders() {
 	for _, order := range c.pending {
 		orders = append(orders, order)
 	}
+	read := c.moves // the changes recorded before the orders are read, see record
 	c.mtx.RUnlock()
 
 	if len(orders) == 0 {
@@ -836,8 +855,7 @@ func (c *Controller) updateOrders() {
 			continue
 		}
 
-		keepStored(&excOrder, order)
-		log.Infof("[ORDER %s] %s", excOrder.Status, excOrder)
+		excOrder.ID = order.ID
 		updatedOrders = append(updatedOrders, excOrder)
 	}
 
@@ -846,19 +864,145 @@ func (c *Controller) updateOrders() {
 	}
 
 	// Lock only when updating internal state: the change happened on the
-	// exchange, settled even when the storage fails to write it
+	// exchange, settled even when the storage fails to write it. An order moved
+	// or canceled since it was read (see record) may have been read before:
+	// unless ended, it is read again next time, its move never undone.
 	c.mtx.Lock()
 	for _, processOrder := range updatedOrders {
+		current, ok := c.pending[processOrder.ID]
+		switch {
+		case !ok:
+			continue // settled already
+		case c.movedAt[processOrder.ID] > read && !processOrder.Status.Final():
+			log.Infof("[ORDER] %s changed as it was read from the exchange, %s: read again", current,
+				processOrder.Status)
+			continue
+		}
+		keepStored(&processOrder, current)
+		log.Infof("[ORDER %s] %s", processOrder.Status, processOrder)
 		c.store(&processOrder)
 		if isOpen(processOrder.Status) {
 			c.pending[processOrder.ID] = processOrder
 		} else {
 			delete(c.pending, processOrder.ID)
+			delete(c.movedAt, processOrder.ID)
 		}
 		c.processTrade(&processOrder)
-		c.orderFeed.Publish(processOrder, false)
+		c.publish(processOrder, false)
 	}
 	c.mtx.Unlock()
+}
+
+// record records order, changed on the exchange by a move or a cancel begun
+// before, see UpdateLimit, UpdateProtection and Cancel; published when
+// publish. An order ended meanwhile, eg: filled as it was moved, settled by
+// UpdateOrders, is kept as it ended, its end returned when known (see ended),
+// false: never undone. Must be called while holding c.mtx.
+func (c *Controller) record(order model.Order, publish bool) (model.Order, bool) {
+	if _, followed := c.pending[order.ID]; !followed {
+		end, ok := c.ended(order)
+		switch {
+		case ok:
+			log.Warnf("[ORDER %s] %s: ended as the exchange changed it, kept as it ended rather than %s",
+				end.Status, end, order.Status)
+			return end, false
+		case order.ID < 0:
+			// numbered provisionally, followed while open (see create): ended,
+			// its end never stored
+			log.Warnf("[ORDER] %s: ended as the exchange changed it, kept as it ended", order)
+			return order, false
+		}
+	}
+
+	c.store(&order)
+	if _, followed := c.pending[order.ID]; followed {
+		if isOpen(order.Status) {
+			c.pending[order.ID] = order
+		}
+		c.moves++
+		c.movedAt[order.ID] = c.moves
+	}
+	if publish {
+		c.publish(order, false)
+	}
+	return order, true
+}
+
+// ended returns the end of order, an order not pending, if it ended: its last
+// state recorded, when final, the one the storage failed to write (see
+// unstored), else the stored one. Must be called while holding c.mtx.
+func (c *Controller) ended(order model.Order) (model.Order, bool) {
+	if last, ok := c.unstored[order.ID]; ok {
+		return last, last.Status.Final()
+	}
+	if order.ID <= 0 || c.storage == nil {
+		return model.Order{}, false
+	}
+	stored, err := c.storage.Orders(func(stored model.Order) bool { return stored.ID == order.ID })
+	if err != nil {
+		log.Errorf("order controller: the order %d stored: %v", order.ID, err)
+		return model.Order{}, false
+	}
+	if len(stored) == 0 || !stored[0].Status.Final() {
+		return model.Order{}, false
+	}
+	return *stored[0], true
+}
+
+// feedQueue holds the orders of a pair waiting to be handed to the order feed,
+// see publish.
+type feedQueue struct {
+	orders  []feedOrder
+	handing bool // a goroutine hands them, see hand
+}
+
+type feedOrder struct {
+	order   model.Order
+	created bool
+}
+
+// publish hands order, created by the controller when created, to the order
+// feed in the background, after the orders of its pair published before: in the order the controller records them, never
+// an older state of an order after a newer one, and without waiting for the
+// consumers of the feed, eg: a notification sent. Must be called while holding
+// c.mtx.
+func (c *Controller) publish(order model.Order, created bool) {
+	if c.orderFeed == nil {
+		return
+	}
+	c.feedMtx.Lock()
+	defer c.feedMtx.Unlock()
+	if c.feedQueues == nil {
+		c.feedQueues = make(map[string]*feedQueue)
+	}
+	queue, ok := c.feedQueues[order.Pair]
+	if !ok {
+		queue = &feedQueue{}
+		c.feedQueues[order.Pair] = queue
+	}
+	queue.orders = append(queue.orders, feedOrder{order: order, created: created})
+	if !queue.handing {
+		queue.handing = true
+		go c.hand(queue)
+	}
+}
+
+// hand hands the orders of queue to the order feed, one at a time, until none
+// is left.
+func (c *Controller) hand(queue *feedQueue) {
+	for {
+		c.feedMtx.Lock()
+		if len(queue.orders) == 0 {
+			queue.orders, queue.handing = nil, false
+			c.feedMtx.Unlock()
+			return
+		}
+		next := queue.orders[0]
+		queue.orders[0] = feedOrder{}
+		queue.orders = queue.orders[1:]
+		c.feedMtx.Unlock()
+		c.orderFeed.Publish(next.order, next.created)
+	}
 }
 
 // keepStored gives an order reported by the exchange the storage id of the
@@ -1111,7 +1255,7 @@ func (c *Controller) CreateOrderOCO(side model.SideType, pair string, size, pric
 	for i := range orders {
 		c.create(&orders[i])
 		c.track(orders[i])
-		go c.orderFeed.Publish(orders[i], true)
+		c.publish(orders[i], true)
 	}
 
 	return orders, nil
@@ -1187,7 +1331,7 @@ func (c *Controller) keepCreated(orders []model.Order) {
 		c.create(&orders[i])
 		c.processTrade(&orders[i])
 		c.track(orders[i])
-		go c.orderFeed.Publish(orders[i], true)
+		c.publish(orders[i], true)
 		log.Infof("[ORDER CREATED] %s", orders[i])
 	}
 }
@@ -1303,9 +1447,10 @@ func (c *Controller) Protect(side model.SideType, pair string, size, stop, profi
 }
 
 // UpdateProtection moves a stop loss or take profit leg to level, see
-// service.ProtectionBroker, and stores it moved. Like Cancel, it works on a
-// stopped bot too: it only protects a position; not once the controller is
-// closed (see Close).
+// service.ProtectionBroker, and stores it moved; a leg that ended meanwhile,
+// eg: filled as it was moved, is returned as it ended, see record. Like
+// Cancel, it works on a stopped bot too: it only protects a position; not once
+// the controller is closed (see Close).
 func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
 	end, err := c.beginProtection(leg.Pair)
 	if err != nil {
@@ -1330,18 +1475,17 @@ func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Ord
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	keepStored(&moved, leg)
-	c.store(&moved)
-	if _, ok := c.pending[moved.ID]; ok {
-		c.pending[moved.ID] = moved
+	moved, recorded := c.record(moved, true)
+	if recorded {
+		log.Infof("[ORDER UPDATED] %s", moved)
 	}
-	go c.orderFeed.Publish(moved, false)
-	log.Infof("[ORDER UPDATED] %s", moved)
 	return moved, nil
 }
 
 // UpdateLimit moves a pending limit order to limit, see
-// service.ProtectionBroker, and stores it moved. Unlike UpdateProtection, it
-// needs the bot running: it changes when a position opens.
+// service.ProtectionBroker, and stores it moved; an order that ended meanwhile,
+// eg: filled as it was moved, is returned as it ended, see record. Unlike
+// UpdateProtection, it needs the bot running: it changes when a position opens.
 func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order, error) {
 	end, err := c.beginOrder(order.Pair)
 	if err != nil {
@@ -1366,12 +1510,10 @@ func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order,
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	keepStored(&moved, order)
-	c.store(&moved)
-	if _, ok := c.pending[moved.ID]; ok {
-		c.pending[moved.ID] = moved
+	moved, recorded := c.record(moved, true)
+	if recorded {
+		log.Infof("[ORDER UPDATED] %s", moved)
 	}
-	go c.orderFeed.Publish(moved, false)
-	log.Infof("[ORDER UPDATED] %s", moved)
 	return moved, nil
 }
 
@@ -1393,7 +1535,7 @@ func (c *Controller) CreateOrderLimit(side model.SideType, pair string, size, li
 	defer c.mtx.Unlock()
 	c.create(&order)
 	c.track(order)
-	go c.orderFeed.Publish(order, true)
+	c.publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
 	return order, nil
 }
@@ -1419,7 +1561,7 @@ func (c *Controller) CreateOrderMarketQuote(side model.SideType, pair string, am
 	// calculate profit
 	c.processTrade(&order)
 	c.track(order) // exchanges may report a market order as new and fill it right after
-	go c.orderFeed.Publish(order, true)
+	c.publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
 	return order, nil
 }
@@ -1445,7 +1587,7 @@ func (c *Controller) CreateOrderMarket(side model.SideType, pair string, size fl
 	// calculate profit
 	c.processTrade(&order)
 	c.track(order) // exchanges may report a market order as new and fill it right after
-	go c.orderFeed.Publish(order, true)
+	c.publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
 	return order, nil
 }
@@ -1468,13 +1610,14 @@ func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (
 	defer c.mtx.Unlock()
 	c.create(&order)
 	c.track(order)
-	go c.orderFeed.Publish(order, true)
+	c.publish(order, true)
 	log.Infof("[ORDER CREATED] %s", order)
 	return order, nil
 }
 
 // Cancel cancels an order, on a stopped bot too, not once the controller is
-// closed (see Close).
+// closed (see Close): pending cancel until the exchange tells it canceled,
+// unless it ended meanwhile, see record.
 func (c *Controller) Cancel(order model.Order) error {
 	end, err := c.beginProtection(order.Pair)
 	if err != nil {
@@ -1489,11 +1632,12 @@ func (c *Controller) Cancel(order model.Order) error {
 
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
-	order.Status = model.OrderStatusTypePendingCancel
-	c.store(&order)
-	if _, ok := c.pending[order.ID]; ok {
-		c.pending[order.ID] = order
+	if followed, ok := c.pending[order.ID]; ok {
+		order = followed // newer than a copy, eg: moved since
 	}
-	log.Infof("[ORDER CANCELED] %s", order)
+	order.Status = model.OrderStatusTypePendingCancel
+	if _, recorded := c.record(order, false); recorded {
+		log.Infof("[ORDER CANCELED] %s", order)
+	}
 	return nil
 }

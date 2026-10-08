@@ -135,7 +135,7 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 		Enabled: a.Enabled, Launched: a.Launched, Restart: a.Restart, TradePanel: a.TradePanel,
 		TelegramControl: a.TelegramControl, Running: state.Running, RestartPending: state.RestartPending,
 		Restarts: state.Restarts, Restarting: state.Restarting, Exited: state.Exited, LastExit: state.LastExit,
-		LaunchError: state.LaunchError, Params: a.AllParams()}
+		LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID), Params: a.AllParams()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

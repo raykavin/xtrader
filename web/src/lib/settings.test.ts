@@ -19,6 +19,7 @@ import {
   httpURLError,
   magicError,
   maxTokensError,
+  outboxNote,
   paramKeyError,
   paramValueError,
   parseCount,
@@ -118,6 +119,39 @@ describe("agents", () => {
       ),
     ).toBe("Última saída: exit status 2 · reiniciado 3 vezes");
     expect(agentNote(agent({ running: true, restarts: 2 }))).toBe("Reiniciado 2 vezes");
+  });
+
+  it("tells what the outbox of an agent holds not written, once failing or a minute old", () => {
+    const now = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const ago = (seconds: number) => Math.floor(now / 1000) - seconds;
+    expect(outboxNote(agent({}), now)).toBe("");
+    expect(outboxNote(agent({ outbox: { pending: 3, since: ago(20) } }), now)).toBe("");
+    expect(outboxNote(agent({ outbox: { pending: 1, since: ago(20), failing: true } }), now)).toBe(
+      "Outbox: 1 registro ainda não gravado no banco (o envio está falhando: veja o log do controller)",
+    );
+    expect(outboxNote(agent({ outbox: { pending: 40, since: ago(12 * 60 + 5) } }), now)).toBe(
+      "Outbox: 40 registros ainda não gravados no banco, o mais antigo há 12 min",
+    );
+    expect(
+      outboxNote(
+        agent({ outbox: { pending: 2, since: ago(3 * 3600), failing: true, set_apart: 1 } }),
+        now,
+      ),
+    ).toBe(
+      "Outbox: 2 registros ainda não gravados no banco, o mais antigo há 3 h (o envio está falhando: veja o log do controller) · Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente)",
+    );
+    expect(outboxNote(agent({ outbox: { pending: 0, set_apart: 4 } }), now)).toBe(
+      "Outbox: 4 registros recusados para sempre, separados no arquivo do agente (veja o log do agente)",
+    );
+    expect(outboxNote(agent({ outbox: { pending: 5, since: ago(3 * 86400) } }), now)).toBe(
+      "Outbox: 5 registros ainda não gravados no banco, o mais antigo há 3 dias",
+    );
+    expect(outboxNote(agent({ outbox: { pending: 0, held: 1 } }), now)).toBe(
+      "Outbox: 1 registro que falhou seguidamente, separado no arquivo do agente e reenviado de tempos em tempos (veja o log do agente)",
+    );
+    expect(outboxNote(agent({ outbox: { pending: 0, set_apart: 1, held: 2 } }), now)).toBe(
+      "Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente) · Outbox: 2 registros que falharam seguidamente, separados no arquivo do agente e reenviados de tempos em tempos (veja o log do agente)",
+    );
   });
 
   it("groups the agents by kind, the LLM ones first, the unknown kinds last", () => {

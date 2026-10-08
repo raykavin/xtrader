@@ -29,8 +29,16 @@ import (
 	"github.com/raykavin/xtrader/ui"
 )
 
-// errDryRun rolls back an import run with -dry-run.
-var errDryRun = errors.New("migrator: dry run")
+var (
+	// errDryRun rolls back an import run with -dry-run.
+	errDryRun = errors.New("migrator: dry run")
+	// errConflicts rolls back an import with conflicts, see report.conflict.
+	errConflicts = errors.New("migrator: conflicts")
+)
+
+// telegramImport is the record of the import of Telegram, see
+// importer.telegram.
+const telegramImport = "env:TELEGRAM"
 
 // legacyConfig is the agents.yml of the previous version.
 type legacyConfig struct {
@@ -107,7 +115,8 @@ func runImport(ctx context.Context, cfg *config.Config, args []string, out io.Wr
 	calendar := fs.String("calendar", "", "MCP server of the terminal of the agents with a calendar, in place of "+
 		"their -calendar-mcp, eg: http://mt5:22347/mcp in the containers (default: the one of each agent)")
 	force := fs.Bool("force", false, "import again the data files imported already (their records kept are never "+
-		"replaced)")
+		"replaced), and the data of an agent that has orders already, the IDs of the orders imported moved past its "+
+		"own; never brings back an agent or a user deleted, nor changes Telegram")
 	dryRun := fs.Bool("dry-run", false, "tell what would be imported, writing nothing")
 	fs.SetOutput(out)
 	if err := fs.Parse(args); err != nil {
@@ -153,15 +162,22 @@ func runImport(ctx context.Context, cfg *config.Config, args []string, out io.Wr
 		if err := imp.run(ctx, legacy); err != nil {
 			return err
 		}
-		if *dryRun {
+		switch {
+		case len(imp.report.conflicts) > 0:
+			return errConflicts
+		case *dryRun:
 			return errDryRun
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errDryRun) {
+	if err != nil && !errors.Is(err, errDryRun) && !errors.Is(err, errConflicts) {
 		return err
 	}
 	imp.report.print(out, *dryRun)
+	if n := len(imp.report.conflicts); n > 0 {
+		return fmt.Errorf("migrator: %d %s, nothing imported: see the report", n,
+			map[bool]string{true: "conflict", false: "conflicts"}[n == 1])
+	}
 	return nil
 }
 
@@ -233,9 +249,11 @@ func (imp *importer) run(ctx context.Context, legacy legacyConfig) error {
 	return nil
 }
 
-// users imports the login of the dashboard, its password hashed.
+// users imports the login of the dashboard, its password hashed, once: a
+// user that exists is kept as it is (its password too), and one deleted on the
+// dashboard is never created again.
 func (imp *importer) users(ctx context.Context) error {
-	username, password := imp.env["XTRADER_UI_USERNAME"], imp.env["XTRADER_UI_PASSWORD"]
+	username, password := strings.TrimSpace(imp.env["XTRADER_UI_USERNAME"]), imp.env["XTRADER_UI_PASSWORD"]
 	if username == "" || password == "" {
 		imp.report.note("dashboard: no XTRADER_UI_USERNAME and XTRADER_UI_PASSWORD, no user imported")
 		return nil
@@ -250,11 +268,32 @@ func (imp *importer) users(ctx context.Context) error {
 			return nil
 		}
 	}
-	if _, err := imp.store.CreateUser(ctx, username, password); err != nil {
+	key := "user:" + strings.ToLower(username)
+	deleted, err := imp.store.UserDeleted(ctx, username)
+	if err != nil {
+		return err
+	}
+	imported, err := imp.store.LegacyImported(ctx, key)
+	if err != nil {
+		return err
+	}
+	switch {
+	case deleted:
+		imp.report.note("dashboard: user %s skipped: deleted on the dashboard, never created again", username)
+		return nil
+	case imported:
+		imp.report.note("dashboard: user %s skipped: imported already, gone since", username)
+		return nil
+	}
+	user, err := imp.store.CreateUser(ctx, username, password)
+	if err != nil {
 		if errors.Is(err, store.ErrInvalid) {
 			imp.report.note("dashboard: user %s not imported: %v", username, err)
 			return nil
 		}
+		return err
+	}
+	if err := imp.store.MarkLegacyImported(ctx, key, store.Params{"user_id": strconv.FormatInt(user.ID, 10)}); err != nil {
 		return err
 	}
 	imp.report.add("dashboard: user %s, its password hashed with bcrypt", username)
@@ -262,23 +301,44 @@ func (imp *importer) users(ctx context.Context) error {
 }
 
 // telegram imports the token of the bot and its users, several allowed:
-// TELEGRAM_USER a list of IDs.
+// TELEGRAM_USER a list of IDs. Once, and only into a Telegram never
+// configured nor imported by a version before: the token, the bot and the
+// users of the dashboard, the ones revoked too, are kept as they are.
 func (imp *importer) telegram(ctx context.Context) error {
 	token := strings.TrimSpace(imp.env["TELEGRAM_TOKEN"])
 	ids := strings.FieldsFunc(imp.env["TELEGRAM_USER"], func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 	if token == "" && len(ids) == 0 {
 		return nil
 	}
-	// the users kept already are left alone: a conflict would abort the
-	// transaction of the import
-	users, err := imp.store.TelegramUsers(ctx)
+	imported, err := imp.store.LegacyImported(ctx, telegramImport)
 	if err != nil {
 		return err
 	}
-	known := make(map[int64]bool, len(users))
-	for _, user := range users {
-		known[user.TelegramID] = true
+	configured, err := imp.store.TelegramConfigured(ctx)
+	if err != nil {
+		return err
 	}
+	// an import of a version before the record of Telegram wrote it, its
+	// token maybe cleared on the dashboard since
+	older := false
+	if !imported && !configured {
+		if older, err = imp.store.ImportedByAnOlderVersion(ctx); err != nil {
+			return err
+		}
+	}
+	if imported || configured || older {
+		why := "configured on the dashboard"
+		switch {
+		case imported:
+			why = "imported already"
+		case older:
+			why = "imported by a version before (which kept no record of it), changed on the dashboard since " +
+				"maybe; set it there"
+		}
+		imp.report.add("telegram: left as it is, %s: TELEGRAM_TOKEN and TELEGRAM_USER not imported", why)
+		return nil
+	}
+	known := make(map[int64]bool, len(ids))
 	authorized := 0
 	for _, value := range ids {
 		id, err := strconv.ParseInt(value, 10, 64)
@@ -300,6 +360,10 @@ func (imp *importer) telegram(ctx context.Context) error {
 	}
 	enabled := token != "" && authorized > 0
 	if err := imp.store.SetTelegram(ctx, &enabled, secret); err != nil {
+		return err
+	}
+	if err := imp.store.MarkLegacyImported(ctx, telegramImport, store.Params{"users": strconv.Itoa(authorized),
+		"enabled": strconv.FormatBool(enabled)}); err != nil {
 		return err
 	}
 	imp.report.add("telegram: token %s, %d users authorized, the bot %s", describeSecret(token), authorized,
@@ -329,7 +393,16 @@ func (imp *importer) agent(ctx context.Context, position int, a legacyAgent) err
 	agent, err := imp.store.AgentByName(ctx, a.Name)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
+		gone, err := imp.gone(ctx, a.Name)
+		if err != nil || gone {
+			return err
+		}
 		if agent, err = imp.createAgent(ctx, position, a, kind, mode, flags); err != nil {
+			return err
+		}
+		err = imp.store.MarkLegacyImported(ctx, "agent:"+a.Name, store.Params{"agent_id": strconv.FormatInt(agent.ID,
+			10)})
+		if err != nil {
 			return err
 		}
 	case err != nil:
@@ -339,6 +412,28 @@ func (imp *importer) agent(ctx context.Context, position int, a legacyAgent) err
 		imp.kept(agent)
 	}
 	return imp.data(ctx, agent, kind, comment, flags)
+}
+
+// gone reports whether the agent name of the previous version, none of that
+// name on the dashboard, is to leave out, told: deleted there (or imported
+// before, gone since), as an import never brings back what the user deleted.
+func (imp *importer) gone(ctx context.Context, name string) (bool, error) {
+	deleted, err := imp.store.AgentDeleted(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	imported, err := imp.store.LegacyImported(ctx, "agent:"+name)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case deleted:
+		imp.report.note("agent %s skipped: deleted on the dashboard, never created again, nor its data imported "+
+			"(to import it, create it there, or give it another name in agents.yml)", name)
+	case imported:
+		imp.report.note("agent %s skipped: imported already, gone since", name)
+	}
+	return deleted || imported, nil
 }
 
 // kept notes the bridge and the calendar of the agent kept as it exists that
@@ -481,29 +576,90 @@ func (imp *importer) prompt(ctx context.Context, path string) (int64, error) {
 	return prompt.ID, nil
 }
 
+// dataFiles are the data files of an agent of the previous version: its
+// orders, and the decisions and the journal of an LLM agent, "" for none.
+type dataFiles struct {
+	orders, decisions, journal string
+}
+
+// all returns the files, the ones set.
+func (f dataFiles) all() []string {
+	var files []string
+	for _, file := range []string{f.orders, f.decisions, f.journal} {
+		if file != "" {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
 // data imports the data files of the agent: its orders, and the decisions and
 // journal of an LLM agent, where the agent of the previous version kept them.
+// Their order IDs are the ones of the agent: into an agent that used some
+// already, they are moved past its own with -force (see offset), else its data
+// is a conflict, left out.
 func (imp *importer) data(ctx context.Context, agent store.Agent, kind, comment string,
 	flags map[string]string) error {
-	orders := imp.path(flagOr(flags, "db", ""), comment, ".db")
-	list, err := imp.orders(ctx, agent, orders)
-	if err != nil {
-		return err
+	files := dataFiles{orders: imp.path(flagOr(flags, "db", ""), comment, ".db")}
+	if kind == "llm" {
+		files.decisions = imp.path(flagOr(flags, "llm-decisions", ""), comment, ".decisions.db")
+		if journal := flagOr(flags, "llm-journal", ""); journal != "none" {
+			files.journal = imp.path(journal, comment, ".decisions.jsonl")
+		}
 	}
-	if kind != "llm" {
+	pending := make(map[string]bool)
+	for _, file := range files.all() {
+		ok, err := imp.pending(ctx, file)
+		if err != nil {
+			return err
+		}
+		if ok {
+			pending[file] = true
+		}
+	}
+	if len(pending) == 0 {
 		return nil
 	}
-	decisions := imp.path(flagOr(flags, "llm-decisions", ""), comment, ".decisions.db")
-	journal := flagOr(flags, "llm-journal", "")
-	if journal == "none" {
-		journal = ""
-	} else {
-		journal = imp.path(journal, comment, ".decisions.jsonl")
-	}
-	if err := imp.decisions(ctx, agent, decisions, journal, list); err != nil {
+	move, ok, err := imp.offset(ctx, agent, files, pending)
+	if err != nil || !ok {
 		return err
 	}
-	return imp.journal(ctx, agent, journal)
+	if move.offset > 0 {
+		imp.report.add("  the IDs of its orders imported moved by %d, past the ones of the agent", move.offset)
+	}
+
+	var orders []model.Order
+	if pending[files.orders] {
+		if orders, ok, err = imp.orders(ctx, agent, files.orders, &move); err != nil || !ok {
+			return err
+		}
+	}
+	if files.decisions == "" {
+		return nil
+	}
+	if pending[files.decisions] {
+		if ok, err := imp.decisions(ctx, agent, files.decisions, move); err != nil || !ok {
+			return err
+		}
+	} else if _, statErr := os.Stat(files.decisions); statErr != nil && pending[files.journal] {
+		if err := imp.journalDecisions(ctx, agent, files.journal, orders); err != nil {
+			return err
+		}
+	}
+	if pending[files.journal] {
+		return imp.journal(ctx, agent, files.journal, move.offset)
+	}
+	return nil
+}
+
+// idMove is how the order IDs of the data of an agent move, see
+// importer.offset: by offset; and, its data imported before, the IDs leased
+// to the agent since, past the last one of that import, which an order or a
+// link of a decision imported takes only as a conflict: the order of the
+// agent at that ID may be on its way, eg: in its outbox.
+type idMove struct {
+	offset int64
+	leased store.LeasedIDs
 }
 
 // path returns the data file of a flag, else the default one of the comment
@@ -545,68 +701,180 @@ func (imp *importer) pending(ctx context.Context, file string) (bool, error) {
 	return true, nil
 }
 
-// orders imports the orders file of the agent, and returns its orders.
-func (imp *importer) orders(ctx context.Context, agent store.Agent, file string) ([]model.Order, error) {
-	pending, err := imp.pending(ctx, file)
-	if err != nil || !pending {
-		return nil, err
+// offset returns how far the IDs of the orders of the data of the agent move,
+// and of the links of its decisions: as far as when its data was imported
+// before (the files of pending imported again, or the ones missing then), the
+// IDs leased to the agent since never taken (see idMove); else none into an
+// agent that used no order ID, or, with -force, past the IDs it used. Without
+// -force, the data of an agent that used some is a conflict, told: false.
+// The agent is locked meanwhile, leasing no order ID.
+func (imp *importer) offset(ctx context.Context, agent store.Agent, files dataFiles,
+	pending map[string]bool) (idMove, bool, error) {
+	ids, err := imp.store.LockOrderIDs(ctx, agent.ID)
+	if err != nil {
+		return idMove{}, false, err
 	}
+	var move idMove
+	before := false
+	for _, file := range files.all() {
+		record, err := imp.store.LegacyImportOf(ctx, file)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return idMove{}, false, err
+		}
+		offset, ok := importedOffset(record, agent)
+		if !ok {
+			continue
+		}
+		if !before {
+			move.offset, before = offset, true
+		}
+		// the last ID it took, unknown to the versions before: then the
+		// orders it kept tell it, see store.ImportOrders
+		last, _ := strconv.ParseInt(record.Details["order_last"], 10, 64)
+		move.leased.After = max(move.leased.After, last)
+	}
+	if before {
+		move.leased.After = max(move.leased.After, move.offset)
+		move.leased.Next = ids.Next
+		return move, true, nil
+	}
+	switch {
+	case !ids.Used():
+		return idMove{}, true, nil
+	case imp.force:
+		return idMove{offset: max(ids.Next-1, ids.Max)}, true, nil
+	}
+	var names []string
+	for _, file := range files.all() {
+		if pending[file] {
+			names = append(names, file)
+		}
+	}
+	used := fmt.Sprintf("orders already (%d, its next order ID %d)", ids.Orders, ids.Next)
+	if ids.Orders == 0 {
+		used = fmt.Sprintf("leased order IDs already (its next one %d), its orders on their way", ids.Next)
+	}
+	imp.report.conflict("agent %s: it has %s: the orders imported would take their IDs, and the decisions "+
+		"imported would link to its orders, so its data is left out (%s). Take the agent out of agents.yml, or "+
+		"import with -force, which moves the IDs of the orders imported past %d, the links of their decisions "+
+		"with them", agent.Name, used, strings.Join(names, ", "), max(ids.Next-1, ids.Max))
+	return idMove{}, false, nil
+}
+
+// importedOffset returns the offset of the order IDs of a data file imported
+// into the agent before, of its record: false for a file of another agent.
+func importedOffset(record store.LegacyImport, agent store.Agent) (int64, bool) {
+	details := record.Details
+	switch details["agent_id"] {
+	case strconv.FormatInt(agent.ID, 10):
+		offset, err := strconv.ParseInt(details["order_offset"], 10, 64)
+		return offset, err == nil && offset >= 0
+	case "":
+		// a record of the versions that never moved the IDs, of the agent
+		// of its name then: never one created after it
+		return 0, details["agent"] == agent.Name && !agent.CreatedAt.After(record.ImportedAt)
+	}
+	return 0, false
+}
+
+// importDetails are the details of the record of a data file imported into
+// the agent, its order IDs moved by offset, with counts.
+func importDetails(agent store.Agent, offset int64, counts ...string) store.Params {
+	details := store.Params{"agent": agent.Name, "agent_id": strconv.FormatInt(agent.ID, 10),
+		"order_offset": strconv.FormatInt(offset, 10)}
+	for i := 0; i+1 < len(counts); i += 2 {
+		details[counts[i]] = counts[i+1]
+	}
+	return details
+}
+
+// orders imports the orders file of the agent, their IDs moved as move tells,
+// and returns its orders: false for orders at the IDs of other orders of the
+// agent, or at IDs leased to it, a conflict, told, nothing written. The
+// orders kept already were imported then: past their IDs, move leases.
+func (imp *importer) orders(ctx context.Context, agent store.Agent, file string, move *idMove) ([]model.Order,
+	bool, error) {
+	offset := move.offset
 	copied, cleanup, err := copyFile(file)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer cleanup()
 	orders, err := storage.FromFile(copied)
 	if err != nil {
-		return nil, fmt.Errorf("the orders %s: %w", file, err)
+		return nil, false, fmt.Errorf("the orders %s: %w", file, err)
 	}
 	stored, err := orders.Orders()
 	if err != nil {
-		return nil, fmt.Errorf("the orders %s: %w", file, err)
+		return nil, false, fmt.Errorf("the orders %s: %w", file, err)
 	}
 	list := make([]model.Order, 0, len(stored))
 	var last int64
 	for _, order := range stored {
-		list = append(list, *order)
-		last = max(last, order.ID)
+		o := *order
+		o.ID += offset
+		list = append(list, o)
+		last = max(last, o.ID)
 	}
-	if err := imp.store.SaveOrders(ctx, agent.ID, list, false); err != nil {
-		return nil, err
+	result, err := imp.store.ImportOrders(ctx, agent.ID, list, move.leased)
+	if err != nil {
+		return nil, false, err
+	}
+	move.leased.After = max(move.leased.After, result.KeptLast)
+	if len(result.Conflicts) > 0 || len(result.Leased) > 0 {
+		legacy := func(ids []int64) string {
+			list := make([]string, 0, len(ids))
+			for _, id := range ids {
+				list = append(list, strconv.FormatInt(id-offset, 10))
+			}
+			return strings.Join(list, ", ")
+		}
+		moved := ""
+		if offset > 0 {
+			moved = fmt.Sprintf(" (their IDs moved by %d)", offset)
+		}
+		if len(result.Conflicts) > 0 {
+			imp.report.conflict("agent %s: the orders %s of %s%s would take the IDs of other orders of the agent, "+
+				"which it placed since the import of the file: its data is left out", agent.Name,
+				legacy(result.Conflicts), file, moved)
+		}
+		if len(result.Leased) > 0 {
+			imp.report.conflict("agent %s: the orders %s of %s%s would take IDs leased to the agent since the import "+
+				"of the file (%d to %d), its orders at them maybe on their way, eg: in its outbox: its data is left "+
+				"out", agent.Name, legacy(result.Leased), file, moved, move.leased.After+1, move.leased.Next-1)
+		}
+		return nil, false, nil
 	}
 	if err := imp.store.ReserveOrderIDs(ctx, agent.ID, last); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if err := imp.store.MarkLegacyImported(ctx, file, store.Params{"agent": agent.Name,
-		"orders": strconv.Itoa(len(list))}); err != nil {
-		return nil, err
+	err = imp.store.MarkLegacyImported(ctx, file, importDetails(agent, offset, "orders", strconv.Itoa(len(list)),
+		"written", strconv.FormatInt(result.Written, 10), "order_last", strconv.FormatInt(last, 10)))
+	if err != nil {
+		return nil, false, err
 	}
-	imp.report.add("  %d orders of %s, the next ID of the agent after %d", len(list), file, last)
-	return list, nil
+	imp.report.add("  %d orders of %s: %d written, %d kept already, the next ID of the agent after %d", len(list),
+		file, result.Written, result.Kept, last)
+	return list, true, nil
 }
 
 // decisions imports the decisions file of the LLM agent with its attachments,
-// oldest first, so that an order keeps the decision that placed it; without
-// one, the decisions of its journal, see llm.JournalDecisions.
-func (imp *importer) decisions(ctx context.Context, agent store.Agent, file, journal string,
-	orders []model.Order) error {
-	pending, err := imp.pending(ctx, file)
-	if err != nil {
-		return err
-	}
-	if !pending {
-		if _, statErr := os.Stat(file); statErr == nil || journal == "" {
-			return nil
-		}
-		return imp.journalDecisions(ctx, agent, journal, orders)
-	}
+// oldest first, so that an order keeps the decision that placed it, the IDs
+// of their orders moved as move tells: false for a decision written linking
+// to an ID leased to the agent, a conflict, told.
+func (imp *importer) decisions(ctx context.Context, agent store.Agent, file string, move idMove) (bool, error) {
+	offset := move.offset
 	copied, cleanup, err := copyFile(file)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer cleanup()
 	db, err := buntdb.Open(copied)
 	if err != nil {
-		return fmt.Errorf("the decisions %s: %w", file, err)
+		return false, fmt.Errorf("the decisions %s: %w", file, err)
 	}
 	defer func() { _ = db.Close() }()
 	var decisions []legacyDecision
@@ -622,7 +890,7 @@ func (imp *importer) decisions(ctx context.Context, agent store.Agent, file, jou
 		})
 	})
 	if err != nil {
-		return fmt.Errorf("the decisions %s: %w", file, err)
+		return false, fmt.Errorf("the decisions %s: %w", file, err)
 	}
 	sort.Slice(decisions, func(i, j int) bool {
 		if decisions[i].DecidedAt != decisions[j].DecidedAt {
@@ -632,7 +900,8 @@ func (imp *importer) decisions(ctx context.Context, agent store.Agent, file, jou
 	})
 
 	dir := strings.TrimSuffix(file, filepath.Ext(file)) + ".attachments"
-	files, links := 0, 0
+	var written, links, files, last int64
+	var leased []string
 	for _, d := range decisions {
 		var attachments []store.Attachment
 		for i, name := range d.Files {
@@ -643,23 +912,51 @@ func (imp *importer) decisions(ctx context.Context, agent store.Agent, file, jou
 			}
 			attachments = append(attachments, store.Attachment{MediaType: d.Attachments[i].MediaType, Data: data})
 		}
-		files += len(attachments)
-		links += len(d.OrderIDs)
-		if err := imp.store.SaveDecision(ctx, agent.ID, d.Decision, attachments, false); err != nil {
-			return fmt.Errorf("the decision %s: %w", d.ID, err)
+		ids := make([]int64, 0, len(d.OrderIDs))
+		for _, id := range d.OrderIDs {
+			ids = append(ids, id+offset)
+			last = max(last, id+offset)
 		}
+		d.OrderIDs = ids
+		result, err := imp.store.ImportDecision(ctx, agent.ID, d.Decision, attachments)
+		if err != nil {
+			return false, fmt.Errorf("the decision %s: %w", d.ID, err)
+		}
+		if result.Written {
+			written++
+			for _, id := range ids {
+				if move.leased.Holds(id) {
+					leased = append(leased, fmt.Sprintf("%s to the order %d", d.ID, id-offset))
+				}
+			}
+		}
+		links += result.Links
+		files += result.Attachments
 	}
-	if err := imp.store.MarkLegacyImported(ctx, file, store.Params{"agent": agent.Name,
-		"decisions": strconv.Itoa(len(decisions)), "attachments": strconv.Itoa(files)}); err != nil {
-		return err
+	if len(leased) > 0 {
+		imp.report.conflict("agent %s: the decisions of %s would link to IDs leased to the agent since the import of "+
+			"its data (%d to %d), to its orders: %s; its data is left out", agent.Name, file, move.leased.After+1,
+			move.leased.Next-1, strings.Join(leased, ", "))
+		return false, nil
 	}
-	imp.report.add("  %d decisions of %s, %d links to their orders, %d attachments", len(decisions), file, links,
-		files)
-	return nil
+	// the orders linked missing from the orders file: their IDs never the
+	// ones of orders of the agent
+	if err := imp.store.ReserveOrderIDs(ctx, agent.ID, last); err != nil {
+		return false, err
+	}
+	err = imp.store.MarkLegacyImported(ctx, file, importDetails(agent, offset,
+		"decisions", strconv.Itoa(len(decisions)), "written", strconv.FormatInt(written, 10),
+		"attachments", strconv.FormatInt(files, 10), "order_last", strconv.FormatInt(last, 10)))
+	if err != nil {
+		return false, err
+	}
+	imp.report.add("  %d decisions of %s: %d written, %d kept already, %d links to their orders, %d attachments",
+		len(decisions), file, written, int64(len(decisions))-written, links, files)
+	return true, nil
 }
 
 // journalDecisions imports the decisions of the journal of an LLM agent that
-// kept none apart, linked to its orders by their time.
+// kept none apart, linked to its orders imported by their time.
 func (imp *importer) journalDecisions(ctx context.Context, agent store.Agent, journal string,
 	orders []model.Order) error {
 	data, err := os.ReadFile(journal)
@@ -679,25 +976,24 @@ func (imp *importer) journalDecisions(ctx context.Context, agent store.Agent, jo
 		return list
 	}
 	decisions := llm.JournalDecisions(data, byPair)
+	var written int64
 	for _, d := range decisions {
-		if err := imp.store.SaveDecision(ctx, agent.ID, d, nil, false); err != nil {
+		result, err := imp.store.ImportDecision(ctx, agent.ID, d, nil)
+		if err != nil {
 			return fmt.Errorf("the decision %s: %w", d.ID, err)
 		}
+		if result.Written {
+			written++
+		}
 	}
-	imp.report.add("  %d decisions of the journal %s, without a decisions file", len(decisions), journal)
+	imp.report.add("  %d decisions of the journal %s, without a decisions file: %d written, %d kept already",
+		len(decisions), journal, written, int64(len(decisions))-written)
 	return nil
 }
 
 // journal imports the journal of the LLM agent, a line of JSON per call to
 // the model.
-func (imp *importer) journal(ctx context.Context, agent store.Agent, file string) error {
-	if file == "" {
-		return nil
-	}
-	pending, err := imp.pending(ctx, file)
-	if err != nil || !pending {
-		return err
-	}
+func (imp *importer) journal(ctx context.Context, agent store.Agent, file string, offset int64) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
@@ -720,14 +1016,17 @@ func (imp *importer) journal(ctx context.Context, agent store.Agent, file string
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("the journal %s: %w", file, err)
 	}
-	if err := imp.store.AppendJournal(ctx, agent.ID, entries); err != nil {
+	written, err := imp.store.ImportJournal(ctx, agent.ID, entries)
+	if err != nil {
 		return err
 	}
-	if err := imp.store.MarkLegacyImported(ctx, file, store.Params{"agent": agent.Name,
-		"entries": strconv.Itoa(len(entries))}); err != nil {
+	err = imp.store.MarkLegacyImported(ctx, file, importDetails(agent, offset, "entries", strconv.Itoa(len(entries)),
+		"written", strconv.FormatInt(written, 10)))
+	if err != nil {
 		return err
 	}
-	line := fmt.Sprintf("  %d entries of the journal %s", len(entries), file)
+	line := fmt.Sprintf("  %d entries of the journal %s: %d written, %d kept already", len(entries), file, written,
+		int64(len(entries))-written)
 	if skipped > 0 {
 		line += fmt.Sprintf(", %d unreadable lines left out", skipped)
 	}
@@ -909,10 +1208,12 @@ func copyFile(file string) (copied string, cleanup func(), err error) {
 	return copied, cleanup, nil
 }
 
-// report is what an import did, and what it left to do.
+// report is what an import did, what it left to do, and its conflicts, which
+// leave out the whole import.
 type report struct {
-	lines []string
-	notes []string
+	lines     []string
+	notes     []string
+	conflicts []string
 }
 
 func (r *report) add(format string, args ...interface{}) {
@@ -923,10 +1224,17 @@ func (r *report) note(format string, args ...interface{}) {
 	r.notes = append(r.notes, fmt.Sprintf(format, args...))
 }
 
+func (r *report) conflict(format string, args ...interface{}) {
+	r.conflicts = append(r.conflicts, fmt.Sprintf(format, args...))
+}
+
 // print writes the report to out, as a dry run when dry.
 func (r *report) print(out io.Writer, dry bool) {
 	title := "Imported:"
-	if dry {
+	switch {
+	case len(r.conflicts) > 0:
+		title = "Nothing imported, because of the conflicts below. Without them, it would import:"
+	case dry:
 		title = "Would import (dry run, nothing written):"
 	}
 	_, _ = fmt.Fprintln(out, title)
@@ -940,6 +1248,12 @@ func (r *report) print(out io.Writer, dry bool) {
 		_, _ = fmt.Fprintln(out, "Notes:")
 		for _, note := range r.notes {
 			_, _ = fmt.Fprintln(out, "  "+note)
+		}
+	}
+	if len(r.conflicts) > 0 {
+		_, _ = fmt.Fprintln(out, "Conflicts:")
+		for _, conflict := range r.conflicts {
+			_, _ = fmt.Fprintln(out, "  "+conflict)
 		}
 	}
 }

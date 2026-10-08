@@ -127,6 +127,7 @@ func run() error {
 		api           = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5564 (default: off)")
 		tradePanel    = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels, the reanalysis; the dashboard starts and stops the bot without it)")
 		telegramCtl   = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller")
+		quarantine    = flag.Bool("outbox-quarantine", false, "launched by the controller: an outbox that can't be read (data/outbox/<agent>-<id>.db, eg: written over in the middle) is moved aside to <file>.corrupt-<time>, kept for a look, and the agent starts with an empty one, its records never sent to the controller (default: the agent doesn't start, telling which file)")
 		currency      = flag.String("currency", "USD", "backtest: currency the symbols are quoted in, eg: GBP for EURGBPm")
 		mt5Bridge     = flag.String("mt5-bridge", exchange.MT5DefaultBaseURL, "mt5: address of the bridge (tools/mt5bridge) running with the terminal logged in the account")
 		mt5TokenArg   = flag.String("mt5-token", "", "mt5, on its own: X-Bridge-Token of the bridge (default: "+mt5TokenEnv+"; launched by the controller: the token of its settings)")
@@ -164,6 +165,7 @@ func run() error {
 		if err := flag.CommandLine.Parse(agent.Args()); err != nil {
 			return err
 		}
+		agent.QuarantineOutbox = *quarantine
 		if err := agent.Open(filepath.Join("data", "outbox")); err != nil {
 			return err
 		}

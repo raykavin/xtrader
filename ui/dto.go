@@ -435,7 +435,8 @@ type ErrorResponse struct {
 // tells that it exited without Restart: launched again once restarted,
 // enabled again, its settings changed after it exited, or the controller
 // started again. LaunchError tells why the controller didn't launch it,
-// eg: another agent running trades the same positions on MT5. Params are the
+// eg: another agent running trades the same positions on MT5. Outbox tells
+// what its outbox holds not written yet, see AgentOutbox. Params are the
 // flags of its settings that no field holds, by name, the ones of its
 // language model included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}.
 // Model names its language model, eg: openai gpt-5, and LLM holds it, for an
@@ -457,6 +458,7 @@ type AgentSettings struct {
 	Exited          bool                  `json:"exited,omitempty"`
 	LastExit        string                `json:"last_exit,omitempty"`
 	LaunchError     string                `json:"launch_error,omitempty"`
+	Outbox          *AgentOutbox          `json:"outbox,omitempty"`
 	Params          map[string]string     `json:"params"`
 	Account         *AgentAccountSettings `json:"account,omitempty"`
 	LLM             *AgentLLMSettings     `json:"llm,omitempty"`
@@ -464,6 +466,21 @@ type AgentSettings struct {
 	PromptID        *int64                `json:"prompt_id,omitempty"`
 	PromptStatus    *AgentPromptStatus    `json:"prompt_status,omitempty"`
 	Secrets         AgentSecretsPresent   `json:"secrets"`
+}
+
+// AgentOutbox is what the outbox of an agent holds, as it told the
+// controller with its last batch of records: the records not written to the
+// database yet, Since in Unix seconds when the oldest of them was written by
+// the agent, absent when unknown, Failing when that batch wasn't written, the
+// records the controller refused for good, set apart in the outbox, and the
+// ones it failed again and again, held apart there, sent again now and then.
+// Absent for an outbox sent whole.
+type AgentOutbox struct {
+	Pending  int   `json:"pending"`
+	Since    int64 `json:"since,omitempty"`
+	Failing  bool  `json:"failing,omitempty"`
+	SetApart int   `json:"set_apart,omitempty"`
+	Held     int   `json:"held,omitempty"`
 }
 
 // AgentAccountSettings is the trading account of an agent: the URL of the

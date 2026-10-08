@@ -110,3 +110,46 @@ func TestBunt_NumbersNotFiniteStoredAsZero(t *testing.T) {
 	require.Zero(t, *orders[0].Stop)
 	require.Equal(t, 100.0, orders[0].Price)
 }
+
+// B19: the end of an order (filled, canceled, rejected, expired) is never
+// undone by an open state written after it, eg: a move the exchange answered
+// as the order filled; the open states and the ends replace one another as
+// written.
+func TestBunt_AnEndIsNeverUndone(t *testing.T) {
+	st, err := FromMemory()
+	require.NoError(t, err)
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	order := &model.Order{ExchangeID: 7, Pair: "BTCUSDT", Side: model.SideTypeBuy, Type: model.OrderTypeLimit,
+		Status: model.OrderStatusTypeNew, Price: 2000, Quantity: 1, CreatedAt: at, UpdatedAt: at}
+	require.NoError(t, st.CreateOrder(order))
+	state := func() model.Order {
+		t.Helper()
+		orders, err := st.Orders()
+		require.NoError(t, err)
+		require.Len(t, orders, 1)
+		return *orders[0]
+	}
+	write := func(status model.OrderStatusType, price float64) {
+		t.Helper()
+		update := *order
+		update.Status, update.Price = status, price
+		require.NoError(t, st.UpdateOrder(&update))
+	}
+
+	write(model.OrderStatusTypePartiallyFilled, 2005)
+	require.Equal(t, model.OrderStatusTypePartiallyFilled, state().Status)
+	write(model.OrderStatusTypeNew, 2010)
+	require.Equal(t, 2010.0, state().Price, "an open state replaces another")
+
+	write(model.OrderStatusTypeFilled, 2010)
+	for _, status := range []model.OrderStatusType{model.OrderStatusTypeNew, model.OrderStatusTypePartiallyFilled,
+		model.OrderStatusTypePendingCancel} {
+		write(status, 2015)
+		require.Equal(t, model.OrderStatusTypeFilled, state().Status, "never %s after filled", status)
+		require.Equal(t, 2010.0, state().Price)
+	}
+	update := state()
+	update.ProfitValue = 15
+	require.NoError(t, st.UpdateOrder(&update))
+	require.Equal(t, 15.0, state().ProfitValue, "an end written again, eg: with its profit")
+}

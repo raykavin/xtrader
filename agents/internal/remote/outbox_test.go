@@ -24,9 +24,10 @@ type scriptedSender struct {
 	written []agentapi.Record
 }
 
-func (s *scriptedSender) Outbox(_ context.Context, records []agentapi.Record) (uint64, error) {
+func (s *scriptedSender) Outbox(_ context.Context, request agentapi.OutboxRequest) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	records := request.Records
 	s.batches = append(s.batches, records)
 	if len(s.answers) > 0 {
 		err := s.answers[0]
@@ -37,6 +38,12 @@ func (s *scriptedSender) Outbox(_ context.Context, records []agentapi.Record) (u
 	}
 	s.written = append(s.written, records...)
 	return records[len(records)-1].Seq, nil
+}
+
+// CheckOutbox tells the records after one the controller can't read or
+// write written, as a controller writing the others does.
+func (s *scriptedSender) CheckOutbox(context.Context, []agentapi.Record) error {
+	return nil
 }
 
 func (s *scriptedSender) keys() []string {

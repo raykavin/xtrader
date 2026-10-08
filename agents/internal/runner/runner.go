@@ -234,6 +234,7 @@ func run(agent Agent) error {
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")
 		tradePanel   = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot without it)")
 		telegramCtl  = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller (/start, /stop, /buy, /sell, /status, /balance)")
+		quarantine   = flag.Bool("outbox-quarantine", false, "launched by the controller: an outbox that can't be read (data/outbox/<agent>-<id>.db, eg: written over in the middle) is moved aside to <file>.corrupt-<time>, kept for a look, and the agent starts with an empty one, its records never sent to the controller (default: the agent doesn't start, telling which file)")
 	)
 	// launched by the controller, the flags and the token of its settings
 	ctx := context.Background()
@@ -254,6 +255,7 @@ func run(agent Agent) error {
 		if err := flag.CommandLine.Parse(remoteAgent.Args()); err != nil {
 			return err
 		}
+		remoteAgent.QuarantineOutbox = *quarantine
 		if err := remoteAgent.Open(filepath.Join("data", "outbox")); err != nil {
 			return err
 		}
