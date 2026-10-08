@@ -429,12 +429,17 @@ type ErrorResponse struct {
 // its process, its language model with its prompt, and which of its secrets
 // are set, never their values. Its Name and its Kind never change. Its API is
 // served at APIAddress, host:port. Launched tells that the controller runs it,
-// and Restart that it runs it again when it exits; LaunchError why the
-// controller didn't launch it, eg: another agent running trades the same
-// positions on MT5. Params are the flags of its settings that no field holds,
-// by name, the ones of its language model included, eg: {"pair": "XAUUSDm",
-// "llm-min-stop-atr": "1"}. Model names its language model, eg: openai gpt-5,
-// and LLM holds it, for an LLM agent only.
+// and Restart that it runs it again when it exits, with the settings of its
+// launch and the secrets of now: Restarts counts the times since then, and
+// Restarting tells that it exited and waits for that, Running still. Exited
+// tells that it exited without Restart: launched again once restarted,
+// enabled again, its settings changed after it exited, or the controller
+// started again. LaunchError tells why the controller didn't launch it,
+// eg: another agent running trades the same positions on MT5. Params are the
+// flags of its settings that no field holds, by name, the ones of its
+// language model included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}.
+// Model names its language model, eg: openai gpt-5, and LLM holds it, for an
+// LLM agent only.
 type AgentSettings struct {
 	Name            string                `json:"name"`
 	Kind            string                `json:"kind"`
@@ -447,6 +452,9 @@ type AgentSettings struct {
 	TelegramControl bool                  `json:"telegram_control"`
 	Running         bool                  `json:"running"`
 	RestartPending  bool                  `json:"restart_pending"`
+	Restarts        int                   `json:"restarts,omitempty"`
+	Restarting      bool                  `json:"restarting,omitempty"`
+	Exited          bool                  `json:"exited,omitempty"`
 	LastExit        string                `json:"last_exit,omitempty"`
 	LaunchError     string                `json:"launch_error,omitempty"`
 	Params          map[string]string     `json:"params"`

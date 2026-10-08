@@ -3,6 +3,7 @@ package strategies
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
@@ -137,13 +138,50 @@ type Scalp struct {
 }
 
 // scalpTrade is a position of Scalp: its side, the candles since its entry,
-// the legs of its stop loss and take profit at the broker, and whether its exit
-// was decided, retried on each candle once its legs are canceled.
+// the legs of its stop loss and take profit at the broker, whether its exit
+// was decided, retried on each candle while it fails, and the levels of the
+// legs a close that failed left it without, if any (see rkCloseProtected). A
+// position found held, eg: opened before a restart, has its opening too, zero
+// when unknown, see adoptTrade.
 type scalpTrade struct {
 	side    model.SideType
 	bars    int
 	legs    []model.Order
 	exiting bool
+	bare    rkLevels
+	opened  time.Time
+}
+
+// adoptTrade returns the trade of a position held on side found on the last
+// candle of df, which the strategy name doesn't follow, eg: opened before a
+// restart, or by someone else: with its legs at the broker, which it moves and
+// cancels, and the candles held since its opening, minus the last one, which
+// the strategy counts, when the broker tells them (see rkFind); else from the
+// last candle on, without legs known.
+func adoptTrade(df *model.Dataframe, broker service.Broker, name, timeframe string,
+	side model.SideType) *scalpTrade {
+
+	found := rkFind(df, broker, name, side)
+	trade := &scalpTrade{side: side, legs: found.legs, opened: found.opened}
+	if bars, _, ok := found.held(df, timeframe); ok && bars > 0 {
+		trade.bars = bars - 1
+	}
+	return trade
+}
+
+// close closes the position of trade at the market, see rkCloseProtected, and
+// reports whether the pair is flat now. The trade is marked as exiting, its
+// close retried on the next candles while it fails, the position protected by
+// its legs meanwhile.
+func (t *scalpTrade) close(df *model.Dataframe, broker service.Broker, name string, minValue float64) bool {
+	t.exiting = true
+	levels := t.bare
+	if len(t.legs) > 0 {
+		levels = rkLevelsOf(t.legs)
+	}
+	var flat bool
+	flat, t.legs, t.bare = rkCloseProtected(df, broker, name, t.side, minValue, t.legs, levels)
+	return flat
 }
 
 // NewScalp validates the configuration and creates the strategy.
@@ -248,9 +286,8 @@ func (s *Scalp) OnCandle(df *model.Dataframe, broker service.Broker) {
 	if held != "" {
 		trade, ok := s.trades[df.Pair]
 		if !ok || trade.side != held {
-			// a position opened before a restart, or by someone else: it is
-			// followed from this candle on, without legs known
-			trade = &scalpTrade{side: held}
+			// a position opened before a restart, or by someone else
+			trade = adoptTrade(df, broker, "SCALP", s.cfg.Timeframe, held)
 			s.trades[df.Pair] = trade
 		}
 		trade.bars++
@@ -258,7 +295,7 @@ func (s *Scalp) OnCandle(df *model.Dataframe, broker service.Broker) {
 		reason := ""
 		switch {
 		case trade.exiting:
-			reason = "RETRY" // a close that failed, the position left without its legs
+			reason = "RETRY" // a close that failed, the position protected meanwhile
 		case rkSign(held)*(closePrice-df.Metadata["sc_ema"].Last(0)) <= 0:
 			reason = "INVALIDATION" // the close back across the EMA: the pullback became a reversal
 		case s.cfg.MaxBars > 0 && trade.bars >= s.cfg.MaxBars:
@@ -333,20 +370,13 @@ func (s *Scalp) position(df *model.Dataframe, broker service.Broker) (float64, m
 }
 
 // close closes the position of trade at the market, and reports whether the
-// pair is flat now. Its stop loss and take profit are canceled first, as they
-// reserve the position: the close would otherwise open the other side, eg: in
-// the paper wallet. A close that fails leaves the position without them, so the
-// trade is marked as exiting and the close retried on the next candles.
+// pair is flat now. Where the broker needs it, its stop loss and take profit
+// are canceled first, as they reserve the position: the close would otherwise
+// open the other side, eg: in the paper wallet; a close that fails places them
+// again, see rkCloseProtected. The trade is marked as exiting, and the close
+// retried on the next candles.
 func (s *Scalp) close(df *model.Dataframe, broker service.Broker, trade *scalpTrade) bool {
-	trade.exiting = true
-	for _, leg := range trade.legs {
-		if err := broker.Cancel(leg); err != nil {
-			log.Debugf("[SCALP] %s | %s: %v", df.Pair, leg.Type, err) // already filled or canceled
-		}
-	}
-	trade.legs = nil
-
-	if !rkClose(df, broker, trade.side, s.cfg.MinPositionValue) {
+	if !trade.close(df, broker, "SCALP", s.cfg.MinPositionValue) {
 		return false
 	}
 	delete(s.trades, df.Pair)

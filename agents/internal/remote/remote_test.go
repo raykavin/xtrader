@@ -202,15 +202,19 @@ func TestAgent_CloseFlushes(t *testing.T) {
 	assert.Equal(t, "1", f.written()[0].Key)
 }
 
-// Serve returns as the context of the agent is done, the bot never stopping
-// with it, ErrUnauthorized when the controller refused the agent.
+// Serve returns as the context of the agent is done, once the bot stopped
+// with it (see TestAgent_ServeStopsTheBotBeforeTheOutboxCloses),
+// ErrUnauthorized when the controller refused the agent.
 func TestAgent_Serve(t *testing.T) {
 	f := newFakeController(t)
 	f.set(func(f *fakeController) {
 		f.cfg = testConfig()
 		f.runtime = agentapi.Runtime{Version: 1}
 	})
-	forever := func(context.Context) error { select {} } // as the bot: deaf to its context
+	forever := func(ctx context.Context) error { // as the bot: until its context is done
+		<-ctx.Done()
+		return nil
+	}
 
 	a, err := connect(context.Background(), f.client(), "llm")
 	require.NoError(t, err)

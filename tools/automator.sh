@@ -11,6 +11,12 @@
 #	tools/automator.sh stop configs/config.yml     # stops the agents, then the bridge
 #
 # The log and the pid are in ${XDG_STATE_HOME:-~/.local/state}/automator.
+#
+# stop waits for the controller as long as its stop takes, the shutdown_timeout
+# of the configuration at most (which kills what is left past it), up to
+# AUTOMATOR_STOP_TIMEOUT seconds (300 by default: keep it above
+# shutdown_timeout); then whatever the controller launched still runs, eg: once
+# it was killed, is stopped too.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -30,6 +36,36 @@ logfile="$state/$name.log"
 
 running() {
 	[[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null
+}
+
+# leftovers prints the processes of the session $1 the controller launched, of
+# the groups of their own of the agents and of the services: the ones marked
+# XTRADER_LAUNCH in their environment (see controller/pids.go)
+leftovers() {
+	local p
+	for p in $(pgrep -s "$1" 2>/dev/null); do
+		grep -qz '^XTRADER_LAUNCH=' "/proc/$p/environ" 2>/dev/null && echo "$p"
+	done
+	return 0
+}
+
+# stop_leftovers stops the leftovers of the session $1: interrupted, as the
+# controller stops them, then killed after 20 seconds
+stop_leftovers() {
+	local left
+	left="$(leftovers "$1")"
+	[[ -n "$left" ]] || return 0
+	echo "automator: processes of the controller still running, stopped:" $left >&2
+	# shellcheck disable=SC2086 # one PID each
+	kill -INT $left 2>/dev/null || true
+	for _ in $(seq 1 20); do
+		left="$(leftovers "$1")"
+		[[ -n "$left" ]] || return 0
+		sleep 1
+	done
+	echo "automator: still running after 20s, killed:" $left >&2
+	# shellcheck disable=SC2086
+	kill -KILL $left 2>/dev/null || true
 }
 
 case "$action" in
@@ -52,21 +88,26 @@ start)
 stop)
 	if ! running; then
 		echo "automator: $name isn't running"
+		# a controller that died may have left its processes running
+		[[ -f "$pidfile" ]] && stop_leftovers "$(cat "$pidfile")"
 		rm -f "$pidfile"
 		exit 0
 	fi
 	pid="$(cat "$pidfile")"
+	wait="${AUTOMATOR_STOP_TIMEOUT:-300}"
 	# the group of the session: `go run` and the controller it runs, which stops
-	# its agents and then its services
+	# its agents and then its services, within its shutdown_timeout
 	kill -INT -- "-$pid"
-	for _ in $(seq 1 30); do
+	for _ in $(seq 1 "$wait"); do
 		kill -0 "$pid" 2>/dev/null || break
 		sleep 1
 	done
 	if kill -0 "$pid" 2>/dev/null; then
-		echo "automator: $name still running after 30s, killed" >&2
+		echo "automator: $name still running after ${wait}s, killed" >&2
 		kill -KILL -- "-$pid" 2>/dev/null || true
 	fi
+	# the agents and the services run in groups of their own, of the session
+	stop_leftovers "$pid"
 	rm -f "$pidfile"
 	echo "automator: $name stopped"
 	;;

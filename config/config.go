@@ -52,6 +52,15 @@ type Config struct {
 	Services  []Service `mapstructure:"services"`
 	Log       Log       `mapstructure:"log"`
 
+	// ShutdownTimeout is the whole stop of the controller, from the signal
+	// to its exit: the agents stopped (agents.stop_timeout), then the
+	// services (their stop_timeout); whatever still runs once it passed is
+	// killed. Who stops the controller waits for it longer, eg: the
+	// stop_grace_period of the compose, or tools/automator.sh. By default,
+	// agents.stop_timeout plus the longest stop_timeout of the services plus
+	// shutdownMargin; never under them plus shutdownSlack.
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+
 	// Warnings are the ${VAR} of the file that weren't set, taken as empty,
 	// by Load: the ones it can't do without fail it instead, see checkUnset.
 	Warnings []string `mapstructure:"-"`
@@ -151,14 +160,45 @@ type Agents struct {
 // launched before them from Dir of Agents and stopped after them: once
 // Health, a URL, answers, whatever its status, it is up, or after Wait at most
 // (3 minutes by default). One answering already isn't launched, nor stopped.
+// StopTimeout is how long it has to exit once interrupted before it is killed
+// (10 seconds by default).
 type Service struct {
-	Name    string        `mapstructure:"name"`
-	Exec    string        `mapstructure:"exec"`
-	Args    []string      `mapstructure:"args"`
-	Env     Env           `mapstructure:"env"`
-	Restart bool          `mapstructure:"restart"`
-	Health  string        `mapstructure:"health"`
-	Wait    time.Duration `mapstructure:"wait"`
+	Name        string        `mapstructure:"name"`
+	Exec        string        `mapstructure:"exec"`
+	Args        []string      `mapstructure:"args"`
+	Env         Env           `mapstructure:"env"`
+	Restart     bool          `mapstructure:"restart"`
+	Health      string        `mapstructure:"health"`
+	Wait        time.Duration `mapstructure:"wait"`
+	StopTimeout time.Duration `mapstructure:"stop_timeout"`
+}
+
+// OutputWait is how long the controller waits for the output of a process
+// once it exited, eg: held by a process out of its group, such as the X server
+// a script of the bridge starts in a session of its own (see
+// controller.Supervisor): each phase of the stop, the agents then the
+// services, may take that long beyond its stop_timeout.
+const OutputWait = time.Second
+
+const (
+	// shutdownMargin is what the default ShutdownTimeout gives beyond the
+	// stops of the agents and of the services, and shutdownSlack what any
+	// ShutdownTimeout does at least: OutputWait for each of the two phases,
+	// and a second for the rest, eg: a process killed reaped, the records the
+	// agents sent stored.
+	shutdownMargin = 10 * time.Second
+	shutdownSlack  = 2*OutputWait + time.Second
+)
+
+// StopTimeouts returns how long the stops of the agents and of the services
+// take at most, one after the other: agents.stop_timeout plus the longest
+// stop_timeout of the services.
+func (c *Config) StopTimeouts() time.Duration {
+	var services time.Duration
+	for _, s := range c.Services {
+		services = max(services, s.StopTimeout)
+	}
+	return c.Agents.StopTimeout + services
 }
 
 // Env is the environment of a process of config.yml, NAME=value each: a list,
@@ -271,6 +311,12 @@ func (c *Config) defaults() {
 		if c.Services[i].Wait == 0 {
 			c.Services[i].Wait = 3 * time.Minute
 		}
+		if c.Services[i].StopTimeout == 0 {
+			c.Services[i].StopTimeout = 10 * time.Second
+		}
+	}
+	if c.ShutdownTimeout == 0 {
+		c.ShutdownTimeout = c.StopTimeouts() + shutdownMargin
 	}
 }
 
@@ -315,10 +361,20 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("service %s: health %q is not an http(s) URL", s.Name, s.Health))
 		case s.Wait < 0:
 			errs = append(errs, fmt.Errorf("service %s: wait %v is negative", s.Name, s.Wait))
+		case s.StopTimeout < 0:
+			errs = append(errs, fmt.Errorf("service %s: stop_timeout %v is negative", s.Name, s.StopTimeout))
 		}
 		if err := s.Env.check("service " + s.Name + ": env"); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if c.Agents.StopTimeout < 0 {
+		errs = append(errs, fmt.Errorf("agents.stop_timeout %v is negative", c.Agents.StopTimeout))
+	}
+	if least := c.StopTimeouts() + shutdownSlack; c.ShutdownTimeout < least {
+		errs = append(errs, fmt.Errorf("shutdown_timeout %v: under the stops of the agents and of the services, "+
+			"agents.stop_timeout plus the longest stop_timeout of the services, plus %v (%v): the controller would "+
+			"kill them before their time", c.ShutdownTimeout, shutdownSlack, least))
 	}
 	if _, err := c.UI.Proxies(); err != nil {
 		errs = append(errs, err)

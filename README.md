@@ -28,6 +28,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 - [Início rápido com Docker](#início-rápido-com-docker)
 - [Execução local (host)](#execução-local-host)
 - [Configuração](#configuração)
+  - [Parada do controller](#parada-do-controller)
 - [Uso](#uso)
   - [Painel web](#painel-web)
   - [Agentes e parâmetros](#agentes-e-parâmetros)
@@ -105,9 +106,16 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
 
 Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linha de comando, também roda backtests.
 
+- **Depois de um reinício:** a posição aberta que a estratégia encontra é acompanhada com as pernas (stop loss e take profit) que estão na corretora, lidas das ordens guardadas pelo bot.
+  - O trailing na corretora continua a partir delas (`-trailing-atr` dos sinais, como `donchianatr`; `matrend -broker-stop`; `trendconfluence -broker-trailing-atr`), contando o melhor preço desde a entrada pelos candles carregados.
+  - O `MaxBars` conta os candles desde a abertura real da posição.
+  - Os stops no fechamento (`matrend`, `trendconfluence`) são refeitos desde o candle da entrada, quando ele está na janela carregada, e nunca ficam mais largos que o stop da corretora.
+  - Sem a hora de abertura conhecida (ex.: posição aberta por fora do bot), a posição é acompanhada a partir do candle atual, como antes.
+- **Saída que falha:** como no agente LLM, a posição não fica sem stop loss e take profit. No MT5, o fechamento sai com eles no lugar; no paper, eles são cancelados antes e, se o fechamento falhar, recolocados nos mesmos níveis. O fechamento é tentado de novo a cada fechamento de candle (inclusive o de uma reversão do `matrend` e do `trendconfluence`, cujo sinal já passou), e um fechamento que deixa a posição sem proteção fica registrado no log como erro.
+
 ### Controller
 
-- **Supervisão:** lança os agentes ligados como processos filhos, com um token novo a cada início, e os reinicia se caírem.
+- **Supervisão:** lança os agentes ligados como processos filhos, com um token novo a cada início. Com **Reiniciar se cair** ligado, um agente que cai volta com as configurações com que foi iniciado (e os segredos atuais), depois de uma espera que dobra a cada queda (de 5 s até 1 min, e volta a 5 s depois de 1 min rodando); desligado, ele fica parado (veja abaixo). No Linux, os agentes e os `services` param junto com o controller, mesmo quando ele é morto (veja [Parada do controller](#parada-do-controller)).
 - **Configuração:** entrega aos agentes a configuração deles por uma API interna, só no loopback.
 - **Registros:** recebe dos agentes as ordens, as decisões e o journal por um **outbox durável**. O agente grava localmente e envia depois, e o fluxo da estratégia nunca espera o banco.
 - **Interfaces:** serve o painel web (login com sessão e CSRF) e o bot do Telegram.
@@ -143,7 +151,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 - **Ordem executada que não se grava:** a ordem que a corretora já executou nunca vira erro por falha de gravação, por exemplo com o disco do outbox cheio.
   - O bot continua a acompanhá-la em memória: posição, pernas e lucro.
   - A falha é notificada no painel e no Telegram, e a gravação é repetida até dar certo, com outra notificação quando conclui. As falhas de ordens novas durante a mesma interrupção saem juntas, no máximo uma notificação por minuto, mesmo que uma ordem fique recusada para sempre. As ordens gravadas enquanto outra continua falhando também são notificadas.
-  - Ao parar, o agente tenta gravar de novo antes de fechar o outbox. O que ainda não tiver sido gravado aparece no log como perdido. A posição continua na corretora.
+  - Ao parar, o agente para de operar e então tenta gravar de novo antes de fechar o outbox (veja "Parada de um agente" em [Parada do controller](#parada-do-controller)). O que ainda não tiver sido gravado aparece no log como perdido. A posição continua na corretora.
   - A boleta não responde erro para uma ordem executada. Se a entrada foi executada e o stop loss ou o take profit falharam, a resposta traz um aviso (`warning`), que o painel mostra até a próxima ordem: a posição pode estar sem proteção. Números não finitos (NaN, infinito) são gravados como 0, também no storage local (buntdb) do paper e do backtest.
 
 ## Arquitetura
@@ -245,15 +253,15 @@ go run ./cmd/migrator -config configs/config.yml up          # schema e seeds (4
 go run ./cmd/controller -config configs/config.yml           # ou: tools/automator.sh start configs/config.yml
 ```
 
-O `tools/automator.sh` roda o migrator e o controller numa sessão própria, que não para ao fechar o terminal, e oferece `start`, `stop`, `status` e `logs`.
+O `tools/automator.sh` roda o migrator e o controller numa sessão própria, que não para ao fechar o terminal, e oferece `start`, `stop`, `status` e `logs`. O `stop` espera o controller parar os agentes e a bridge pelo tempo que for preciso, até `AUTOMATOR_STOP_TIMEOUT` segundos (300 por padrão; mantenha acima do `shutdown_timeout`), e no fim para também o que o controller tiver deixado rodando.
 
 ## Configuração
 
 O `config.yml` tem só o necessário para subir e acessar o banco. O resto fica no banco e é alterado pelo painel.
 
-| No `config.yml`                                                                                                                                                                      | No banco (Configurações)                                                                               |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo), `services` (bridge do host), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt), prompts, Telegram, usuários |
+| No `config.yml`                                                                                                                                                                                                                            | No banco (Configurações)                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo, tempo de parada), `services` (bridge do host), `shutdown_timeout` (parada inteira), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt), prompts, Telegram, usuários |
 
 | Variável                                                    | Uso                                                                                                     |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -265,6 +273,19 @@ O `config.yml` tem só o necessário para subir e acessar o banco. O resto fica 
 Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entre aspas simples. Assim, qualquer valor sem `'` funciona.
 
 Um `${VAR}` sem valor viraria texto vazio. Por isso o controller e o migrator não sobem quando falta (não definida ou vazia) uma variável de `database.dsn` ou de `secrets_key`, ou quando uma entrada do `env` de um `services` fica vazia, como o `MT5_BRIDGE_TOKEN` (sem token, a bridge do host aceitaria qualquer processo da máquina). Qualquer outra variável não definida gera um aviso no log, exceto as do `bootstrap`, que podem ser removidas depois do primeiro login.
+
+### Parada do controller
+
+- **Tempos:** com SIGINT ou SIGTERM, o controller para os agentes, cada um com `agents.stop_timeout` (20 s por padrão) antes de ser morto, e depois os `services`, cada um com o seu `stop_timeout` (10 s por padrão). A parada inteira cabe em `shutdown_timeout`: por padrão, `agents.stop_timeout` mais o maior `stop_timeout` dos `services` mais 10 s (40 s no exemplo), e nunca menos que essa soma mais 3 s (o controller não sobe com um valor menor): cada fase, a dos agentes e a dos `services`, pode levar até 1 s além do próprio `stop_timeout`, esperando a saída (stdout/stderr) de um processo morto que outro processo fora do grupo ainda segura, como o Xvfb que o `run.sh` da bridge inicia em outra sessão; o segundo que sobra cobre o resto da parada. Passado esse tempo, o que ainda roda é morto e o controller sai com erro.
+- **Parada de um agente:** com o sinal, o agente para de operar antes de fechar o outbox.
+  - Recusa na hora qualquer ordem nova: a da estratégia no candle em andamento, a da boleta e a do Telegram.
+  - Espera as chamadas à corretora que já começaram terminarem e serem gravadas no outbox. A consulta ao modelo em andamento (agente LLM) é encerrada sem ordem e sem registro: a parada não é falha do modelo e não entra no histórico de decisões, nem no journal, nem nas contagens; só o log diz que a consulta ficou sem resposta (e uma reanálise pedida recebe "the agent stopped before the model answered").
+  - Depois disso, nada mais chega à corretora, nem cancelamentos nem proteções. Só então envia ao controller os registros pendentes (até 10 s; o resto vai no próximo início) e fecha o outbox.
+  - Uma chamada à corretora que demora segura a parada até o `agents.stop_timeout`. Se o agente for morto antes, o que já estava no outbox continua no disco e é enviado no próximo início.
+- **Quem para o controller espera mais que isso:** o `tools/automator.sh stop` (até `AUTOMATOR_STOP_TIMEOUT`), o `stop_grace_period` do compose (45 s, acima dos 30 s do `shutdown_timeout` do container) ou o `TimeoutStopSec` de uma unidade do systemd. Uma instalação em `/var/containers/xtrader` feita antes desse ajuste só ganha o `stop_grace_period` depois de reinstalar (veja "Parar tudo" em [deploy/docker/README.md](deploy/docker/README.md#operação)); até lá, o Docker espera só 10 s.
+- **Controller morto** (`kill -9`, falta de memória, uma falha): no Linux, os agentes e os `services` recebem SIGTERM e param como numa parada normal, inclusive o programa que um `go run` roda. O agente lançado pelo controller ignora o SIGPIPE: o log dele ia para o controller morto, então as linhas dessa parada se perdem, mas ela vai até o fim (para de operar, grava a ordem em andamento e fecha o outbox; o que não chegar ao controller fica no outbox para o próximo início). Um servidor do controller que falha (painel ou API interna) também para tudo em ordem.
+- **Processos que ficaram para trás:** cada início de um agente ou de um `service` tem um pidfile em `data/pids` do `agents.dir`. Ao subir, antes de lançar qualquer coisa, o controller para o que um controller anterior deixou rodando, como na parada normal. Ele confere pelo ambiente de cada processo que é mesmo o que foi lançado: um PID reaproveitado por outro programa fica intocado. Sem o Linux (sem `/proc`), esses processos só são avisados no log.
+- **Um controller por `agents.dir`:** um segundo controller com o mesmo diretório não sobe, porque tomaria os processos do primeiro por restos.
 
 ## Uso
 
@@ -294,7 +315,14 @@ Um `${VAR}` sem valor viraria texto vazio. Por isso o controller e o migrator n�
 - O controller também não inicia um agente que conflita com outro em execução, por exemplo com dados gravados antes dessa regra. O card mostra **Não iniciado** e o motivo. Essa verificação só enxerga os agentes que o próprio controller roda.
 - Para separar dois agentes, dê a um deles um comentário (ou magic) próprio. Trocar o magic de um agente com posições abertas faz ele deixar de reconhecê-las.
 
-**Quais mudanças valem na hora:** num agente rodando, **Ativo**, **Painel de trading**, **Controle via Telegram** e o prompt. As demais ficam como "reinício pendente", aplicadas pelo botão **Reiniciar**.
+**Quais mudanças valem na hora:** num agente rodando, **Ativo**, **Painel de trading**, **Controle via Telegram** e o prompt. As demais ficam como "reinício pendente", aplicadas só pelo botão **Reiniciar** (ou ao desligar e religar o agente). Se o processo cair nesse meio-tempo, o relançamento automático usa as configurações com que o agente foi iniciado: uma mudança pendente (de paper para live, de conta, de magic etc.) nunca entra em vigor sozinha, e o painel continua no endereço em que o processo escuta. Os segredos são a exceção, porque não são configuração de trading: o relançamento usa os atuais (um token da bridge ou uma chave revogada e trocada não deixa o agente caindo em loop). Cada segredo só vai para o mesmo endpoint com que foi iniciado: o token da bridge para a mesma bridge, a chave do modelo para o mesmo provedor e base URL, o token do calendário para o mesmo calendário. Se o endpoint também mudou, o relançamento continua com o endpoint e o segredo antigos até o **Reiniciar**.
+
+**Quando o agente sai sozinho:**
+
+- Com **Reiniciar se cair** ligado, o card mostra **Reiniciando** durante a espera e, na nota, a última saída e quantas vezes o controller o reiniciou desde o último início.
+- Com **Reiniciar se cair** desligado (no início do processo), o agente fica **Parado** e a nota diz por quê. Ele só volta com **Reiniciar**, ao ser desligado e religado ou quando as configurações de inicialização mudam depois da saída; trocar o painel de trading, o controle via Telegram ou o prompt não o inicia. Uma mudança salva enquanto ele ainda rodava é reinício pendente e também não o inicia (o controller lê as configurações logo que vê a saída; uma mudança salva nesses milissegundos conta como pendente).
+- Esse estado de **Parado** fica só na memória do controller: quando o controller reinicia, ele inicia de novo todo agente ligado, inclusive o que tinha saído sozinho.
+- Reiniciar ou desligar um agente não trava o painel enquanto ele para: as demais mudanças são aplicadas na hora, e o agente que está parando é ajustado logo depois. Ao encerrar, o controller não aceita mais reinícios: um reinício em andamento não lança o agente de novo.
 
 **Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`. Nas listas, os itens são separados por `;` (a vírgula continua aceita). Nos tamanhos (`lot`, `mt5-contract-size`), o decimal é com ponto: um valor que pode ter vírgula decimal, como `lot = 1,5` ou `lot = 0,05`, é recusado e o agente não inicia, porque `1,5` com dois pares viraria 1 e 5 lotes; escreva `1.5` para um tamanho ou `1;5` para um por par. A vírgula como separador só é aceita entre tamanhos com ponto decimal, como no formato antigo `lot = 0.03,0.01`.
 

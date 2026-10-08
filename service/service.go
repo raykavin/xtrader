@@ -116,6 +116,17 @@ type PositionProtector interface {
 	Protect(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error)
 }
 
+// PositionLegs is implemented by the brokers that tell how a position held is
+// protected, eg: the order controller, from the orders it stores and follows,
+// a restart included: a strategy that finds a position it doesn't follow, eg:
+// opened before a restart, follows it with its legs, which it moves or
+// cancels, rather than without them. HeldLegs returns the open legs (the stop
+// loss and the take profit) of the position held on side of pair, and when it
+// opened, zero when unknown.
+type PositionLegs interface {
+	HeldLegs(pair string, side model.SideType) (legs []model.Order, opened time.Time, err error)
+}
+
 type Notifier interface {
 	Notify(string)
 	OnOrder(order model.Order)

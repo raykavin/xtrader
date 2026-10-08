@@ -243,8 +243,13 @@ func (s *SignalStrategy) trail(df *model.Dataframe, broker service.Broker) {
 
 	trail := s.trails[df.Pair]
 	if trail == nil || trail.trade != trade {
-		// a position found after a restart: trailed from now on
+		// a position found after a restart: its best price since its opening,
+		// when known, else trailed from now on
 		trail = &signalTrail{trade: trade, extreme: df.Close.Last(0)}
+		found := rkFound{opened: trade.opened}
+		if _, first, ok := found.held(df, s.cfg.Timeframe); ok && first < len(df.Close) {
+			trail.extreme = rkExtreme(df, trade.side, first)
+		}
 		s.trails[df.Pair] = trail
 	}
 	sign := rkSign(trade.side)

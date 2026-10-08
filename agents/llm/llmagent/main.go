@@ -153,7 +153,7 @@ func run() error {
 	}
 	var keys secrets
 	if agent != nil {
-		// stopped by the controller, it sends its records before it exits
+		// stopped by the controller, it stops trading, then sends its records (see remote.Agent.Serve)
 		var stop context.CancelFunc
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -488,7 +488,7 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 		}()
 	}
 	if agent != nil {
-		return agent.Serve(ctx, nil, bot.Run) // the switches of the channels are the ones of the live mode
+		return agent.Serve(ctx, nil, runBot(bot, trader)) // the switches of the channels are the ones of the live mode
 	}
 	return bot.Run(ctx)
 }
@@ -576,7 +576,20 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 			log.Fatal(dash.serve(chart))
 		}()
 	}
-	return agent.Serve(ctx, apply, bot.Run)
+	return agent.Serve(ctx, apply, runBot(bot, trader))
+}
+
+// runBot returns the run of bot, trading with trader, for remote.Agent.Serve:
+// as its context is done, the requests to the model in progress are ended (see
+// llm.Trader.Stop), so that the bot stops at once (see xtrader.XTrader.Run)
+// rather than with the reply of the candle in progress, its order refused
+// anyway.
+func runBot(bot *xtrader.XTrader, trader *llm.Trader) func(context.Context) error {
+	return func(ctx context.Context) error {
+		stop := context.AfterFunc(ctx, trader.Stop)
+		defer stop()
+		return bot.Run(ctx)
+	}
 }
 
 // accountBroker is a broker reporting the account and the results of the

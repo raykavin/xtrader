@@ -448,6 +448,10 @@ type Trader struct {
 
 	period        time.Duration // of the candles, to know their close
 	calendarError time.Time     // last warning of a calendar that couldn't be read
+
+	// the context of the requests to the model, done by Stop; nil for none
+	quit context.Context
+	stop context.CancelFunc
 }
 
 // series is an indicator of the context: its key in the Metadata of the
@@ -544,7 +548,10 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 			"above %s", cfg.Timeframe)
 	}
 
+	quit, stop := context.WithCancel(context.Background())
 	t := &Trader{
+		quit:      quit,
+		stop:      stop,
 		period:    period,
 		decisions: NewMemoryDecisions(0),
 		pending:   make(map[string]*reanalysis),
@@ -880,8 +887,15 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 
 // finish concludes the analysis p with the reply of the model: its decision,
 // validated and kept, applied to the broker. It returns the result of the
-// analysis, see endAnalysis.
+// analysis, see endAnalysis. A request that failed once Stop was called, eg:
+// the one in progress it ended, is no failure of the model: nothing is kept,
+// neither a decision nor an entry of the journal.
 func (t *Trader) finish(p *prepared, broker service.Broker, r reply) string {
+	if r.err != nil && t.stopped() {
+		log.Infof("[LLM] %s %s | %s | the agent stops: the request to the model left without its reply (%v), "+
+			"nothing kept", p.input.Symbol, p.input.Timeframe, t.name, r.err)
+		return "no decision: the agent stopped before the model answered"
+	}
 	decision, kept, err := t.conclude(p, r)
 	if err != nil {
 		t.keep(kept, decision.Attachments)
@@ -1207,13 +1221,32 @@ type reply struct {
 // st, asked at at, bounded by the timeout. It touches no state of the Trader:
 // it may run apart, see startApart.
 func (t *Trader) request(st *promptState, input Input, at time.Time) reply {
-	ctx, cancel := context.WithTimeout(context.Background(), t.cfg.Timeout)
+	base := t.quit
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, t.cfg.Timeout)
 	defer cancel()
 	r := reply{at: at}
 	start := time.Now()
 	r.decision, r.err = t.ask(ctx, st, input)
 	r.latency = time.Since(start).Round(time.Millisecond)
 	return r
+}
+
+// Stop ends the requests to the model in progress, and fails the ones asked
+// after at once, as the bot exits: its orders refused anyway (see
+// xtrader.XTrader.Run), the candle in progress ends without waiting for the
+// reply, and nothing is kept of those requests (see finish).
+func (t *Trader) Stop() {
+	if t.stop != nil {
+		t.stop()
+	}
+}
+
+// stopped reports whether Stop was called.
+func (t *Trader) stopped() bool {
+	return t.quit != nil && t.quit.Err() != nil
 }
 
 // conclude validates the reply r of the provider against the context of the

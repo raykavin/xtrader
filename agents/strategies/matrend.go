@@ -143,6 +143,10 @@ type MATrend struct {
 	warmup int
 	trades map[string]*rkTrade     // positions followed by the stop, by pair
 	legs   map[string]*model.Order // stops placed at the broker, by pair
+	// the take profit levels of the legs placed at the broker, by pair, 0 for
+	// none: placed again with the stop should a close fail
+	targets map[string]float64
+	exits   map[string]*rkExit // closes that failed, retried on the next candles, by pair
 }
 
 // NewMATrend validates the configuration and creates the strategy.
@@ -158,9 +162,11 @@ func NewMATrend(cfg MATrendConfig) (*MATrend, error) {
 		cfg: cfg,
 		sizing: rkSizing{sizes: cfg.PositionSize, fraction: cfg.PositionFraction, leverage: cfg.Leverage,
 			minValue: cfg.MinPositionValue},
-		warmup: max(cfg.TrendLen, recursive) + 1 + rkSeedFactor*recursive,
-		trades: make(map[string]*rkTrade),
-		legs:   make(map[string]*model.Order),
+		warmup:  max(cfg.TrendLen, recursive) + 1 + rkSeedFactor*recursive,
+		trades:  make(map[string]*rkTrade),
+		legs:    make(map[string]*model.Order),
+		targets: make(map[string]float64),
+		exits:   make(map[string]*rkExit),
 	}, nil
 }
 
@@ -251,9 +257,25 @@ func (s *MATrend) OnCandle(df *model.Dataframe, broker service.Broker) {
 		log.Error(err)
 		return
 	}
+	if exit, ok := s.exits[df.Pair]; ok && exit.side != held {
+		delete(s.exits, df.Pair) // closed meanwhile, by its legs or by someone else
+	}
 	if held == "" {
 		delete(s.trades, df.Pair)
 		delete(s.legs, df.Pair) // the broker stop closed the position, if any
+		delete(s.targets, df.Pair)
+	} else if trade, ok := s.trades[df.Pair]; !ok || trade.side != held {
+		s.adopt(df, broker, held) // a position opened before a restart, or by someone else
+	}
+
+	// a close that failed is retried before anything else, the position
+	// protected meanwhile
+	if _, ok := s.exits[df.Pair]; ok {
+		log.Infof("[MA TREND] %s %s | RETRY | close %f", df.Pair, s.cfg.Timeframe, closePrice)
+		if !s.close(df, broker, held) {
+			return
+		}
+		held = ""
 	}
 
 	// the stop comes first: a cross on the candle of a stop applies to the
@@ -337,11 +359,10 @@ func (s *MATrend) stopped(df *model.Dataframe, broker service.Broker, held model
 	}
 	trade, ok := s.trades[df.Pair]
 	if !ok || trade.side != held {
-		// a position opened before a restart, or by someone else: its stop
-		// is followed from this candle on, as for an entry
-		stop := df.Metadata["ma_trend"].Last(0) - rkSign(held)*s.cfg.StopBufferATR*df.Metadata["ma_atr"].Last(0)
-		s.trades[df.Pair] = &rkTrade{side: held, extreme: df.Close.Last(0), stop: stop}
-		delete(s.legs, df.Pair)
+		return false // see adopt
+	}
+	if trade.fresh {
+		trade.fresh = false // set up on this candle, as for an entry
 		return false
 	}
 
@@ -356,12 +377,17 @@ func (s *MATrend) stopped(df *model.Dataframe, broker service.Broker, held model
 		trade.extreme = math.Min(trade.extreme, df.Low.Last(0))
 	}
 	previous := trade.stop
+	if trade.adopted {
+		// the broker stop of a position found may lag behind the stop
+		// replayed: moved to it as to a stop tightened
+		trade.adopted, previous = false, math.NaN()
+	}
 	trade.tighten(trade.extreme - trade.sign()*s.cfg.TrailingATR*df.Metadata["ma_atr"].Last(0))
 
 	// the broker takes a stop on the losing side of the price only: beyond
 	// it, the close of the next candle stops the position
 	if leg, ok := s.legs[df.Pair]; ok && leg.Type == model.OrderTypeStopLoss && trade.stop != previous &&
-		trade.sign()*trade.stop < trade.sign()*df.Close.Last(0) {
+		trade.stop != rkLegLevel(*leg) && trade.sign()*trade.stop < trade.sign()*df.Close.Last(0) {
 		if protected, ok := broker.(service.ProtectionBroker); ok {
 			moved, err := protected.UpdateProtection(*leg, trade.stop)
 			if err != nil {
@@ -395,25 +421,88 @@ func (s *MATrend) openProtected(df *model.Dataframe, broker service.Broker, trad
 	if len(orders) > 1 {
 		leg := rkProtectionLeg(orders[1:])
 		s.legs[df.Pair] = &leg
+		s.targets[df.Pair] = rkLevelsOf(orders[1:]).profit
 	}
 	return err
 }
 
-// close closes the position held on the pair at the market, and reports
-// whether the pair is flat now. The stop at the broker is canceled first, as it reserves the
-// position: the close would otherwise open the other side, eg: in the paper
-// wallet.
-func (s *MATrend) close(df *model.Dataframe, broker service.Broker, held model.SideType) bool {
-	if leg, ok := s.legs[df.Pair]; ok {
-		if err := broker.Cancel(*leg); err != nil {
-			log.Debugf("[MA TREND] %s | broker stop: %v", df.Pair, err) // already filled or canceled
-		}
-		delete(s.legs, df.Pair)
+// adopt follows the position held on side found on the last candle of df,
+// eg: opened before a restart: with its legs at the broker, when it tells them
+// (see rkFind), and its stop as it stood on the previous candle, replayed from
+// the candle of its entry when df holds it; else set up from the last candle
+// on, as for an entry. The stop is never looser than the one at the broker.
+func (s *MATrend) adopt(df *model.Dataframe, broker service.Broker, held model.SideType) {
+	found := rkFind(df, broker, "MA TREND", held)
+	delete(s.legs, df.Pair)
+	delete(s.targets, df.Pair)
+	if len(found.legs) > 0 {
+		leg := rkProtectionLeg(found.legs)
+		s.legs[df.Pair] = &leg
+		s.targets[df.Pair] = rkLevelsOf(found.legs).profit
 	}
 
-	if !rkClose(df, broker, held, s.cfg.MinPositionValue) {
+	trend, atr := df.Metadata["ma_trend"], df.Metadata["ma_atr"]
+	sign := rkSign(held)
+	indicators := len(trend) == len(df.Close) && len(atr) == len(df.Close)
+	trade := &rkTrade{side: held, extreme: df.Close.Last(0), stop: math.Inf(-1) * sign, fresh: true}
+	if indicators {
+		trade.stop = trend.Last(0) - sign*s.cfg.StopBufferATR*atr.Last(0)
+	}
+	if _, first, ok := found.held(df, s.cfg.Timeframe); ok && indicators && first >= 1 && first < len(df.Close) &&
+		!isNa(trend[first-1]) && !isNa(atr[first-1]) {
+		entry := first - 1
+		trade = &rkTrade{side: held, extreme: df.Close[entry], stop: trend[entry] - sign*s.cfg.StopBufferATR*atr[entry]}
+		for i := first; i < len(df.Close)-1; i++ {
+			if held == model.SideTypeBuy {
+				trade.extreme = math.Max(trade.extreme, df.High[i])
+			} else {
+				trade.extreme = math.Min(trade.extreme, df.Low[i])
+			}
+			if !isNa(atr[i]) {
+				trade.tighten(trade.extreme - sign*s.cfg.TrailingATR*atr[i])
+			}
+		}
+	}
+	if leg, ok := s.legs[df.Pair]; ok && rkIsStop(*leg) {
+		trade.tighten(rkLegLevel(*leg))
+		trade.adopted = true
+	}
+	s.trades[df.Pair] = trade
+}
+
+// close closes the position held on the pair at the market, and reports
+// whether the pair is flat now. Where the broker needs it, its legs are
+// canceled first, as they reserve the position: the close would otherwise
+// open the other side, eg: in the paper wallet; a close that fails places them
+// again, see rkCloseProtected, and is retried on the next candles.
+func (s *MATrend) close(df *model.Dataframe, broker service.Broker, held model.SideType) bool {
+	var legs []model.Order
+	var levels rkLevels
+	if exit, ok := s.exits[df.Pair]; ok {
+		levels = exit.bare
+	}
+	if leg, ok := s.legs[df.Pair]; ok {
+		legs = []model.Order{*leg}
+		levels = rkLevels{profit: s.targets[df.Pair]}
+		if rkIsStop(*leg) {
+			levels.stop = rkLegLevel(*leg)
+		} else {
+			levels.profit = rkLegLevel(*leg)
+		}
+	}
+
+	flat, kept, bare := rkCloseProtected(df, broker, "MA TREND", held, s.cfg.MinPositionValue, legs, levels)
+	delete(s.legs, df.Pair)
+	if len(kept) > 0 {
+		leg := rkProtectionLeg(kept)
+		s.legs[df.Pair] = &leg
+	}
+	if !flat {
+		s.exits[df.Pair] = &rkExit{side: held, bare: bare}
 		return false
 	}
+	delete(s.exits, df.Pair)
+	delete(s.targets, df.Pair)
 	delete(s.trades, df.Pair)
 	return true
 }

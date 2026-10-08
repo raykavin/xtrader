@@ -22,6 +22,12 @@
 // services of config.yml are the processes of the host the agents need, eg:
 // the bridge of MT5 out of a container, launched before the agents and stopped
 // after them.
+//
+// The whole stop, on SIGINT or SIGTERM, takes shutdown_timeout of config.yml
+// at most: past it, whatever still runs is killed. On Linux the agents and
+// the services stop with the controller, even killed, and their pidfiles in
+// data/pids of agents.dir make the next start stop what a controller killed
+// left running elsewhere, before it launches anything.
 package main
 
 import (
@@ -33,7 +39,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -45,6 +54,11 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run runs the controller until it is stopped, and returns its exit code.
+func run() int {
 	configFile := flag.String("config", "configs/config.yml", "configuration of the controller: its dashboard, "+
 		"its database and how it runs the agents")
 	flag.Parse()
@@ -105,7 +119,25 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// what a controller before left running as it died, eg: killed, stopped
+	// before anything is launched: the agents, then the services they use
+	pids := filepath.Join(cfg.Agents.Dir, "data", "pids")
+	unlock, err := controller.LockPIDs(pids)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer unlock()
 	agents := controller.NewSupervisor(os.Stdout, os.Stderr, cfg.Agents.StopTimeout)
+	services := controller.NewSupervisor(os.Stdout, os.Stderr, cfg.Agents.StopTimeout)
+	if err := agents.KeepPIDs(filepath.Join(pids, "agents")); err != nil {
+		log.Fatal(err)
+	}
+	if err := services.KeepPIDs(filepath.Join(pids, "services")); err != nil {
+		log.Fatal(err)
+	}
+	agents.StopLeftovers()
+	services.StopLeftovers()
+
 	var manager *controller.Manager
 	bot := controller.NewTelegramRunner(ctx, dashboard, controller.WithPrompts(st, func() { manager.Trigger() }))
 	manager = controller.NewManager(st, cfg.Agents, agents, dashboard, bot)
@@ -121,25 +153,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	life := &lifecycle{cancel: cancel, timeout: cfg.ShutdownTimeout, exit: os.Exit, kill: func() {
+		agents.KillAll()
+		services.KillAll()
+	}}
 	internal := ui.NewHTTPServer("", manager.InternalHandler())
-	go func() {
-		if err := internal.Serve(internalListener); !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
-		}
-	}()
+	life.serve("the internal API", internal, internalListener)
 	server := ui.NewHTTPServer("", dashboard.Handler(ctx))
-	go func() {
-		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
-		}
-	}()
+	// the requests end as the controller stops, eg: the events streamed, or a
+	// restart in flight, which launches nothing anymore (controller.ErrStopped)
+	server.BaseContext = func(net.Listener) context.Context { return ctx }
+	life.serve("the dashboard", server, listener)
 	fmt.Printf("Dashboard available at http://%s\n", cfg.Listen)
 
 	// the services may take minutes to start, eg: the terminal of MT5: the
 	// dashboard serves meanwhile, the agents offline
-	services := controller.NewSupervisor(os.Stdout, os.Stderr, cfg.Agents.StopTimeout)
 	if _, err := controller.StartServices(ctx, services, cfg.Services, cfg.Agents.Dir); err != nil {
-		log.Fatal(err)
+		life.fail(err)
 	}
 	managed := make(chan struct{})
 	go func() {
@@ -148,8 +178,70 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	_ = server.Close()
-	<-managed          // the agents stopped, their records sent through the internal API
-	services.StopAll() // after the agents, which use them
-	_ = internal.Close()
+	return life.stop(func() {
+		// no request anymore, the ones in flight waited for while the manager
+		// stops the agents, eg: a restart waiting for its agent to stop
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			shutdown, cancelShutdown := context.WithTimeout(context.Background(),
+				cfg.Agents.StopTimeout+2*time.Second)
+			defer cancelShutdown()
+			if err := server.Shutdown(shutdown); err != nil {
+				_ = server.Close()
+			}
+		}()
+		<-managed          // the agents stopped, their records sent through the internal API
+		services.StopAll() // after the agents, which use them, each with its stop timeout
+		<-served
+		_ = internal.Close()
+	})
+}
+
+// lifecycle is the end of the controller: a server failing stops it as a
+// signal does (cancel), its processes stopped in order, then it exits with an
+// error; the whole stop within timeout, shutdown_timeout, as who stops the
+// controller waits that long at most, eg: the stop_grace_period of the
+// compose: past it, its processes are killed (kill) and it exits at once with
+// an error (exit).
+type lifecycle struct {
+	cancel  context.CancelFunc
+	timeout time.Duration
+	kill    func()
+	exit    func(code int)
+	failed  atomic.Bool
+}
+
+// fail stops the controller for err, see lifecycle.
+func (l *lifecycle) fail(err error) {
+	log.Errorf("controller: %v: stopping", err)
+	l.failed.Store(true)
+	l.cancel()
+}
+
+// serve serves srv on listener, apart: anything but its close fails the
+// controller.
+func (l *lifecycle) serve(name string, srv *http.Server, listener net.Listener) {
+	go func() {
+		if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			l.fail(fmt.Errorf("%s: %w", name, err))
+		}
+	}()
+}
+
+// stop runs the stop of the controller, its context done, within the timeout,
+// and returns its exit code: 1 once a server failed.
+func (l *lifecycle) stop(stop func()) int {
+	deadline := time.AfterFunc(l.timeout, func() {
+		log.Errorf("controller: not stopped %s after the signal (shutdown_timeout): its processes killed",
+			l.timeout)
+		l.kill()
+		l.exit(1)
+	})
+	defer deadline.Stop()
+	stop()
+	if l.failed.Load() {
+		return 1
+	}
+	return 0
 }

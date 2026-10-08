@@ -43,6 +43,9 @@ services:
       # - "8090:8090" # INTERNAL AGENTS API
       # - "5580:5580" # LLM AGENT API
     restart: always
+    # above the shutdown_timeout of services/controller/config/config.yml (30s):
+    # the agents stopped before the SIGKILL
+    stop_grace_period: 45s
     volumes:
       - ./services/controller/data:/app/data
       - ./services/controller/config:/app/config:ro

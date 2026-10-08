@@ -887,7 +887,16 @@ func (s *Store) AgentSecrets(ctx context.Context, id int64) (AgentSecretValues, 
 	if err != nil {
 		return AgentSecretValues{}, err
 	}
-	var values AgentSecretValues
+	return s.SecretsOf(agent)
+}
+
+// SecretsOf returns the secrets of agent, as read, decrypted, eg: the ones it
+// was launched with: only for the agent itself, see AgentSecrets.
+func (s *Store) SecretsOf(agent Agent) (AgentSecretValues, error) {
+	var (
+		values AgentSecretValues
+		err    error
+	)
 	if agent.Account != nil {
 		if values.BridgeToken, err = s.open(agent.Account.BridgeToken); err != nil {
 			return AgentSecretValues{}, err

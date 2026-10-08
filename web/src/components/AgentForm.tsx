@@ -294,7 +294,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
             <Switch
               label="Reiniciar se cair"
               checked={values.restart}
-              title="Ligado, o controller inicia o agente de novo quando o processo sai"
+              title="Ligado, o controller inicia o agente de novo quando o processo sai, com as configurações com que ele foi iniciado e os segredos atuais; desligado, o agente fica parado até ser reiniciado ou até o controller reiniciar"
               onChange={(restart) => set("restart", restart)}
             />
             {creating && (

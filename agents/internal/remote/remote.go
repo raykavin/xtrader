@@ -240,8 +240,10 @@ func (a *Agent) Run(ctx context.Context, apply func(agentapi.Runtime)) context.C
 
 // Serve runs the agent (see Run) and its bot with run, until the bot ends or
 // the context of the agent is done: a signal, or the controller refusing the
-// agent, ErrUnauthorized then. The bot doesn't stop with its context: Serve
-// returns, and Close sends the records left as the agent exits.
+// agent, ErrUnauthorized then. Then the bot stops trading before Serve returns:
+// run must return once its context is done, the orders it executed recorded
+// in the outbox, as xtrader.XTrader.Run does, so that Close sends and closes
+// an outbox nothing writes an order to any more.
 func (a *Agent) Serve(ctx context.Context, apply func(agentapi.Runtime), run func(context.Context) error) error {
 	ctx = a.Run(ctx, apply)
 	ended := make(chan error, 1)
@@ -250,12 +252,15 @@ func (a *Agent) Serve(ctx context.Context, apply func(agentapi.Runtime), run fun
 	case err := <-ended:
 		return err
 	case <-ctx.Done():
-		log.Infof("%s: stopping", a.Config.Name)
-		if cause := context.Cause(ctx); errors.Is(cause, ErrUnauthorized) {
-			return cause
-		}
-		return nil
 	}
+	log.Infof("%s: stopping, the bot first", a.Config.Name)
+	if err := <-ended; err != nil {
+		log.Warnf("%s: the bot, stopping: %v", a.Config.Name, err)
+	}
+	if cause := context.Cause(ctx); errors.Is(cause, ErrUnauthorized) {
+		return cause
+	}
+	return nil
 }
 
 // watch applies the runtime of the agent as it changes until ctx is done, see
@@ -299,7 +304,7 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 
 // Close stops sending the records and watching the runtime, writes the orders
 // the outbox failed to write a last time, sends the records left,
-// flushTimeout at most, and closes the outbox.
+// flushTimeout at most, and closes the outbox. After Serve, the bot stopped.
 func (a *Agent) Close() error {
 	a.mu.Lock()
 	cancel, done, orders := a.cancel, a.done, a.orders

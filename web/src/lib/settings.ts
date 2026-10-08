@@ -47,16 +47,41 @@ export type Tone = "on" | "off" | "warn";
 
 /**
  * The state of an agent: disabled, not launched by the controller (eg: another
- * agent running trades the same positions), running (a restart pending), or
- * stopped, with the mark of its chip when it runs or stopped.
+ * agent running trades the same positions), exited and waiting to be started
+ * again, running (a restart pending), or stopped, with the mark of its chip
+ * when it runs or stopped.
  */
 export function agentState(agent: AgentSettings): { label: string; tone: Tone; mark?: StatusMark } {
   if (!agent.enabled) return { label: "Desativado", tone: "off" };
   if (agent.launch_error) return { label: "Não iniciado", tone: "warn", mark: "stop" };
+  if (agent.running && agent.restarting)
+    return { label: "Reiniciando", tone: "warn", mark: "stop" };
   if (agent.running && agent.restart_pending) return { label: "Reinício pendente", tone: "warn" };
   if (agent.running) return { label: "Executando", tone: "on", mark: "play" };
   if (!agent.launched) return { label: "Iniciado à parte", tone: "off" };
   return { label: "Parado", tone: "warn", mark: "stop" };
+}
+
+/**
+ * The note of the card of an agent: why the controller didn't launch it, a
+ * restart pending, why it stays stopped once exited ("Reiniciar se cair" off),
+ * or how its last start exited, with the times the controller started it
+ * again since its launch.
+ */
+export function agentNote(agent: AgentSettings): string {
+  if (agent.launch_error) return `Não iniciado: ${agent.launch_error}`;
+  if (agent.restart_pending)
+    return "Configurações de inicialização alteradas: reinicie para aplicá-las.";
+  const exit = agent.last_exit ? `Última saída: ${agent.last_exit}` : "";
+  if (agent.exited) {
+    const note =
+      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia).";
+    return exit ? `${note} ${exit}` : note;
+  }
+  const restarts = agent.restarts ?? 0;
+  if (restarts === 0) return exit;
+  const times = restarts === 1 ? "1 vez" : `${restarts} vezes`;
+  return exit ? `${exit} · reiniciado ${times}` : `Reiniciado ${times}`;
 }
 
 /** The agents of a kind, a group of the page: the LLM ones, or the ones of a strategy. */
