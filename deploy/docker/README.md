@@ -106,7 +106,7 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
 
 ## 5. Agentes, Telegram e usuários
 
-1. **Agentes:** o banco começa sem agentes. Crie-os em **Configurações > Agentes > Novo agente** (modo, endereço da API, conta MT5 com a bridge `http://mt5:18812`, modelo do LLM, parâmetros e segredos), ou importe os do `services/migrator/config/agents.yml`, no formato da versão anterior:
+1. **Agentes:** o banco começa sem agentes. Crie-os em **Configurações > Agentes > Novo agente** (modo, endereço da API no loopback do container, ex.: `localhost:5580`, conta MT5 com a bridge `http://mt5:18812`, modelo do LLM, parâmetros e segredos), ou importe os do `services/migrator/config/agents.yml`, no formato da versão anterior:
 
    ```bash
    docker compose run --rm migrator migrator -config /app/config/config.yml import -agents /app/config/agents.yml -dry-run
@@ -115,7 +115,7 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
 
    O controller lança os agentes habilitados em até 30 segundos. Depois, cada agente é editado ou excluído (desligado antes) na mesma tela; uma mudança de inicialização num agente rodando fica como "reinício pendente".
 
-2. Entre no painel com o usuário do bootstrap e abra **Configurações** (ícone de engrenagem):
+2. Entre no painel (`http://127.0.0.1:8082` no servidor, a URL do ngrok ou um túnel SSH; veja "Portas e segurança") com o usuário do bootstrap e abra **Configurações** (ícone de engrenagem):
    - **Agentes:** a chave da API do LLM e o token da bridge de cada agente (o `MT5_BRIDGE_TOKEN` do `services/mt5/.env`), o prompt dos agentes LLM, o painel de trading e o controle via Telegram, além de **Editar** e **Excluir**. Uma troca de segredo fica como "reinício pendente": use **Reiniciar**.
    - **Telegram:** o token do bot, os IDs autorizados e **Bot ativo**.
    - **Usuários:** crie os usuários do painel e troque a senha do primeiro.
@@ -124,8 +124,8 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
 
 O terminal já vem com o servidor MCP ligado (`http://127.0.0.1:22346/mcp`, encaminhado para a rede interna em `mt5:22347`), com uma chave gerada por ele. Essa chave fica cifrada na configuração do terminal, por isso precisa ser copiada uma vez pela interface:
 
-1. Em `services/mt5/.env`, defina `MT5_VNC_PASSWORD=<senha>` e rode `docker compose up -d mt5`. A porta 5900 já é publicada, mas o VNC só sobe com a senha.
-2. Conecte um cliente VNC em `<servidor>:5900`, de preferência por um túnel SSH (`ssh -L 5900:127.0.0.1:5900 <usuário>@<servidor>` e o cliente em `localhost:5900`): o protocolo do VNC não é cifrado.
+1. Em `services/mt5/.env`, defina `MT5_VNC_PASSWORD=<senha>` e rode `docker compose up -d mt5`. A porta 5900 já é publicada no loopback do servidor, mas o VNC só sobe com a senha.
+2. Conecte um cliente VNC em `127.0.0.1:5900` no próprio servidor ou, de outra máquina, por um túnel SSH (`ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` e o cliente em `127.0.0.1:5900` dessa máquina; veja "Acesso de outra máquina"). A porta não é alcançável pela rede, e o protocolo do VNC não é cifrado.
 3. No terminal, vá em **Ferramentas > Opções** e copie a chave do servidor MCP do MetaTrader.
 4. No painel, em **Configurações > Agentes**, defina o **Token do calendário (MCP)** do agente llm e reinicie-o. Depois apague o `MT5_VNC_PASSWORD` e rode `docker compose up -d mt5`, que desliga o VNC.
 
@@ -171,12 +171,24 @@ Sem esse passo, o agente llm roda sem o calendário. Ficam sem efeito as notíci
 
 ## Portas e segurança
 
-- **Portas publicadas**, em todas as interfaces do host (ajuste-as conforme a reserva de portas de rede):
-  - **8082, o painel:** coloque-o atrás do proxy reverso com HTTPS; o cookie de sessão sai como `Secure` quando o proxy envia `X-Forwarded-Proto: https`;
-  - **5900, o VNC do terminal:** só sobe com o `MT5_VNC_PASSWORD`; deixe a senha vazia fora do uso;
-  - **5432, o PostgreSQL:** protegido pela senha do usuário `xtrader`.
+- **Portas publicadas**, só no loopback do host (`127.0.0.1`; ajuste os números conforme a reserva de portas de rede). O Docker publica as portas com regras próprias de NAT, que passam por fora do firewall do host (ufw): fechar a porta no firewall não basta, por isso o compose nunca as publica em `0.0.0.0`. Da rede (LAN, Wi-Fi, VPN) nenhuma é alcançável; de outra máquina, use um túnel SSH (abaixo).
+  - **`127.0.0.1:8082`, o painel:** o ngrok do host (ou um proxy reverso com HTTPS no host) tunela para esse endereço. Use `127.0.0.1`, e não `localhost`, que pode resolver para o IPv6 `::1`, onde nada é publicado. O cookie de sessão sai como `Secure` quando o proxy envia `X-Forwarded-Proto: https`. Esse header e o `X-Forwarded-For` (o endereço do cliente nos logs e no limite de login) só valem vindos de um proxy de `ui.trusted_proxies` em `services/controller/config/config.yml`: o loopback e a faixa privada do Docker (`172.16.0.0/12`), por onde o ngrok do host chega ao container. Isso só é seguro com a porta no loopback: publicada em todas as interfaces, outro cliente poderia chegar por essa faixa. Se a rede `xtrader` tiver outra faixa (`docker network inspect xtrader`), ajuste a lista;
+  - **`127.0.0.1:5900`, o VNC do terminal:** só sobe com o `MT5_VNC_PASSWORD`; deixe a senha vazia fora do uso;
+  - **`127.0.0.1:5432`, o PostgreSQL:** para `psql` e ferramentas no host, com a senha do usuário `xtrader`. O backup e as migrações não usam a porta: rodam pelo `docker compose exec`/`run`, na rede `xtrader`.
 
-  Num servidor com IP público, feche o 5900 e o 5432 no firewall e use-os por túnel SSH, ou publique-os só no loopback (`"127.0.0.1:5432:5432"`).
-- **Portas internas**, comentadas no compose: a bridge (18812) e o MCP (22347) ficam na rede `xtrader`, e a bridge exige o token; a API interna dos agentes (8090) e a de cada agente (ex.: 5580) só no container do controller, que faz o proxy.
+  Numa instalação anterior, com as portas em todas as interfaces, rode o `install.sh` de novo (ele troca o compose e guarda o anterior em `docker-compose.yml.bak`) e depois `docker compose up -d`, que recria o `controller`, o `mt5` e o `postgres` para publicar as portas de novo. De preferência, faça isso sem posição aberta. Para conferir: `ss -ltn` mostra `127.0.0.1:8082`, `127.0.0.1:5900` e `127.0.0.1:5432`, e nenhum `0.0.0.0` nem `[::]` nessas portas.
+- **Portas internas**, comentadas no compose: a bridge (18812) e o MCP (22347) ficam na rede `xtrader`, e a bridge exige o token; a API interna dos agentes (8090) e a de cada agente (ex.: 5580) só no loopback do container do controller, que faz o proxy. O painel recusa um endereço de agente fora do loopback, e um agente gravado antes com outro host (ex.: `0.0.0.0:5580`) não é lançado até o endereço ser corrigido nas configurações dele.
 - **Segredos:** a senha do banco e a chave dos segredos ficam nos `.env` (modo 600, fora do git); as chaves de API e os tokens, cifrados no banco, nunca aparecem no painel, nos logs nem no Telegram. Senhas do painel em bcrypt.
 - **Usuário:** o `controller` e o `mt5` rodam com um usuário não-root (uid 1000), dono dos dados; o `postgres`, com o usuário da imagem oficial.
+
+### Acesso de outra máquina
+
+Por um túnel SSH ao servidor, que encaminha uma porta local para o loopback dele (`-N`: só o túnel, sem shell):
+
+```bash
+ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>    # VNC: o cliente em 127.0.0.1:5900
+ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>    # PostgreSQL: psql -h 127.0.0.1 -p 5433 -U xtrader xtrader
+ssh -N -L 8082:127.0.0.1:8082 <usuário>@<servidor>    # painel sem o ngrok: http://127.0.0.1:8082
+```
+
+Uma porta local diferente (ex.: `5433`) evita o conflito com um PostgreSQL da própria máquina. O túnel cifra o tráfego, inclusive o do VNC, e só quem tem acesso SSH ao servidor o abre.

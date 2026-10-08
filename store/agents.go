@@ -17,6 +17,7 @@ import (
 
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/config"
+	"github.com/raykavin/xtrader/ui"
 )
 
 // agentNameRegexp is the rule of the names of the agents, the one of the table
@@ -26,10 +27,6 @@ var agentNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // paramNameRegexp is the rule of the names of the params, the ones of their
 // flags, eg: llm-min-stop-atr.
 var paramNameRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
-// hostRegexp is the rule of the host of the address of the API of an agent: a
-// name, or an IPv4 or IPv6 address.
-var hostRegexp = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // maxParamValue is the length of the value of a param at most, in bytes.
 const maxParamValue = 1024
@@ -379,8 +376,9 @@ func checkAgent(a Agent) error {
 	case a.APIAddress == "":
 		return fmt.Errorf("%w: agent %s: the address of its API is required", ErrInvalid, a.Name)
 	case !validAddress(a.APIAddress):
-		return fmt.Errorf("%w: agent %s: address %q, host:port with a port of 1 to 65535", ErrInvalid, a.Name,
-			a.APIAddress)
+		return fmt.Errorf("%w: agent %s: address %q, host:port with a port of 1 to 65535, the host on the loopback "+
+			"(localhost, 127.0.0.0/8 or [::1]): the controller reaches the API of its agents on its machine only, "+
+			"unauthenticated", ErrInvalid, a.Name, a.APIAddress)
 	case a.LLM != nil && a.Kind != "llm":
 		return fmt.Errorf("%w: agent %s: a language model for an agent of kind %s", ErrInvalid, a.Name, a.Kind)
 	case a.Kind == "llm" && a.Launched && a.LLM == nil:
@@ -497,10 +495,12 @@ func checkSecrets(a Agent, secrets AgentSecrets) error {
 }
 
 // validAddress reports whether address is host:port, its port a number of 1
-// to 65535, as the API of an agent listens.
+// to 65535, as the API of an agent listens, on the loopback (see
+// ui.LoopbackHost): another host, or the unspecified address, would serve it
+// to the network, and have the controller send its requests there.
 func validAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)
-	if err != nil || !hostRegexp.MatchString(host) {
+	if err != nil || !ui.LoopbackHost(host) {
 		return false
 	}
 	number, err := strconv.ParseUint(port, 10, 16)

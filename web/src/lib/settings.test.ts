@@ -231,15 +231,35 @@ describe("the fields of an agent", () => {
     }
   });
 
-  it("takes the addresses host:port, of a port of 1 to 65535", () => {
+  it("takes the addresses host:port, of a port of 1 to 65535, on the loopback", () => {
     for (const address of [
       "localhost:5580",
+      "LocalHost:5580",
       "127.0.0.1:1",
+      "127.1.2.255:5580",
       "[::1]:65535",
-      "mt5-bridge.local:8080",
+      "[0:0:0:0:0:0:0:1]:5580",
+      "[::ffff:127.0.0.1]:5580",
       " localhost:5580 ",
     ]) {
       expect(addressError(address), address).toBeNull();
+    }
+    for (const address of [
+      "mt5-bridge.local:8080",
+      "0.0.0.0:5580",
+      "[::]:5580",
+      "10.0.0.5:5580",
+      "169.254.169.254:80",
+      "128.0.0.1:5580",
+      "127.0.0.256:5580",
+      "127.0.0.01:5580",
+      "127.1:5580",
+      "localhost.evil.example:5580",
+      "127.0.0.1.nip.io:5580",
+      "[::ffff:10.0.0.5]:5580",
+      "[fe80::1]:5580",
+    ]) {
+      expect(addressError(address), address).toMatch(/loopback/);
     }
     for (const address of [
       "",

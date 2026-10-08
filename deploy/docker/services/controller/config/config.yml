@@ -25,6 +25,15 @@ bootstrap:
 # the bundle of the dashboard, in the image
 ui:
   dir: /app/web
+  # the proxies whose X-Forwarded-For and X-Forwarded-Proto are believed: ngrok
+  # on the host reaches the published port through the gateway of the network
+  # of the compose (eg: 172.18.0.1), in the private range of Docker. Safe
+  # with the port published on the loopback of the host only (127.0.0.1:8082,
+  # the compose), and see `docker network inspect xtrader` if the network has
+  # another range
+  trusted_proxies:
+    - 127.0.0.0/8
+    - 172.16.0.0/12
 
 agents:
   # the internal API of the agents, on the loopback of the container

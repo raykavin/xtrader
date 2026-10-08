@@ -1,5 +1,5 @@
 import { csrfToken } from "../lib/settings";
-import { APIError } from "./errors";
+import { APIError, retryAfterSeconds } from "./errors";
 import type {
   AgentCreateRequest,
   AgentPeriod,
@@ -78,7 +78,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // not JSON; keep the generic message
     }
-    throw new APIError(message, response.status);
+    throw new APIError(
+      message,
+      response.status,
+      retryAfterSeconds(response.headers.get("Retry-After")),
+    );
   }
   return (text ? JSON.parse(text) : undefined) as T; // none for 204
 }

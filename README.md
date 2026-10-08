@@ -182,7 +182,7 @@ web/                 painel (React 19 + Vite + TypeScript)
 
 - **Docker e Docker Compose**, para a stack completa, que é o caminho recomendado.
 - **Para desenvolver no host:**
-  - Go 1.25+;
+  - Go 1.25+: o `go.mod` pede o toolchain `go1.25.14`, que um Go mais antigo baixa sozinho (`GOTOOLCHAIN=auto`, o padrão);
   - PostgreSQL 18;
   - [bun](https://bun.sh), para o painel;
   - um terminal MT5 com a bridge (`tools/mt5bridge/run.sh`), para os modos live e paper.
@@ -207,7 +207,7 @@ sudo nano /var/containers/xtrader/services/controller/.env  # primeiro usuário 
 cd /var/containers/xtrader && sudo docker compose up -d
 ```
 
-O painel fica em `http://<servidor>:8082`. Depois do login, crie os agentes em **Configurações > Agentes > Novo agente**. O passo a passo completo, com calendário econômico, portas, backup e migração, está em [deploy/docker/README.md](deploy/docker/README.md).
+O painel fica em `http://127.0.0.1:8082`, só no loopback do servidor: de fora, pelo ngrok (ou um proxy reverso com HTTPS) do host, ou por um túnel SSH (`ssh -N -L 8082:127.0.0.1:8082 <usuário>@<servidor>`). Depois do login, crie os agentes em **Configurações > Agentes > Novo agente**. O passo a passo completo, com calendário econômico, portas, backup e migração, está em [deploy/docker/README.md](deploy/docker/README.md).
 
 ## Execução local (host)
 
@@ -245,6 +245,8 @@ O `config.yml` tem só o necessário para subir e acessar o banco. O resto fica 
 
 Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entre aspas simples. Assim, qualquer valor sem `'` funciona.
 
+Um `${VAR}` sem valor viraria texto vazio. Por isso o controller e o migrator não sobem quando falta (não definida ou vazia) uma variável de `database.dsn` ou de `secrets_key`, ou quando uma entrada do `env` de um `services` fica vazia, como o `MT5_BRIDGE_TOKEN` (sem token, a bridge do host aceitaria qualquer processo da máquina). Qualquer outra variável não definida gera um aviso no log, exceto as do `bootstrap`, que podem ser removidas depois do primeiro login.
+
 ## Uso
 
 ### Painel web
@@ -259,7 +261,7 @@ Os `${VAR}` são trocados no texto antes da leitura do YAML, por isso ficam entr
 **Criar um agente:** use **Configurações > Agentes > Novo agente**. O formulário pede:
 
 - tipo e modo;
-- endereço da API do agente;
+- endereço da API do agente, só no loopback (`localhost`, `127.0.0.0/8` ou `[::1]`, ex.: `localhost:5580`), porque só o controller da mesma máquina a acessa;
 - conta MT5 (bridge, magic, comentário);
 - modelo, para o agente LLM;
 - segredos;
@@ -414,16 +416,32 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 
 - **Painel** (`/api`): sessão por cookie. Métodos que alteram algo exigem o header `X-CSRF-Token` com o valor do cookie `csrf_token`.
   - `/api/auth/login`, `/api/auth/logout` e `/api/auth/session`;
-  - `/api/agents` e `/api/agents/{agente}/…`: proxy da API de cada agente (snapshot, eventos SSE, controles, decisões);
+  - `/api/agents` e `/api/agents/{agente}/…`: proxy da API de cada agente (snapshot, eventos SSE, controles, decisões). O proxy não repassa ao agente os cookies, `Authorization`, `Proxy-Authorization`, `X-CSRF-Token`, `Origin`, `Referer`, `Sec-Fetch-*`, `Forwarded` nem `X-Forwarded-*` do navegador. Da resposta do agente, só passam os headers do conteúdo (tipo, tamanho, `Content-Disposition`, cache), nunca `Set-Cookie`, e só os tipos que a API serve: JSON, `text/event-stream`, CSV, texto, as imagens PNG, JPEG, GIF e WebP dos anexos e os downloads (`Content-Disposition: attachment`). Qualquer outro tipo, como HTML ou SVG, vira `502`;
   - `/api/settings/agents[/{nome}[/restart]]`, `/api/prompts[/{id}]`, `/api/settings/telegram[/users[/{id}]]` e `/api/users[/{id}]`;
   - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory` e `outbox`.
+- **API de cada agente** (`ui`, no `api_address` dele): só responde ao controller. Exige um host do loopback no `Host`, recusa com `403` requisições de navegador (com `Origin`, ou `Sec-Fetch-Site` `cross-site`/`same-site`) e, num agente lançado pelo controller, as que não trazem `X-Xtrader-Agent-Key` com a chave daquele start. `POST`, `PUT`, `PATCH` e `DELETE` exigem `Content-Type: application/json`, mesmo sem corpo (senão `415`).
 
 ## Segurança
 
-- **Login:** senhas em bcrypt, sessão com cookie `HttpOnly` (e `Secure` atrás de proxy HTTPS) e proteção CSRF.
+- **Login:** senhas em bcrypt, sessão com cookie `HttpOnly` (e `Secure` atrás de proxy HTTPS) e proteção CSRF. Depois do login, só volta para uma página do próprio painel (`next` com caractere de controle, espaço, `\` ou outro site vai para `/`).
+- **Limite de tentativas de login:** é contado antes de conferir a senha, porque o bcrypt custa cerca de 250 ms de CPU do controller, que também roda os agentes:
+  - **por endereço do cliente** (rígido): um login por vez; depois de uma falha, o próximo só 1 s depois; a partir da 5ª falha seguida, a espera dobra a cada falha (2 s, 4 s, 8 s… até 5 min). As falhas são esquecidas 1 h depois da última;
+  - **por usuário** (mais folgado, somando todos os endereços, para que um atacante não bloqueie o usuário legítimo): 10 tentativas seguidas e depois 1 a cada 30 s. Um login certo zera esse limite;
+  - **no máximo 2 senhas conferidas ao mesmo tempo.**
+
+  O login recusado recebe `429` com `Retry-After`, sem conferir a senha, exista o usuário ou não (o tempo de um usuário inexistente é o mesmo, com um bcrypt falso). Um IPv6 conta pelo seu /64. Os contadores ficam na memória (no máximo 4096 endereços e 4096 usuários; cheios, um novo é recusado até os antigos expirarem) e zeram quando o controller reinicia. Um ataque distribuído (muitos endereços) contra um mesmo usuário pode atrasar o login dele enquanto durar: use senhas fortes.
+- **Proxy reverso:** `X-Forwarded-For` e `X-Forwarded-Proto` só valem quando a conexão vem de um proxy confiável, `ui.trusted_proxies` do `config.yml` (padrão: o loopback, onde roda o ngrok do host). O endereço do cliente, usado nos logs e no limite de login, é o último de `X-Forwarded-For` antes dos proxies confiáveis: os anteriores são informados pelo próprio cliente. No Docker, o ngrok do host chega ao controller pelo gateway da rede do compose (ex.: `172.18.0.1`), por isso o config do container confia na faixa privada do Docker, `172.16.0.0/12`; com a porta do painel publicada só no loopback do host, nenhum outro cliente chega por essa faixa.
+- **Sessões:** duram 7 dias, ficam na memória do controller (reiniciá-lo desloga todos) e são conferidas no banco a cada minuto: usuário desativado, apagado ou com outra senha (inclusive trocada por SQL ou pelo migrator) encerra a sessão. Com o banco fora do ar, a sessão segue por até 5 min desde a última conferência, para uma reinicialização do PostgreSQL não deslogar ninguém; depois, é recusada até o banco voltar, quando segue se nada mudou.
 - **Segredos:** cifrados no banco (AES-256-GCM), só de escrita no painel e nunca mostrados em respostas, logs ou no Telegram. O token do bot é mascarado nos logs.
 - **Agentes:** recebem um ambiente mínimo e um token novo a cada início, revogado quando saem.
+- **API dos agentes:** não tem login, então fica só no loopback. O painel recusa (`400`) um `api_address` fora de `localhost`, `127.0.0.0/8` e `[::1]`. Um agente gravado antes dessa regra com outro host (ex.: `0.0.0.0:5580`) não é lançado, não entra no painel nem é sondado, e o card dele mostra "Não iniciado" com o motivo; os demais seguem normalmente. Corrija o endereço nas configurações do agente. Antes de atualizar, confira com `SELECT name, api_address FROM agents;`.
+  - **Chave por start:** a cada início, o controller entrega ao agente uma chave aleatória (`XTRADER_AGENT_API_KEY`, separada do token da API interna) e a envia em `X-Xtrader-Agent-Key` no proxy, na sonda e no Telegram. O agente recusa (`403`) quem não a traz, então outro processo da máquina não opera o bot. Um agente rodado à parte (ex.: backtest com `-api`) não tem chave, e o painel o acessa sem ela.
+  - **Navegador:** uma página de outro site aberta num navegador da máquina alcança o `localhost`, mas a API recusa requisições com `Origin`, com `Sec-Fetch-Site` de outro site ou com outro `Host` (DNS rebinding), e só aceita alterações em JSON, que uma página de outro site não envia sem preflight. O proxy do painel confere a sessão e o CSRF e só depois remove esses headers.
+- **Cabeçalhos do painel:** todas as respostas levam `Content-Security-Policy` só com os arquivos do próprio painel (`default-src 'self'`; o script inline de configuração do `index.html` liberado pelo hash SHA-256; `frame-ancestors 'none'`; `object-src 'none'`; `base-uri 'none'`), além de `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` e `Referrer-Policy: same-origin`. Os diretórios do pacote do painel não são listados (`404`). Se o pacote não carrega, a página de erro mostra uma mensagem genérica, e o motivo vai só para o log (`ui: dashboard bundle unavailable`).
+- **Conexões lentas:** o painel, a API interna e a API de cada agente dão 10 s para os headers (no máximo 32 KiB) e 30 s para a requisição inteira, corpo incluído, e fecham uma conexão keep-alive ociosa depois de 2 min. A resposta não tem prazo, porque os eventos (SSE) e a espera longa da API interna duram mais que isso.
+- **Logs:** uma mensagem de quem não é usuário do bot do Telegram é recusada e registrada só pelo ID do remetente, no máximo uma linha por minuto (com a contagem das recusadas no intervalo), nunca o conteúdo. Um erro HTTP do servidor MCP do calendário guarda só o início do corpo (1 KiB), sem o token nem nada parecido com uma chave.
 - **Conta real:** exige **Permitir conta real** no agente. No container `mt5`, a bridge também tem `MT5_ALLOW_REAL` e `MT5_READ_ONLY`.
-- **Portas publicadas no Docker:** 8082 (painel), 5900 (VNC, que só sobe com senha) e 5432 (PostgreSQL). Num servidor com IP público, feche 5900 e 5432 no firewall ou use-os por túnel SSH.
+- **Portas publicadas no Docker:** só no loopback do host, `127.0.0.1:8082` (painel, para onde o ngrok do host tunela), `127.0.0.1:5900` (VNC, que só sobe com senha) e `127.0.0.1:5432` (PostgreSQL). O Docker publica as portas por fora do firewall do host (ufw), então uma porta em `0.0.0.0` ficaria aberta para a rede mesmo "fechada" no firewall. De outra máquina, use um túnel SSH, ex.: `ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` para o VNC e `ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>` para o `psql -h 127.0.0.1 -p 5433` (detalhes em [deploy/docker/README.md](deploy/docker/README.md#acesso-de-outra-máquina)).
+- **Dependências:** o `go.mod` fixa o toolchain (`toolchain go1.25.14`), com as correções de segurança da biblioteca padrão, e a imagem compila com o Go 1.26.8. Para conferir as vulnerabilidades conhecidas: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`.

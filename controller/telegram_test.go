@@ -638,3 +638,41 @@ func TestReanalysisTarget(t *testing.T) {
 		assert.Equal(t, tc.note, note, tc.payload)
 	}
 }
+
+// Anyone can write to the bot: an update of someone else is refused and
+// logged by the ID of its sender only, never its content, a line a minute at
+// most.
+func TestTelegram_RefusedUpdatesLogTheSenderOnly(t *testing.T) {
+	telegram, _ := newTestTelegram(t)
+	logs := captureLogs(t)
+
+	stranger := &tb.Message{Text: "/buy BTCUSDT 1 my-secret-text", Payload: "BTCUSDT 1 my-secret-text",
+		Sender: &tb.User{ID: 666, Username: "eve-the-stranger", FirstName: "Eve"},
+		Chat:   &tb.Chat{ID: 666, Username: "eve-the-stranger"}}
+	require.False(t, telegram.authorized(&tb.Update{ID: 1, Message: stranger}))
+	require.False(t, telegram.authorized(&tb.Update{ID: 2, Callback: &tb.Callback{Data: "my-secret-callback",
+		Sender: &tb.User{ID: 667, Username: "eve-the-stranger"}}}), "an update without a message")
+	require.True(t, telegram.authorized(&tb.Update{ID: 3, Message: command("/status")}), "the user")
+	for i := range 100 {
+		require.False(t, telegram.authorized(&tb.Update{ID: 4 + i, Message: stranger}))
+	}
+
+	text := logs.String()
+	assert.Contains(t, text, "the last of the user 666")
+	assert.Equal(t, 1, strings.Count(text, "telegram: refused"), "a line a minute at most: %s", text)
+	for _, content := range []string{"my-secret", "eve-the-stranger", "Eve", "BTCUSDT"} {
+		assert.NotContains(t, text, content)
+	}
+
+	// a minute after, the count of the ones in between
+	var r refusals
+	now := time.Now()
+	r.log(666, now)
+	for range 5 {
+		r.log(666, now.Add(time.Second))
+	}
+	r.log(0, now.Add(refusalLogEvery))
+	text = logs.String()
+	assert.Contains(t, text, "telegram: refused 6 update(s) of users not allowed, the last without a sender")
+	assert.Equal(t, 3, strings.Count(text, "telegram: refused"), text)
+}

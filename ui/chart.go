@@ -65,6 +65,7 @@ type Chart struct {
 
 	events *broker
 
+	key            string                                   // of the requests of the controller, see WithAPIKey
 	brokerPosition func(pair string) (BrokerPosition, bool) // see WithBrokerPositions
 	reporter       service.AccountReporter                  // see WithAccountReporter
 	currency       string                                   // of the account, once read
@@ -628,11 +629,12 @@ func (c *Chart) orderRowsByPair(pair string) [][]string {
 	return rows
 }
 
-// Start serves the API on the configured port, for the dashboard of
-// cmd/controller, whose database lists it. It blocks until the server stops.
+// Start serves the API on the configured port of the loopback, for the
+// dashboard of cmd/controller, whose database lists it, which reaches its
+// agents there only. It blocks until the server stops.
 func (c *Chart) Start() error {
 	fmt.Printf("Dashboard API available at http://localhost:%d/api, open it with cmd/controller\n", c.port)
-	return http.ListenAndServe(fmt.Sprintf(":%d", c.port), c.Handler())
+	return NewHTTPServer(fmt.Sprintf("localhost:%d", c.port), c.Handler()).ListenAndServe()
 }
 
 // Handler returns the HTTP handler of the API, under /api, for users who want

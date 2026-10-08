@@ -112,7 +112,8 @@ export function Login() {
     const controller = new AbortController();
     fetchSession(controller.signal)
       .then((authenticated) => {
-        if (authenticated) window.location.replace(nextPage(window.location.search));
+        if (authenticated)
+          window.location.replace(nextPage(window.location.search, window.location.origin));
         else setState("ready");
       })
       .catch((e) => {
@@ -129,7 +130,7 @@ export function Login() {
     setError(null);
     try {
       await login(username, password);
-      window.location.replace(nextPage(window.location.search)); // busy until it leaves
+      window.location.replace(nextPage(window.location.search, window.location.origin)); // busy until it leaves
     } catch (e) {
       if (e instanceof APIError && e.status === 503) setState("closed");
       setError(loginError(e));

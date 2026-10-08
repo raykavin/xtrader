@@ -555,6 +555,9 @@ func TestControls_Channels(t *testing.T) {
 		t.Helper()
 		req, err := http.NewRequest(method, srv.URL+path, nil)
 		require.NoError(t, err)
+		if method != http.MethodGet {
+			req.Header.Set("Content-Type", "application/json") // as the controller sends them
+		}
 		if channel != "" {
 			req.Header.Set(ChannelHeader, string(channel))
 		}

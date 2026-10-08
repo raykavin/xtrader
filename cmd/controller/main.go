@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -42,6 +41,7 @@ import (
 	"github.com/raykavin/xtrader/controller"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/tools/log"
+	"github.com/raykavin/xtrader/ui"
 )
 
 func main() {
@@ -58,6 +58,9 @@ func main() {
 		log.Fatal(fmt.Errorf("log.level: %w", err))
 	}
 	log.SetLevel(level)
+	for _, warning := range cfg.Warnings {
+		log.Warnf("config %s: %s", *configFile, warning)
+	}
 
 	key, err := cfg.Key()
 	if err != nil {
@@ -86,7 +89,11 @@ func main() {
 		}
 	}
 
-	options := []controller.DashboardOption{controller.WithUsers(st)}
+	proxies, err := cfg.UI.Proxies()
+	if err != nil {
+		log.Fatal(err)
+	}
+	options := []controller.DashboardOption{controller.WithUsers(st), controller.WithTrustedProxies(proxies)}
 	if cfg.UI.Dir != "" {
 		options = append(options, controller.WithUIDir(cfg.UI.Dir))
 	}
@@ -114,13 +121,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	internal := &http.Server{Handler: manager.InternalHandler(), ReadHeaderTimeout: 10 * time.Second}
+	internal := ui.NewHTTPServer("", manager.InternalHandler())
 	go func() {
 		if err := internal.Serve(internalListener); !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()
-	server := &http.Server{Handler: dashboard.Handler(ctx), ReadHeaderTimeout: 10 * time.Second}
+	server := ui.NewHTTPServer("", dashboard.Handler(ctx))
 	go func() {
 		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)

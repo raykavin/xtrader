@@ -39,7 +39,7 @@ services:
     networks:
       xtrader:
     ports:
-      - "8082:8080" # WEB_UI
+      - "127.0.0.1:8082:8080" # WEB_UI
       # - "8090:8090" # INTERNAL AGENTS API
       # - "5580:5580" # LLM AGENT API
     restart: always
@@ -91,7 +91,7 @@ services:
     ports:
       # - "18812:18812" # BRIDGE
       # - "22347:22347" # MCP SERVER
-      - "5900:5900" # VNC
+      - "127.0.0.1:5900:5900" # VNC
     restart: always
     volumes:
       - ./services/mt5/data:/data
@@ -115,7 +115,7 @@ services:
     networks:
       xtrader:
     ports:
-      - "5432:5432" # POSTGRES
+      - "127.0.0.1:5432:5432" # POSTGRES
     restart: always
     volumes:
       - ./services/postgres/data:/var/lib/postgresql

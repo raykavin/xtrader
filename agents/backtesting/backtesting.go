@@ -101,7 +101,7 @@ func main() {
 	// Print bot results
 	bot.Summary()
 
-	// Serve the chart on :5555, the API of the bot the web dashboard of
+	// Serve the chart on localhost:5555, the API of the bot the web dashboard of
 	// cmd/controller shows for an agent of its database at localhost:5555
 	err = chart.Start()
 	if err != nil {

@@ -11,7 +11,9 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,10 +45,17 @@ const (
 	// sessionTTL is how long a session lasts from the login.
 	sessionTTL = 7 * 24 * time.Hour
 	// sessionCheck is how often a session checks that its user is still
-	// enabled, eg: disabled by another way than the dashboard.
+	// enabled, with the same password, eg: changed by another way than the
+	// dashboard.
 	sessionCheck = time.Minute
-	// failedLoginDelay delays each failed login, one at a time: a password
-	// can't be guessed faster than one try per delay.
+	// sessionGrace is how long a session goes on, since its user was last
+	// checked, while the database can't tell: a restart of PostgreSQL doesn't
+	// log everybody out, but a user disabled or with a new password meanwhile
+	// can't go on for long. Beyond, the session is refused until the database
+	// answers again.
+	sessionGrace = 5 * time.Minute
+	// failedLoginDelay delays the answer to a failed login, and the next login
+	// of its address, see loginLimiter.
 	failedLoginDelay = time.Second
 	// maxLoginBody is the size of the payload of a login at most.
 	maxLoginBody = 4 << 10
@@ -63,31 +72,39 @@ type Users interface {
 	CountUsers(ctx context.Context) (int64, error)
 }
 
-// session is a session open: its user, its CSRF token, when it expires and
-// when its user was last found enabled.
+// session is a session open: its user, the mark of its password (see
+// passwordMark), its CSRF token, when it expires and when its user was last
+// found enabled with the same password.
 type session struct {
 	userID   int64
 	username string
+	password string
 	csrf     string
 	expires  time.Time
 	checked  time.Time
 }
 
-// auth is the login of the dashboard: its users and the sessions open.
+// auth is the login of the dashboard: its users, the limits of the logins,
+// the proxies in front of it and the sessions open.
 type auth struct {
 	users Users
 
 	now       func() time.Time
 	failDelay time.Duration
-	failMu    sync.Mutex // the failed logins, one at a time
+	limiter   *loginLimiter
+	proxies   []netip.Prefix // trusted with X-Forwarded-For and X-Forwarded-Proto
 	hasUsers  atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]*session // by the hash of their ID
 }
 
+// loopback is the proxies trusted by default: eg, ngrok on the host.
+var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
+
 func newAuth(users Users) *auth {
-	return &auth{users: users, now: time.Now, failDelay: failedLoginDelay, sessions: make(map[string]*session)}
+	return &auth{users: users, now: time.Now, failDelay: failedLoginDelay, limiter: newLoginLimiter(),
+		proxies: loopback, sessions: make(map[string]*session)}
 }
 
 // configured reports whether the dashboard has users to log in with.
@@ -164,8 +181,10 @@ func validCSRF(r *http.Request, s *session) bool {
 }
 
 // handleLogin opens a session for the credentials of the request, in its
-// cookies. The answer to wrong credentials doesn't tell which one is wrong,
-// and comes after failDelay.
+// cookies, within the limits of the logins (see loginLimiter): beyond, 429
+// with Retry-After, the password unchecked. The answer to wrong credentials
+// doesn't tell which one is wrong, and comes after failDelay, or as soon as
+// the request ends.
 func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !a.configured(r.Context()) {
 		writeJSONError(w, http.StatusServiceUnavailable, errNoUsers)
@@ -176,20 +195,30 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
+	client := a.clientAddress(r)
+	ticket, refusal := a.limiter.admit(clientKey(client), request.Username, a.now())
+	if refusal != nil {
+		log.Debugf("ui: login from %s refused: %s", client, refusal.reason)
+		w.Header().Set("Retry-After", strconv.Itoa(refusal.retryAfter()))
+		writeJSONError(w, http.StatusTooManyRequests, refusal.reason)
+		return
+	}
+	defer ticket.finish(loginAborted, a.now(), 0) // a panic of the store
 	user, err := a.users.Authenticate(r.Context(), request.Username, request.Password)
 	if errors.Is(err, store.ErrCredentials) {
-		a.failMu.Lock()
-		time.Sleep(a.failDelay)
-		a.failMu.Unlock()
-		log.Warnf("ui: failed login from %s", clientAddress(r))
+		failures, wait := ticket.finish(loginFailed, a.now(), a.failDelay)
+		log.Warnf("ui: failed login from %s (%d in a row, the next one in %v)", client, failures, wait)
+		pause(r.Context(), a.failDelay)
 		writeJSONError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 	if err != nil {
+		ticket.finish(loginAborted, a.now(), 0)
 		log.Errorf("ui: login: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "the login failed, try again")
 		return
 	}
+	ticket.finish(loginSucceeded, a.now(), 0)
 
 	id, s, err := a.open(user)
 	if err != nil {
@@ -198,8 +227,21 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setCookies(w, r, id, s)
-	log.Infof("ui: login of %s from %s", user.Username, clientAddress(r))
+	log.Infof("ui: login of %s from %s", user.Username, client)
 	writeJSON(w, ui.SessionResponse{Authenticated: true, Username: user.Username})
+}
+
+// pause waits for d, or less if ctx ends first.
+func pause(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 // setCookies sets the cookies of the session s of id: the session, HttpOnly,
@@ -207,9 +249,9 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (a *auth) setCookies(w http.ResponseWriter, r *http.Request, id string, s *session) {
 	maxAge := int(sessionTTL.Seconds())
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", Expires: s.expires, MaxAge: maxAge,
-		HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode})
+		HttpOnly: true, Secure: a.secure(r), SameSite: http.SameSiteLaxMode})
 	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: s.csrf, Path: "/", Expires: s.expires, MaxAge: maxAge,
-		Secure: secure(r), SameSite: http.SameSiteStrictMode})
+		Secure: a.secure(r), SameSite: http.SameSiteStrictMode})
 }
 
 // handleLogout closes the session of the request, if any, and clears its
@@ -226,7 +268,7 @@ func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, name := range []string{sessionCookie, csrfCookie} {
 		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == sessionCookie,
-			Secure: secure(r), SameSite: http.SameSiteLaxMode})
+			Secure: a.secure(r), SameSite: http.SameSiteLaxMode})
 	}
 	writeJSON(w, ui.SessionResponse{Authenticated: false})
 }
@@ -266,14 +308,17 @@ func (a *auth) open(user store.User) (string, *session, error) {
 			delete(a.sessions, key)
 		}
 	}
-	s := &session{userID: user.ID, username: user.Username, csrf: csrf, expires: now.Add(sessionTTL), checked: now}
+	s := &session{userID: user.ID, username: user.Username, password: passwordMark(user), csrf: csrf,
+		expires: now.Add(sessionTTL), checked: now}
 	a.sessions[sessionKey(id)] = s
 	return id, s, nil
 }
 
 // session returns the session of the request, open and not expired, nil for
 // none: its user checked again every sessionCheck, the session closed once the
-// user is disabled or deleted.
+// user is disabled, deleted or has another password. While the database can't
+// tell, the session goes on for sessionGrace since the last check, then is
+// refused, kept for when the database answers again.
 func (a *auth) session(r *http.Request) *session {
 	if a.users == nil {
 		return nil
@@ -302,17 +347,36 @@ func (a *auth) session(r *http.Request) *session {
 
 	user, err := a.users.User(r.Context(), s.userID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		log.Warnf("ui: the user of a session: %v", err)
-		return s // the database out of reach: the session goes on meanwhile
+		a.mu.Lock()
+		unchecked := now.Sub(s.checked)
+		a.mu.Unlock()
+		if unchecked < sessionGrace {
+			log.Warnf("ui: the user of a session: %v: the session goes on meanwhile", err)
+			return s
+		}
+		log.Warnf("ui: the user of a session: %v: unchecked for %v, the session refused", err,
+			unchecked.Round(time.Second))
+		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err != nil || !user.Enabled {
+	if a.sessions[key] != s {
+		return nil // closed meanwhile, eg: a new password
+	}
+	if err != nil || !user.Enabled || subtle.ConstantTimeCompare([]byte(passwordMark(user)), []byte(s.password)) != 1 {
 		delete(a.sessions, key)
 		return nil
 	}
 	s.checked = now
 	return s
+}
+
+// passwordMark is the mark of the password of user its sessions keep, to end
+// once it changes: a prefix of the SHA-256 of its hash, the hash itself not
+// kept.
+func passwordMark(user store.User) string {
+	sum := sha256.Sum256([]byte(user.PasswordHash))
+	return hex.EncodeToString(sum[:8])
 }
 
 // closeUser closes the sessions of the user of id, eg: disabled, or with a new
@@ -344,30 +408,100 @@ func sessionKey(id string) string {
 }
 
 // secure reports whether the request came over HTTPS, directly or through a
-// proxy (eg: ngrok): its cookies are then only sent over HTTPS.
-func secure(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// trusted proxy (eg: ngrok): its cookies are then only sent over HTTPS.
+func (a *auth) secure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !a.trusted(remoteIP(r)) {
+		return false
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
 // safeNext returns the page to go to after the login: next when it is a path
-// of the dashboard, else its root, never another site.
+// of the dashboard, else its root, never another site nor the login. The
+// browsers drop the tabs and the newlines of a URL and read a backslash as a
+// slash, so that "/\t/x" goes to the site x: none of them, nor a space, is
+// taken. Nor is an empty segment of the path: the browsers remove the dot
+// segments, so that "/.//x" (or "/%2e//x") is "//x", the site x.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") ||
-		strings.HasPrefix(next, "/login") {
+	if strings.ContainsFunc(next, func(c rune) bool { return c <= ' ' || c == 0x7f || c == '\\' }) ||
+		!strings.HasPrefix(next, "/") || strings.HasPrefix(next, "/login") {
+		return "/"
+	}
+	pathOf := next
+	if i := strings.IndexAny(next, "?#"); i >= 0 {
+		pathOf = next[:i]
+	}
+	if strings.Contains(pathOf, "//") {
+		return "/"
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" ||
+		!strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "/login") {
 		return "/"
 	}
 	return next
 }
 
-// clientAddress is the address of the client of the request for the logs: the
-// first one of X-Forwarded-For behind a proxy, else the remote one.
-func clientAddress(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		first, _, _ := strings.Cut(forwarded, ",")
-		return strings.TrimSpace(first)
+// clientAddress is the address of the client of the request, for the logs and
+// the limits of the logins: from a trusted proxy, the last address of
+// X-Forwarded-For before the trusted ones (the ones before it are the word
+// of the client), else the remote one.
+func (a *auth) clientAddress(r *http.Request) string {
+	remote := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
 	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	if !a.trusted(remoteIP(r)) {
+		return remote
 	}
-	return r.RemoteAddr
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	client := remote
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := strings.TrimSpace(hops[i])
+		if hop == "" && len(hops) == 1 {
+			break // no header
+		}
+		ip, err := netip.ParseAddr(hop)
+		if err != nil {
+			if addrPort, portErr := netip.ParseAddrPort(hop); portErr == nil {
+				ip, err = addrPort.Addr(), nil
+			}
+		}
+		if err != nil {
+			break // a proxy wouldn't: the last trusted one is the client
+		}
+		client = ip.Unmap().WithZone("").String()
+		if !a.trusted(ip) {
+			break
+		}
+	}
+	return client
+}
+
+// remoteIP returns the IP of the remote address of the request, invalid for
+// none, eg: a test.
+func remoteIP(r *http.Request) netip.Addr {
+	if addrPort, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return addrPort.Addr()
+	}
+	ip, _ := netip.ParseAddr(r.RemoteAddr)
+	return ip
+}
+
+// trusted reports whether ip is the one of a trusted proxy.
+func (a *auth) trusted(ip netip.Addr) bool {
+	if !ip.IsValid() {
+		return false
+	}
+	ip = ip.Unmap().WithZone("")
+	for _, proxy := range a.proxies {
+		if proxy.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

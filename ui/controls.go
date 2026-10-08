@@ -65,9 +65,10 @@ func channelOf(r *http.Request) Channel {
 // disabled and the panel is hidden; but the web dashboard starts and stops the
 // bot of a controller whatever its channels, which gate its orders.
 //
-// Anyone with access to the dashboard port can operate the bot once this is
-// set, the channel being a header of the requests; keep the port private
-// (localhost, VPN or an authenticating proxy).
+// The channel is a header of the requests, which the API takes from its
+// controller only (see guard): an agent the controller launched wants the key
+// of its start (WithAPIKey), but one run on its own answers any process of its
+// machine, so keep its port on the loopback.
 func (c *Chart) SetOrderController(controller OrderController, channels ...Channel) {
 	if len(channels) == 0 {
 		channels = []Channel{ChannelWeb, ChannelTelegram}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -64,6 +65,12 @@ const (
 // images the dashboard shows; the others are downloads, never rendered by the
 // browser: an SVG may hold scripts.
 var imageTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+// ImageType reports whether mediaType is the one of an image the dashboard
+// shows as it is, an attachment of a decision: the others are downloads.
+func ImageType(mediaType string) bool {
+	return slices.Contains(imageTypes, strings.ToLower(strings.TrimSpace(mediaType)))
+}
 
 // llm returns the language model of the strategy, nil for a strategy of
 // another kind.
@@ -188,13 +195,8 @@ func (c *Chart) handleDecisionAttachment(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=86400, immutable") // a decision never changes its files
-	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
-	isImage := false
-	for _, image := range imageTypes {
-		isImage = isImage || mediaType == image
-	}
-	if isImage {
-		w.Header().Set("Content-Type", mediaType)
+	if ImageType(mediaType) {
+		w.Header().Set("Content-Type", strings.ToLower(strings.TrimSpace(mediaType)))
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", "attachment")

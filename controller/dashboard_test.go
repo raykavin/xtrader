@@ -179,17 +179,27 @@ func TestNewDashboard(t *testing.T) {
 		_, err := NewDashboard([]Agent{{Name: "bot", Address: address}})
 		require.ErrorContains(t, err, "agent bot", address)
 	}
+	// the API of an agent answers whoever reaches it: the dashboard reaches
+	// the ones of its machine only, never sending its requests elsewhere
+	for _, address := range []string{"https://bots.local/rk", "10.0.0.5:5555", "169.254.169.254:80",
+		"0.0.0.0:5555", "[::]:5555", "localhost.evil.example:5555", "[::ffff:10.0.0.5]:5555"} {
+		_, err := NewDashboard([]Agent{{Name: "bot", Address: address}})
+		require.ErrorContains(t, err, "isn't on the loopback", address)
+	}
 
 	d, err = NewDashboard([]Agent{
 		{Name: "crossover", Address: "localhost:5555"},
-		{Name: "rk.trend_2", Address: "https://bots.local/rk"},
+		{Name: "rk.trend_2", Address: "https://LOCALHOST:5600/rk"},
+		{Name: "v4", Address: "127.0.0.2:5555"},
+		{Name: "v6", Address: "[::1]:5555"},
 	})
 	require.NoError(t, err)
-	require.Len(t, d.agents.list(), 2)
+	require.Len(t, d.agents.list(), 4)
 	crossover := agentNamed(t, d, "crossover")
 	assert.Equal(t, "http://localhost:5555/api", crossover.api.String())
 	assert.Equal(t, "/api", crossover.api.Path)
-	assert.Equal(t, "https://bots.local/rk/api", agentNamed(t, d, "rk.trend_2").api.String())
+	assert.Equal(t, "https://LOCALHOST:5600/rk/api", agentNamed(t, d, "rk.trend_2").api.String())
+	assert.Equal(t, "http://[::1]:5555/api", agentNamed(t, d, "v6").api.String())
 }
 
 // agentNamed returns the agent of name of the dashboard.
@@ -251,15 +261,21 @@ func TestDashboard_LocalBundleIsNotCached(t *testing.T) {
 }
 
 func TestDashboard_ErrorPageWhenBundleMissing(t *testing.T) {
-	srv := newDashboardServer(t, []Agent{{Name: "bot", Address: offlineAddress(t)}}, errors.New("boom: no network"))
+	srv := newDashboardServer(t, []Agent{{Name: "bot", Address: offlineAddress(t)}},
+		errors.New("boom: open /home/op/.cache/xtrader/ui/v1.0.0/app.js: no network"))
 
-	resp, body := get(t, srv.URL+"/")
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	assert.Contains(t, body, "boom: no network")
-	assert.Contains(t, body, "ui.dir: web/dist")
+	for _, path := range []string{"/", "/login", "/settings"} {
+		resp, body := get(t, srv.URL+path)
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, path)
+		assert.NotContains(t, body, "boom", "the reason in the log only, the login being public")
+		assert.NotContains(t, body, "/home/op", path)
+		assert.Contains(t, body, "log do controller", path)
+		assert.Contains(t, body, "ui.dir: web/dist", path)
+		assert.Equal(t, errorPolicy, resp.Header.Get("Content-Security-Policy"), path)
+	}
 
 	// API still works
-	resp, _ = get(t, srv.URL+"/api/agents")
+	resp, _ := get(t, srv.URL+"/api/agents")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// assets are not served

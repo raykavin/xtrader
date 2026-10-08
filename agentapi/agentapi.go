@@ -26,6 +26,10 @@ const (
 	// EnvToken is the variable of the token of the start of the agent, sent
 	// as Authorization: Bearer <token>.
 	EnvToken = "XTRADER_AGENT_TOKEN"
+	// EnvAPIKey is the variable of the key of the start of the agent the
+	// controller sends to its API, which wants it (see ui.WithAPIKey): apart
+	// from the token, which the API of the agent never gets.
+	EnvAPIKey = "XTRADER_AGENT_API_KEY"
 
 	// Prefix is the path of the routes of the internal API.
 	Prefix = "/internal/v1"

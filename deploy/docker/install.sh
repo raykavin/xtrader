@@ -108,3 +108,5 @@ fi
 
 echo "install: $target ready; fill in the .env of mt5 and the first user of the dashboard in the one of"
 echo "the controller (XTRADER_BOOTSTRAP_USERNAME and XTRADER_BOOTSTRAP_PASSWORD), then: cd $target && docker compose up -d"
+echo "install: the ports are published on the loopback of this host only (the dashboard on http://127.0.0.1:8082,"
+echo "VNC on 5900, PostgreSQL on 5432): from another machine, through an SSH tunnel (see deploy/docker/README.md)"

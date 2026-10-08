@@ -237,16 +237,34 @@ export function agentNameError(name: string): string | null {
 
 /**
  * Why the address of the API of an agent is refused, as the controller refuses
- * it, null when taken: host:port, the host a name or an IP address (an IPv6
- * one in brackets), and the port 1 to 65535.
+ * it, null when taken: host:port, the port 1 to 65535 and the host on the
+ * loopback (localhost, 127.0.0.0/8 or [::1]), as the API of an agent answers
+ * whoever reaches it.
  */
 export function addressError(address: string): string | null {
-  const match = /^(?:\[[A-Za-z0-9._:-]+\]|[A-Za-z0-9._-]+):(\d+)$/.exec(address.trim());
-  const port = Number(match?.[1]);
-  if (!(port >= 1 && port <= 65535)) {
+  const [, host = "", port = ""] =
+    /^(\[[A-Za-z0-9._:-]+\]|[A-Za-z0-9._-]+):(\d+)$/.exec(address.trim()) ?? [];
+  if (!(Number(port) >= 1 && Number(port) <= 65535)) {
     return "Use host:porta, com a porta de 1 a 65535, ex.: localhost:5580.";
   }
+  if (!loopbackHost(host)) {
+    return "Use um host do loopback (localhost, 127.0.0.1 ou [::1]): só o controller desta máquina acessa a API do agente.";
+  }
   return null;
+}
+
+/** Whether host, an IPv6 address in brackets, is localhost or on the loopback. */
+function loopbackHost(host: string): boolean {
+  if (host.toLowerCase() === "localhost") return true;
+  if (/^127(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(host)) return true;
+  if (!host.startsWith("[")) return false;
+  try {
+    // normalized, eg: [0:0:0:0:0:0:0:1] is [::1], [::ffff:127.0.0.1] is [::ffff:7f00:1]
+    const ip = new URL(`http://${host}/`).hostname;
+    return ip === "[::1]" || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(ip);
+  } catch {
+    return false;
+  }
 }
 
 /** Whether url parses with a host. */

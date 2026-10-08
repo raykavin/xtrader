@@ -31,10 +31,12 @@ import (
 // ones not sent are sent by its next start.
 const flushTimeout = 10 * time.Second
 
-// Agent is an agent launched by the controller: its settings, and what it
-// keeps through the controller once Open.
+// Agent is an agent launched by the controller: its settings, the key of its
+// API for this start (see ui.WithAPIKey), and what it keeps through the
+// controller once Open.
 type Agent struct {
 	Config agentapi.Config
+	APIKey string
 
 	client  *Client
 	outbox  *Outbox
@@ -58,7 +60,12 @@ func Connect(ctx context.Context) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return connect(ctx, client, os.Getenv(agentapi.EnvAgent))
+	a, err := connect(ctx, client, os.Getenv(agentapi.EnvAgent))
+	if err != nil {
+		return nil, err
+	}
+	a.APIKey = os.Getenv(agentapi.EnvAPIKey)
+	return a, nil
 }
 
 // connect reads the settings of the agent name with client.

@@ -8,10 +8,16 @@
 # Copy it to configs/config.yml, which git ignores. The ${VAR} are read from the
 # environment of the controller, the secrets never written here. They replace
 # the text before the YAML is read, so each stays between single quotes, which
-# take a value of any character but ':
+# take a value of any character but '. One without a value would be read as
+# nothing: the controller (and cmd/migrator) refuses to start when one of
+# database.dsn or secrets_key isn't set or is empty, or when an entry of the
+# env of a service is left empty, eg: MT5_BRIDGE_TOKEN, without which the
+# bridge accepts any process of the host; any other one not set is a warning
+# of the log, but the ones of bootstrap, removed once logged in:
 #
 #	export XTRADER_DB_PASSWORD='...'                           # of the user xtrader of PostgreSQL
 #	export XTRADER_SECRETS_KEY="$(head -c 32 /dev/urandom | base64)"  # once, kept: it encrypts the secrets
+#	export MT5_BRIDGE_TOKEN='...'                              # of the bridge of MT5 on the host (services)
 #	go run ./cmd/migrator -config configs/config.yml up        # the schema and the seeds
 #	go run ./cmd/controller -config configs/config.yml
 
@@ -46,6 +52,13 @@ bootstrap:
 ui:
   dir: web/dist
   # version: latest
+  # the reverse proxies in front of the dashboard (IPs or CIDRs), eg: ngrok on
+  # this host: only their X-Forwarded-For and X-Forwarded-Proto are believed,
+  # for the address of the client (logs and limits of the logins) and the
+  # Secure cookies. The loopback by default; never a range clients come from
+  # trusted_proxies:
+  #   - 127.0.0.0/8
+  #   - ::1/128
 
 agents:
   # the internal API the agents take their settings from and keep their
