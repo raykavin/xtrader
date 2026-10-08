@@ -58,32 +58,61 @@ func TestList(t *testing.T) {
 	require.Equal(t, map[string]float64{"BTCUSDm": 0.03, "XAUUSDm": 0.01}, sizes)
 }
 
+// -lot takes the lot of each pair by its name only, separated by ;.
+func TestLotsByPair(t *testing.T) {
+	pairs := []string{"BTCUSDm", "XAUUSDm"}
+	lots, err := lotsByPair(pairs, "")
+	require.NoError(t, err)
+	require.Nil(t, lots, "no lot: a share of the balance")
+
+	lots, err = lotsByPair(pairs, "BTCUSDm=0.01;XAUUSDm=0.02")
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"BTCUSDm": 0.01, "XAUUSDm": 0.02}, lots)
+	lots, err = lotsByPair(pairs, " XAUUSDm = 0.02 ; BTCUSDm=0.01;")
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"BTCUSDm": 0.01, "XAUUSDm": 0.02}, lots, "in any order, the blanks dropped")
+	lots, err = lotsByPair([]string{"XAUUSDm"}, "XAUUSDm=1.5")
+	require.NoError(t, err)
+	require.Equal(t, map[string]float64{"XAUUSDm": 1.5}, lots, "one pair, by its name too")
+
+	for value, want := range map[string]string{
+		"BTCUSDm=0.01":              "no size for XAUUSDm",
+		"BTCUSDm=0.01;EURUSDm=0.02": `"EURUSDm" isn't a pair of -pair (BTCUSDm,XAUUSDm)`,
+		"BTCUSDm=0.01;BTCUSDm=0.02": "BTCUSDm twice",
+		"BTCUSDm=0;XAUUSDm=0.02":    `invalid size "0" for BTCUSDm`,
+		"BTCUSDm=abc;XAUUSDm=0.02":  `invalid size "abc" for BTCUSDm`,
+		"BTCUSDm=0.01;0.02":         `"0.02" isn't PAIR=SIZE`,
+		"BTCUSDm=0,01;XAUUSDm=0,02": "has a comma",
+		"BTCUSDm=0.01,XAUUSDm=0.02": "has a comma",
+		// the formats of before, refused: one lot for all, the order of -pair
+		"0.01":      `"0.01" isn't PAIR=SIZE`,
+		"0.03;0.01": `"0.03" isn't PAIR=SIZE`,
+		"0.03,0.01": "has a comma",
+		"1,5":       "has a comma",
+	} {
+		lots, err = lotsByPair(pairs, value)
+		require.ErrorContains(t, err, "-lot: ", value)
+		require.ErrorContains(t, err, want, value)
+		require.ErrorContains(t, err, "eg: BTCUSDm=0.01;XAUUSDm=0.02", value)
+		require.Nil(t, lots, value)
+	}
+}
+
 func TestCorrelatedByPair(t *testing.T) {
 	pairs := []string{"BTCUSDm", "XAUUSDm"}
 	byPair, err := correlatedByPair(pairs, "")
 	require.NoError(t, err)
 	require.Nil(t, byPair)
 
-	// the same markets for all, each pair leaving itself out
-	byPair, err = correlatedByPair(pairs, "USTECm, XAUUSDm,DXYm")
+	// the ones of each pair by its name, the pairs separated by ;
+	byPair, err = correlatedByPair(pairs, "BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm")
 	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"BTCUSDm": {"USTECm", "XAUUSDm", "DXYm"}, "XAUUSDm": {"USTECm", "DXYm"}},
-		byPair)
-
-	byPair, err = correlatedByPair(pairs, "USTECm;XAUUSDm; DXYm")
-	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"BTCUSDm": {"USTECm", "XAUUSDm", "DXYm"}, "XAUUSDm": {"USTECm", "DXYm"}},
-		byPair, "separated by ;")
-
-	// the ones of each pair, a pair without any left out
-	byPair, err = correlatedByPair(pairs, "XAUUSDm=USTECm+DXYm, BTCUSDm=XAUUSDm+DXYm+USTECm")
-	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"XAUUSDm": {"USTECm", "DXYm"}, "BTCUSDm": {"XAUUSDm", "DXYm", "USTECm"}},
-		byPair, "the pairs separated by , too")
+	require.Equal(t, map[string][]string{"BTCUSDm": {"DXYm", "XAUUSDm"}, "XAUUSDm": {"DXYm", "USTECm"}}, byPair)
 	byPair, err = correlatedByPair(pairs, "XAUUSDm=USTECm+DXYm; BTCUSDm = XAUUSDm + DXYm + USTECm ;")
 	require.NoError(t, err)
 	require.Equal(t, map[string][]string{"XAUUSDm": {"USTECm", "DXYm"}, "BTCUSDm": {"XAUUSDm", "DXYm", "USTECm"}},
-		byPair)
+		byPair, "in any order, the blanks dropped")
+	// a pair without any left out
 	byPair, err = correlatedByPair(pairs, "XAUUSDm=DXYm")
 	require.NoError(t, err)
 	require.Equal(t, map[string][]string{"XAUUSDm": {"DXYm"}}, byPair)
@@ -93,9 +122,13 @@ func TestCorrelatedByPair(t *testing.T) {
 		"XAUUSDm=DXYm;XAUUSDm=USTEC": "XAUUSDm twice",
 		"XAUUSDm=XAUUSDm+DXYm":       "XAUUSDm among its own markets",
 		"XAUUSDm=":                   "no market for XAUUSDm",
-		"XAUUSDm=DXYm,USTECm":        `"USTECm" isn't PAIR=MARKET+MARKET`,
 		"XAUUSDm=DXYm=USTECm":        "isn't PAIR=MARKET+MARKET",
 		"=DXYm":                      "isn't PAIR=MARKET+MARKET",
+		// the formats of before, refused: one list for all the pairs, a comma
+		"USTECm;XAUUSDm;DXYm":                              `"USTECm" isn't PAIR=MARKET+MARKET`,
+		"USTECm, XAUUSDm,DXYm":                             "has a comma",
+		"XAUUSDm=USTECm+DXYm, BTCUSDm=XAUUSDm+DXYm+USTECm": "has a comma",
+		"XAUUSDm=DXYm,USTECm":                              "has a comma",
 	} {
 		_, err = correlatedByPair(pairs, value)
 		require.ErrorContains(t, err, want, value)
