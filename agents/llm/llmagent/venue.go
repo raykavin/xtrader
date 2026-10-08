@@ -151,6 +151,36 @@ func sizesOf(name string, pairs []string, value string) (map[string]float64, err
 	return sizesByPair(name, pairs, sizes)
 }
 
+// lotsByPair reads -lot: the lot of every pair of -pair by its name, PAIR=SIZE,
+// the pairs separated by ;, eg: BTCUSDm=0.01;XAUUSDm=0.02, the decimals with a
+// dot. A size for all the pairs, sizes in the order of -pair and a comma are
+// refused. It returns nil without any: a share of the balance.
+func lotsByPair(pairs []string, value string) (map[string]float64, error) {
+	const want = "the lot of each pair by its name, separated by ;, eg: BTCUSDm=0.01;XAUUSDm=0.02"
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if strings.Contains(value, ",") {
+		return nil, fmt.Errorf("-lot: %q has a comma, the decimals go with a dot: %s", value, want)
+	}
+	var sizes []string
+	for _, item := range strings.Split(value, ";") {
+		if item = strings.TrimSpace(item); item == "" {
+			continue
+		}
+		if !strings.Contains(item, "=") {
+			return nil, fmt.Errorf("-lot: %q isn't PAIR=SIZE: %s", item, want)
+		}
+		sizes = append(sizes, item)
+	}
+	lots, err := sizesByPair("-lot", pairs, sizes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, want)
+	}
+	return lots, nil
+}
+
 // sizesByPair maps the positive sizes of the flag name to the pairs: one for
 // all of them, one per pair in the same order, or one by pair, each PAIR=SIZE,
 // eg: BTCUSDm=0.03,XAUUSDm=0.01, every pair with its own. It returns nil

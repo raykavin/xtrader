@@ -48,20 +48,20 @@ import (
 //
 //	# the market data of the bridge, trading a paper wallet
 //	OPENAI_API_KEY=... go run ./agents/llm/llmagent -llm-provider openai -llm-model gpt-5 \
-//		-mode paper -pair BTCUSDm -lot 0.01
+//		-mode paper -pair BTCUSDm -lot BTCUSDm=0.01
 //	# the same with the economic calendar of the terminal in the context, no
 //	# entry from 15 minutes before a release of high importance to 15 after
 //	MT5_MCP_TOKEN=... go run ./agents/llm/llmagent -llm-provider anthropic -llm-model claude-sonnet-5 \
-//		-mode paper -pair XAUUSDm -lot 0.01 -timeframe 5m -calendar-mcp http://127.0.0.1:22346/mcp
+//		-mode paper -pair XAUUSDm -lot XAUUSDm=0.01 -timeframe 5m -calendar-mcp http://127.0.0.1:22346/mcp
 //	# a backtest asks the model on every candle of the file: mind the costs
 //	go run ./agents/llm/llmagent -llm-provider anthropic -llm-model claude-sonnet-5 \
-//		-pair BTCUSDm -lot 0.01 -timeframe 1h -csv btc-1h.csv
+//		-pair BTCUSDm -lot BTCUSDm=0.01 -timeframe 1h -csv btc-1h.csv
 //	# a prompt of the database saved to a file, eg: the Supertrend flips of
 //	# agents/trendagent, its indicators (and whether its entries go without a
 //	# take profit) read from its header
 //	go run ./agents/llm/llmagent -llm-provider openai -llm-model gpt-5-mini \
 //		-prompt-path supertrend.txt -llm-min-rr 0 -llm-min-stop-atr 0 \
-//		-pair BTCUSDm -lot 0.01 -timeframe 15m -csv btc-15m.csv
+//		-pair BTCUSDm -lot BTCUSDm=0.01 -timeframe 15m -csv btc-15m.csv
 //
 // The model never trades itself: each entry is a market order with the stop
 // loss and take profit of the decision at the broker, which places them with
@@ -99,7 +99,7 @@ func run() error {
 		structure     = flag.Int("llm-structure", cfg.StructureCandles, "candles the price structure of the context is computed on: its swings, levels, round numbers and candle patterns (0: none)")
 		higherTFs     = flag.String("llm-higher-timeframes", "", "higher timeframes of the context, separated by ;, eg: 1h;4h, read from the exchange with the levels of the previous day and week (default: the two above -timeframe; none: none)")
 		higherRows    = flag.Int("llm-higher-candles", cfg.HigherCandles, "candles of each higher timeframe sent as rows, their levels computed on 200")
-		correlated    = flag.String("llm-correlated", "", "markets correlated with the pairs, read from the exchange on -timeframe: the same for all, separated by ;, each pair leaving itself out, eg: USTECm;XAUUSDm;DXYm on MT5; or the ones of each pair, their markets joined by +, eg: XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm")
+		correlated    = flag.String("llm-correlated", "", "markets correlated with the pairs, read from the exchange on -timeframe: the ones of each pair by its name, their markets joined by +, the pairs separated by ;, eg: BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm, a pair left out without any (one list for all the pairs and a comma are refused)")
 		memory        = flag.Int("llm-memory", cfg.Memory, "last decisions and trades closed of the pair recalled in the context (0: none)")
 		warmup        = flag.Int("llm-warmup", 0, "candles kept at least: the room of the prompts switched while the agent runs, whose indicators may need more history than its first one (default: 1000 launched by the controller, else what the prompt needs)")
 		indicators    = flag.String("llm-indicators", "", "indicators drawn on the chart and sent to the model, separated by ;: groups alone, of "+strings.Join(llm.IndicatorGroups, ", ")+", or kinds with their parameters joined by spaces or +, eg: ema+20+50;supertrend+10+3, of: "+strings.Join(llm.IndicatorKinds, "; ")+" (default: the '# Indicators:' of the prompt, else all the groups)")
@@ -117,7 +117,7 @@ func run() error {
 		pairList      = flag.String("pair", agentapi.DefaultPair, "pairs to trade, separated by ;, eg: XAUUSDm;BTCUSDm")
 		timeframe     = flag.String("timeframe", cfg.Timeframe, "timeframe of the candles, one decision per candle close")
 		direction     = flag.String("direction", "both", "side of the positions opened: both, buy or sell")
-		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01; the decimals with . (a decimal comma, eg: 1,5, is refused)")
+		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit: the lot of each pair of -pair by its name, separated by ;, eg: BTCUSDm=0.01;XAUUSDm=0.02, the decimals with . (one for all the pairs, the order of -pair and a comma are refused)")
 		fraction      = flag.Float64("position-fraction", cfg.PositionFraction, "share of the free balance each position commits (0-1], without -lot")
 		leverage      = flag.Float64("leverage", cfg.Leverage, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
 		minValue      = flag.Float64("min-position-value", cfg.MinPositionValue, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
@@ -237,7 +237,7 @@ func run() error {
 	if len(pairs) == 0 {
 		return errors.New("-pair: no pair to trade")
 	}
-	lots, err := sizesOf("-lot", pairs, *lotList)
+	lots, err := lotsByPair(pairs, *lotList)
 	if err != nil {
 		return err
 	}
@@ -774,34 +774,30 @@ func calendarConfig(cfg *llm.Config, set map[string]bool, url, token string, cur
 	return nil
 }
 
-// correlatedByPair reads -llm-correlated: the markets of every pair, a list
-// (see list), each pair leaving itself out, eg: USTECm;XAUUSDm;DXYm; or the
-// ones of each pair, the pairs separated as the items of a list and their
-// markets joined by +, eg: XAUUSDm=USTECm+DXYm;BTCUSDm=XAUUSDm+DXYm+USTECm, a
-// pair left out without any. It returns nil without any.
+// correlatedByPair reads -llm-correlated: the markets of each pair by its name,
+// joined by +, the pairs separated by ;, eg:
+// BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm, a pair left out without any. One
+// list for all the pairs and a comma are refused. It returns nil without any.
 func correlatedByPair(pairs []string, value string) (map[string][]string, error) {
+	const want = "the markets of each pair by its name, joined by +, the pairs separated by ;, " +
+		"eg: BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm"
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, nil
 	}
-	byPair := make(map[string][]string, len(pairs))
-	if !strings.Contains(value, "=") {
-		markets := list(value)
-		for _, pair := range pairs {
-			for _, market := range markets {
-				if market != pair {
-					byPair[pair] = append(byPair[pair], market)
-				}
-			}
-		}
-		return byPair, nil
+	if strings.Contains(value, ",") {
+		return nil, fmt.Errorf("-llm-correlated: %q has a comma: %s", value, want)
 	}
-	for _, entry := range list(value) {
+	byPair := make(map[string][]string, len(pairs))
+	for _, entry := range strings.Split(value, ";") {
+		if entry = strings.TrimSpace(entry); entry == "" {
+			continue
+		}
 		pair, markets, ok := strings.Cut(entry, "=")
 		pair = strings.TrimSpace(pair)
 		switch _, seen := byPair[pair]; {
 		case !ok || pair == "" || strings.Contains(markets, "="):
-			return nil, fmt.Errorf("-llm-correlated: %q isn't PAIR=MARKET+MARKET", entry)
+			return nil, fmt.Errorf("-llm-correlated: %q isn't PAIR=MARKET+MARKET: %s", entry, want)
 		case !slices.Contains(pairs, pair):
 			return nil, fmt.Errorf("-llm-correlated: %q isn't a pair of -pair (%s)", pair, strings.Join(pairs, ","))
 		case seen:

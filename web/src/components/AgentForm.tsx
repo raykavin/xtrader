@@ -470,8 +470,11 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
               <code>pair = XAUUSDm</code>, <code>lot = 0.01</code>, <code>timeframe = 15m</code>.
               Nas listas, separe os itens com <code>;</code>, ex.:{" "}
               <code>pair = BTCUSDm;XAUUSDm</code> e o lote de cada par,{" "}
-              <code>lot = BTCUSDm=0.03;XAUUSDm=0.01</code>. Decimais com ponto:{" "}
-              <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado.
+              <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code>. Decimais com ponto:{" "}
+              <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado. No
+              agente LLM, o lote e os mercados correlacionados vão sempre por par:{" "}
+              <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code> e{" "}
+              <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>.
             </>
           }
         >

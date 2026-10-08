@@ -35,10 +35,10 @@ agents:
       - -prompt-path agents/llm/prompts/trend_following.txt
       - -llm-setup free -llm-max-spread-atr 0.2
       - -llm-min-stop-atr 1 -llm-higher-trend-required
-      - -llm-higher-timeframes 4h -llm-correlated USTECm,XAUUSDm,DXYm
+      - -llm-higher-timeframes 4h -llm-correlated BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm
       - >-
         -mode live -exchange mt5 -mt5-bridge http://mt5:18812
-        -pair BTCUSDm,XAUUSDm -timeframe 30m -lot 0.03,0.01 -leverage 400
+        -pair BTCUSDm,XAUUSDm -timeframe 30m -lot BTCUSDm=0.01;XAUUSDm=0.02 -leverage 400
         -calendar-mcp http://mt5:22347/mcp -calendar-importance high
         -trade-panel -telegram-control
       - -api localhost:5580

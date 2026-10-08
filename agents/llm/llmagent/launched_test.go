@@ -129,7 +129,7 @@ func TestRun_LotWithADecimalCommaRefused(t *testing.T) {
 		Account: &agentapi.Account{},
 		LLM:     &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test"}}
 	requests, err := launchedRun(t, cfg)
-	require.ErrorContains(t, err, `-lot: "1,5" is ambiguous, the comma may be a decimal one`)
+	require.ErrorContains(t, err, `-lot: "1,5" has a comma`)
 	require.Zero(t, requests, "never connected")
 }
 
