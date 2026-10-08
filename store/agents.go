@@ -556,8 +556,9 @@ func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 // their secrets encrypted: checked (see checkAgent), its API at an address no
 // other agent has and, trading, positions no other agent trading trades
 // (ErrConflict otherwise, see checkBookFree), its params given merged or apart
-// (see Agent.AllParams), its prompt one of the database. An agent without a
-// position, 0, goes after the others on the dashboard.
+// (see Agent.AllParams), its prompt one of the database, not deleted, nor
+// meanwhile (see sharePrompt). An agent without a position, 0, goes after the
+// others on the dashboard.
 func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecrets) (Agent, error) {
 	agent = normalized(agent)
 	agent.ID = 0
@@ -582,7 +583,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 			return err
 		}
 		if llm != nil && llm.PromptID != nil {
-			_, err := s.Prompt(ctx, *llm.PromptID)
+			err := s.sharePrompt(ctx, *llm.PromptID)
 			if errors.Is(err, ErrNotFound) {
 				return fmt.Errorf("%w: agent %s: prompt %d doesn't exist", ErrInvalid, agent.Name, *llm.PromptID)
 			}
@@ -602,7 +603,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 		}
 		if account != nil {
 			account.AgentID = agent.ID
-			if err := s.sealInto(&account.BridgeToken, secrets.BridgeToken); err != nil {
+			if err := s.sealInto(&account.BridgeToken, bridgeTokenOf(agent.ID), secrets.BridgeToken); err != nil {
 				return err
 			}
 			if err := s.conn(ctx).Create(account).Error; err != nil {
@@ -611,10 +612,10 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 		}
 		if llm != nil {
 			llm.AgentID = agent.ID
-			if err := s.sealInto(&llm.APIKey, secrets.LLMAPIKey); err != nil {
+			if err := s.sealInto(&llm.APIKey, llmAPIKeyOf(agent.ID), secrets.LLMAPIKey); err != nil {
 				return err
 			}
-			if err := s.sealInto(&llm.CalendarToken, secrets.CalendarToken); err != nil {
+			if err := s.sealInto(&llm.CalendarToken, calendarTokenOf(agent.ID), secrets.CalendarToken); err != nil {
 				return err
 			}
 			if err := s.conn(ctx).Create(llm).Error; err != nil {
@@ -715,12 +716,12 @@ func localHost(host string) bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
-// sealInto encrypts secret into column, when set.
-func (s *Store) sealInto(column *[]byte, secret Secret) error {
+// sealInto encrypts secret into column, for its place (see seal), when set.
+func (s *Store) sealInto(column *[]byte, place string, secret Secret) error {
 	if secret == nil {
 		return nil
 	}
-	sealed, err := s.seal(*secret)
+	sealed, err := s.seal(place, *secret)
 	if err != nil {
 		return err
 	}
@@ -824,11 +825,12 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 }
 
 // SetAgentPrompt selects the prompt of the LLM agent of id, the default one
-// embedded in the agent when nil.
+// embedded in the agent when nil: one deleted, or deleted meanwhile, is
+// ErrNotFound (see sharePrompt).
 func (s *Store) SetAgentPrompt(ctx context.Context, id int64, promptID *int64) error {
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		if promptID != nil {
-			if _, err := s.Prompt(ctx, *promptID); err != nil {
+			if err := s.sharePrompt(ctx, *promptID); err != nil {
 				return err
 			}
 		}
@@ -846,7 +848,7 @@ func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecr
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		if secrets.BridgeToken != nil {
 			var sealed []byte
-			if err := s.sealInto(&sealed, secrets.BridgeToken); err != nil {
+			if err := s.sealInto(&sealed, bridgeTokenOf(id), secrets.BridgeToken); err != nil {
 				return err
 			}
 			result := s.conn(ctx).Model(&Account{}).Where("agent_id = ?", id).Update("bridge_token", sealed)
@@ -864,7 +866,7 @@ func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecr
 				continue
 			}
 			var sealed []byte
-			if err := s.sealInto(&sealed, secret); err != nil {
+			if err := s.sealInto(&sealed, placeOf("agent_llm_settings", column, id), secret); err != nil {
 				return err
 			}
 			columns[column] = sealed
@@ -898,15 +900,15 @@ func (s *Store) SecretsOf(agent Agent) (AgentSecretValues, error) {
 		err    error
 	)
 	if agent.Account != nil {
-		if values.BridgeToken, err = s.open(agent.Account.BridgeToken); err != nil {
+		if values.BridgeToken, err = s.open(bridgeTokenOf(agent.ID), agent.Account.BridgeToken); err != nil {
 			return AgentSecretValues{}, err
 		}
 	}
 	if agent.LLM != nil {
-		if values.LLMAPIKey, err = s.open(agent.LLM.APIKey); err != nil {
+		if values.LLMAPIKey, err = s.open(llmAPIKeyOf(agent.ID), agent.LLM.APIKey); err != nil {
 			return AgentSecretValues{}, err
 		}
-		if values.CalendarToken, err = s.open(agent.LLM.CalendarToken); err != nil {
+		if values.CalendarToken, err = s.open(calendarTokenOf(agent.ID), agent.LLM.CalendarToken); err != nil {
 			return AgentSecretValues{}, err
 		}
 	}

@@ -147,20 +147,45 @@ const (
 	KindPromptStatus = "prompt_status" // a PromptStatus
 )
 
-// Record is a record an agent keeps through the controller, of its outbox:
-// Seq orders them, Key identifies what it writes, eg: the ID of an order, a
-// later record of the same kind and key replacing it.
+// Record is a record an agent keeps through the controller, of its outbox.
+// Seq orders the records of the outbox while it holds them, nothing more: it
+// starts again from 1 once the outbox was sent whole and the agent starts
+// again, and the controller keeps none of it, answering only the last one
+// written (see OutboxResponse). Key names what the record writes for the
+// logs, eg: the ID of an order. The controller writes a record by the keys of
+// its payload, never by Seq or Key: the ID of an order, of a decision or of
+// an entry of the journal, the prompt status of the agent. So a record sent
+// again writes the same, and a later record of the same order, decision or
+// prompt status replaces it, an order never going back (see
+// model.Order.Supersedes). At is when the agent added it, zero for a record
+// of a version before it.
 type Record struct {
 	Seq     uint64          `json:"seq"`
 	Kind    string          `json:"kind"`
 	Key     string          `json:"key"`
+	At      time.Time       `json:"at,omitzero"`
 	Payload json.RawMessage `json:"payload"`
 }
 
 // OutboxRequest is the payload of POST /outbox: records in the order of their
-// Seq, written in a single transaction.
+// Seq, written in a single transaction. What the dashboard tells of the
+// outbox of the agent: Pending are the records of the outbox not sent yet,
+// the ones of the request included, and NextAt when the first of them after
+// the ones of the request was added, zero for none; SetApart are the records
+// the controller refused for good, kept apart in it, and Held the ones it
+// failed again and again alone while it wrote the next ones of their kind,
+// held apart in it, sent again now and then. A record held sent again is a
+// request alone, counted among the ones not sent.
+//
+// POST /outbox/check takes one too and answers as POST /outbox would, nothing
+// written: the agent checks with it that the controller writes the records
+// after one it fails to write again and again, before holding that one apart.
 type OutboxRequest struct {
-	Records []Record `json:"records"`
+	Records  []Record  `json:"records"`
+	Pending  int       `json:"pending,omitempty"`
+	NextAt   time.Time `json:"next_at,omitzero"`
+	SetApart int       `json:"set_apart,omitempty"`
+	Held     int       `json:"held,omitempty"`
 }
 
 // OutboxResponse answers POST /outbox: the records written, up to Acked.

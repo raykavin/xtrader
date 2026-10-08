@@ -490,3 +490,108 @@ func TestAgent_CloseWritesTheOrdersNotWritten(t *testing.T) {
 	require.ErrorIs(t, err, errOrdersLost)
 	assert.ErrorContains(t, err, "ticket 802")
 }
+
+// holdingOutbox holds the write of a record of quantity 1 until another
+// record is written, a moment at most.
+type holdingOutbox struct {
+	outbox  *Outbox
+	entered chan struct{} // closed as the record held comes
+	other   chan struct{} // closed as another one is written
+	once    sync.Once
+}
+
+func (h *holdingOutbox) Add(kind, key string, payload any) error {
+	if order, ok := payload.(model.Order); ok && order.Quantity == 1 {
+		close(h.entered)
+		select {
+		case <-h.other:
+		case <-time.After(200 * time.Millisecond):
+		}
+		return h.outbox.Add(kind, key, payload)
+	}
+	err := h.outbox.Add(kind, key, payload)
+	h.once.Do(func() { close(h.other) })
+	return err
+}
+
+// The writes of an order racing each other, eg: the order controller settling
+// a fill while the bot moves the order, reach the outbox in the order they
+// changed the memory: the last record of the order is the state the agent
+// keeps, the one a restart reads.
+func TestOrders_TheOutboxTakesTheWritesInTheOrderOfTheMemory(t *testing.T) {
+	f := newFakeController(t)
+	outbox := openOutbox(t, f)
+	orders, err := NewOrders(context.Background(), f.client(), outbox)
+	require.NoError(t, err)
+
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	order := &model.Order{ExchangeID: 903, Pair: "XAUUSDm", Status: model.OrderStatusTypeNew, Quantity: 3,
+		UpdatedAt: at}
+	require.NoError(t, orders.CreateOrder(order))
+	holding := &holdingOutbox{outbox: outbox, entered: make(chan struct{}), other: make(chan struct{})}
+	orders.outbox = holding
+
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		state := *order
+		state.Quantity = 1
+		_ = orders.UpdateOrder(&state)
+	}()
+	<-holding.entered // kept, its record not written yet
+	second := *order
+	second.Quantity = 2
+	require.NoError(t, orders.UpdateOrder(&second))
+	<-first
+
+	kept, err := orders.Orders()
+	require.NoError(t, err)
+	require.Len(t, kept, 1)
+	written := pendingOrders(t, outbox)
+	require.Len(t, written, 3)
+	assert.Equal(t, kept[0].Quantity, written[len(written)-1].Quantity, "the last record is the state kept")
+	assert.Equal(t, 2.0, kept[0].Quantity)
+}
+
+// A state of an order older than the one kept, eg: the copy of a move of a
+// limit order written after its fill, is neither kept nor written: the order
+// stays filled for the bot after a restart, as the controller keeps it (see
+// model.Order.Supersedes); a record of a run before, left in the outbox,
+// never takes back the state of the controller either.
+func TestOrders_AnOlderStateOfAnOrderIsNeverKept(t *testing.T) {
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	filled := model.Order{ID: 4, ExchangeID: 904, Pair: "XAUUSDm", Side: model.SideTypeBuy,
+		Type: model.OrderTypeLimit, Status: model.OrderStatusTypeFilled, Price: 2000, Quantity: 1, CreatedAt: at,
+		UpdatedAt: at.Add(time.Minute)}
+	moved := filled
+	moved.Status, moved.Price, moved.UpdatedAt = model.OrderStatusTypeNew, 1999, at.Add(2*time.Minute)
+
+	f := newFakeController(t)
+	f.set(func(f *fakeController) { f.orders = []model.Order{filled} })
+	outbox := openOutbox(t, f)
+	require.NoError(t, outbox.Add(agentapi.KindOrder, "4", moved)) // of a run before
+	orders, err := NewOrders(context.Background(), f.client(), outbox)
+	require.NoError(t, err)
+	kept, err := orders.Orders()
+	require.NoError(t, err)
+	require.Len(t, kept, 1)
+	assert.Equal(t, model.OrderStatusTypeFilled, kept[0].Status, "the state of the controller")
+	assert.Equal(t, 2000.0, kept[0].Price)
+
+	stale := moved
+	require.NoError(t, orders.UpdateOrder(&stale))
+	kept, err = orders.Orders(storage.WithStatusIn(model.OrderStatusTypeNew))
+	require.NoError(t, err)
+	assert.Empty(t, kept, "never open again")
+	assert.Len(t, pendingOrders(t, outbox), 1, "nothing written")
+
+	later := filled
+	later.Profit, later.ProfitValue = 0.01, 20 // the same state, its profit
+	require.NoError(t, orders.UpdateOrder(&later))
+	kept, err = orders.Orders()
+	require.NoError(t, err)
+	assert.Equal(t, 20.0, kept[0].ProfitValue)
+	written := pendingOrders(t, outbox)
+	require.Len(t, written, 2)
+	assert.Equal(t, 20.0, written[1].ProfitValue)
+}

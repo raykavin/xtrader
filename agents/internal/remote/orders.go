@@ -49,7 +49,9 @@ type Notifier interface {
 // (storage.Storage): in memory, each change written through the outbox, the
 // orders numbered with IDs leased from the controller ahead of their need, so
 // CreateOrder never waits for it: the order is at the broker already when it
-// is called. The orders are handed as copies.
+// is called. The orders are handed as copies. A state of an order older than
+// the one kept is neither kept nor written, as the controller would refuse it
+// (see model.Order.Supersedes), eg: the copy of a move written after a fill.
 //
 // The order at the broker already, a failure of the outbox, eg: a full disk, is
 // never an error of CreateOrder nor of UpdateOrder: the order kept in memory is
@@ -58,6 +60,9 @@ type Notifier interface {
 type Orders struct {
 	outbox recorder
 	ids    orderIDs
+	// the context of the leases, see lease: done as the agent stops
+	leaseCtx    context.Context
+	stopLeasing context.CancelFunc
 
 	// write serializes the writes of the orders, so that the last record of
 	// an order is its last state, whichever writes it
@@ -87,10 +92,17 @@ type Orders struct {
 var ordersNotifyEvery = time.Minute
 
 // NewOrders returns the orders of the agent: the ones of the controller, and
-// the ones of the outbox not sent yet, newer, with the IDs leased to it.
-func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (*Orders, error) {
+// the ones of the outbox not sent yet, newer, with the IDs leased to it. The
+// next IDs are leased until ctx is done or Close, see lease.
+func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (_ *Orders, err error) {
 	o := &Orders{outbox: outbox, ids: client, orders: make(map[int64]model.Order),
 		unwritten: make(map[int64]bool), closed: make(chan struct{})}
+	o.leaseCtx, o.stopLeasing = context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			o.stopLeasing()
+		}
+	}()
 	for after := int64(0); ; {
 		page, err := client.Orders(ctx, after, ordersPage)
 		if err != nil {
@@ -112,6 +124,9 @@ func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (*Orders, er
 		var order model.Order
 		if err := json.Unmarshal(record.Payload, &order); err != nil {
 			return nil, fmt.Errorf("remote: the order %s of the outbox: %w", record.Key, err)
+		}
+		if known, ok := o.orders[order.ID]; ok && !order.Supersedes(known) {
+			continue // older than the one kept, as the controller takes it
 		}
 		o.orders[order.ID] = order
 	}
@@ -155,21 +170,26 @@ func (o *Orders) CreateOrder(order *model.Order) error {
 		o.leasing = true
 		go o.lease()
 	}
-	kept := o.keep(*order)
+	kept, _ := o.keep(*order)
 	o.mu.Unlock()
 	o.add(kept)
 	return nil
 }
 
 // lease leases the next order IDs, retried while the controller is out of
-// reach.
+// reach, warned every warnEvery while it lasts, until the agent stops (the
+// context of NewOrders done, or Close) or the controller refuses it (401),
+// which stops it: the next orders are numbered past the IDs leased then, see
+// CreateOrder, never leased again.
 func (o *Orders) lease() {
 	delay := retryDelay
+	var warned time.Time
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		ctx, cancel := context.WithTimeout(o.leaseCtx, requestTimeout)
 		ids, err := o.ids.LeaseOrderIDs(ctx, leaseSize)
 		cancel()
-		if err == nil {
+		switch {
+		case err == nil:
 			o.mu.Lock()
 			if ids.Last >= o.next {
 				o.next, o.last = max(o.next, ids.First), ids.Last
@@ -178,36 +198,59 @@ func (o *Orders) lease() {
 			o.leasing = false
 			o.mu.Unlock()
 			return
+		case errors.Is(err, ErrUnauthorized):
+			log.Errorf("remote: the next order IDs: %v: asked no more", err)
+			return
+		case o.leaseCtx.Err() != nil:
+			return
 		}
-		log.Warnf("remote: the next order IDs: %v, again in %s", err, delay)
-		time.Sleep(delay)
+		if time.Since(warned) >= warnEvery {
+			warned = time.Now()
+			log.Warnf("remote: the next order IDs: %v: asked again until the controller answers, warned every %s",
+				err, warnEvery)
+		}
+		select {
+		case <-time.After(delay):
+		case <-o.leaseCtx.Done():
+			return
+		}
 		delay = min(2*delay, retryMaxDelay)
 	}
 }
 
 // UpdateOrder keeps the order as it is, its UpdatedAt the one of the order
-// controller. It never fails, see CreateOrder.
+// controller, unless older than the one kept (see Orders). It never fails,
+// see CreateOrder.
 func (o *Orders) UpdateOrder(order *model.Order) error {
 	o.write.Lock()
 	defer o.write.Unlock()
 	o.mu.Lock()
-	kept := o.keep(*order)
+	kept, ok := o.keep(*order)
 	o.mu.Unlock()
-	o.add(kept)
+	if ok {
+		o.add(kept)
+	}
 	return nil
 }
 
 // keep keeps a copy of order, its numbers not finite, which JSON can't write,
-// eg: the profit of a fill without a price, written as 0. Must be called while
-// holding o.mu.
-func (o *Orders) keep(order model.Order) model.Order {
+// eg: the profit of a fill without a price, written as 0; false, and the one
+// kept, for a state older than it (see Orders). Must be called while holding
+// o.write and o.mu: the outbox takes the states in the order they are kept.
+func (o *Orders) keep(order model.Order) (model.Order, bool) {
 	kept, fields := clone(order).Finite()
 	if len(fields) > 0 {
 		log.Errorf("remote: the order %d (%s %s of %s): %s not finite, kept as 0", kept.ID, kept.Type, kept.Side,
 			kept.Pair, strings.Join(fields, ", "))
 	}
+	if known, ok := o.orders[kept.ID]; ok && !kept.Supersedes(known) {
+		log.Warnf("remote: the order %d (%s %s of %s): a state older than the one kept, %s at %s after %s at %s: "+
+			"not written", kept.ID, kept.Type, kept.Side, kept.Pair, kept.Status,
+			kept.UpdatedAt.Format(time.RFC3339Nano), known.Status, known.UpdatedAt.Format(time.RFC3339Nano))
+		return known, false
+	}
 	o.orders[kept.ID] = kept
-	return kept
+	return kept, true
 }
 
 // add writes the last state of an order to the outbox, else keeps it to write
@@ -381,10 +424,12 @@ func (o *Orders) writeAgain() (int, error) {
 	return len(o.unwritten), failed
 }
 
-// Close stops writing the orders unwritten again, after a last attempt, as the
-// agent stops, before its outbox is flushed: it returns the error of the ones
-// still unwritten, never sent to the controller.
+// Close stops leasing the next order IDs and writing the orders unwritten
+// again, after a last attempt, as the agent stops, before its outbox is
+// flushed: it returns the error of the ones still unwritten, never sent to the
+// controller.
 func (o *Orders) Close() error {
+	o.stopLeasing()
 	o.mu.Lock()
 	if !o.stopped {
 		o.stopped = true

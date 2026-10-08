@@ -5,7 +5,8 @@
 //
 // The schema is the one of sql/migrations, applied by cmd/migrator, never by
 // GORM: the store only checks its version (see CheckSchema). The secrets, the
-// API keys and the tokens, are encrypted with the key of config.yml.
+// API keys and the tokens, are encrypted with the key of config.yml, each one
+// sealed for its place (see seal).
 package store
 
 import (
@@ -25,7 +26,7 @@ import (
 )
 
 // SchemaVersion is the version of sql/migrations the store needs.
-const SchemaVersion = 15
+const SchemaVersion = 16
 
 var (
 	// ErrNotFound is the error of a record that doesn't exist.

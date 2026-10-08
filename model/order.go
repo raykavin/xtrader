@@ -83,6 +83,29 @@ func (o Order) Finite() (Order, []string) {
 	return o, fields
 }
 
+// Final reports whether the status ends the order for good: filled,
+// canceled, rejected or expired.
+func (s OrderStatusType) Final() bool {
+	switch s {
+	case OrderStatusTypeFilled, OrderStatusTypeCanceled, OrderStatusTypeRejected, OrderStatusTypeExpired:
+		return true
+	}
+	return false
+}
+
+// Supersedes reports whether o, a state of the order of prev, replaces prev
+// written after it: a final status (see Final) is never replaced by an open
+// one, and replaces an open one whatever their UpdatedAt (the one of a fill is
+// the time of the broker, the one of a move the clock of the agent); else o
+// is not older than prev, to the microsecond a database keeps, the same state
+// written again replacing it.
+func (o Order) Supersedes(prev Order) bool {
+	if final := o.Status.Final(); final != prev.Status.Final() {
+		return final
+	}
+	return !o.UpdatedAt.Truncate(time.Microsecond).Before(prev.UpdatedAt.Truncate(time.Microsecond))
+}
+
 func (o Order) String() string {
 	return fmt.Sprintf("[%s] %s %s | ID: %d, Type: %s, %f x $%f (~$%.f)",
 		o.Status, o.Side, o.Pair, o.ID, o.Type, o.Quantity, o.Price, o.Quantity*o.Price)

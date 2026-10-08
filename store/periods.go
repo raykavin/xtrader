@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,10 +35,10 @@ const maxDeposit = 1e12
 var currencyRegexp = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // StartPeriod resets the results of the agent of name: a new period starting
-// now, deposit, in currency, its balance (rounded to cents), started by the
-// user by. The earlier periods are kept, the current one ending as it starts.
-// A deposit out of 0 to 1e12, or a currency that isn't a code of 3 letters,
-// is refused (ErrInvalid).
+// now, deposit, in currency, its balance (rounded to cents, see cents),
+// started by the user by. The earlier periods are kept, the current one
+// ending as it starts. A deposit out of 0 to 1e12, or a currency that isn't a
+// code of 3 letters, is refused (ErrInvalid).
 func (s *Store) StartPeriod(ctx context.Context, name string, deposit float64, currency, by string) (Period,
 	error) {
 
@@ -66,11 +67,28 @@ func (s *Store) StartPeriod(ctx context.Context, name string, deposit float64, c
 		if last.ID != 0 && !started.After(last.StartedAt) {
 			started = last.StartedAt.Add(time.Microsecond) // after the one before, whatever the clock
 		}
-		period = Period{AgentID: agent.ID, StartedAt: started, Deposit: math.Round(deposit*100) / 100,
+		period = Period{AgentID: agent.ID, StartedAt: started, Deposit: cents(deposit),
 			Currency: currency, CreatedBy: strings.TrimSpace(by)}
 		return notFound(s.conn(ctx).Create(&period).Error, "the period of the agent "+name)
 	})
 	return period, err
+}
+
+// cents rounds a non-negative amount to the cent as written, half up: from
+// its shortest decimal, eg: 2500.555 to 2500.56, which math.Round(x*100)/100
+// makes 2500.55, the float of 2500.555 a hair below it. The column keeps the
+// cents exactly (NUMERIC(16,2)).
+func cents(amount float64) float64 {
+	whole, fraction, _ := strings.Cut(strconv.FormatFloat(amount, 'f', -1, 64), ".")
+	fraction += "000"
+	units, err := strconv.ParseInt(whole+fraction[:2], 10, 64)
+	if err != nil {
+		return math.Round(amount*100) / 100
+	}
+	if fraction[2] >= '5' {
+		units++
+	}
+	return float64(units) / 100
 }
 
 // Periods returns the periods of the agent of name, the current one first;

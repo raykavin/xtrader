@@ -152,9 +152,15 @@ func (s *Store) UpdatePrompt(ctx context.Context, id int64, edit PromptEdit, by 
 	return s.Prompt(ctx, id)
 }
 
-// DeletePrompt deletes the prompt of id, unless an agent uses it.
+// DeletePrompt deletes the prompt of id, unless an agent uses it: locked
+// first, so that an agent given it meanwhile (see sharePrompt) is one of
+// them, and one given it after waits and fails.
 func (s *Store) DeletePrompt(ctx context.Context, id int64) error {
 	return s.Transaction(ctx, func(ctx context.Context) error {
+		var prompt Prompt
+		if err := s.conn(ctx).Clauses(lockForUpdate()).Select("id").First(&prompt, id).Error; err != nil {
+			return notFound(err, fmt.Sprintf("prompt %d", id))
+		}
 		var users []string
 		err := s.conn(ctx).Table("agent_llm_settings AS l").
 			Joins("JOIN agents a ON a.id = l.agent_id AND a.deleted_at IS NULL").
@@ -171,6 +177,16 @@ func (s *Store) DeletePrompt(ctx context.Context, id int64) error {
 		}
 		return result.Error
 	})
+}
+
+// sharePrompt fails with ErrNotFound unless the prompt of id exists, not
+// deleted, and keeps it so until the end of the transaction, for an agent
+// given it: DeletePrompt waits for it, then sees the agent using it; one
+// deleting it before is waited for.
+func (s *Store) sharePrompt(ctx context.Context, id int64) error {
+	var prompt Prompt
+	err := s.conn(ctx).Clauses(clause.Locking{Strength: "SHARE"}).Select("id").First(&prompt, id).Error
+	return notFound(err, fmt.Sprintf("prompt %d", id))
 }
 
 // lockForUpdate locks the rows read until the end of the transaction.

@@ -144,26 +144,37 @@ func (s *Store) SaveDecision(ctx context.Context, id int64, d ui.Decision, attac
 		if err := s.conn(ctx).Clauses(conflict).Create(&row).Error; err != nil {
 			return err
 		}
-		for _, order := range d.OrderIDs {
-			// a link already kept, or a decision placing an order another
-			// placed meanwhile: left as it is
-			err := s.conn(ctx).Exec(`INSERT INTO decision_orders (agent_id, decision_id, order_id, placed)
-				VALUES (?, ?, ?, NOT EXISTS (SELECT 1 FROM decision_orders
-					WHERE agent_id = ? AND order_id = ? AND placed))
-				ON CONFLICT DO NOTHING`, id, d.ID, order, id, order).Error
-			if err != nil {
-				return err
-			}
-		}
-		for i, attachment := range attachments {
-			err := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&attachmentRow{AgentID: id,
-				DecisionID: d.ID, Number: i, MediaType: attachment.MediaType, Data: attachment.Data}).Error
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		_, _, err := s.saveDecisionParts(ctx, id, d, attachments)
+		return err
 	})
+}
+
+// saveDecisionParts keeps the links of the orders of the decision d of the
+// agent of id and its attachments, the ones kept already left as they are, and
+// returns how many of each it wrote.
+func (s *Store) saveDecisionParts(ctx context.Context, id int64, d ui.Decision, attachments []Attachment) (links,
+	files int64, err error) {
+	for _, order := range d.OrderIDs {
+		// a link already kept, or a decision placing an order another placed
+		// meanwhile: left as it is
+		result := s.conn(ctx).Exec(`INSERT INTO decision_orders (agent_id, decision_id, order_id, placed)
+			VALUES (?, ?, ?, NOT EXISTS (SELECT 1 FROM decision_orders
+				WHERE agent_id = ? AND order_id = ? AND placed))
+			ON CONFLICT DO NOTHING`, id, d.ID, order, id, order)
+		if result.Error != nil {
+			return links, files, result.Error
+		}
+		links += result.RowsAffected
+	}
+	for i, attachment := range attachments {
+		result := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&attachmentRow{AgentID: id,
+			DecisionID: d.ID, Number: i, MediaType: attachment.MediaType, Data: attachment.Data})
+		if result.Error != nil {
+			return links, files, result.Error
+		}
+		files += result.RowsAffected
+	}
+	return links, files, nil
 }
 
 // Decisions returns the last decisions of the agent of id, of pair when set,

@@ -92,13 +92,20 @@ func (j *jsonb) Scan(src interface{}) error {
 // AppendJournal appends the entries of the journal of the agent of id, the
 // ones kept already left as they are.
 func (s *Store) AppendJournal(ctx context.Context, id int64, entries []JournalEntry) error {
+	_, err := s.appendJournal(ctx, id, entries)
+	return err
+}
+
+// appendJournal appends the entries of the journal of the agent of id, the
+// ones kept already left as they are, and returns how many it wrote.
+func (s *Store) appendJournal(ctx context.Context, id int64, entries []JournalEntry) (int64, error) {
 	if len(entries) == 0 {
-		return nil
+		return 0, nil
 	}
 	rows := make([]journalRow, 0, len(entries))
 	for _, e := range entries {
 		if len(e.Input) == 0 {
-			return fmt.Errorf("%w: the journal entry %s has no input", ErrInvalid, e.ID)
+			return 0, fmt.Errorf("%w: the journal entry %s has no input", ErrInvalid, e.ID)
 		}
 		row := journalRow{AgentID: id, ID: e.ID, At: e.At.UTC(), Pair: e.Pair, Trigger: e.Trigger,
 			RequestedBy: e.RequestedBy, Model: e.Model, LatencyMS: e.LatencyMS, Input: jsonb(e.Input),
@@ -116,8 +123,9 @@ func (s *Store) AppendJournal(ctx context.Context, id int64, entries []JournalEn
 		}
 		rows = append(rows, row)
 	}
-	return s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}, {Name: "id"}},
-		DoNothing: true}).CreateInBatches(&rows, 100).Error
+	result := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}, {Name: "id"}},
+		DoNothing: true}).CreateInBatches(&rows, 100)
+	return result.RowsAffected, result.Error
 }
 
 // JournalMemory returns the last perPair decisions of each pair of the

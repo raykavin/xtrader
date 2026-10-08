@@ -84,6 +84,55 @@ export function agentNote(agent: AgentSettings): string {
   return exit ? `${exit} · reiniciado ${times}` : `Reiniciado ${times}`;
 }
 
+/** How long ago, as the note of the outbox tells it: "12 min", "3 h", "2 dias". */
+function formatAge(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h`;
+  return `${Math.floor(hours / 24)} dias`;
+}
+
+/**
+ * The note of the outbox of an agent, as it told the controller last: the
+ * records not written to the database yet, once their sending fails or the
+ * oldest of them is a minute old, the ones the controller refused for good,
+ * set apart in it, and the ones it failed again and again, held apart, sent
+ * again now and then.
+ */
+export function outboxNote(agent: AgentSettings, now = Date.now()): string {
+  const outbox = agent.outbox;
+  if (!outbox) return "";
+  const notes: string[] = [];
+  const age = outbox.since ? Math.max(0, Math.floor(now / 1000) - outbox.since) : 0;
+  if (outbox.pending > 0 && (outbox.failing || age >= 60)) {
+    const records =
+      outbox.pending === 1
+        ? "1 registro ainda não gravado"
+        : `${outbox.pending} registros ainda não gravados`;
+    const oldest = age >= 60 ? `, o mais antigo há ${formatAge(age)}` : "";
+    const failing = outbox.failing ? " (o envio está falhando: veja o log do controller)" : "";
+    notes.push(`Outbox: ${records} no banco${oldest}${failing}`);
+  }
+  if (outbox.set_apart) {
+    const records =
+      outbox.set_apart === 1
+        ? "1 registro recusado para sempre, separado"
+        : `${outbox.set_apart} registros recusados para sempre, separados`;
+    notes.push(`Outbox: ${records} no arquivo do agente (veja o log do agente)`);
+  }
+  if (outbox.held) {
+    const records =
+      outbox.held === 1
+        ? "1 registro que falhou seguidamente, separado"
+        : `${outbox.held} registros que falharam seguidamente, separados`;
+    notes.push(
+      `Outbox: ${records} no arquivo do agente e reenviado${outbox.held === 1 ? "" : "s"} de tempos em tempos (veja o log do agente)`,
+    );
+  }
+  return notes.join(" · ");
+}
+
 /** The agents of a kind, a group of the page: the LLM ones, or the ones of a strategy. */
 export interface AgentGroup {
   kind: string;

@@ -21,6 +21,8 @@ const testToken = "xta_1_secret"
 
 func init() {
 	retryDelay, retryMaxDelay = 5*time.Millisecond, 20*time.Millisecond
+	poisonAfter, poisonFor = 3, 50*time.Millisecond
+	holdAfter, heldRetry, heldRetryMax = 200*time.Millisecond, 50*time.Millisecond, 200*time.Millisecond
 }
 
 // fakeController answers the internal API of a controller as the test sets
@@ -44,6 +46,11 @@ type fakeController struct {
 	memory    []agentapi.Remembered
 	records   []agentapi.Record
 	requests  []string
+	// outboxAnswer answers POST /outbox and /outbox/check in place of the
+	// controller when set and other than 200, nothing written: eg: 503
+	outboxAnswer func(request agentapi.OutboxRequest) (int, any)
+	outboxes     []agentapi.OutboxRequest // the requests of POST /outbox
+	checks       []agentapi.OutboxRequest // the ones of POST /outbox/check
 }
 
 func newFakeController(t *testing.T) *fakeController {
@@ -183,10 +190,23 @@ func (f *fakeController) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, links)
 	case path == "/journal/memory":
 		reply(http.StatusOK, f.memory)
-	case path == "/outbox":
+	case path == "/outbox", path == "/outbox/check":
 		var request agentapi.OutboxRequest
 		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&request))
-		f.records = append(f.records, request.Records...)
+		if path == "/outbox" {
+			f.outboxes = append(f.outboxes, request)
+		} else {
+			f.checks = append(f.checks, request)
+		}
+		if f.outboxAnswer != nil {
+			if status, body := f.outboxAnswer(request); status != http.StatusOK {
+				reply(status, body)
+				return
+			}
+		}
+		if path == "/outbox" {
+			f.records = append(f.records, request.Records...)
+		}
 		reply(http.StatusOK, agentapi.OutboxResponse{Acked: request.Records[len(request.Records)-1].Seq})
 	default:
 		reply(http.StatusNotFound, ui.ErrorResponse{Error: "no route " + path})

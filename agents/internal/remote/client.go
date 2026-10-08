@@ -264,12 +264,21 @@ func (c *Client) JournalMemory(ctx context.Context, perPair int) ([]agentapi.Rem
 	return remembered, c.get(ctx, fmt.Sprintf("/journal/memory?per_pair=%d", perPair), &remembered)
 }
 
-// Outbox writes the records, and returns the Seq of the last one written: a
-// *RefusedError names the record refused, none written.
-func (c *Client) Outbox(ctx context.Context, records []agentapi.Record) (uint64, error) {
+// Outbox writes the records of request, and returns the Seq of the last one
+// written: a *RefusedError names the record refused, none written.
+func (c *Client) Outbox(ctx context.Context, request agentapi.OutboxRequest) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*requestTimeout)
 	defer cancel()
 	var answer agentapi.OutboxResponse
-	_, err := c.do(ctx, http.MethodPost, "/outbox", nil, agentapi.OutboxRequest{Records: records}, &answer)
+	_, err := c.do(ctx, http.MethodPost, "/outbox", nil, request, &answer)
 	return answer.Acked, err
+}
+
+// CheckOutbox asks the controller whether it writes the records, none written:
+// nil when it does, a *RefusedError naming the one it refuses for good.
+func (c *Client) CheckOutbox(ctx context.Context, records []agentapi.Record) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*requestTimeout)
+	defer cancel()
+	_, err := c.do(ctx, http.MethodPost, "/outbox/check", nil, agentapi.OutboxRequest{Records: records}, nil)
+	return err
 }

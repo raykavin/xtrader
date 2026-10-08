@@ -21,11 +21,12 @@ func (s *Store) TelegramToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.open(settings.Token)
+	return s.open(telegramToken(), settings.Token)
 }
 
 // SetTelegram changes the settings of the Telegram bot: enabled when set, and
-// its token, see Secret.
+// its token, see Secret; the one kept, sealed by a version before the places
+// of the secrets (see unseal), sealed again for its place as it is written.
 func (s *Store) SetTelegram(ctx context.Context, enabled *bool, token Secret) error {
 	settings, _, err := s.Telegram(ctx)
 	if err != nil {
@@ -34,7 +35,12 @@ func (s *Store) SetTelegram(ctx context.Context, enabled *bool, token Secret) er
 	if enabled != nil {
 		settings.Enabled = *enabled
 	}
-	if err := s.sealInto(&settings.Token, token); err != nil {
+	if token == nil {
+		if kept, placed, err := s.unseal(telegramToken(), settings.Token); err == nil && !placed {
+			token = &kept
+		}
+	}
+	if err := s.sealInto(&settings.Token, telegramToken(), token); err != nil {
 		return err
 	}
 	settings.ID = 1

@@ -8,6 +8,7 @@ import {
   agentNote,
   agentState,
   agentSummary,
+  outboxNote,
   promptStatusLabel,
   tradePanelHint,
 } from "../lib/settings";
@@ -220,7 +221,7 @@ function AgentCard({
     : stopping
       ? "O agente ainda está parando: aguarde para excluí-lo"
       : "Exclui o agente; as ordens e as decisões dele são mantidas";
-  const footnote = agentNote(agent);
+  const footnote = [agentNote(agent), outboxNote(agent)].filter(Boolean).join(" · ");
 
   return (
     <article className={`card settings-agent ${state.tone}`} aria-label={`Agente ${agent.name}`}>

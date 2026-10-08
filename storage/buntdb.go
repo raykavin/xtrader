@@ -74,9 +74,22 @@ func (b *Bunt) CreateOrder(order *model.Order) error {
 	})
 }
 
+// UpdateOrder writes order under its id, unless the order stored ended (see
+// model.OrderStatusType.Final) and order is open: an end is never undone, eg:
+// by a move the exchange answered as the order filled, logged and not written.
+// Unlike the database of the agents, the times aren't compared: the order
+// controller writes the states of an order in their order.
 func (b *Bunt) UpdateOrder(order *model.Order) error {
 	return b.db.Update(func(tx *buntdb.Tx) error {
 		id := strconv.FormatInt(order.ID, 10)
+		if value, err := tx.Get(id); err == nil && !order.Status.Final() {
+			var stored model.Order
+			if json.Unmarshal([]byte(value), &stored) == nil && stored.Status.Final() {
+				log.Printf("storage: the order %d (%s %s of %s) %s, never %s again: not written", order.ID,
+					order.Type, order.Side, order.Pair, stored.Status, order.Status)
+				return nil
+			}
+		}
 
 		content, err := orderJSON(*order)
 		if err != nil {

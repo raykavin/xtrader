@@ -83,6 +83,7 @@ type Manager struct {
 	supervisor *Supervisor
 	tokens     *tokens
 	runtimes   *runtimes
+	backlogs   *backlogs
 	dashboard  *Dashboard
 	bot        Bot
 
@@ -140,7 +141,7 @@ func (l *agentLocks) of(name string) *sync.Mutex {
 // commands of agents, served by dashboard, with the Telegram bot, if any.
 func NewManager(s *store.Store, agents config.Agents, sup *Supervisor, dashboard *Dashboard, bot Bot) *Manager {
 	return &Manager{store: s, agents: agents, supervisor: sup, tokens: newTokens(), runtimes: newRuntimes(),
-		dashboard: dashboard, bot: bot, trigger: make(chan struct{}, 1),
+		backlogs: newBacklogs(), dashboard: dashboard, bot: bot, trigger: make(chan struct{}, 1),
 		locks: agentLocks{locks: make(map[string]*sync.Mutex)}, launched: make(map[string]launch),
 		byName: make(map[string]store.Agent), launchErr: make(map[string]string),
 		exited: make(map[string][32]byte)}
