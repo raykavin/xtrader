@@ -20,19 +20,35 @@ type sseEvent struct {
 // cannot keep up are dropped instead of blocking the bot.
 type broker struct {
 	mu          sync.RWMutex
-	subscribers map[chan sseEvent]struct{}
+	subscribers map[chan sseEvent]*subscriber
+}
+
+// subscriber tells its stream that an event was dropped for it: the stream is
+// ended, so that the browser reconnects and loads the dashboard again.
+type subscriber struct {
+	behind chan struct{} // closed once an event was dropped
+	once   sync.Once
 }
 
 func newBroker() *broker {
-	return &broker{subscribers: make(map[chan sseEvent]struct{})}
+	return &broker{subscribers: make(map[chan sseEvent]*subscriber)}
 }
 
 func (b *broker) subscribe() chan sseEvent {
-	ch := make(chan sseEvent, 256)
-	b.mu.Lock()
-	b.subscribers[ch] = struct{}{}
-	b.mu.Unlock()
+	ch, _ := b.listen()
 	return ch
+}
+
+// listen subscribes, returning the events and a channel closed once an event
+// was dropped because the subscriber was behind. The events channel is never
+// closed: publish may be sending to it.
+func (b *broker) listen() (chan sseEvent, <-chan struct{}) {
+	ch := make(chan sseEvent, 256)
+	sub := &subscriber{behind: make(chan struct{})}
+	b.mu.Lock()
+	b.subscribers[ch] = sub
+	b.mu.Unlock()
+	return ch, sub.behind
 }
 
 func (b *broker) unsubscribe(ch chan sseEvent) {
@@ -47,6 +63,9 @@ func (b *broker) hasSubscribers() bool {
 	return len(b.subscribers) > 0
 }
 
+// publish sends the event to the subscribers without waiting for any: the
+// chart publishes holding c.mu, so that the events of a pair go in the order
+// they happen, and never waits for a client, see handleEvents.
 func (b *broker) publish(name string, payload interface{}) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -61,11 +80,15 @@ func (b *broker) publish(name string, payload interface{}) {
 	}
 
 	event := sseEvent{name: name, data: data}
-	for ch := range b.subscribers {
+	for ch, sub := range b.subscribers {
 		select {
 		case ch <- event:
 		default:
-			// client is too slow; it will be disconnected by the writer
+			// the client is too slow: the event is lost, its stream ended
+			sub.once.Do(func() {
+				log.Warnf("ui: an events client fell behind (%d events queued), ending its stream", len(ch))
+				close(sub.behind)
+			})
 		}
 	}
 }
@@ -88,7 +111,7 @@ func (c *Chart) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	ch := c.events.subscribe()
+	ch, behind := c.events.listen()
 	defer c.events.unsubscribe(ch)
 
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -97,6 +120,9 @@ func (c *Chart) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-behind:
+			// an event was lost: the browser reconnects and loads again
 			return
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {

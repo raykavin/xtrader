@@ -473,7 +473,7 @@ func TestChart_AccountReporter(t *testing.T) {
 	fill(3, 200, model.SideTypeBuy, 20, 0)       // a long
 	fill(4, 201, model.SideTypeSell, 30, 14.906) // its take profit: booked
 
-	snapshot := c.snapshot("BTCUSDm")
+	snapshot := getSnapshot(t, c, "BTCUSDm") // the account read first, never holding the chart
 	assert.Equal(t, "BRL", snapshot.AccountCurrency)
 	byID := map[int64]Order{}
 	for _, order := range snapshot.Orders {

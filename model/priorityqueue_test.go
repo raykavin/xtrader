@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -46,14 +47,79 @@ func TestPriorityQueue_Len(t *testing.T) {
 func TestPriorityQueue_PopLock(t *testing.T) {
 	now := time.Now()
 	queue := NewPriorityQueue(nil)
+	queue.Push(Candle{Pair: "C", Time: now.Add(2 * time.Minute)}) // pushed before PopLock: handed too
 
-	items := queue.PopLock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	items := queue.PopLock(ctx)
+	require.Equal(t, items, queue.PopLock(ctx), "a single consumer")
+	require.Equal(t, "C", (<-items).(Candle).Pair)
+
 	queue.Push(Candle{Pair: "B", Time: now.Add(time.Minute)})
+	require.Equal(t, "B", (<-items).(Candle).Pair)
 	queue.Push(Candle{Pair: "A", Time: now})
-
-	// The callbacks run in their own goroutines, so the pops are not ordered
-	// by push order; both candles must come out.
-	received := []string{(<-items).(Candle).Pair, (<-items).(Candle).Pair}
-	require.ElementsMatch(t, []string{"A", "B"}, received)
+	require.Equal(t, "A", (<-items).(Candle).Pair)
 	require.Zero(t, queue.Len())
+}
+
+// B27: the items come out in their order, one consumer popping them: the close
+// of a candle is never handed after the next candle in progress, which made
+// the strategy drop the close as late (strategy.Controller.OnCandle), eg: no
+// analysis of the LLM on it.
+func TestPriorityQueue_PopLockNeverInvertsACloseAndTheNextPartial(t *testing.T) {
+	queue := NewPriorityQueue(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	items := queue.PopLock(ctx)
+
+	const n = 20000
+	base := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	pushed := make([]Candle, 0, 2*n)
+	for i := 0; i < n; i++ {
+		at := base.Add(time.Duration(i) * time.Minute)
+		pushed = append(pushed,
+			Candle{Pair: "A", Time: at, UpdatedAt: at.Add(time.Minute - time.Second), Complete: true},
+			Candle{Pair: "A", Time: at.Add(time.Minute), UpdatedAt: at.Add(time.Minute)})
+	}
+	go func() {
+		for _, candle := range pushed {
+			queue.Push(candle)
+		}
+	}()
+
+	inverted := 0
+	for i := range pushed {
+		got := (<-items).(Candle)
+		if !got.Time.Equal(pushed[i].Time) || got.Complete != pushed[i].Complete {
+			inverted++
+		}
+	}
+	require.Zero(t, inverted, "candles handed out of their order, of %d", len(pushed))
+}
+
+// The channel of PopLock closes once ctx is done, the item popped and not
+// taken back in the queue: no goroutine left blocked on it, nor item lost.
+func TestPriorityQueue_PopLockEndsWithItsContext(t *testing.T) {
+	now := time.Now()
+	queue := NewPriorityQueue(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	items := queue.PopLock(ctx)
+
+	queue.Push(Candle{Pair: "A", Time: now})
+	require.Eventually(t, func() bool { return queue.Len() == 0 }, time.Second, time.Millisecond,
+		"popped, waiting for the consumer")
+	cancel()
+
+	select {
+	case _, open := <-items:
+		if open { // taken as ctx was done: either way, never lost
+			_, open = <-items
+		}
+		require.False(t, open)
+	case <-time.After(time.Second):
+		t.Fatal("the channel of PopLock never closed")
+	}
+	if queue.Len() == 1 {
+		require.Equal(t, "A", queue.Pop().(Candle).Pair, "back in the queue")
+	}
 }

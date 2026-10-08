@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -1843,6 +1844,159 @@ func (m *MT5) setLevels(ctx context.Context, position mt5Position, stop, profit 
 	return nil
 }
 
+// changeLevels sets the levels of positions, in order, to the ones levels
+// returns for each, see setLevels. One failing stops the change, and the
+// levels of the positions changed so far get back to the ones they had (see
+// restoreLevels): none is left half changed, eg: without its protection after
+// a Cancel, or at another level than the leg the bot follows. A failure of the
+// first one surely refused changed nothing: it is returned as it is.
+func (m *MT5) changeLevels(ctx context.Context, positions []mt5Position,
+	levels func(mt5Position) (stop, profit float64)) error {
+	for i, position := range positions {
+		stop, profit := levels(position)
+		err := m.setLevels(ctx, position, stop, profit)
+		switch {
+		case err == nil:
+		case i == 0 && mt5Refused(err):
+			return err
+		default:
+			return m.restoreLevels(ctx, positions, i, err)
+		}
+	}
+	return nil
+}
+
+// restoreLevels sets back the levels of positions to the ones they had (their
+// SL and TP) after the change of positions[failed] failed with err: the ones
+// changed before it, then itself unless surely refused, its outcome unknown.
+// One whose outcome is unknown, the bridge or the terminal not answering,
+// leaves the next ones as they are, so that the call doesn't wait for each of
+// them. Then it reads the account again (poll) and returns an
+// *MT5ProtectionError with the levels of each position, logged when one isn't
+// back to the ones it had.
+func (m *MT5) restoreLevels(ctx context.Context, positions []mt5Position, failed int, err error) error {
+	changed := positions[:failed]
+	if !mt5Refused(err) {
+		changed = positions[:failed+1]
+	}
+	restore := make(map[int64]error, len(changed))
+	var stuck error
+	for _, position := range changed {
+		if stuck != nil {
+			restore[position.id()] = fmt.Errorf("not tried after %w", stuck)
+			continue
+		}
+		restore[position.id()] = m.setLevels(ctx, position, position.SL, position.TP)
+		if failure := restore[position.id()]; failure != nil && !mt5Refused(failure) {
+			stuck = failure
+		}
+	}
+
+	report := &MT5ProtectionError{Pair: positions[0].Symbol, Err: err}
+	if pollErr := m.poll(ctx); pollErr != nil {
+		report.Unread = pollErr
+	}
+	b := m.book
+	b.mtx.RLock()
+	for _, position := range positions {
+		current, open := b.positions[position.id()]
+		report.Positions = append(report.Positions, MT5PositionLevels{
+			Position: position.id(), StopLoss: current.SL, TakeProfit: current.TP, Closed: !open,
+			PreviousStopLoss: position.SL, PreviousTakeProfit: position.TP, Restore: restore[position.id()],
+		})
+	}
+	b.mtx.RUnlock()
+	if !report.Kept() {
+		log.Errorf("[MT5] %v", report)
+	}
+	return report
+}
+
+// mt5Refused reports whether a trade request that failed surely changed
+// nothing: refused by the terminal (a retcode) or never sent (see mt5Unsent).
+func mt5Refused(err error) bool {
+	var bridgeErr *MT5Error
+	if errors.As(err, &bridgeErr) && bridgeErr.Status == http.StatusOK && bridgeErr.Retcode != 0 {
+		return true
+	}
+	return mt5Unsent(err) || errors.Is(err, ErrMT5AccountChanged)
+}
+
+// MT5ProtectionError is a change of the levels of the positions of a
+// protection (CreateOrderOCO, UpdateProtection, the Cancel of a leg) failed
+// partway, or with its outcome unknown: the levels changed were set back to
+// the ones of before where possible. Positions has the levels of each
+// position after it, read again from the account (as last known, when
+// Unread). It wraps the failure of the change, Err.
+type MT5ProtectionError struct {
+	Pair      string
+	Err       error
+	Positions []MT5PositionLevels
+	Unread    error // reading the account again failed
+}
+
+// MT5PositionLevels is the state of a position after an MT5ProtectionError:
+// its levels, 0 for none, and the ones it had before the change.
+type MT5PositionLevels struct {
+	Position                             int64
+	StopLoss, TakeProfit                 float64
+	PreviousStopLoss, PreviousTakeProfit float64
+	Closed                               bool  // gone from the account
+	Restore                              error // setting back the previous levels failed
+}
+
+// Kept reports whether the position has the levels of before, or is closed.
+func (p MT5PositionLevels) Kept() bool {
+	return p.Closed || p.StopLoss == p.PreviousStopLoss && p.TakeProfit == p.PreviousTakeProfit
+}
+
+func (p MT5PositionLevels) String() string {
+	if p.Closed {
+		return fmt.Sprintf("position %d closed", p.Position)
+	}
+	state := "as before"
+	switch {
+	case p.Kept():
+	case p.StopLoss <= 0 && p.TakeProfit <= 0:
+		state = fmt.Sprintf("WITHOUT PROTECTION (it had stop loss %v, take profit %v)", p.PreviousStopLoss,
+			p.PreviousTakeProfit)
+	default:
+		state = fmt.Sprintf("CHANGED (it had stop loss %v, take profit %v)", p.PreviousStopLoss,
+			p.PreviousTakeProfit)
+	}
+	if p.Restore != nil {
+		state += fmt.Sprintf(", setting them back failed: %v", p.Restore)
+	}
+	return fmt.Sprintf("position %d stop loss %v take profit %v %s", p.Position, p.StopLoss, p.TakeProfit, state)
+}
+
+// Kept reports whether every position has the levels of before, or is closed.
+func (e *MT5ProtectionError) Kept() bool {
+	for _, position := range e.Positions {
+		if !position.Kept() {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *MT5ProtectionError) Error() string {
+	states := make([]string, 0, len(e.Positions))
+	for _, position := range e.Positions {
+		states = append(states, position.String())
+	}
+	read := "read again"
+	if e.Unread != nil {
+		read = fmt.Sprintf("as last known, reading the account again failed (%v)", e.Unread)
+	}
+	return fmt.Sprintf("mt5: changing the levels of the positions of %s: %v; after it, the levels changed set back "+
+		"where possible, %s: %s", e.Pair, e.Err, read, strings.Join(states, "; "))
+}
+
+func (e *MT5ProtectionError) Unwrap() error {
+	return e.Err
+}
+
 // removePending removes a pending order (TRADE_ACTION_REMOVE) and moves it out
 // of the book as canceled. A request refused as invalid is ErrOrderNotOpen: the
 // order was filled or canceled meanwhile.
@@ -2173,6 +2327,39 @@ func (m *MT5) OpenPosition(pair string) (MT5OpenPosition, bool) {
 			Profit: profit, Currency: m.currency}, true
 	}
 	return MT5OpenPosition{}, false
+}
+
+// HeldPosition returns the net position of the bot on pair, its positions of
+// the magic number of the bot as last polled from the terminal (no request),
+// netted in volume steps, as Position nets them: the side and the units held,
+// 0 when flat; false for a pair the bot doesn't trade, or without the book
+// (WithMT5DataOnly). It implements service.PositionReporter.
+func (m *MT5) HeldPosition(pair string) (side model.SideType, quantity float64, ok bool) {
+	symbol, traded := m.instruments[pair]
+	if m.dataOnly || m.book == nil || !traded {
+		return "", 0, false
+	}
+	b := m.book
+	b.mtx.RLock()
+	var steps int64
+	for _, position := range b.positions {
+		if position.Symbol != pair || !m.ours(position.Magic, position.Symbol) {
+			continue
+		}
+		n := symbol.steps(position.Volume)
+		if position.Type == mt5TypeSell {
+			n = -n
+		}
+		steps += n
+	}
+	b.mtx.RUnlock()
+	switch {
+	case steps > 0:
+		return model.SideTypeBuy, symbol.units(symbol.lotsOf(steps)), true
+	case steps < 0:
+		return model.SideTypeSell, symbol.units(symbol.lotsOf(-steps)), true
+	}
+	return "", 0, true
 }
 
 // AccountSummary returns the account as the terminal reports it, in its
@@ -2859,18 +3046,13 @@ func (m *MT5) CreateOrderOCO(side model.SideType, pair string, size, price, stop
 		return fail(err)
 	}
 
+	// a failure removes the levels set on the positions before, so that none
+	// is protected without legs
+	if err := m.changeLevels(m.ctx, held, func(mt5Position) (float64, float64) { return stop, price }); err != nil {
+		return fail(err)
+	}
 	tickets := make([]int64, 0, len(held))
-	for i, position := range held {
-		if err := m.setLevels(m.ctx, position, stop, price); err != nil {
-			// the levels set on the positions before: removed, so that none is
-			// protected without legs
-			for _, done := range held[:i] {
-				if undo := m.setLevels(m.ctx, done, 0, 0); undo != nil {
-					log.Errorf("[MT5] removing the levels of the position %d: %v", done.id(), undo)
-				}
-			}
-			return fail(err)
-		}
+	for _, position := range held {
 		tickets = append(tickets, position.id())
 	}
 	anchor := tickets[0]
@@ -3648,10 +3830,9 @@ func (m *MT5) cancelProtection(known mt5Known, fail func(error) error) error {
 		return fail(fmt.Errorf("mt5: the position of order %d is closed: %w", known.order.ExchangeID,
 			ErrOrderNotOpen))
 	}
-	for _, position := range open {
-		if err := m.setLevels(m.ctx, position, 0, 0); err != nil {
-			return fail(err)
-		}
+	// a failure sets back the levels removed before: the legs stay
+	if err := m.changeLevels(m.ctx, open, func(mt5Position) (float64, float64) { return 0, 0 }); err != nil {
+		return fail(err)
 	}
 	m.remember(known)
 	first := open[0]
@@ -3736,16 +3917,15 @@ func (m *MT5) UpdateProtection(leg model.Order, level float64) (model.Order, err
 			return fail(err)
 		}
 	}
-	for _, position := range open {
-		positionStop, positionProfit := position.SL, position.TP
+	// a failure sets back the levels moved before: the leg stays where it was
+	err := m.changeLevels(m.ctx, open, func(position mt5Position) (float64, float64) {
 		if known.leg == mt5StopLoss {
-			positionStop = level
-		} else {
-			positionProfit = level
+			return level, position.TP
 		}
-		if err := m.setLevels(m.ctx, position, positionStop, positionProfit); err != nil {
-			return fail(err)
-		}
+		return position.SL, level
+	})
+	if err != nil {
+		return fail(err)
 	}
 
 	moved := known.order

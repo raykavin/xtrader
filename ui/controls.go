@@ -516,12 +516,13 @@ func (c *Chart) handleControlCancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	// unless the order events told the outcome meanwhile
 	if current := c.orderByID[pending.ID]; current.Status == model.OrderStatusTypeNew {
 		current.Status = model.OrderStatusTypePendingCancel
 		c.orderByID[pending.ID] = current
 		c.events.publish("order", OrderEvent{Pair: current.Pair, Order: c.toOrder(current, c.candles[current.Pair])})
 	}
-	writeJSON(w, c.toOrder(c.orderByID[pending.ID], c.candles[pending.Pair]))
+	dto := c.toOrder(c.orderByID[pending.ID], c.candles[pending.Pair])
+	c.mu.Unlock()
+	writeJSON(w, dto) // never holding c.mu, see snapshotOf
 }

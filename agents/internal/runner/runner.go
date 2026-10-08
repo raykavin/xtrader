@@ -436,7 +436,7 @@ func backtest(ctx context.Context, settings xtrader.Settings, strategy strategy.
 	if err != nil {
 		return err
 	}
-	chart, err := dash.chart(strategy, wallet)
+	chart, err := dash.chart(strategy, wallet, ui.WithCandleWindow(0)) // the whole backtest on the chart
 	if err != nil {
 		return err
 	}

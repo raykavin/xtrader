@@ -35,8 +35,11 @@ type orderLock struct {
 	quote float64 // quote paying a buy, or the collateral of a short entry
 }
 
+// PaperWallet simulates the wallet of an exchange. Its methods are safe for
+// concurrent use: the bot feeds it candles and orders while the dashboard and
+// the Telegram bot read the account and the equity.
 type PaperWallet struct {
-	sync.Mutex
+	sync.RWMutex
 	ctx           context.Context
 	baseCoin      string
 	counter       int64
@@ -128,13 +131,23 @@ func NewPaperWallet(ctx context.Context, baseCoin string, options ...PaperWallet
 	return &wallet
 }
 
+// ID returns a new order id.
 func (p *PaperWallet) ID() int64 {
+	p.Lock()
+	defer p.Unlock()
+	return p.nextID()
+}
+
+// nextID is ID for the callers holding the lock.
+func (p *PaperWallet) nextID() int64 {
 	p.counter++
 	return p.counter
 }
 
 func (p *PaperWallet) Pairs() []string {
-	pairs := make([]string, 0)
+	p.RLock()
+	defer p.RUnlock()
+	pairs := make([]string, 0, len(p.assets))
 	for pair := range p.assets {
 		pairs = append(pairs, pair)
 	}
@@ -145,15 +158,29 @@ func (p *PaperWallet) LastQuote(ctx context.Context, pair string) (float64, erro
 	return p.feeder.LastQuote(ctx, pair)
 }
 
-func (p *PaperWallet) AssetValues(pair string) []AssetValue {
-	return p.assetValues[pair]
+// AssetValues returns a copy of the values of asset, one per complete candle:
+// OnCandle keeps appending to them.
+func (p *PaperWallet) AssetValues(asset string) []AssetValue {
+	p.RLock()
+	defer p.RUnlock()
+	return slices.Clone(p.assetValues[asset])
 }
 
+// EquityValues returns a copy of the equity, one per complete candle.
 func (p *PaperWallet) EquityValues() []AssetValue {
-	return p.equityValues
+	p.RLock()
+	defer p.RUnlock()
+	return slices.Clone(p.equityValues)
 }
 
 func (p *PaperWallet) MaxDrawdown() (float64, time.Time, time.Time) {
+	p.RLock()
+	defer p.RUnlock()
+	return p.maxDrawdown()
+}
+
+// maxDrawdown is MaxDrawdown for the callers holding the lock.
+func (p *PaperWallet) maxDrawdown() (float64, time.Time, time.Time) {
 	if len(p.equityValues) < 1 {
 		return 0, time.Time{}, time.Time{}
 	}
@@ -193,6 +220,9 @@ func (p *PaperWallet) MaxDrawdown() (float64, time.Time, time.Time) {
 }
 
 func (p *PaperWallet) Summary() {
+	p.RLock()
+	defer p.RUnlock()
+
 	var (
 		total        float64
 		marketChange float64
@@ -223,7 +253,7 @@ func (p *PaperWallet) Summary() {
 	profit := total + baseCoinValue - p.initialValue
 	fmt.Printf("%.4f %s\n", baseCoinValue, p.baseCoin)
 	fmt.Println()
-	maxDrawDown, _, _ := p.MaxDrawdown()
+	maxDrawDown, _, _ := p.maxDrawdown()
 	fmt.Println("----- RETURNS -----")
 	fmt.Printf("START PORTFOLIO     = %.2f %s\n", p.initialValue, p.baseCoin)
 	fmt.Printf("FINAL PORTFOLIO     = %.2f %s\n", total+baseCoinValue, p.baseCoin)
@@ -696,7 +726,14 @@ func (p *PaperWallet) updateEquityValues(candle model.Candle) {
 }
 
 func (p *PaperWallet) Account() (model.Account, error) {
-	balances := make([]model.Balance, 0)
+	p.RLock()
+	defer p.RUnlock()
+	return p.account(), nil
+}
+
+// account is Account for the callers holding the lock.
+func (p *PaperWallet) account() model.Account {
+	balances := make([]model.Balance, 0, len(p.assets))
 	for pair, info := range p.assets {
 		balances = append(balances, model.Balance{
 			Asset: pair,
@@ -707,19 +744,15 @@ func (p *PaperWallet) Account() (model.Account, error) {
 
 	return model.Account{
 		Balances: balances,
-	}, nil
+	}
 }
 
 func (p *PaperWallet) Position(pair string) (asset, quote float64, err error) {
-	p.Lock()
-	defer p.Unlock()
+	p.RLock()
+	defer p.RUnlock()
 
 	assetTick, quoteTick := SplitAssetQuote(pair)
-	acc, err := p.Account()
-	if err != nil {
-		return 0, 0, err
-	}
-
+	acc := p.account()
 	assetBalance, quoteBalance := acc.Balance(assetTick, quoteTick)
 
 	return assetBalance.Free + assetBalance.Lock, quoteBalance.Free + quoteBalance.Lock, nil
@@ -735,14 +768,14 @@ func (p *PaperWallet) CreateOrderOCO(side model.SideType, pair string,
 	}
 
 	// both legs share one reservation, released when either fills or cancels
-	groupID := p.ID()
+	groupID := p.nextID()
 	err := p.lockOrder(groupID, side, pair, size, price, p.feeRate(model.OrderTypeLimitMaker))
 	if err != nil {
 		return nil, err
 	}
 
 	limitMaker := model.Order{
-		ExchangeID: p.ID(),
+		ExchangeID: p.nextID(),
 		CreatedAt:  p.lastCandle[pair].Time,
 		UpdatedAt:  p.lastCandle[pair].Time,
 		Pair:       pair,
@@ -756,7 +789,7 @@ func (p *PaperWallet) CreateOrderOCO(side model.SideType, pair string,
 	}
 
 	stopOrder := model.Order{
-		ExchangeID: p.ID(),
+		ExchangeID: p.nextID(),
 		CreatedAt:  p.lastCandle[pair].Time,
 		UpdatedAt:  p.lastCandle[pair].Time,
 		Pair:       pair,
@@ -789,7 +822,7 @@ func (p *PaperWallet) createOrderLimit(side model.SideType, pair string, size, l
 		return model.Order{}, ErrInvalidQuantity
 	}
 
-	id := p.ID()
+	id := p.nextID()
 	err := p.lockOrder(id, side, pair, size, limit, p.feeRate(model.OrderTypeLimit))
 	if err != nil {
 		return model.Order{}, err
@@ -824,7 +857,7 @@ func (p *PaperWallet) CreateOrderStop(pair string, size float64, limit float64) 
 		return model.Order{}, ErrInvalidQuantity
 	}
 
-	id := p.ID()
+	id := p.nextID()
 	err := p.lockOrder(id, model.SideTypeSell, pair, size, limit, p.feeRate(model.OrderTypeStopLossLimit))
 	if err != nil {
 		return model.Order{}, err
@@ -866,7 +899,7 @@ func (p *PaperWallet) createOrderMarket(side model.SideType, pair string, size f
 	p.volume[pair] += price * filled
 
 	order := model.Order{
-		ExchangeID: p.ID(),
+		ExchangeID: p.nextID(),
 		CreatedAt:  p.lastCandle[pair].Time,
 		UpdatedAt:  p.lastCandle[pair].Time,
 		Pair:       pair,
@@ -1019,7 +1052,7 @@ func (p *PaperWallet) CreateOrderStopProtected(side model.SideType, pair string,
 		return nil, ErrInvalidQuantity
 	}
 
-	id := p.ID()
+	id := p.nextID()
 	if err := p.lockOrder(id, side, pair, size, level, p.feeRate(model.OrderTypeStopLoss)); err != nil {
 		return nil, err
 	}
@@ -1056,7 +1089,7 @@ func (p *PaperWallet) addLegs(side model.SideType, pair string, size, stop, prof
 		closing = model.SideTypeSell
 	}
 
-	group := p.ID()
+	group := p.nextID()
 	var legs []int
 	for _, level := range []struct {
 		orderType model.OrderType
@@ -1067,7 +1100,7 @@ func (p *PaperWallet) addLegs(side model.SideType, pair string, size, stop, prof
 		}
 
 		leg := model.Order{
-			ExchangeID: p.ID(),
+			ExchangeID: p.nextID(),
 			CreatedAt:  p.lastCandle[pair].Time,
 			UpdatedAt:  p.lastCandle[pair].Time,
 			Pair:       pair,
@@ -1311,8 +1344,8 @@ func (p *PaperWallet) addOrder(order model.Order, pending bool) {
 }
 
 func (p *PaperWallet) Order(_ string, id int64) (model.Order, error) {
-	p.Lock()
-	defer p.Unlock()
+	p.RLock()
+	defer p.RUnlock()
 
 	if idx, ok := p.ordersByID[id]; ok {
 		return p.orders[idx], nil

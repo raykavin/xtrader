@@ -115,10 +115,12 @@ func (m *MT5) ratesRange(ctx context.Context, symbol string, frame mt5Timeframe,
 
 // toCandles converts candles of the terminal into xtrader ones, oldest first,
 // rounded to the digits of the symbol: a candle is complete once a newer one
-// started, or mt5CloseDelay after its end. tick, when known, sets the ask and
-// the spread of the last candle when in progress.
+// started, or, the last one, mt5CloseDelay after its end when confirmed: the
+// terminal had all of it (see confirmsClose), always for a range of the
+// history with newer candles after it. tick, when known, sets the ask and the
+// spread of the last candle when in progress.
 func (m *MT5) toCandles(pair string, rates []mt5Rate, frame mt5Timeframe, now time.Time,
-	tick *mt5Tick) []model.Candle {
+	tick *mt5Tick, confirmed bool) []model.Candle {
 	symbol := m.instrument(pair)
 	digits := -1
 	if symbol.Name != "" {
@@ -133,6 +135,7 @@ func (m *MT5) toCandles(pair string, rates []mt5Rate, frame mt5Timeframe, now ti
 	candles := make([]model.Candle, 0, len(rates))
 	for i, rate := range rates {
 		start := time.Unix(rate.Time, 0).UTC()
+		complete := i < len(rates)-1 || confirmed && !frame.end(start).Add(mt5CloseDelay).After(now)
 		volume := rate.RealVolume
 		if volume <= 0 {
 			volume = rate.TickVolume
@@ -146,7 +149,7 @@ func (m *MT5) toCandles(pair string, rates []mt5Rate, frame mt5Timeframe, now ti
 			Low:       mt5Round(rate.Low, digits),
 			Close:     mt5Round(rate.Close, digits),
 			Volume:    volume,
-			Complete:  i < len(rates)-1 || !frame.end(start).Add(mt5CloseDelay).After(now),
+			Complete:  complete,
 		}
 		ask := candle.Close + rate.Spread*point
 		if tick != nil && !candle.Complete && i == len(rates)-1 && tick.Ask > 0 {
@@ -158,6 +161,76 @@ func (m *MT5) toCandles(pair string, rates []mt5Rate, frame mt5Timeframe, now ti
 		candles = append(candles, candle)
 	}
 	return candles
+}
+
+// mt5LastEnd returns the end of the latest candle of rates, zero without any.
+func mt5LastEnd(rates []mt5Rate, frame mt5Timeframe) time.Time {
+	if len(rates) == 0 {
+		return time.Time{}
+	}
+	latest := rates[0].Time
+	for _, rate := range rates[1:] {
+		latest = max(latest, rate.Time)
+	}
+	return frame.end(time.Unix(latest, 0).UTC())
+}
+
+// confirmsClose reports whether the terminal had the whole candle of pair
+// ended at end when its candles were read, at read, which the clock alone
+// can't tell: a terminal disconnected from its server serves the candle it
+// was building, partial, with no newer one after it, and the clock of the bot
+// may be ahead of the server's. Read before read, either a tick of the symbol
+// at or after end, on the clock of the server, or the terminal connected to
+// its server mt5CloseDelay after end, on the bot's (GET /health, see
+// askHealth), later by as much as the clock of the bot looks ahead of the
+// server's past mt5CloseDelay (see clockAhead).
+func (m *MT5) confirmsClose(pair string, end, read time.Time) bool {
+	m.quotesMtx.Lock()
+	quote, ok := m.quotes[pair]
+	m.quotesMtx.Unlock()
+	if ok && !quote.at.After(read) && !quote.tick.at().Before(end) {
+		return true
+	}
+	m.healthMtx.Lock()
+	seen := m.health
+	m.healthMtx.Unlock()
+	return seen.connected && !seen.asked.Before(end.Add(mt5CloseDelay+m.clockAhead())) &&
+		!seen.answered.After(read)
+}
+
+// askHealth reads GET /health for confirmsClose, unless one was asked at or
+// after since or is in flight: the polls of every pair share it. A failure
+// leaves the previous read.
+func (m *MT5) askHealth(ctx context.Context, since time.Time) {
+	m.healthMtx.Lock()
+	skip := m.healthBusy || !m.health.asked.Before(since)
+	m.healthBusy = m.healthBusy || !skip
+	m.healthMtx.Unlock()
+	if skip {
+		return
+	}
+
+	var health mt5Health
+	asked := time.Now()
+	err := m.get(ctx, "/health", nil, &health)
+	answered := time.Now()
+
+	m.healthMtx.Lock()
+	defer m.healthMtx.Unlock()
+	m.healthBusy = false
+	if err != nil {
+		log.Debugf("[MT5] reading the state of the terminal: %v", err)
+		return
+	}
+	m.health = mt5Seen{connected: health.Connected, asked: asked, answered: answered}
+}
+
+// at returns the time of the tick, on the clock of the trade server.
+func (t mt5Tick) at() time.Time {
+	if t.TimeMsc > 0 {
+		return mt5Time(t.TimeMsc)
+	}
+	return time.Unix(t.Time, 0).UTC()
 }
 
 // LastQuote returns the bid of pair, as the candles, from its last tick.
@@ -175,8 +248,10 @@ func (m *MT5) LastQuote(ctx context.Context, pair string) (float64, error) {
 // CandlesByLimit returns the last limit complete candles, oldest first: the
 // latest limit+1 (the candle in progress dropped), read backwards by pages of
 // mt5MaxRates from the positions of /rates, until enough candles or the start
-// of the history. It records the last complete candle, where
-// CandlesSubscription starts.
+// of the history. The latest one, over on the clock only, is complete when
+// the terminal confirms it (confirmsClose, the state of the terminal read
+// first); otherwise it is dropped as in progress. It records the last complete
+// candle, where CandlesSubscription starts.
 func (m *MT5) CandlesByLimit(ctx context.Context, pair, period string, limit int) ([]model.Candle, error) {
 	frame, err := mt5Resolution(period)
 	if err != nil {
@@ -186,7 +261,9 @@ func (m *MT5) CandlesByLimit(ctx context.Context, pair, period string, limit int
 		return []model.Candle{}, nil
 	}
 	m.awaitHistory(ctx, pair, frame)
+	m.askHealth(ctx, time.Now().Add(-m.pollInterval))
 
+	read := time.Now()
 	var rates []mt5Rate
 	for start := 0; len(rates) < limit+1; {
 		count := min(limit+1-len(rates), mt5MaxRates)
@@ -207,7 +284,8 @@ func (m *MT5) CandlesByLimit(ctx context.Context, pair, period string, limit int
 		start += len(page)
 	}
 
-	candles := m.toCandles(pair, rates, frame, time.Now(), nil)
+	confirmed := m.confirmsClose(pair, mt5LastEnd(rates, frame), read)
+	candles := m.toCandles(pair, rates, frame, time.Now(), nil, confirmed)
 	complete := candles[:0]
 	for _, candle := range candles {
 		if candle.Complete {
@@ -264,7 +342,8 @@ func (m *MT5) awaitHistory(ctx context.Context, pair string, frame mt5Timeframe)
 }
 
 // CandlesByPeriod returns the complete candles opened between start and end,
-// oldest first, read in ranges of mt5RangeRates periods.
+// oldest first, read in ranges of mt5RangeRates periods. Up to now, the latest
+// one is complete as for CandlesByLimit.
 func (m *MT5) CandlesByPeriod(ctx context.Context, pair, period string, start, end time.Time) ([]model.Candle,
 	error) {
 	frame, err := mt5Resolution(period)
@@ -275,10 +354,13 @@ func (m *MT5) CandlesByPeriod(ctx context.Context, pair, period string, start, e
 		return nil, errors.New("mt5: the candles of a period need its start")
 	}
 	now := time.Now()
-	if end.IsZero() || end.After(now) {
+	present := end.IsZero() || end.After(now)
+	if present {
 		end = now
+		m.askHealth(ctx, now.Add(-m.pollInterval))
 	}
 
+	read := time.Now()
 	candles := make([]model.Candle, 0)
 	for from := start; !from.After(end); {
 		to := from.Add(time.Duration(mt5RangeRates-1) * frame.approx())
@@ -289,7 +371,9 @@ func (m *MT5) CandlesByPeriod(ctx context.Context, pair, period string, start, e
 		if err != nil {
 			return nil, err
 		}
-		for _, candle := range m.toCandles(pair, rates, frame, now, nil) {
+		// the last candle of a range has newer ones after it, but up to now
+		confirmed := !present || to.Before(end) || m.confirmsClose(pair, mt5LastEnd(rates, frame), read)
+		for _, candle := range m.toCandles(pair, rates, frame, now, nil, confirmed) {
 			newer := len(candles) == 0 || candle.Time.After(candles[len(candles)-1].Time)
 			if candle.Complete && newer && !candle.Time.Before(start) && !candle.Time.After(end) {
 				candles = append(candles, candle)
@@ -303,9 +387,13 @@ func (m *MT5) CandlesByPeriod(ctx context.Context, pair, period string, start, e
 // CandlesSubscription polls the latest candles (and the tick, for the ask of
 // the candle in progress) every poll interval: the candle in progress is sent
 // as partial each time it changes, and every candle once complete, the ones
-// missed during an outage included. The stream starts after the last candle
-// returned by CandlesByLimit, which the bot preloads; without one, after the
-// candles already complete at the first poll. Errors go to the error channel
+// missed during an outage included. The latest candle over on the clock only
+// stays in progress until the terminal confirms it (confirmsClose), eg: while
+// it is disconnected from its server, logged after mt5HeldWarn. The stream
+// starts after the last candle returned by CandlesByLimit, which the bot
+// preloads; without one, after the candles already complete at the first
+// poll. A candle the terminal changes after it was sent complete is logged,
+// never sent again: the strategies ran on it. Errors go to the error channel
 // without stopping the stream; both channels are closed when ctx is done.
 func (m *MT5) CandlesSubscription(ctx context.Context, pair, period string) (chan model.Candle, chan error) {
 	ccandle := make(chan model.Candle)
@@ -328,6 +416,8 @@ func (m *MT5) CandlesSubscription(ctx context.Context, pair, period string) (cha
 		lastComplete, started := m.loaded[pair+"--"+period]
 		m.loadedMtx.Unlock()
 		var partial model.Candle
+		sent := make(map[time.Time]model.Candle) // the complete candles sent, while the polls read them
+		var held time.Time                       // the candle in progress over on the clock, logged
 
 		ticker := time.NewTicker(m.pollInterval)
 		defer ticker.Stop()
@@ -355,10 +445,21 @@ func (m *MT5) CandlesSubscription(ctx context.Context, pair, period string) (cha
 					continue
 				}
 				if !candle.Time.After(lastComplete) {
+					if before, ok := sent[candle.Time]; ok && !samePrices(before, candle) {
+						log.Warnf("[MT5] %s %s: the terminal changed the candle of %s after it was sent closed, "+
+							"%s, now %s: the strategies keep the one sent", pair, period,
+							candle.Time.Format(time.DateTime), mt5Prices(before), mt5Prices(candle))
+						sent[candle.Time] = candle
+					}
 					continue
 				}
 				if candle.Complete {
 					lastComplete = candle.Time
+					sent[candle.Time] = candle
+					if candle.Time.Equal(held) {
+						log.Infof("[MT5] %s %s: the candle of %s is closed, the terminal confirmed it", pair, period,
+							candle.Time.Format(time.DateTime))
+					}
 				} else if samePrices(candle, partial) && candle.Metadata["ask"] == partial.Metadata["ask"] {
 					continue
 				} else {
@@ -372,6 +473,22 @@ func (m *MT5) CandlesSubscription(ctx context.Context, pair, period string) (cha
 				}
 			}
 			started = started || err == nil
+			if n := len(candles); n > 0 {
+				for at := range sent {
+					if at.Before(candles[0].Time) {
+						delete(sent, at) // no longer read
+					}
+				}
+				last := candles[n-1]
+				over := frame.end(last.Time).Add(mt5CloseDelay + m.clockAhead() + max(mt5HeldWarn, 3*m.pollInterval))
+				if !last.Complete && last.Time.After(lastComplete) && !last.Time.Equal(held) && time.Now().After(over) {
+					held = last.Time
+					log.Warnf("[MT5] %s %s: the candle of %s ended at %s, but the terminal doesn't confirm it "+
+						"closed (no tick since, not connected to its server, or GET /health failing): it stays in "+
+						"progress until it does, or has the next candle", pair, period,
+						last.Time.Format(time.DateTime), frame.end(last.Time).Format(time.DateTime))
+				}
+			}
 
 			select {
 			case <-ctx.Done():
@@ -397,18 +514,27 @@ func (m *MT5) latest(ctx context.Context, pair string, frame mt5Timeframe, last,
 		count = min(max(int(time.Since(polled)/frame.approx())+3, count), mt5MaxRates)
 	}
 
+	read := time.Now()
 	rates, err := m.rates(ctx, pair, frame, count, 0)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
+	end := mt5LastEnd(rates, frame)
+	confirmed := m.confirmsClose(pair, end, read)
 	var tick *mt5Tick
-	if candles := m.toCandles(pair, rates, frame, now, nil); len(candles) > 0 && !candles[len(candles)-1].Complete {
+	candles := m.toCandles(pair, rates, frame, now, nil, confirmed)
+	if n := len(candles); n > 0 && !candles[n-1].Complete && candles[n-1].Time.After(last) {
+		if closing := end.Add(mt5CloseDelay + m.clockAhead()); !closing.After(now) {
+			// over on the clock, not confirmed: the state of the terminal for
+			// the next poll
+			m.askHealth(ctx, mt5Later(closing, now.Add(-m.pollInterval)))
+		}
 		if t, err := m.tick(ctx, pair); err == nil {
 			tick = &t
 		}
 	}
-	candles := m.toCandles(pair, rates, frame, now, tick)
+	candles = m.toCandles(pair, rates, frame, now, tick, confirmed)
 
 	// more candles missed than requested, eg: after an outage longer than a
 	// request or while the host was suspended, which the monotonic clock of
@@ -421,6 +547,12 @@ func (m *MT5) latest(ctx context.Context, pair string, frame mt5Timeframe, last,
 		candles = append(missed, candles...)
 	}
 	return candles, nil
+}
+
+// mt5Prices formats the prices and the volume of a candle for the logs.
+func mt5Prices(candle model.Candle) string {
+	return fmt.Sprintf("open %v high %v low %v close %v volume %v", candle.Open, candle.High, candle.Low,
+		candle.Close, candle.Volume)
 }
 
 // periodOf returns the xtrader timeframe of a timeframe of the terminal.

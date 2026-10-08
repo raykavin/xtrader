@@ -1,3 +1,4 @@
+import { liveStream } from "../lib/events";
 import { csrfToken } from "../lib/settings";
 import { APIError, retryAfterSeconds } from "./errors";
 import type {
@@ -221,42 +222,38 @@ export interface EventHandlers {
   onControls?: (event: ControlsResponse) => void;
   onDecision?: (event: DecisionEvent) => void;
   onStatus?: (connected: boolean) => void;
+  /** Connected again after a drop: what the events of the meantime changed is to be loaded. */
+  onResync?: () => void;
 }
 
 /**
- * Subscribes to the Server-Sent Events stream of an agent. EventSource
- * reconnects by itself after a network error, but gives up on an HTTP error,
- * such as the 502 of the dashboard while the agent is offline: then it is
- * opened again. The returned function closes the connection.
+ * Subscribes to the Server-Sent Events stream of an agent, opened again when
+ * it gives up (see liveStream): the login follows once the session is gone.
+ * The returned function closes the connection.
  */
 export function subscribeEvents(agent: string, handlers: EventHandlers): () => void {
-  let source: EventSource;
-  let retry: number | undefined;
-  const connect = () => {
-    source = new EventSource(`${API_BASE}${agentPath(agent, "/events")}`);
-    source.onopen = () => handlers.onStatus?.(true);
-    source.onerror = () => {
-      handlers.onStatus?.(false);
-      if (source.readyState === EventSource.CLOSED) retry = window.setTimeout(connect, 5000);
-    };
-    source.addEventListener("candle", (e) => {
-      handlers.onCandle?.(JSON.parse((e as MessageEvent<string>).data) as CandleEvent);
-    });
-    source.addEventListener("order", (e) => {
-      handlers.onOrder?.(JSON.parse((e as MessageEvent<string>).data) as OrderEvent);
-    });
-    source.addEventListener("controls", (e) => {
-      handlers.onControls?.(JSON.parse((e as MessageEvent<string>).data) as ControlsResponse);
-    });
-    source.addEventListener("decision", (e) => {
-      handlers.onDecision?.(JSON.parse((e as MessageEvent<string>).data) as DecisionEvent);
-    });
-  };
-  connect();
-  return () => {
-    window.clearTimeout(retry);
-    source.close();
-  };
+  return liveStream({
+    open: () => {
+      const source = new EventSource(`${API_BASE}${agentPath(agent, "/events")}`);
+      source.addEventListener("candle", (e) => {
+        handlers.onCandle?.(JSON.parse((e as MessageEvent<string>).data) as CandleEvent);
+      });
+      source.addEventListener("order", (e) => {
+        handlers.onOrder?.(JSON.parse((e as MessageEvent<string>).data) as OrderEvent);
+      });
+      source.addEventListener("controls", (e) => {
+        handlers.onControls?.(JSON.parse((e as MessageEvent<string>).data) as ControlsResponse);
+      });
+      source.addEventListener("decision", (e) => {
+        handlers.onDecision?.(JSON.parse((e as MessageEvent<string>).data) as DecisionEvent);
+      });
+      return source;
+    },
+    onStatus: handlers.onStatus,
+    onResync: handlers.onResync,
+    session: fetchSession,
+    onLoggedOut: () => window.location.assign(loginPath()),
+  });
 }
 
 /** Every agent of the controller in its settings, the disabled ones included. */

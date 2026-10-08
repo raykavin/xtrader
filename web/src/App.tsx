@@ -23,6 +23,7 @@ import { PriceChart } from "./components/PriceChart";
 import { StatsBar } from "./components/StatsBar";
 import { pickAgent } from "./lib/agents";
 import { applyDecisionEvent, DECISIONS, linkOrders, reanalysisState } from "./lib/decisions";
+import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
 import {
   applyCandleEvent,
   applyOrderEvent,
@@ -149,6 +150,8 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const [decisionsError, setDecisionsError] = useState<string | null>(null);
   const [shownDecision, setShownDecision] = useState<string | null>(null);
   const [reloads, setReloads] = useState(0);
+  // bumped as the events are back after a drop: what they missed is loaded again
+  const [resyncs, setResyncs] = useState(noResyncs);
   const pairRef = useRef<string | null>(pair);
   pairRef.current = pair;
   const snapshotRef = useRef<Snapshot | null>(snapshot);
@@ -209,8 +212,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   }, [agent]);
 
   // Load the snapshot of the selected pair, and again as the indicators of
-  // the strategy change, eg: its prompt switched.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloaded as the indicators change
+  // the strategy change, eg: its prompt switched, and as the events are back
+  // after a drop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloaded as the indicators change or the events are back
   useEffect(() => {
     if (!pair) return;
     setPairInURL(pair);
@@ -228,27 +232,39 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [agent, pair, reloads]);
+  }, [agent, pair, reloads, resyncs.snapshot]);
 
   // The decisions of the language model of the strategy, when it keeps them:
-  // loaded with the pair, then followed on the events.
-  const keepsDecisions = snapshot?.llm?.decisions === true && snapshot.pair === pair;
+  // loaded with the pair, then followed on the events, and loaded again as
+  // the events are back after a drop, the ones shown kept meanwhile.
+  const keeps = keepsDecisions(snapshot, pair);
+  const decisionsFor = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloaded as the events are back
   useEffect(() => {
-    setDecisions([]);
-    setDecisionsError(null);
-    if (!pair || !keepsDecisions) return;
+    const run = decisionsLoad(decisionsFor.current, agent, pair, keeps);
+    if (run.clear) {
+      decisionsFor.current = run.key;
+      setDecisions([]);
+      setDecisionsError(null);
+    }
+    if (!pair || !run.load) return;
     const controller = new AbortController();
     fetchDecisions(agent, pair, DECISIONS, controller.signal)
-      .then(setDecisions)
+      .then((list) => {
+        setDecisions(list);
+        setDecisionsError(null);
+      })
       .catch((e) => {
         if (!controller.signal.aborted)
           setDecisionsError(e instanceof Error ? e.message : String(e));
       });
     return () => controller.abort();
-  }, [agent, pair, keepsDecisions]);
+  }, [agent, pair, keeps, resyncs.decisions]);
 
   // Bot control state: SSE pushes changes made from this dashboard, polling
-  // catches changes made elsewhere (Telegram, another browser).
+  // catches changes made elsewhere (Telegram, another browser), loaded at once
+  // as the events are back after a drop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloaded as the events are back
   useEffect(() => {
     const controller = new AbortController();
     const load = () => {
@@ -264,12 +280,13 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [agent]);
+  }, [agent, resyncs.controls]);
 
   // Live updates.
   useEffect(() => {
     return subscribeEvents(agent, {
       onStatus: setConnected,
+      onResync: () => setResyncs(resynced),
       onCandle: (event) => {
         setPairs((list) => (list.includes(event.pair) ? list : [...list, event.pair].sort()));
         const current = snapshotRef.current;

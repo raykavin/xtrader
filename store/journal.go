@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
@@ -128,22 +129,29 @@ func (s *Store) appendJournal(ctx context.Context, id int64, entries []JournalEn
 	return result.RowsAffected, result.Error
 }
 
+// journalMemory reads the memory of an agent (@agent): the last @limit
+// decisions of each pair of its journal, oldest first, read from the index of
+// the agent, the pair and the time, newest first, a pair at a time (see
+// pairsOf), the entries of a pair read until its last ones are found, however
+// many the agent kept.
+var journalMemory = `WITH RECURSIVE ` + pairsOf("journal_entries") + `
+	SELECT m.pair, (m.input->>'time')::timestamptz AS candle, m.at AS at, m.decision->>'action' AS action,
+		COALESCE((m.decision->>'confidence')::float8, 0) AS confidence,
+		btrim(COALESCE(m.decision->>'reason', '')) AS reason
+	FROM pairs CROSS JOIN LATERAL (
+		SELECT * FROM journal_entries
+		WHERE agent_id = @agent AND pair = pairs.pair AND error = '' AND decision IS NOT NULL
+			AND decision->>'action' IS NOT NULL AND input->>'time' IS NOT NULL
+		ORDER BY at DESC, id DESC LIMIT @limit
+	) m
+	ORDER BY m.at, m.id`
+
 // JournalMemory returns the last perPair decisions of each pair of the
 // journal of the agent of id, oldest first, the errors and the entries without
 // a decision left out: the memory of its prompt, see agents/llm.
 func (s *Store) JournalMemory(ctx context.Context, id int64, perPair int) ([]Remembered, error) {
 	var remembered []Remembered
-	err := s.conn(ctx).Raw(`SELECT pair, (input->>'time')::timestamptz AS candle, ranked.at AS at,
-			decision->>'action' AS action,
-			COALESCE((decision->>'confidence')::float8, 0) AS confidence,
-			btrim(COALESCE(decision->>'reason', '')) AS reason
-		FROM (
-			SELECT *, row_number() OVER (PARTITION BY pair ORDER BY at DESC, id DESC) AS rank
-			FROM journal_entries
-			WHERE agent_id = ? AND error = '' AND decision IS NOT NULL AND decision->>'action' IS NOT NULL
-				AND input->>'time' IS NOT NULL
-		) ranked
-		WHERE rank <= ?
-		ORDER BY at, id`, id, perPair).Scan(&remembered).Error
+	err := s.conn(ctx).Raw(journalMemory, sql.Named("agent", id), sql.Named("limit", perPair)).
+		Scan(&remembered).Error
 	return remembered, err
 }

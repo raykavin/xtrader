@@ -17,6 +17,7 @@ import (
 	"github.com/StudioSol/set"
 
 	"github.com/raykavin/xtrader/exchange"
+	"github.com/raykavin/xtrader/internal/recovery"
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/strategy"
@@ -46,6 +47,11 @@ type IndicatorMetric struct {
 // xtrader.CandleSubscriber and xtrader.OrderSubscriber, and service.Notifier:
 // registered with xtrader.WithNotifier, the messages of the bot are sent on its
 // events too.
+//
+// A panic computing what it shows of a candle, eg: the indicators of the
+// strategy, leaves that out only, the candle kept: recovered, logged with its
+// stack and sent as an error on its events (see recovery.Reporter), the chart
+// and the bot, whose feed calls it, going on.
 type Chart struct {
 	mu sync.Mutex
 
@@ -69,6 +75,27 @@ type Chart struct {
 	brokerPosition func(pair string) (BrokerPosition, bool) // see WithBrokerPositions
 	reporter       service.AccountReporter                  // see WithAccountReporter
 	currency       string                                   // of the account, once read
+	askingCurrency bool                                     // in the background, see accountCurrency
+
+	panics *recovery.Reporter // see Chart
+	window int                // the candles of a pair kept, see WithCandleWindow
+}
+
+// ChartCandles are the closed candles of a pair the chart keeps by default,
+// see WithCandleWindow: the last ones, sent with the snapshot of the pair, the
+// indicators drawn on them, eg: 3 days of M1, 17 of M5, 7 months of H1: more
+// than the dashboard shows at a time, while the snapshot and the indicators,
+// computed again on the closes and the snapshots, stay the same size as the
+// bot runs for months.
+const ChartCandles = 5000
+
+// WithCandleWindow sets the closed candles of a pair the chart keeps, the last
+// ones, ChartCandles by default, with the warmup of the indicators before them
+// (the strategy's, and the longest of WithCustomIndicators), so the
+// indicators are drawn on all of them; 0 keeps them all, eg: the chart of a
+// backtest, served once it ends. The orders are kept all the same.
+func WithCandleWindow(candles int) Option {
+	return func(c *Chart) { c.window = max(candles, 0) }
 }
 
 // WithAccountReporter sets where the chart reads the account and the profits
@@ -79,18 +106,64 @@ func WithAccountReporter(reporter service.AccountReporter) Option {
 	return func(c *Chart) { c.reporter = reporter }
 }
 
-// accountCurrency returns the currency of the account, read once, empty
-// without WithAccountReporter. The caller holds c.mu.
-func (c *Chart) accountCurrency() string {
-	if c.reporter == nil {
-		return ""
-	}
+// currencyReporter is an AccountReporter that knows the currency of its
+// account without asking for it, eg: MT5, since it connected.
+type currencyReporter interface {
+	AccountCurrency() string
+}
+
+var _ currencyReporter = (*exchange.MT5)(nil)
+
+// knownCurrency returns the currency of the account when known, without
+// asking the broker. The caller holds c.mu.
+func (c *Chart) knownCurrency() string {
 	if c.currency == "" {
-		if account, ok := c.reporter.AccountSummary(); ok {
-			c.currency = account.Currency
+		if reporter, ok := c.reporter.(currencyReporter); ok {
+			c.currency = reporter.AccountCurrency()
 		}
 	}
 	return c.currency
+}
+
+// accountCurrency returns the currency of the account, empty without
+// WithAccountReporter or until it is read: unless the broker tells it (see
+// currencyReporter), the account is read in the background, never holding
+// c.mu, as it is asked on the network (see readCurrency). The caller holds
+// c.mu.
+func (c *Chart) accountCurrency() string {
+	currency := c.knownCurrency()
+	if currency == "" && c.reporter != nil && !c.askingCurrency {
+		c.askingCurrency = true
+		go func() {
+			c.readCurrency()
+			c.mu.Lock()
+			c.askingCurrency = false
+			c.mu.Unlock()
+		}()
+	}
+	return currency
+}
+
+// readCurrency reads the currency of the account from the broker, unless known
+// already, see accountCurrency. It may ask the broker on the network: the
+// caller doesn't hold c.mu.
+func (c *Chart) readCurrency() {
+	if c.reporter == nil {
+		return
+	}
+	c.mu.Lock()
+	known := c.knownCurrency() != ""
+	c.mu.Unlock()
+	if known {
+		return
+	}
+	account, ok := c.reporter.AccountSummary()
+	if !ok || account.Currency == "" {
+		return
+	}
+	c.mu.Lock()
+	c.currency = account.Currency
+	c.mu.Unlock()
 }
 
 // accountProfit returns the profit the account booked for o, a close (a
@@ -174,6 +247,8 @@ func (c *Chart) position(pair string) *BrokerPosition {
 		return &BrokerPosition{}
 	}
 	position.Open = true
+	position.Quantity, position.Entry, position.Profit = orZero(position.Quantity), orZero(position.Entry),
+		orZero(position.Profit)
 	return &position
 }
 
@@ -213,7 +288,9 @@ func New(options ...Option) (*Chart, error) {
 		orderIDs:  make(map[string]*set.LinkedHashSetINT64),
 		orderByID: make(map[int64]model.Order),
 		events:    newBroker(),
+		window:    ChartCandles,
 	}
+	c.panics = recovery.NewReporter(c.OnError)
 
 	for _, option := range options {
 		option(c)
@@ -310,11 +387,66 @@ func (c *Chart) OnCandle(candle model.Candle) {
 	for k, v := range candle.Metadata {
 		df.Metadata[k] = append(df.Metadata[k], v)
 	}
+	c.trim(candle.Pair)
 	c.lastUpdate = time.Now()
 
 	if c.events.hasSubscribers() {
-		c.events.publish("candle", c.candleEvent(candle.Pair, dto))
+		if event, ok := c.safely(candle, func() CandleEvent { return c.candleEvent(candle.Pair, dto) }); ok {
+			c.events.publish("candle", event)
+		}
 	}
+}
+
+// trim drops the oldest candles of pair beyond the ones kept, see
+// WithCandleWindow, from the candles and the dataframe of the indicators, in
+// step. The series are resliced, append copying the candles kept once out of
+// room. The caller holds c.mu.
+func (c *Chart) trim(pair string) {
+	if c.window <= 0 {
+		return
+	}
+	keep := c.window + c.warmup()
+	if drop := len(c.candles[pair]) - keep; drop > 0 {
+		c.candles[pair] = c.candles[pair][drop:]
+	}
+	df := c.dataframe[pair]
+	drop := len(df.Time) - keep
+	if drop <= 0 {
+		return
+	}
+	df.Close, df.Open, df.High, df.Low = df.Close[drop:], df.Open[drop:], df.High[drop:], df.Low[drop:]
+	df.Volume, df.Time = df.Volume[drop:], df.Time[drop:]
+	for key, values := range df.Metadata {
+		df.Metadata[key] = values[min(drop, len(values)):]
+	}
+}
+
+// warmup returns the candles the indicators of the chart take before their
+// first value: the warmup of the strategy, or of the longest of the custom
+// indicators.
+func (c *Chart) warmup() int {
+	warmup := 0
+	if c.strategy != nil {
+		warmup = c.strategy.WarmupPeriod()
+	}
+	for _, indicator := range c.indicators {
+		warmup = max(warmup, indicator.Warmup())
+	}
+	return max(warmup, 0)
+}
+
+// safely returns event(), the event of candle, false when it panics, eg: the
+// strategy drawing its levels: recovered and reported, see Chart. The caller
+// holds c.mu.
+func (c *Chart) safely(candle model.Candle, event func() CandleEvent) (CandleEvent, bool) {
+	var built CandleEvent
+	recovered := recovery.Call("the candle event of the chart of "+candle.Pair, candle.Time,
+		func() { built = event() })
+	if recovered != nil {
+		c.panics.Report(recovered, "the candle left out of the events of the dashboard, its snapshot shows it")
+		return CandleEvent{}, false
+	}
+	return built, true
 }
 
 // onPartialCandle keeps the candle in progress of its pair, shown by the
@@ -341,8 +473,13 @@ func (c *Chart) onPartialCandle(candle model.Candle) {
 	}
 	c.partial[candle.Pair] = dto
 	if c.events.hasSubscribers() {
-		c.events.publish("candle", CandleEvent{Pair: candle.Pair, Candle: dto, Indicators: []IndicatorUpdate{},
-			Partial: true, Levels: c.levels(candle.Pair), Position: c.position(candle.Pair)})
+		event, ok := c.safely(candle, func() CandleEvent {
+			return CandleEvent{Pair: candle.Pair, Candle: dto, Indicators: []IndicatorUpdate{}, Partial: true,
+				Levels: c.levels(candle.Pair), Position: c.position(candle.Pair)}
+		})
+		if ok {
+			c.events.publish("candle", event)
+		}
 	}
 }
 
@@ -353,9 +490,11 @@ func (c *Chart) levels(pair string) []Level {
 	if !ok {
 		return nil
 	}
-	levels := source.ChartLevels(pair)
-	if levels == nil {
-		levels = []Level{}
+	levels := make([]Level, 0)
+	for _, level := range source.ChartLevels(pair) {
+		if finite(level.Price) {
+			levels = append(levels, level)
+		}
 	}
 	return levels
 }
@@ -488,6 +627,18 @@ func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
+// orZero returns value, or 0 when it isn't finite: JSON can't carry it, and
+// the whole answer would fail.
+func orZero(value float64) float64 {
+	if !finite(value) {
+		return 0
+	}
+	return value
+}
+
+// indicatorsByPair returns the indicators of pair: the custom ones, then the
+// ones of the strategy; the ones that panic left out, see Chart. The caller
+// holds c.mu.
 func (c *Chart) indicatorsByPair(pair string) []Indicator {
 	indicators := make([]Indicator, 0)
 	df := c.dataframe[pair]
@@ -495,6 +646,28 @@ func (c *Chart) indicatorsByPair(pair string) []Indicator {
 		return indicators
 	}
 
+	custom := recovery.Call("the custom indicators of the chart of "+pair, df.LastUpdate, func() {
+		indicators = append(indicators, c.customIndicators(df)...)
+	})
+	if custom != nil {
+		c.panics.Report(custom, "left out of the chart")
+	}
+	if c.strategy != nil {
+		var drawn []Indicator
+		recovered := recovery.Call("Indicators of the strategy on the chart of "+pair, df.LastUpdate, func() {
+			drawn = c.strategyIndicators(df)
+		})
+		if recovered != nil {
+			c.panics.Report(recovered, "left out of the chart")
+		}
+		indicators = append(indicators, drawn...)
+	}
+	return indicators
+}
+
+// customIndicators returns the indicators of WithCustomIndicators on df.
+func (c *Chart) customIndicators(df *model.Dataframe) []Indicator {
+	indicators := make([]Indicator, 0, len(c.indicators))
 	for _, i := range c.indicators {
 		i.Load(df)
 		indicator := Indicator{
@@ -512,38 +685,40 @@ func (c *Chart) indicatorsByPair(pair string) []Indicator {
 		}
 		indicators = append(indicators, indicator)
 	}
+	return indicators
+}
 
-	if c.strategy != nil {
-		warmup := c.strategy.WarmupPeriod()
-		for _, i := range c.strategy.Indicators(df) {
-			indicator := Indicator{
-				Name:    i.GroupName,
-				Overlay: i.Overlay,
-				Metrics: make([]Metric, 0),
-			}
-			// Values before the warmup period are not meaningful (usually zero)
-			// and would distort the price scale, so they are dropped. An
-			// indicator that tells where its values start is trusted, the
-			// others wait for the whole warmup of the strategy.
-			start := i.Warmup
-			if start == 0 {
-				start = warmup
-			}
-			for _, metric := range i.Metrics {
-				if len(metric.Values) < start || len(i.Time) < start {
-					continue
-				}
-				indicator.Metrics = append(indicator.Metrics, Metric{
-					Name:   metric.Name,
-					Color:  metric.Color,
-					Style:  string(metric.Style),
-					Points: toPoints(i.Time[start:], metric.Values[start:]),
-				})
-			}
-			indicators = append(indicators, indicator)
+// strategyIndicators returns the indicators of the strategy on df.
+func (c *Chart) strategyIndicators(df *model.Dataframe) []Indicator {
+	indicators := make([]Indicator, 0)
+	warmup := c.strategy.WarmupPeriod()
+	for _, i := range c.strategy.Indicators(df) {
+		indicator := Indicator{
+			Name:    i.GroupName,
+			Overlay: i.Overlay,
+			Metrics: make([]Metric, 0),
 		}
+		// Values before the warmup period are not meaningful (usually zero)
+		// and would distort the price scale, so they are dropped. An
+		// indicator that tells where its values start is trusted, the
+		// others wait for the whole warmup of the strategy.
+		start := i.Warmup
+		if start == 0 {
+			start = warmup
+		}
+		for _, metric := range i.Metrics {
+			if len(metric.Values) < start || len(i.Time) < start {
+				continue
+			}
+			indicator.Metrics = append(indicator.Metrics, Metric{
+				Name:   metric.Name,
+				Color:  metric.Color,
+				Style:  string(metric.Style),
+				Points: toPoints(i.Time[start:], metric.Values[start:]),
+			})
+		}
+		indicators = append(indicators, indicator)
 	}
-
 	return indicators
 }
 
@@ -561,7 +736,11 @@ func candleTimeFor(candles []Candle, t time.Time) int64 {
 	return candles[idx-1].Time
 }
 
+// toOrder returns the DTO of o, its numbers that aren't finite, eg: the profit
+// of a fill without a price, sent as 0: JSON can't carry them, and the snapshot
+// of its pair and its events would fail. The caller holds c.mu.
 func (c *Chart) toOrder(o model.Order, candles []Candle) Order {
+	o, _ = o.Finite()
 	order := Order{
 		ID:          o.ID,
 		ExchangeID:  o.ExchangeID,
@@ -582,8 +761,11 @@ func (c *Chart) toOrder(o model.Order, candles []Candle) Order {
 		ProfitValue: o.ProfitValue,
 		DecisionID:  c.decisionOf(o.ID),
 	}
-	if profit := c.accountProfit(o); profit != nil {
-		order.AccountProfit, order.AccountCurrency = profit, c.accountCurrency()
+	// in the currency of the account: unknown until it is read
+	if profit := c.accountProfit(o); profit != nil && finite(*profit) {
+		if currency := c.accountCurrency(); currency != "" {
+			order.AccountProfit, order.AccountCurrency = profit, currency
+		}
 	}
 	return order
 }

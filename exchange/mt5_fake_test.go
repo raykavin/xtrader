@@ -1414,6 +1414,9 @@ func (x *MT5TestFake) TriggerSL(position int64, price float64) { x.f.triggerSL(p
 // TriggerTP closes a position by its take profit.
 func (x *MT5TestFake) TriggerTP(position int64) { x.f.triggerTP(position) }
 
+// CloseByHand closes lots of a position from the terminal (reason client).
+func (x *MT5TestFake) CloseByHand(position int64, lots float64) { x.f.closeByHand(position, lots) }
+
 // HoldHistory leaves the history made from now on out of the lists of the
 // bridge, as a terminal whose history lags, until ReleaseHistory.
 func (x *MT5TestFake) HoldHistory() { x.f.holdHistory() }
