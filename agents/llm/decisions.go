@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -537,11 +538,17 @@ func (t *Trader) ListenDecisions(listener func(ui.Decision)) {
 }
 
 // keep keeps the decision with its attachments, and hands it to the
-// listeners.
+// listeners: the record of the skips it repeats, see grouped. The records of a
+// pair are grouped, saved and told one at a time, in the same order: a record
+// kept again in its place ends with its last state, never an older one.
 func (t *Trader) keep(d ui.Decision, attachments []Attachment) {
 	if d.ID == "" {
 		return // no record
 	}
+	keeping := t.keeping(d.Pair)
+	keeping.Lock()
+	defer keeping.Unlock()
+	d = t.grouped(d)
 	d, attachments = withAttachments(d, attachments)
 	if err := t.store().Save(d, attachments); err != nil {
 		log.Warnf("[LLM] %s | the decision %s: %v", d.Pair, d.ID, err)
@@ -553,6 +560,90 @@ func (t *Trader) keep(d ui.Decision, attachments []Attachment) {
 	for _, listener := range listeners {
 		listener(d)
 	}
+}
+
+// keeping returns the lock of the records of pair, see keep: the listeners
+// must not keep a decision.
+func (t *Trader) keeping(pair string) *sync.Mutex {
+	t.skipsMtx.Lock()
+	defer t.skipsMtx.Unlock()
+	if t.keepMtx == nil {
+		t.keepMtx = make(map[string]*sync.Mutex)
+	}
+	mtx, ok := t.keepMtx[pair]
+	if !ok {
+		mtx = new(sync.Mutex)
+		t.keepMtx[pair] = mtx
+	}
+	return mtx
+}
+
+// skipRun is the analyses of a pair skipped in a row for the same reason,
+// kept as one record, see grouped: the first one, the triggers of all of them,
+// and the last one.
+type skipRun struct {
+	key      string
+	first    ui.Decision
+	triggers map[string]int
+	count    int
+	last     ui.Decision
+}
+
+// grouped returns the record to keep of d: d itself, or the record of the
+// skips it repeats. The analyses of a pair at the close of a candle and on the
+// consult interval skipped for the same reason, with the same position and
+// prompt, since any other record of the pair, are kept as their first record,
+// eg: the entries blocked around a release, one record rather than one every
+// few seconds: of the same ID, kept again in its place with a note of how many
+// they are, of their triggers, and of the last one, its time, its price and its
+// detail when another. The start and the reanalyses are kept apart, as any
+// decision.
+func (t *Trader) grouped(d ui.Decision) ui.Decision {
+	t.skipsMtx.Lock()
+	defer t.skipsMtx.Unlock()
+	if d.Outcome != OutcomeSkipped || d.RequestedBy != "" ||
+		d.Trigger != TriggerCandle && d.Trigger != TriggerInterval {
+		delete(t.skips, d.Pair)
+		return d
+	}
+	key := strings.Join([]string{d.Reason, d.Position, d.Timeframe, describeRecordPrompt(d.Prompt)}, "\x00")
+	run := t.skips[d.Pair]
+	if run == nil || run.key != key {
+		t.skips[d.Pair] = &skipRun{key: key, first: d, triggers: map[string]int{d.Trigger: 1}, count: 1, last: d}
+		return d
+	}
+	run.count++
+	run.triggers[d.Trigger]++
+	run.last = d
+	record := run.first
+	record.Notes = append(slices.Clone(run.first.Notes), ui.DecisionNote{Kind: "text", Text: run.describe()})
+	return record
+}
+
+// describe tells of the skips of the run, eg: skipped 41 times in a row for
+// the same reason (candle 1, interval 40), the last at 2026-10-07 10:57:03 UTC,
+// at the price of 4154.25.
+func (r *skipRun) describe() string {
+	triggers := make([]string, 0, len(r.triggers))
+	for trigger, count := range r.triggers {
+		triggers = append(triggers, fmt.Sprintf("%s %d", trigger, count))
+	}
+	sort.Strings(triggers)
+	text := fmt.Sprintf("skipped %d times in a row for the same reason (%s), the last at %s, at the price of %s",
+		r.count, strings.Join(triggers, ", "), time.Unix(r.last.DecidedAt, 0).UTC().Format("2006-01-02 15:04:05 UTC"),
+		strconv.FormatFloat(r.last.Price, 'f', -1, 64))
+	if r.last.Error != r.first.Error {
+		text += ": " + r.last.Error
+	}
+	return text
+}
+
+// describeRecordPrompt names the prompt of a record, empty for none.
+func describeRecordPrompt(p *ui.DecisionPrompt) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d/%s/%d", p.ID, p.Name, p.Version)
 }
 
 // decisionRecord returns the record of the decision asked with input at at,

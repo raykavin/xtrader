@@ -656,6 +656,9 @@ func TestSignalStrategy_Trailing(t *testing.T) {
 }
 
 func TestSignalStrategy_Backtest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: left out by -short")
+	}
 	for name := range signals {
 		if name == "mtfema" {
 			continue // its 16x timeframe needs more candles than the test data holds

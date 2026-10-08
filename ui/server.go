@@ -75,15 +75,27 @@ func (c *Chart) handlePairs(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (c *Chart) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	pair, ok := c.resolvePair(chi.URLParam(r, "pair"))
+	snapshot, ok := c.snapshotOf(chi.URLParam(r, "pair"))
 	if !ok {
 		http.Error(w, "unknown pair", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, c.snapshot(pair))
+	writeJSON(w, snapshot)
+}
+
+// snapshotOf returns the snapshot of the pair named name, see resolvePair. It
+// is made holding c.mu, and written without it: a client reading it slowly,
+// eg: a phone through ngrok, never holds the chart, nor the bot feeding it its
+// candles and orders. The account is read before, see readCurrency.
+func (c *Chart) snapshotOf(name string) (Snapshot, bool) {
+	c.readCurrency()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pair, ok := c.resolvePair(name)
+	if !ok {
+		return Snapshot{}, false
+	}
+	return c.snapshot(pair), true
 }
 
 // resolvePair returns the pair of the chart named name: the same name, or

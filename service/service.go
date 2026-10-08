@@ -127,6 +127,19 @@ type PositionLegs interface {
 	HeldLegs(pair string, side model.SideType) (legs []model.Order, opened time.Time, err error)
 }
 
+// PositionReporter is implemented by the exchanges that report the position the
+// bot holds on a pair apart from the rest of the account, eg: MT5, from the
+// positions of its magic number: the order controller checks the positions it
+// replays from the storage after a restart against it, and a position whose
+// orders on the other side, eg: its legs, end without a fill, as a position
+// closed outside the bot, eg: by hand in the terminal or by a stop out, leaves no
+// fill in the storage. HeldPosition returns the side and the size of the net
+// position held on pair, 0 when flat; false when unknown, eg: a pair not
+// traded. It must not block: a state polled already, not a request.
+type PositionReporter interface {
+	HeldPosition(pair string) (side model.SideType, quantity float64, ok bool)
+}
+
 type Notifier interface {
 	Notify(string)
 	OnOrder(order model.Order)

@@ -1,4 +1,4 @@
-.PHONY: generate generate-check lint test bridge-test release ui-install ui-build ui-dev ui-check ui-bundle
+.PHONY: generate generate-check lint test test-short bridge-test release ui-install ui-build ui-dev ui-check ui-bundle
 
 generate:
 	go generate ./...
@@ -11,8 +11,15 @@ generate-check:
 lint:
 	golangci-lint run --fix
 
+# The whole suite under the race detector, whose backtests of the strategies
+# take minutes on a busy machine: past the 10 minutes of go test by default.
 test:
-	go test -race -cover ./...
+	go test -race -cover -timeout 30m ./...
+
+# The suite without its long tests (testing.Short), eg: the backtests of the
+# strategies on the history of testdata.
+test-short:
+	go test -race -short -timeout 10m ./...
 
 # The tests of tools/mt5bridge, with a MetaTrader5 package simulated by the
 # tests themselves (never the real one); -B leaves no __pycache__.

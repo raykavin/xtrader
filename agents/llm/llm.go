@@ -446,6 +446,10 @@ type Trader struct {
 	listeners    []func(ui.Decision) // see ListenDecisions
 	notify       func(string)        // see SetNotifier
 
+	skipsMtx sync.Mutex
+	skips    map[string]*skipRun    // the analyses skipped in a row for the same reason, by pair, see grouped
+	keepMtx  map[string]*sync.Mutex // the records of each pair kept one at a time, see keep
+
 	period        time.Duration // of the candles, to know their close
 	calendarError time.Time     // last warning of a calendar that couldn't be read
 
@@ -553,7 +557,8 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 		quit:      quit,
 		stop:      stop,
 		period:    period,
-		decisions: NewMemoryDecisions(0),
+		decisions: NewMemoryDecisions(memoryDecisions(cfg)),
+		skips:     make(map[string]*skipRun),
 		pending:   make(map[string]*reanalysis),
 		running:   make(map[string]*reanalysis),
 		cfg:       cfg,
@@ -606,6 +611,20 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 	t.state.Store(state)
 	t.warmup = max(state.need, cfg.Warmup)
 	return t, nil
+}
+
+// liveDecisionsHeld are the decisions a Trader trading live keeps in memory
+// without SetDecisionStore, eg: on a paper wallet: the last ones, as a bot runs
+// for months, the dashboard listing 500 at most; a backtest keeps them all.
+const liveDecisionsHeld = 2000
+
+// memoryDecisions returns the capacity of the decisions kept in memory by
+// default, see liveDecisionsHeld.
+func memoryDecisions(cfg Config) int {
+	if cfg.Live {
+		return liveDecisionsHeld
+	}
+	return 0
 }
 
 func (t *Trader) Timeframe() string {

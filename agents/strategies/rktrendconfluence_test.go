@@ -503,6 +503,9 @@ func (flatBroker) CreateOrderStop(string, float64, float64) (model.Order, error)
 // The strategy only receives the last WarmupPeriod candles: its signals must be
 // the ones of the indicator computed over the whole history, as on a chart.
 func TestRKTrendConfluence_WindowMatchesFullHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: left out by -short")
+	}
 	df := btcDataframe(t)
 
 	tests := []struct {

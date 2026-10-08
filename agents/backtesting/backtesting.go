@@ -69,6 +69,7 @@ func main() {
 			indicator.RSI(14, "purple"),
 		),
 		ui.WithPaperWallet(wallet),
+		ui.WithCandleWindow(0), // the whole backtest on the chart
 	)
 	if err != nil {
 		log.Fatal(err)

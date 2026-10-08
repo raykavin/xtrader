@@ -240,10 +240,14 @@ type Result struct {
 	Side          model.SideType
 	Duration      time.Duration
 	CreatedAt     time.Time
+
+	unpriced bool // the profit unknown, 0: the fill or the position had no price, see Position.Update
 }
 
 type Position struct {
-	Side     model.SideType
+	Side model.SideType
+	// AvgPrice is the average price of the position, 0 when unknown: a fill
+	// of it had no price, see Position.Update.
 	AvgPrice float64
 	Quantity float64
 	// Fee paid to open the position, in quote currency. It is settled against
@@ -266,6 +270,11 @@ func sameQuantity(a, b float64) bool {
 	return math.Abs(a-b) <= quantityEpsilon*math.Max(math.Abs(a), math.Abs(b))
 }
 
+// priced reports whether price is a price: positive and finite.
+func priced(price float64) bool {
+	return price > 0 && !math.IsInf(price, 1)
+}
+
 // filledAt is the time an order was executed: the last update for orders that
 // rested on the book, the creation for the ones filled immediately.
 func filledAt(order *model.Order) time.Time {
@@ -280,9 +289,16 @@ func (p *Position) Update(order *model.Order) (result *Result, finished bool) {
 	// orders: live exchanges return the executed price, and the paper wallet
 	// records the trigger price it filled at.
 	price := order.Price
+	if !priced(price) {
+		price = 0 // unknown, eg: a fill reported without its price
+	}
 
 	if p.Side == order.Side {
-		p.AvgPrice = (p.AvgPrice*p.Quantity + price*order.Quantity) / (p.Quantity + order.Quantity)
+		if priced(p.AvgPrice) && price > 0 && p.Quantity+order.Quantity > 0 {
+			p.AvgPrice = (p.AvgPrice*p.Quantity + price*order.Quantity) / (p.Quantity + order.Quantity)
+		} else {
+			p.AvgPrice = 0 // unknown: never an average made of a price of 0
+		}
 		p.Quantity += order.Quantity
 		p.Fee += order.Fee
 		return nil, false
@@ -307,11 +323,21 @@ func (p *Position) Update(order *model.Order) (result *Result, finished bool) {
 		exitFee = order.Fee * closedQuantity / order.Quantity
 	}
 
-	order.Profit = profitPrice / p.AvgPrice
-	order.ProfitValue = profitPrice * closedQuantity
-	if fee := entryFee + exitFee; fee > 0 {
-		order.ProfitValue -= fee
-		order.Profit = order.ProfitValue / (p.AvgPrice * closedQuantity)
+	// The profit needs the price of the fill and the one of the position: one
+	// unknown, the profit is (0), rather than a NaN or an infinity, which JSON
+	// can't write, or a loss of the whole position made of a price of 0.
+	unpriced := price == 0 || !priced(p.AvgPrice)
+	if unpriced {
+		order.Profit, order.ProfitValue = 0, 0
+		log.Warnf("[ORDER] %s: the fill or the position it closes (%s %g at %g) without a price: its profit unknown",
+			order, p.Side, p.Quantity, p.AvgPrice)
+	} else {
+		order.Profit = profitPrice / p.AvgPrice
+		order.ProfitValue = profitPrice * closedQuantity
+		if fee := entryFee + exitFee; fee > 0 {
+			order.ProfitValue -= fee
+			order.Profit = order.ProfitValue / (p.AvgPrice * closedQuantity)
+		}
 	}
 
 	closedAt := filledAt(order)
@@ -322,6 +348,7 @@ func (p *Position) Update(order *model.Order) (result *Result, finished bool) {
 		ProfitPercent: order.Profit,
 		ProfitValue:   order.ProfitValue,
 		Side:          p.Side,
+		unpriced:      unpriced,
 	}
 
 	if sameQuantity(p.Quantity, order.Quantity) {
@@ -399,6 +426,14 @@ type Controller struct {
 	// restoring is set while restore replays the stored fills: they settle
 	// the positions and the results quietly, notified already.
 	restoring bool
+	// unheld holds the pairs whose position replayed from the storage the
+	// exchange doesn't hold, kept for the open orders that may have closed
+	// it, until they end, see reconcile.
+	unheld map[string]bool
+	// heldChecks holds the pairs whose position to check against the one the
+	// exchange holds, an order that may have closed it ended without a fill
+	// as an order of the pair was in flight, see heldEnded.
+	heldChecks map[string]bool
 
 	// unstored holds the orders created or changed on the exchange that the
 	// storage failed to write, in their last state, by id: followed all the
@@ -445,6 +480,8 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 		pending:        make(map[int64]model.Order),
 		movedAt:        make(map[int64]uint64),
 		unstored:       make(map[int64]model.Order),
+		unheld:         make(map[string]bool),
+		heldChecks:     make(map[string]bool),
 	}
 	c.restore()
 	return c
@@ -455,7 +492,8 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 // before a restart: a stop loss or a take profit filling after it then closes
 // the position it protects, rather than opening one on the other side that
 // the next trades would settle against. The profits computed and missing from
-// the storage are stored.
+// the storage are stored. The positions are then checked against the ones the
+// exchange holds, when it tells them, see reconcile.
 func (c *Controller) restore() {
 	if c.storage == nil {
 		return
@@ -486,10 +524,245 @@ func (c *Controller) restore() {
 	}
 	open := make([]string, 0, len(c.position))
 	for pair, position := range c.position {
-		open = append(open, fmt.Sprintf("%s %s %g at %g", pair, position.Side, position.Quantity, position.AvgPrice))
+		open = append(open, fmt.Sprintf("%s %s", pair, position))
 	}
 	sort.Strings(open)
 	log.Infof("[SETUP] %d filled orders of the storage replayed, the positions open: %v", len(orders), open)
+	c.reconcile()
+}
+
+// String describes the position, eg: BUY 0.1 at 4250.5.
+func (p *Position) String() string {
+	return fmt.Sprintf("%s %g at %g", p.Side, p.Quantity, p.AvgPrice)
+}
+
+// reconcile checks the positions replayed from the storage (see restore)
+// against the ones the exchange reports the bot holds, when it does (see
+// service.PositionReporter), without sending any order: a position closed
+// outside the bot, eg: by hand in the terminal or by a stop out, leaves no
+// fill in the storage, and the trades of its pair would be settled against
+// it, their profits and results wrong (the strategies read the position from
+// the exchange). One the exchange doesn't hold is discarded, unless an open
+// order on its other side may have closed it, eg: its stop loss, filled while
+// the bot was off, which closes it with its profit: kept until they end (see
+// unheldEnded). One the exchange holds otherwise, eg: of another size, is
+// kept, an error logged: what differs is unknown; a warning only when the
+// more held is explained by open orders of the storage on its side, eg: a
+// pending entry filled while the bot was off, whose fill comes next.
+func (c *Controller) reconcile() {
+	reporter, ok := c.exchange.(service.PositionReporter)
+	if !ok {
+		return
+	}
+	pairs := make([]string, 0, len(c.Results))
+	for pair := range c.Results {
+		pairs = append(pairs, pair)
+	}
+	sort.Strings(pairs)
+	for _, pair := range pairs {
+		position, open := c.position[pair]
+		side, quantity, known := reporter.HeldPosition(pair)
+		switch {
+		case !known:
+			if open {
+				log.Warnf("[SETUP] %s: the position held at the exchange unknown, the one replayed from the "+
+					"storage (%s) not checked", pair, position)
+			}
+		case !open && quantity > 0 && c.mayHaveFilled(pair, side, quantity):
+			log.Warnf("[SETUP] %s: the exchange holds a position (%s %g) the storage doesn't tell yet: an open "+
+				"order of the bot on its side, eg: a pending entry, may have filled while it was off, settled as "+
+				"its fill comes; otherwise the profits of the pair may be wrong", pair, side, quantity)
+		case !open && quantity > 0:
+			log.Errorf("[SETUP] %s: the exchange holds a position (%s %g) the storage doesn't tell: the trades of "+
+				"the pair are settled apart from it, their profits may be wrong", pair, side, quantity)
+		case !open:
+			// flat on both sides
+		case quantity == 0:
+			closing, err := c.storedClosing(pair, position.Side)
+			switch {
+			case err != nil:
+				log.Errorf("[SETUP] %s: the position replayed from the storage (%s) is not held at the exchange, "+
+					"kept: the open orders that may have closed it unknown: %v", pair, position, err)
+			case closing > 0:
+				c.unheld[pair] = true
+				log.Warnf("[SETUP] %s: the position replayed from the storage (%s) is not held at the exchange: "+
+					"kept for the %d open orders that may have closed it, eg: its stop loss, until they end",
+					pair, position, closing)
+			default:
+				c.discard(pair, position)
+			}
+		case side == position.Side && quantity > position.Quantity &&
+			!sameQuantity(quantity, position.Quantity) &&
+			c.mayHaveFilled(pair, side, quantity-position.Quantity):
+			log.Warnf("[SETUP] %s: the position replayed from the storage (%s) is smaller than the one held at the "+
+				"exchange (%s %g): an open order of the bot on its side, eg: a pending entry, may have filled while "+
+				"it was off, settled as its fill comes; otherwise the profits of the pair may be wrong", pair,
+				position, side, quantity)
+		case side != position.Side || !sameQuantity(quantity, position.Quantity):
+			log.Errorf("[SETUP] %s: the position replayed from the storage (%s) differs from the one held at the "+
+				"exchange (%s %g): kept, the profits of the pair may be wrong", pair, position, side, quantity)
+		}
+	}
+}
+
+// mayHaveFilled reports whether the open orders of the storage on pair on side,
+// eg: a pending entry (limit or stop), add up to quantity at least: filled
+// while the bot was off, they explain that much more held at the exchange,
+// their fills settled once Start loads them (see loadPendingOrders).
+func (c *Controller) mayHaveFilled(pair string, side model.SideType, quantity float64) bool {
+	orders, err := c.storedOpen(pair)
+	if err != nil {
+		return false
+	}
+	var open float64
+	for _, order := range orders {
+		if order.Side == side {
+			open += order.Quantity
+		}
+	}
+	return open > 0 && (open >= quantity || sameQuantity(open, quantity))
+}
+
+// storedOpen returns the open orders of the storage on pair.
+func (c *Controller) storedOpen(pair string) ([]*model.Order, error) {
+	return c.storage.Orders(storage.WithPair(pair), storage.WithStatusIn(model.OrderStatusTypeNew,
+		model.OrderStatusTypePartiallyFilled, model.OrderStatusTypePendingCancel))
+}
+
+// storedClosing returns how many open orders of the storage on pair may close
+// a position held on side: the ones on the other side, eg: its legs.
+func (c *Controller) storedClosing(pair string, side model.SideType) (int, error) {
+	orders, err := c.storedOpen(pair)
+	if err != nil {
+		return 0, err
+	}
+	var closing int
+	for _, order := range orders {
+		if order.Side != side {
+			closing++
+		}
+	}
+	return closing, nil
+}
+
+// discard discards position, the one of pair replayed from the storage, which
+// the exchange doesn't hold, see reconcile. Must be called while holding
+// c.mtx, once started.
+func (c *Controller) discard(pair string, position *Position) {
+	delete(c.position, pair)
+	delete(c.unheld, pair)
+	log.Warnf("[ORDER] %s: the position replayed from the storage (%s) is not held at the exchange, eg: closed "+
+		"outside the bot: discarded, without any order, its trades after settled on their own", pair, position)
+}
+
+// unheldEnded checks again the position of pair the exchange didn't hold at
+// the start, kept for the open orders that may have closed it (see
+// reconcile), as one of them ended without a fill: once none is left, it is
+// discarded if the exchange still holds none. Must be called while holding
+// c.mtx.
+func (c *Controller) unheldEnded(pair string) {
+	position, open := c.position[pair]
+	if !open {
+		delete(c.unheld, pair)
+		return
+	}
+	if c.closing(pair, position.Side) {
+		return // may close it still
+	}
+	delete(c.unheld, pair)
+	reporter, ok := c.exchange.(service.PositionReporter)
+	if !ok {
+		return
+	}
+	side, quantity, known := reporter.HeldPosition(pair)
+	switch {
+	case !known:
+		log.Warnf("[ORDER] %s: the position replayed from the storage (%s), not held at the exchange at the "+
+			"start, kept: the one held now unknown", pair, position)
+	case quantity == 0:
+		c.discard(pair, position)
+	case side == position.Side && sameQuantity(quantity, position.Quantity):
+		log.Warnf("[ORDER] %s: the position replayed from the storage (%s), not held at the exchange at the "+
+			"start, is held now, eg: a fill not settled yet: kept", pair, position)
+	default:
+		log.Errorf("[ORDER] %s: the position replayed from the storage (%s), not held at the exchange at the "+
+			"start, differs from the one held now (%s %g): kept, the profits of the pair may be wrong", pair,
+			position, side, quantity)
+	}
+}
+
+// closing reports whether an open order followed on pair may close a position
+// held on side: one on the other side, eg: its leg. Must be called while
+// holding c.mtx.
+func (c *Controller) closing(pair string, side model.SideType) bool {
+	for _, orders := range []map[int64]model.Order{c.pending, c.unstored} {
+		for _, order := range orders {
+			if order.Pair == pair && order.Side != side && isOpen(order.Status) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// heldEnded checks the position of pair against the one the exchange holds,
+// when it tells it (see service.PositionReporter), as an order on its other
+// side ended without a fill, eg: its legs canceled by MT5 as the position
+// closed by hand in the terminal or by a stop out, which leaves no fill: once
+// no order that may close it is left (the end of the last one checks it), it
+// is discarded if the exchange holds none, without any order, rather than
+// settling the next trades of the pair against it, their profits and results
+// wrong; see reconcile, the check at the start. Checked with no order of the
+// pair in flight, under its lock: an exit at the market filled at the
+// exchange, its fill not settled yet, would then open a position on the
+// other side; checked again by the next UpdateOrders. Must be called while
+// holding c.mtx.
+func (c *Controller) heldEnded(pair string) {
+	delete(c.heldChecks, pair)
+	reporter, ok := c.exchange.(service.PositionReporter)
+	if !ok {
+		return
+	}
+	position, open := c.position[pair]
+	if !open || c.closing(pair, position.Side) {
+		return
+	}
+	unlock, free := c.tryLockPair(pair)
+	if !free {
+		c.heldChecks[pair] = true
+		return
+	}
+	defer unlock()
+	side, quantity, known := reporter.HeldPosition(pair)
+	switch {
+	case !known:
+	case quantity == 0:
+		delete(c.position, pair)
+		delete(c.unheld, pair)
+		log.Warnf("[ORDER] %s: the position (%s) is not held at the exchange any more, its orders on the other "+
+			"side ended without a fill, eg: closed outside the bot, by hand or by a stop out: discarded, without "+
+			"any order, its trades after settled on their own", pair, position)
+	case side != position.Side || !sameQuantity(quantity, position.Quantity):
+		log.Warnf("[ORDER] %s: the position (%s) differs from the one held at the exchange (%s %g) as its orders "+
+			"on the other side ended without a fill: kept, the profits of the pair may be wrong", pair, position,
+			side, quantity)
+	}
+}
+
+// heldAgain checks again the positions heldEnded couldn't check, an order of
+// their pair in flight.
+func (c *Controller) heldAgain() {
+	c.mtx.RLock()
+	none := len(c.heldChecks) == 0
+	c.mtx.RUnlock()
+	if none {
+		return
+	}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	for pair := range c.heldChecks {
+		c.heldEnded(pair)
+	}
 }
 
 func (c *Controller) SetNotifier(notifier service.Notifier) {
@@ -504,8 +777,12 @@ func (c *Controller) updatePosition(o *model.Order) {
 	// get filled orders before the current order
 	position, ok := c.position[o.Pair]
 	if !ok {
+		price := o.Price
+		if !priced(price) {
+			price = 0 // unknown, see Position.Update
+		}
 		c.position[o.Pair] = &Position{
-			AvgPrice:  o.Price,
+			AvgPrice:  price,
 			Quantity:  o.Quantity,
 			Fee:       o.Fee,
 			CreatedAt: filledAt(o),
@@ -531,7 +808,10 @@ func (c *Controller) updatePosition(o *model.Order) {
 		// TODO: replace by a slice of Result
 		summary := c.Results[o.Pair]
 		summary.invalidateCache() // Invalidate cache when modifying
-		if result.ProfitPercent >= 0 {
+		switch {
+		case result.unpriced:
+			// unknown: left out of the results rather than a win of 0
+		case result.ProfitPercent >= 0:
 			if result.Side == model.SideTypeBuy {
 				summary.WinLong = append(summary.WinLong, result.ProfitValue)
 				summary.WinLongPercent = append(summary.WinLongPercent, result.ProfitPercent)
@@ -539,7 +819,7 @@ func (c *Controller) updatePosition(o *model.Order) {
 				summary.WinShort = append(summary.WinShort, result.ProfitValue)
 				summary.WinShortPercent = append(summary.WinShortPercent, result.ProfitPercent)
 			}
-		} else {
+		default:
 			if result.Side == model.SideTypeBuy {
 				summary.LoseLong = append(summary.LoseLong, result.ProfitValue)
 				summary.LoseLongPercent = append(summary.LoseLongPercent, result.ProfitPercent)
@@ -555,6 +835,10 @@ func (c *Controller) updatePosition(o *model.Order) {
 		_, quote := exchange.SplitAssetQuote(o.Pair)
 		message := fmt.Sprintf("[PROFIT] %f %s (%f %%)\n`%s`", result.ProfitValue, quote, result.ProfitPercent*100,
 			c.Results[o.Pair].String())
+		if result.unpriced {
+			message = fmt.Sprintf("[PROFIT] unknown %s: the fill or the position it closes without a price\n`%s`",
+				quote, c.Results[o.Pair].String())
+		}
 		reporter, ok := c.exchange.(service.AccountReporter)
 		if !ok {
 			c.notify(message)
@@ -562,13 +846,16 @@ func (c *Controller) updatePosition(o *model.Order) {
 		}
 		// as the account books it, in its currency: its deals may come a
 		// moment after the fill, so the notification waits for them apart
-		closing, percent, table := *o, result.ProfitPercent, c.Results[o.Pair].String()
+		closing, percent, table, unpriced := *o, result.ProfitPercent, c.Results[o.Pair].String(), result.unpriced
 		go func() {
 			for wait := time.Now().Add(profitWait); ; {
 				if booked, ok := reporter.ClosedProfit(closing, entry); ok {
 					if account, ok := reporter.AccountSummary(); ok && account.Currency != "" {
 						message = fmt.Sprintf("[PROFIT] %.2f %s (%.4f %%)\n`%s`", booked, account.Currency,
 							percent*100, table)
+						if unpriced { // its percentage unknown
+							message = fmt.Sprintf("[PROFIT] %.2f %s\n`%s`", booked, account.Currency, table)
+						}
 					}
 					break
 				}
@@ -753,6 +1040,15 @@ func (c *Controller) processTrade(order *model.Order) {
 	if order.Status != model.OrderStatusTypeFilled {
 		return
 	}
+	if c.unheld[order.Pair] && !c.restoring {
+		// the position not held at the exchange closed by its order, or
+		// changed: no longer the one checked, see reconcile
+		delete(c.unheld, order.Pair)
+		if position, ok := c.position[order.Pair]; ok && position.Side == order.Side {
+			log.Warnf("[ORDER] %s: added to the position replayed from the storage (%s), not held at the "+
+				"exchange at the start", order, position)
+		}
+	}
 
 	// initializer results map if needed
 	if _, ok := c.Results[order.Pair]; !ok {
@@ -824,6 +1120,7 @@ func (c *Controller) UpdateOrders() {
 // updateOrders is UpdateOrders. Must be called while holding c.updateMtx.
 func (c *Controller) updateOrders() {
 	c.storeAgain()
+	c.heldAgain()
 
 	c.mtx.RLock()
 	orders := make([]model.Order, 0, len(c.pending))
@@ -889,6 +1186,15 @@ func (c *Controller) updateOrders() {
 		}
 		c.processTrade(&processOrder)
 		c.publish(processOrder, false)
+		if processOrder.Status.Final() && processOrder.Status != model.OrderStatusTypeFilled {
+			position, open := c.position[processOrder.Pair]
+			switch {
+			case c.unheld[processOrder.Pair]:
+				c.unheldEnded(processOrder.Pair)
+			case open && processOrder.Side != position.Side:
+				c.heldEnded(processOrder.Pair) // may have closed it
+			}
+		}
 	}
 	c.mtx.Unlock()
 }
@@ -1055,7 +1361,15 @@ func (c *Controller) requireRunning() error {
 // a call to the exchange, which may be slow, eg: an MT5 trade request whose
 // answer was lost, looked for in the account.
 func (c *Controller) lockPair(pair string) func() {
+	mtx := c.pairMutex(pair)
+	mtx.Lock()
+	return mtx.Unlock
+}
+
+// pairMutex returns the lock of pair, see lockPair.
+func (c *Controller) pairMutex(pair string) *sync.Mutex {
 	c.pairsMtx.Lock()
+	defer c.pairsMtx.Unlock()
 	if c.pairs == nil {
 		c.pairs = make(map[string]*sync.Mutex)
 	}
@@ -1064,9 +1378,17 @@ func (c *Controller) lockPair(pair string) func() {
 		mtx = new(sync.Mutex)
 		c.pairs[pair] = mtx
 	}
-	c.pairsMtx.Unlock()
-	mtx.Lock()
-	return mtx.Unlock
+	return mtx
+}
+
+// tryLockPair takes the lock of pair (see lockPair) when free, returning the
+// unlock and true; false, without waiting, when an order of pair is in flight.
+func (c *Controller) tryLockPair(pair string) (func(), bool) {
+	mtx := c.pairMutex(pair)
+	if !mtx.TryLock() {
+		return nil, false
+	}
+	return mtx.Unlock, true
 }
 
 // beginOrder begins an order of pair, see begin, refused on a stopped bot

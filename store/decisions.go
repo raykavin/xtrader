@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -191,14 +192,35 @@ func (s *Store) Decisions(ctx context.Context, id int64, pair string, limit int)
 	return s.decisions(ctx, id, rows)
 }
 
+// decisionsPerPair reads the last decisions of each pair of an agent (@agent,
+// @limit of them): its pairs skipped through on the index of the agent and the
+// pair, then the last ones of each read from it, so the rows read are the
+// ones answered, however many the agent kept.
+var decisionsPerPair = `WITH RECURSIVE ` + pairsOf("decisions") + `
+	SELECT d.* FROM pairs CROSS JOIN LATERAL (
+		SELECT * FROM decisions WHERE agent_id = @agent AND pair = pairs.pair
+		ORDER BY decided_at DESC, id DESC LIMIT @limit
+	) d
+	ORDER BY d.decided_at DESC, d.id DESC`
+
+// pairsOf returns the CTE pairs: the pairs of table of an agent (@agent),
+// whose index starts with the agent and the pair, skipped through, a lookup
+// a pair (a loose index scan) rather than a read of all its rows.
+func pairsOf(table string) string {
+	return `pairs (pair) AS (
+		(SELECT pair FROM ` + table + ` WHERE agent_id = @agent ORDER BY pair LIMIT 1)
+		UNION ALL
+		SELECT (SELECT t.pair FROM ` + table + ` t WHERE t.agent_id = @agent AND t.pair > pairs.pair
+			ORDER BY t.pair LIMIT 1)
+		FROM pairs WHERE pairs.pair IS NOT NULL
+	)`
+}
+
 // DecisionsPerPair returns the last perPair decisions of each pair of the
 // agent of id, newest first.
 func (s *Store) DecisionsPerPair(ctx context.Context, id int64, perPair int) ([]ui.Decision, error) {
 	var rows []decisionRow
-	err := s.conn(ctx).Raw(`SELECT * FROM (
-			SELECT *, row_number() OVER (PARTITION BY pair ORDER BY decided_at DESC, id DESC) AS rank
-			FROM decisions WHERE agent_id = ?
-		) ranked WHERE rank <= ? ORDER BY decided_at DESC, id DESC`, id, perPair).Scan(&rows).Error
+	err := s.conn(ctx).Raw(decisionsPerPair, sql.Named("agent", id), sql.Named("limit", perPair)).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

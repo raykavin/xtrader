@@ -421,6 +421,9 @@ func TestBracket_NoEntryWithoutProtection(t *testing.T) {
 // test data: each trade is a market entry on a signal, placed with its stop
 // loss and take profit, then a single exit.
 func TestIntraday_Backtest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: left out by -short")
+	}
 	tests := []struct {
 		name string
 		new  func() (strategy.Strategy, error)

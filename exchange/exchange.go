@@ -146,24 +146,45 @@ func (d *DataFeedSubscription) Connect() {
 	}
 }
 
+// Start connects the feeds and hands their candles to their consumers, until
+// the feeds close. With loadSync, eg: a backtest, the consumers take each
+// candle in turn and Start returns once the feeds closed; else each consumer
+// takes the candles from a queue of its own (see candleQueue), so that a slow
+// one, eg: the chart of a bot serving a snapshot, holds itself only, never the
+// feed nor the other consumers, eg: the bot.
 func (d *DataFeedSubscription) Start(loadSync bool) {
 	d.Connect()
 	wg := new(sync.WaitGroup)
 	for key, feed := range d.DataFeeds {
 		wg.Add(1)
-		go func(key string, feed *DataFeed) {
+		subscriptions := d.SubscriptionsByDataFeed[key]
+		consumers := make([]DataFeedConsumer, len(subscriptions))
+		var queues []*candleQueue
+		for i, subscription := range subscriptions {
+			consumers[i] = subscription.consumer
+			if !loadSync {
+				pair, timeframe := d.pairTimeframeFromKey(key)
+				queue := newCandleQueue(pair+" "+timeframe, subscription.consumer)
+				queues = append(queues, queue)
+				consumers[i] = queue.push
+			}
+		}
+		go func(feed *DataFeed) {
 			for {
 				select {
 				case candle, ok := <-feed.Data:
 					if !ok {
+						for _, queue := range queues {
+							queue.close()
+						}
 						wg.Done()
 						return
 					}
-					for _, subscription := range d.SubscriptionsByDataFeed[key] {
+					for i, subscription := range subscriptions {
 						if subscription.onCandleClose && !candle.Complete {
 							continue
 						}
-						subscription.consumer(candle)
+						consumers[i](candle)
 					}
 				case err := <-feed.Err:
 					if err != nil {
@@ -171,12 +192,94 @@ func (d *DataFeedSubscription) Start(loadSync bool) {
 					}
 				}
 			}
-		}(key, feed)
+		}(feed)
 	}
 
 	log.Infof("Data feed connected.")
 	if loadSync {
 		wg.Wait()
+	}
+}
+
+// candleQueue hands the candles of a feed to one of its consumers, every one in
+// their order, from a goroutine of its own, see Start. It has no bound: a
+// candle dropped or merged would change the ticks the strategy sees; a
+// consumer behind by candleQueueWarn candles or more is warned about instead,
+// once every candleQueueWarnEvery at most.
+type candleQueue struct {
+	feed     string
+	mtx      sync.Mutex
+	candles  []model.Candle
+	closed   bool
+	warned   time.Time // the last warning of a consumer behind
+	ready    chan struct{}
+	consumer DataFeedConsumer
+}
+
+const (
+	// candleQueueWarn is how many candles queued for a consumer tell it is
+	// behind, eg: stuck: about a quarter of an hour of the candles in progress
+	// of a pair polled every second, more than a backfill after a short gap.
+	candleQueueWarn = 1000
+	// candleQueueWarnEvery bounds how often a consumer behind is warned about.
+	candleQueueWarnEvery = time.Minute
+)
+
+func newCandleQueue(feed string, consumer DataFeedConsumer) *candleQueue {
+	q := &candleQueue{feed: feed, ready: make(chan struct{}, 1), consumer: consumer}
+	go q.run()
+	return q
+}
+
+// push queues candle for the consumer, without waiting for it.
+func (q *candleQueue) push(candle model.Candle) {
+	q.mtx.Lock()
+	q.candles = append(q.candles, candle)
+	queued, warn := len(q.candles), false
+	if queued >= candleQueueWarn && time.Since(q.warned) >= candleQueueWarnEvery {
+		q.warned, warn = time.Now(), true
+	}
+	q.mtx.Unlock()
+	if warn {
+		log.Warnf("data feed %s: a consumer is %d candles behind, eg: stuck: they are kept for it, in their "+
+			"order, its memory growing", q.feed, queued)
+	}
+	q.signal()
+}
+
+// close ends the goroutine of the queue once the candles queued are taken.
+func (q *candleQueue) close() {
+	q.mtx.Lock()
+	q.closed = true
+	q.mtx.Unlock()
+	q.signal()
+}
+
+func (q *candleQueue) signal() {
+	select {
+	case q.ready <- struct{}{}:
+	default: // signaled already
+	}
+}
+
+func (q *candleQueue) run() {
+	for range q.ready {
+		for {
+			q.mtx.Lock()
+			if len(q.candles) == 0 {
+				q.candles = nil
+				closed := q.closed
+				q.mtx.Unlock()
+				if closed {
+					return
+				}
+				break
+			}
+			candle := q.candles[0]
+			q.candles = q.candles[1:]
+			q.mtx.Unlock()
+			q.consumer(candle)
+		}
 	}
 }
 

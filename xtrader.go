@@ -3,6 +3,7 @@ package xtrader
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -322,20 +323,25 @@ func (n *XTrader) onCandle(candle model.Candle) {
 	n.priorityQueueCandle.Push(candle)
 }
 
-func (n *XTrader) processCandle(candle model.Candle) {
+// processCandle processes candle, returning the panics of the strategy on it,
+// recovered and reported by its controller (see strategy.Controller): the
+// candle goes on to the order controller all the same.
+func (n *XTrader) processCandle(candle model.Candle) error {
 	if n.paperWallet != nil {
 		n.paperWallet.OnCandle(candle)
 	}
 
-	n.strategiesControllers[candle.Pair].OnPartialCandle(candle)
+	controller := n.strategiesControllers[candle.Pair]
+	err := controller.OnPartialCandle(candle)
 	if candle.Complete {
 		// settle the orders filled so far before the strategy runs, as in the
 		// backtest: a trade opened on this candle after a stop filled would
 		// otherwise be added to the closed position, until the next tick
 		n.orderController.UpdateOrders()
-		n.strategiesControllers[candle.Pair].OnCandle(candle)
+		err = errors.Join(err, controller.OnCandle(candle))
 		n.orderController.OnCandle(candle)
 	}
+	return err
 }
 
 // processCandles processes the candles of the buffer as they come, from items
@@ -346,15 +352,21 @@ func (n *XTrader) processCandles(ctx context.Context, items <-chan model.Item) {
 		select {
 		case <-ctx.Done():
 			return
-		case item := <-items:
-			n.processCandle(item.(model.Candle))
+		case item, ok := <-items:
+			if !ok {
+				return // ctx done
+			}
+			// a panic of the strategy, reported, skips its call on the candle:
+			// the bot goes on with the next one
+			_ = n.processCandle(item.(model.Candle))
 		}
 	}
 }
 
 // Start the backtest process and create a progress bar
-// backtestCandles will process candles from a prirority queue in chronological order
-func (n *XTrader) backtestCandles() {
+// backtestCandles will process candles from a prirority queue in chronological order.
+// A panic of the strategy ends it, returned: the results would be wrong.
+func (n *XTrader) backtestCandles() error {
 	log.Info("[SETUP] Starting backtesting")
 
 	progressBar := progressbar.Default(int64(n.priorityQueueCandle.Len()))
@@ -370,9 +382,13 @@ func (n *XTrader) backtestCandles() {
 		// positions and trade results follow the candles, not the wall clock
 		n.orderController.UpdateOrders()
 
-		n.strategiesControllers[candle.Pair].OnPartialCandle(candle)
+		if err := n.strategiesControllers[candle.Pair].OnPartialCandle(candle); err != nil {
+			return fmt.Errorf("backtest: %w", err)
+		}
 		if candle.Complete {
-			n.strategiesControllers[candle.Pair].OnCandle(candle)
+			if err := n.strategiesControllers[candle.Pair].OnCandle(candle); err != nil {
+				return fmt.Errorf("backtest: %w", err)
+			}
 			n.orderController.OnCandle(candle)
 		}
 
@@ -380,6 +396,7 @@ func (n *XTrader) backtestCandles() {
 			log.Warnf("update progressbar fail: %v", err)
 		}
 	}
+	return nil
 }
 
 // Before XTrader starts, we need to load the necessary data to fill strategy indicators
@@ -395,7 +412,11 @@ func (n *XTrader) preload(ctx context.Context, pair string) error {
 	}
 
 	for _, candle := range candles {
-		n.processCandle(candle)
+		// a panic there would come back at every start: the bot doesn't start,
+		// its error told (the controller relaunches it with a backoff)
+		if err := n.processCandle(candle); err != nil {
+			return fmt.Errorf("preloading %s: %w", pair, err)
+		}
 	}
 
 	n.dataFeed.Preload(pair, n.strategy.Timeframe(), candles)
@@ -414,6 +435,9 @@ func (n *XTrader) Run(ctx context.Context) error {
 	for _, pair := range n.settings.Pairs {
 		// setup and subscribe strategy to data feed (candles)
 		n.strategiesControllers[pair] = strategy.NewStrategyController(pair, n.strategy, n.orderController)
+		if n.notifier != nil {
+			n.strategiesControllers[pair].SetNotifier(n.notifier) // of the panics of the strategy
+		}
 
 		// preload candles for warmup period
 		err := n.preload(ctx, pair)
@@ -440,7 +464,7 @@ func (n *XTrader) Run(ctx context.Context) error {
 	// feed on, see processCandles
 	var items <-chan model.Item
 	if !n.backtest {
-		items = n.priorityQueueCandle.PopLock()
+		items = n.priorityQueueCandle.PopLock(ctx)
 	}
 
 	// start data feed and receives new candles
@@ -448,8 +472,7 @@ func (n *XTrader) Run(ctx context.Context) error {
 
 	// start processing new candles for production or backtesting environment
 	if n.backtest {
-		n.backtestCandles()
-		return nil
+		return n.backtestCandles()
 	}
 
 	processed := make(chan struct{})

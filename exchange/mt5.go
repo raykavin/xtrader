@@ -32,6 +32,7 @@ var (
 	_ service.ProtectionBroker = (*MT5)(nil)
 	_ service.OrderHistory     = (*MT5)(nil)
 	_ service.ProtectedCloser  = (*MT5)(nil)
+	_ service.PositionReporter = (*MT5)(nil)
 )
 
 const (
@@ -99,8 +100,20 @@ const (
 	mt5SyncPoll = time.Second
 
 	// mt5CloseDelay is how long after its period a candle is complete, leaving
-	// time for its last ticks to be recorded.
+	// time for its last ticks to be recorded, when the terminal confirms it
+	// (confirmsClose); mt5HeldWarn after it, one it doesn't is logged.
 	mt5CloseDelay = 2 * time.Second
+	mt5HeldWarn   = 10 * time.Second
+
+	// The clock of the bot ahead of the trade server's, see clockAhead: told
+	// by the ticks read, the min of the last mt5SkewSamples taken within
+	// mt5SkewKeep, each of a tick new since a read mt5SkewGap polls before at
+	// most; more than mt5SkewMax ahead is no clock, eg: a server on another
+	// time zone, left alone.
+	mt5SkewSamples = 20
+	mt5SkewKeep    = 30 * time.Minute
+	mt5SkewGap     = 2
+	mt5SkewMax     = 10 * time.Minute
 
 	// mt5HistoryLookback is how far back the deals and the orders of the
 	// history are read on startup; OrderSince reads further back when asked.
@@ -388,6 +401,11 @@ type MT5 struct {
 
 	quotesMtx sync.Mutex
 	quotes    map[string]mt5Quote // last ticks read, by symbol
+	skews     []mt5Skew           // how far the clock of the bot looks ahead, see clockAhead
+
+	healthMtx  sync.Mutex
+	health     mt5Seen // the last GET /health, see confirmsClose
+	healthBusy bool    // a GET /health of askHealth in flight
 
 	loadedMtx sync.Mutex
 	loaded    map[string]time.Time // last complete candle returned by CandlesByLimit, by pair and period
@@ -537,6 +555,13 @@ type mt5Health struct {
 	Time         float64 `json:"time"`
 }
 
+// mt5Seen is a GET /health read: whether the terminal was connected to its
+// server, between asked and answered.
+type mt5Seen struct {
+	connected       bool
+	asked, answered time.Time
+}
+
 // mt5Account is the answer of GET /account (account_info).
 type mt5Account struct {
 	Login      int64   `json:"login"`
@@ -642,6 +667,7 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		return nil, fmt.Errorf("mt5: the bridge at %s: %w", m.baseURL, err)
 	}
 	answered := time.Now()
+	m.health = mt5Seen{connected: health.Connected, asked: asked, answered: answered}
 	switch {
 	case !health.Connected && !m.dataOnly:
 		return nil, fmt.Errorf("mt5: the terminal of the account %d is not connected to its server %s",
@@ -1072,16 +1098,58 @@ type mt5Quote struct {
 	at   time.Time
 }
 
+// mt5Skew is how far the clock of the bot looked ahead of the trade server's
+// as a tick was read, at, see clockAhead.
+type mt5Skew struct {
+	ahead time.Duration
+	at    time.Time
+}
+
 // tick reads the last tick of a symbol (GET /tick), kept for quote.
 func (m *MT5) tick(ctx context.Context, symbol string) (mt5Tick, error) {
 	var tick mt5Tick
 	if err := m.get(ctx, "/tick", url.Values{"symbol": {symbol}}, &tick); err != nil {
 		return mt5Tick{}, fmt.Errorf("mt5: reading the tick of %s: %w", symbol, err)
 	}
+	now := time.Now()
 	m.quotesMtx.Lock()
-	m.quotes[symbol] = mt5Quote{tick: tick, at: time.Now()}
+	previous, read := m.quotes[symbol]
+	if read && tick.at().After(previous.tick.at()) && now.Sub(previous.at) <= mt5SkewGap*m.pollInterval {
+		// a tick new since the previous read, a moment ago: received at most
+		// that moment and the latency of the terminal after the server timed
+		// it, it tells how far ahead the clock of the bot is, a bit more
+		m.skews = append(m.skews, mt5Skew{ahead: now.Sub(tick.at()), at: now})
+		if len(m.skews) > mt5SkewSamples {
+			m.skews = m.skews[len(m.skews)-mt5SkewSamples:]
+		}
+	}
+	m.quotes[symbol] = mt5Quote{tick: tick, at: now}
 	m.quotesMtx.Unlock()
 	return tick, nil
+}
+
+// clockAhead returns how far the clock of the bot is ahead of the trade
+// server's, past mt5CloseDelay, 0 otherwise or unknown: the end of a candle
+// on the clock of the bot comes that much before the server's, see
+// confirmsClose. Told by the ticks read new (see tick): the least of the last
+// ones, each of them that much ahead or a bit more, never less.
+func (m *MT5) clockAhead() time.Duration {
+	m.quotesMtx.Lock()
+	defer m.quotesMtx.Unlock()
+	var ahead time.Duration
+	known := false
+	for _, skew := range m.skews {
+		if time.Since(skew.at) > mt5SkewKeep {
+			continue
+		}
+		if !known || skew.ahead < ahead {
+			ahead, known = skew.ahead, true
+		}
+	}
+	if !known || ahead <= mt5CloseDelay || ahead > mt5SkewMax {
+		return 0
+	}
+	return ahead
 }
 
 // quote returns the last tick of a symbol, read again when older than the poll
