@@ -30,7 +30,7 @@ type Input struct {
 	Summary    Summary             `json:"summary"`
 	Market     map[string]number   `json:"market_data,omitempty"` // the other Metadata of the last candle
 
-	// Calendar is the economic calendar around the close, nil when the
+	// Calendar is the economic calendar around now, nil when the
 	// Trader has none, see Config.Calendar.
 	Calendar *CalendarContext `json:"economic_calendar,omitempty"`
 

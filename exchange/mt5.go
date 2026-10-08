@@ -113,8 +113,14 @@ const (
 	mt5HistoryAhead = 24 * time.Hour
 	// mt5ResolveWait is how long a pending order or a position gone from the
 	// book waits for its outcome in the history, read again every poll
-	// meanwhile, before it is settled without one.
+	// meanwhile, before it is settled without one. The exits of the bot's
+	// positions are read for longer, see awaitedExits.
 	mt5ResolveWait = time.Minute
+	// mt5AwaitCeiling is the longest wait between two reads of the history for
+	// the exits awaited after mt5ResolveWait, and mt5AwaitMax how long they are
+	// awaited at most, see awaitedExits.
+	mt5AwaitCeiling = 5 * time.Minute
+	mt5AwaitMax     = 24 * time.Hour
 	// mt5SettleRetry is how long the netting of a pair waits after a failure
 	// before the poll tries it again.
 	mt5SettleRetry = 30 * time.Second
@@ -359,6 +365,8 @@ type MT5 struct {
 	deviation    int
 	retryDelay   time.Duration
 	syncWait     time.Duration // see awaitHistory
+	resolveWait  time.Duration // mt5ResolveWait but in the tests
+	overlap      time.Duration // mt5HistoryOverlap but in the tests
 	deadline     time.Duration // of the trade requests, see tradeDeadline
 	margin       time.Duration // after their deadline, see reconcile
 	deadlines    bool          // the bridge honors MT5DeadlineHeader (GET /health)
@@ -499,6 +507,14 @@ func withMT5RetryDelay(delay time.Duration) MT5Option {
 	}
 }
 
+// withMT5HistoryWaits sets mt5ResolveWait and mt5HistoryOverlap: for the
+// tests.
+func withMT5HistoryWaits(resolveWait, overlap time.Duration) MT5Option {
+	return func(m *MT5) {
+		m.resolveWait, m.overlap = resolveWait, overlap
+	}
+}
+
 // withMT5TradeDeadline sets the deadline of the trade requests and the margin
 // of reconcile after it, mt5TradeDeadline and mt5ReconcileMargin by default:
 // for the tests.
@@ -588,6 +604,8 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		deviation:    mt5DefaultDeviation,
 		retryDelay:   mt5RetryDelay,
 		syncWait:     mt5SyncWait,
+		resolveWait:  mt5ResolveWait,
+		overlap:      mt5HistoryOverlap,
 		deadline:     mt5TradeDeadline,
 		margin:       mt5ReconcileMargin,
 		instruments:  make(map[string]mt5Symbol),

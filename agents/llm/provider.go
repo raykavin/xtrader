@@ -109,10 +109,12 @@ func WithBaseURL(baseURL string) ProviderOption {
 	}
 }
 
-// WithMaxTokens caps the tokens of an answer, 4096 by default.
+// WithMaxTokens caps the tokens of an answer, the thinking of the model
+// included: 4096 by default, 16000 for an answer of Anthropic left to the
+// model (see Anthropic).
 func WithMaxTokens(tokens int) ProviderOption {
 	return func(c *client) {
-		c.maxTokens = tokens
+		c.maxTokens, c.maxTokensSet = tokens, true
 	}
 }
 
@@ -186,6 +188,8 @@ type client struct {
 	system    string // the instructions, see WithStrategy
 	http      *http.Client
 	usage     *usageMeter // tokens of the answers of the day
+
+	maxTokensSet bool // maxTokens is the one of WithMaxTokens, not the default
 }
 
 func newClient(name, baseURL, keyEnv, model, apiKey string, options []ProviderOption) (client, error) {

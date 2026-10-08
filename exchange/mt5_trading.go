@@ -36,8 +36,9 @@ import (
 //     /account (a snapshot of another account is not applied, see
 //     checkAccount), then the history (GET /deals and /history_orders) since
 //     the last read, when a position or a pending order of the bot left the
-//     book, until their outcome shows (mt5ResolveWait at most); a read failing
-//     applies nothing;
+//     book, until their outcome shows (mt5ResolveWait at most), and from the
+//     exits awaited of the bot's positions until they show (awaitedExits); a
+//     read failing applies nothing;
 //   - the answers of the trade requests, applied before the methods return, so
 //     that Position and Order see them at once: the position opened with its
 //     entry deal, the volume closed with its exit deal, the pending order
@@ -220,6 +221,17 @@ type mt5Gone struct {
 	setup time.Time
 }
 
+// mt5Awaited is a position of the bot whose exits are awaited from the
+// history, their profit unknown meanwhile (ClosedProfit): an exit known from
+// the answer of a close only (provisional), or the position closed without its
+// exits in the book, also before the start (awaitClosed). See awaitedExits.
+type mt5Awaited struct {
+	since  time.Time // its exits are not older than that, by the clock of the bot
+	at     time.Time // when they were first awaited
+	orders []int64   // closing orders with an exit awaited, see exitsBooked
+	warned bool      // late, logged once
+}
+
 // mt5Known is an order the adapter created, moved or canceled, or rebuilt for
 // a previous run.
 type mt5Known struct {
@@ -227,6 +239,7 @@ type mt5Known struct {
 	tickets    []int64 // the positions protected by the legs of an OCO order, the anchor first
 	leg        string  // mt5TakeProfit or mt5StopLoss for a leg
 	generation int     // of the protection of a leg, see mt5LegID
+	closing    []int64 // the closing orders of a market order, one per position it closed
 	order      model.Order
 	canceled   bool // by Cancel
 }
@@ -251,7 +264,8 @@ type mt5Book struct {
 	deals      map[int64]mt5Deal     // deals of the traded symbols, by ticket
 	entries    map[int64]mt5Deal     // entry deal of each position, by position_id
 	exits      map[int64][]mt5Deal   // exit deals of each position, oldest first, by position_id
-	awaited    map[int64]time.Time   // provisional exit deals, their profit awaited from the history, by ticket
+	awaited    map[int64]mt5Awaited  // bot's positions whose exits are awaited from the history, by identifier
+	awaitRead  time.Time             // last read of the history for them, see awaitedExits
 	byOrder    map[int64][]mt5Deal   // deals by the ticket of their order
 	history    map[int64]mt5Order    // orders of the history, by ticket
 	touched    map[int64]time.Time   // last answer applied, by ticket, see applySnapshot
@@ -301,7 +315,7 @@ func newMT5Book() *mt5Book {
 		deals:        make(map[int64]mt5Deal),
 		entries:      make(map[int64]mt5Deal),
 		exits:        make(map[int64][]mt5Deal),
-		awaited:      make(map[int64]time.Time),
+		awaited:      make(map[int64]mt5Awaited),
 		byOrder:      make(map[int64][]mt5Deal),
 		history:      make(map[int64]mt5Order),
 		touched:      make(map[int64]time.Time),
@@ -374,12 +388,13 @@ func (m *MT5) requestPoll() {
 // poll reads a snapshot of the account (GET /account, /orders, then
 // /positions, then /account again) and applies it (applySnapshot), reads the
 // history when something of the bot left the book or is still unresolved
-// (readHistory), then queues the netting of the pairs where the bot holds
-// both sides. One at a time. A read failing applies nothing: an error is never
-// taken for no positions. Nor is the snapshot of another account
-// (checkAccount), which would close the bot's positions in the book: the
-// account read before and after the lists, the terminal back on the bot's
-// account between them never passes them for its own.
+// (readHistory), or exits are awaited (awaitedExits), then queues the netting
+// of the pairs where the bot holds both sides. One at a time. A read failing
+// applies nothing: an error is never taken for no positions. Nor is the
+// snapshot of another account (checkAccount), which would close the bot's
+// positions in the book: the account read before and after the lists, the
+// terminal back on the bot's account between them never passes them for its
+// own.
 func (m *MT5) poll(ctx context.Context) error {
 	b := m.book
 	b.pollMtx.Lock()
@@ -404,19 +419,29 @@ func (m *MT5) poll(ctx context.Context) error {
 
 	b.historyMtx.Lock()
 	first := b.historyTo.IsZero()
-	from := b.historyTo.Add(-mt5HistoryOverlap)
+	from := b.historyTo.Add(-m.overlap)
 	if first {
 		from = started.Add(-mt5HistoryLookback)
 	}
 	b.historyMtx.Unlock()
-	if waiting, since := m.unresolved(); first || waiting {
+	waiting, since := m.unresolved()
+	exits, due := m.awaitedExits()
+	if first || waiting || due {
 		// the orders of the history may be listed by their setup time: from the
 		// setup of the pending orders gone
 		if !since.IsZero() && since.Before(from) {
-			from = since.Add(-mt5HistoryOverlap)
+			from = since.Add(-m.overlap)
+		}
+		// and the exits awaited from their close on: the range read may have
+		// gone past them before the history listed them
+		if !exits.IsZero() && exits.Add(-m.overlap).Before(from) {
+			from = exits.Add(-m.overlap)
 		}
 		if err := m.readHistory(ctx, from, time.Now().Add(mt5HistoryAhead)); err != nil {
 			return err
+		}
+		if first {
+			m.awaitClosed(started)
 		}
 	}
 
@@ -466,6 +491,10 @@ func (m *MT5) applySnapshot(started time.Time, positions []mt5Position, orders [
 		b.positions[id] = position
 		delete(b.closed, id)
 	}
+	seen := b.snapshotAt // the last snapshot listing the positions: they closed after it
+	if seen.IsZero() {
+		seen = now
+	}
 	for id, position := range b.positions {
 		if listed[id] || newer(id) {
 			continue
@@ -474,6 +503,7 @@ func (m *MT5) applySnapshot(started time.Time, positions []mt5Position, orders [
 		b.closed[id] = position
 		if m.ours(position.Magic, position.Symbol) && !m.covered(id) {
 			b.gone[id] = mt5Gone{at: now}
+			m.await(id, seen, 0)
 		}
 	}
 
@@ -532,20 +562,11 @@ func (m *MT5) unresolved() (waiting bool, since time.Time) {
 	b := m.book
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
-	for ticket, at := range b.awaited {
-		if time.Since(at) >= mt5ResolveWait {
-			log.Warnf("[MT5] the deal %d isn't in the history since %s: its profit is unknown", ticket,
-				at.Format(time.RFC3339))
-			delete(b.awaited, ticket)
-			continue
-		}
-		waiting = true
-	}
 	for ticket, gone := range b.gone {
 		switch {
 		case m.resolved(ticket):
 			delete(b.gone, ticket)
-		case time.Since(gone.at) >= mt5ResolveWait:
+		case time.Since(gone.at) >= m.resolveWait:
 			log.Warnf("[MT5] no outcome in the history for the ticket %d, gone from the book since %s", ticket,
 				gone.at.Format(time.RFC3339))
 			delete(b.gone, ticket)
@@ -575,6 +596,119 @@ func (m *MT5) resolved(ticket int64) bool {
 	}
 	_, entered := b.entries[ticket]
 	return entered
+}
+
+// await records that the exits of the bot's position id are awaited from the
+// history, not older than since, among them one of the closing order order
+// when not 0. The caller holds the lock of the book.
+func (m *MT5) await(id int64, since time.Time, order int64) {
+	b := m.book
+	awaited, ok := b.awaited[id]
+	if !ok {
+		awaited = mt5Awaited{since: since, at: time.Now()}
+	}
+	if since.Before(awaited.since) {
+		awaited.since = since
+	}
+	if order != 0 && !slices.Contains(awaited.orders, order) {
+		awaited.orders = append(awaited.orders, order)
+	}
+	b.awaited[id] = awaited
+}
+
+// awaitClosed awaits the exits (see await) of the bot's positions closed
+// before the first snapshot of the book, eg: by their stop loss while the bot
+// restarted, whose exits the history read doesn't list yet: an entry of the
+// bot older than the snapshot, its position not in the account, its exits
+// short of its volume. As for a position seen closing, their legs stay NEW
+// meanwhile (see legState) and ExitsAwaited tells them, from the start: their
+// close, before it, is not known to be older; the history is read again for
+// them from their entry.
+func (m *MT5) awaitClosed(started time.Time) {
+	b := m.book
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	for id, entry := range b.entries {
+		if _, open := b.positions[id]; open || entry.provisional || !entry.at().Before(started) ||
+			!m.ours(entry.Magic, entry.Symbol) || m.covered(id) {
+			continue
+		}
+		log.Warnf("[MT5] the position %d of the bot, opened at %s, isn't in the account and its exits aren't in "+
+			"the history yet: awaited", id, entry.at().Format(time.RFC3339))
+		m.await(id, entry.at(), 0)
+	}
+}
+
+// awaitedExits returns the earliest since of the exits awaited (await), zero
+// when none is, and whether the history is due to be read for them: at every
+// poll while the youngest is awaited for less than mt5ResolveWait, then
+// backing off (awaitDelay), the reads failing too. The ones late are logged
+// once; after mt5AwaitMax, they are no longer awaited, their profit unknown.
+func (m *MT5) awaitedExits() (since time.Time, due bool) {
+	b := m.book
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	youngest := time.Duration(-1)
+	for id, awaited := range b.awaited {
+		age := time.Since(awaited.at)
+		switch {
+		case age >= mt5AwaitMax:
+			log.Errorf("[MT5] the exits of the position %d aren't in the history since %s: its profit stays "+
+				"unknown", id, awaited.at.Format(time.RFC3339))
+			delete(b.awaited, id)
+			continue
+		case age >= m.resolveWait && !awaited.warned:
+			log.Warnf("[MT5] the exits of the position %d aren't in the history since %s: its profit is unknown "+
+				"until they are, read again meanwhile", id, awaited.at.Format(time.RFC3339))
+			awaited.warned = true
+			b.awaited[id] = awaited
+		}
+		if since.IsZero() || awaited.since.Before(since) {
+			since = awaited.since
+		}
+		if youngest < 0 || age < youngest {
+			youngest = age
+		}
+	}
+	if youngest < 0 {
+		return time.Time{}, false
+	}
+	if time.Since(b.awaitRead) < m.awaitDelay(youngest) {
+		return since, false
+	}
+	b.awaitRead = time.Now()
+	return since, true
+}
+
+// awaitDelay returns how long the reads of the history for exits awaited for
+// age wait after the previous one: none during mt5ResolveWait, then a quarter
+// of age, up to mt5AwaitCeiling.
+func (m *MT5) awaitDelay(age time.Duration) time.Duration {
+	if age < m.resolveWait {
+		return 0
+	}
+	return min(age/4, mt5AwaitCeiling)
+}
+
+// exitsBooked reports whether the history shows the exits awaited of the
+// position id: none of them provisional, one of each closing order awaited,
+// and all of them once it left the book (covered). The caller holds the lock
+// of the book.
+func (m *MT5) exitsBooked(id int64, awaited mt5Awaited) bool {
+	b := m.book
+	exits := b.exits[id]
+	if slices.ContainsFunc(exits, func(exit mt5Deal) bool { return exit.provisional }) {
+		return false
+	}
+	for _, order := range awaited.orders {
+		if !slices.ContainsFunc(exits, func(exit mt5Deal) bool { return exit.Order == order }) {
+			return false
+		}
+	}
+	if _, open := b.positions[id]; open {
+		return true
+	}
+	return m.covered(id)
 }
 
 // covered reports whether the exits recorded of the position id cover the
@@ -638,6 +772,11 @@ func (m *MT5) readHistoryLocked(ctx context.Context, from, to time.Time) error {
 			delete(b.gone, ticket)
 		}
 	}
+	for id, awaited := range b.awaited {
+		if m.exitsBooked(id, awaited) {
+			delete(b.awaited, id)
+		}
+	}
 	b.mtx.Unlock()
 
 	// the range read ends now: the records after it are still to come
@@ -668,7 +807,7 @@ func (m *MT5) ensureHistory(ctx context.Context, since time.Time) error {
 	if since.IsZero() {
 		return nil
 	}
-	since = since.Add(-mt5HistoryOverlap) // the clocks of the bot and of the server may differ a little
+	since = since.Add(-m.overlap) // the clocks of the bot and of the server may differ a little
 	b := m.book
 	b.historyMtx.Lock()
 	defer b.historyMtx.Unlock()
@@ -684,7 +823,7 @@ func (m *MT5) ensureHistory(ctx context.Context, since time.Time) error {
 
 // recordDeal records a deal of the history or of an answer, replacing the one
 // of the same ticket: but a deal of an answer, provisional, never replaces one
-// of the history, and waits for it when it exits a position (see unresolved).
+// of the history, and waits for it when it exits a position (see await).
 // The caller holds the lock of the book.
 func (m *MT5) recordDeal(deal mt5Deal) {
 	b := m.book
@@ -693,9 +832,7 @@ func (m *MT5) recordDeal(deal mt5Deal) {
 			return
 		}
 		if deal.provisional && deal.exit() {
-			b.awaited[deal.Ticket] = time.Now()
-		} else {
-			delete(b.awaited, deal.Ticket)
+			m.await(deal.PositionID, deal.at(), 0)
 		}
 		if _, known := b.deals[deal.Ticket]; known {
 			drop := func(deals []mt5Deal) []mt5Deal {
@@ -1025,7 +1162,9 @@ func (m *MT5) closeBy(ctx context.Context, fill, oldest mt5Position) error {
 		"magic":       m.magic,
 		"comment":     m.comment,
 	}
-	if _, err := m.trade(ctx, request); err != nil {
+	sent := time.Now()
+	result, err := m.trade(ctx, request)
+	if err != nil {
 		return err
 	}
 	steps := min(symbol.steps(fill.Volume), symbol.steps(oldest.Volume))
@@ -1039,6 +1178,7 @@ func (m *MT5) closeBy(ctx context.Context, fill, oldest mt5Position) error {
 		if _, open := b.positions[position.id()]; !open {
 			b.gone[position.id()] = mt5Gone{at: now} // its exits come with the history
 		}
+		m.await(position.id(), sent, result.Order)
 	}
 	b.accountAt = time.Time{}
 	return nil
@@ -1568,6 +1708,7 @@ func (m *MT5) closePosition(ctx context.Context, position mt5Position, lots floa
 	float64, error) {
 	pair := position.Symbol
 	side := mt5Opposite(mt5Side(position.Type))
+	sent := time.Now()
 	result, err := m.trade(ctx, m.marketRequest(pair, side, lots, tick, position.id()))
 	if err != nil {
 		return 0, 0, 0, err
@@ -1585,8 +1726,11 @@ func (m *MT5) closePosition(ctx context.Context, position mt5Position, lots floa
 			Type: mt5MarketType(side), Entry: mt5EntryOut, Magic: m.magic, PositionID: position.id(),
 			Reason: mt5ReasonExpert, Volume: volume, Price: price, Symbol: pair, Comment: m.comment,
 			provisional: true})
-	} else if _, open := b.positions[position.id()]; !open {
-		b.gone[position.id()] = mt5Gone{at: now} // its exit comes with the history
+	} else {
+		if _, open := b.positions[position.id()]; !open {
+			b.gone[position.id()] = mt5Gone{at: now} // its exit comes with the history
+		}
+		m.await(position.id(), sent, result.Order)
 	}
 	b.accountAt = time.Time{}
 	return result.Order, price, volume, nil
@@ -2045,71 +2189,262 @@ func (m *MT5) AccountSummary() (service.AccountSummary, bool) {
 		Profit: account.Profit, Margin: account.Margin, FreeMargin: account.MarginFree}, true
 }
 
+// mt5CloseWindow is how far from the deals of a market order of a previous run
+// an exit at the market is taken for one of its own, see marketExits.
+const mt5CloseWindow = 10 * time.Second
+
 // ClosedProfit returns the profit the account booked for close, a fill of the
-// bot closing the position entry opened, from the deals of the history kept
-// (mt5HistoryLookback at the start): the exits of the position by the stop
-// loss for a stop loss leg, by the take profit for a take profit leg, else the
-// ones of the closing order (or, without its ticket, the other exits within
-// seconds of the fill). Their profit, swap, commission and fee, in the account
-// currency; unknown while one of them is only known from the answer of the
-// close, not from the history yet. It implements service.AccountReporter; it
-// reads the book only.
+// bot closing (a part of) the position entry opened, from the deals of the
+// history kept (mt5HistoryLookback at the start): the profit, swap, commission
+// and fee, in the account currency, of
+//   - a leg: the exits of the position by its level, SL for the stop loss, TP
+//     for the take profit;
+//   - a market order: the exits of the position by its closing orders (see
+//     marketExits);
+//   - a pending order, eg: a stop of CreateOrderStop: the close of its fill by
+//     the position (close-by, see closedBy).
+//
+// Unknown while none is in the book, or while one is only known from the
+// answer of the close, not from the history yet: the history is read again
+// meanwhile (awaitedExits). It implements service.AccountReporter; it reads
+// the book only.
 func (m *MT5) ClosedProfit(close, entry model.Order) (float64, bool) {
 	position := entry.ExchangeID
 	if !mt5IsTicket(position) {
 		return 0, false
 	}
-	var reason int
-	switch close.Type {
-	case model.OrderTypeStopLoss, model.OrderTypeStopLossLimit:
-		reason = mt5ReasonSL
-	case model.OrderTypeTakeProfit, model.OrderTypeTakeProfitLimit, model.OrderTypeLimitMaker:
-		reason = mt5ReasonTP
+	known, _ := m.known(close.ExchangeID)
+
+	b := m.book
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+	var deals []mt5Deal
+	var costs float64
+	switch reason := mt5LegReason(close); {
+	case reason != 0:
+		for _, exit := range b.exits[position] {
+			if exit.Reason == reason {
+				deals = append(deals, exit)
+			}
+		}
+	case close.Type == model.OrderTypeMarket:
+		deals = m.marketExits(close, position, known.closing)
+	default:
+		deals, costs = m.closedBy(position, close.ExchangeID)
 	}
-	if close.GroupID == nil && close.Type != model.OrderTypeStopLoss && close.Type != model.OrderTypeStopLossLimit {
-		reason = 0 // a market or a limit order, not a leg
+	if len(deals) == 0 {
+		return 0, false
+	}
+	profit := costs
+	for _, deal := range deals {
+		if deal.provisional {
+			return 0, false // its profit comes with the history
+		}
+		profit += deal.Profit + deal.Swap + deal.Commission + deal.Fee
+	}
+	return profit, true
+}
+
+// ExitsAwaited reports whether a position of the bot on pair left the book, eg:
+// closed by its stop loss, without its exits in the history yet: its close and
+// its profit (see ClosedProfit) unknown to the bot meanwhile, its legs NEW (see
+// legState), the history read again for them up to mt5AwaitMax; also one
+// closed before the adapter started (see awaitClosed). since is when the bot
+// noticed the oldest close, by its clock: the close is not later, eg: the
+// start for one closed before. It reads the book only.
+func (m *MT5) ExitsAwaited(pair string) (since time.Time, ok bool) {
+	b := m.book
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+	for id, awaited := range b.awaited {
+		if _, open := b.positions[id]; open || m.covered(id) {
+			continue // open still, or closed with its exits known
+		}
+		symbol := ""
+		if position, closed := b.closed[id]; closed {
+			symbol = position.Symbol
+		} else if entry, entered := b.entries[id]; entered {
+			symbol = entry.Symbol // closed before the start
+		}
+		if symbol != pair {
+			continue
+		}
+		if !ok || awaited.at.Before(since) {
+			since, ok = awaited.at, true
+		}
+	}
+	return since, ok
+}
+
+// FillPositions returns the positions of the account the fill of an order of
+// the bot opened, by its ticket (0 for none), and closed (a part of), as the
+// book and the history kept tell them (mt5HistoryLookback at the start), for
+// the trades of the bot to be told apart by position:
+//   - a leg closes the positions it protects;
+//   - a market order closes the ones of its closing orders (its ticket, or
+//     the ones the adapter sent it with), and opens the one of its ticket;
+//   - a pending order opens the one of its ticket, and closes the older ones
+//     it was netted with by close-by (see settlePair).
+//
+// False when unknown, eg: a fill older than the history, a leg of a previous
+// run, a market order of a previous run that opened a position, the ones it
+// closed first unknown, or one of this run while the exit of one of its
+// closing orders isn't in the book yet. It reads the book only.
+func (m *MT5) FillPositions(fill model.Order) (opened int64, closed []int64, ok bool) {
+	known, isKnown := m.known(fill.ExchangeID)
+	if fill.GroupID != nil || !mt5IsTicket(fill.ExchangeID) {
+		if !isKnown || known.leg == "" {
+			return 0, nil, false
+		}
+		return 0, slices.Clone(known.protected()), true
 	}
 
 	b := m.book
 	b.mtx.RLock()
 	defer b.mtx.RUnlock()
+	id := fill.ExchangeID
+	_, open := b.positions[id]
+	_, gone := b.closed[id]
+	_, entered := b.entries[id]
+	if open || gone || entered {
+		opened = id
+	}
+	add := func(position int64) {
+		if position != 0 && position != id && !slices.Contains(closed, position) {
+			closed = append(closed, position)
+		}
+	}
+	orders := []int64{id}
+	if isKnown {
+		for _, order := range known.closing {
+			if !slices.ContainsFunc(b.byOrder[order], func(deal mt5Deal) bool { return deal.Entry == mt5EntryOut }) {
+				// its exit not in the book yet (an answer without its deal): the
+				// positions it closed told in part would leave one open
+				return 0, nil, false
+			}
+		}
+		orders = append(orders, known.closing...)
+	}
+	for _, order := range orders {
+		for _, deal := range b.byOrder[order] {
+			if deal.Entry == mt5EntryOut {
+				add(deal.PositionID)
+			}
+		}
+	}
+	if opened != 0 && !isKnown && fill.Type == model.OrderTypeMarket {
+		// of a previous run: the bot's opposite positions it closed before
+		// opening its own (see marketNet) are unknown
+		return 0, nil, false
+	}
+	if opened != 0 {
+		// netted by close-by: the older positions closed by the one it opened
+		for _, exit := range b.exits[opened] {
+			if exit.Entry != mt5EntryOutBy {
+				continue
+			}
+			for _, deal := range b.byOrder[exit.Order] {
+				if deal.Entry == mt5EntryOutBy && deal.PositionID < opened {
+					add(deal.PositionID)
+				}
+			}
+		}
+	}
+	return opened, closed, opened != 0 || len(closed) > 0
+}
+
+// mt5LegReason returns the reason of the exits by the level of close when it
+// is a leg (of a group, or of an id derived, see mt5LegID), else 0.
+func mt5LegReason(close model.Order) int {
+	if close.GroupID == nil && mt5IsTicket(close.ExchangeID) {
+		return 0
+	}
+	switch close.Type {
+	case model.OrderTypeStopLoss, model.OrderTypeStopLossLimit:
+		return mt5ReasonSL
+	case model.OrderTypeTakeProfit, model.OrderTypeTakeProfitLimit, model.OrderTypeLimitMaker:
+		return mt5ReasonTP
+	}
+	return 0
+}
+
+// marketExits returns the exits of position by the market order close: the
+// ones of its closing orders, its ticket or the ones the adapter sent it with
+// (closing, one per position closed first in first out, the ticket of the
+// order being the first one or the one of the position it opened). Without
+// them, for an order of a previous run, the other exits at the market within
+// mt5CloseWindow of the deals of its ticket, by the clock of the server, or of
+// its fill when the book has none. The caller holds the lock of the book.
+func (m *MT5) marketExits(close model.Order, position int64, closing []int64) []mt5Deal {
+	b := m.book
 	exits := b.exits[position]
-	matches := func(deal mt5Deal) bool {
-		switch {
-		case reason != 0:
-			return deal.Reason == reason
-		case deal.Order == close.ExchangeID:
-			return true
-		}
-		for _, other := range exits {
-			if other.Order == close.ExchangeID {
-				return false // the ticket of the closing order is known: its exits only
-			}
-		}
-		gap := deal.at().Sub(close.UpdatedAt)
-		return deal.Reason != mt5ReasonSL && deal.Reason != mt5ReasonTP && gap > -10*time.Second &&
-			gap < 10*time.Second
-	}
-	var profit float64
-	found := false
-	for _, deal := range exits {
-		if matches(deal) {
-			if deal.provisional {
-				return 0, false // its profit comes with the history
-			}
-			profit += deal.Profit + deal.Swap + deal.Commission + deal.Fee
-			found = true
+	var deals []mt5Deal
+	for _, exit := range exits {
+		if exit.Order == close.ExchangeID || slices.Contains(closing, exit.Order) {
+			deals = append(deals, exit)
 		}
 	}
-	return profit, found
+	if len(deals) > 0 || len(closing) > 0 {
+		return deals
+	}
+	at := close.UpdatedAt
+	for i, deal := range b.byOrder[close.ExchangeID] {
+		if i == 0 || deal.at().Before(at) {
+			at = deal.at()
+		}
+	}
+	for _, exit := range exits {
+		gap := exit.at().Sub(at)
+		if exit.Entry == mt5EntryOut && exit.Reason != mt5ReasonSL && exit.Reason != mt5ReasonTP &&
+			gap > -mt5CloseWindow && gap < mt5CloseWindow {
+			deals = append(deals, exit)
+		}
+	}
+	return deals
+}
+
+// closedBy returns the deals closing position by the one the fill of the
+// pending order ticket opened (close-by, see settlePair): the deals of the
+// close-by orders between them, of both positions, however the broker splits
+// the profit between them, and the costs (commission, fee) of the fill in the
+// share of its volume they closed. The caller holds the lock of the book.
+func (m *MT5) closedBy(position, ticket int64) ([]mt5Deal, float64) {
+	b := m.book
+	var deals []mt5Deal
+	var volume float64 // closed by the fill
+	for _, exit := range b.exits[position] {
+		if exit.Entry != mt5EntryOutBy {
+			continue
+		}
+		both := b.byOrder[exit.Order]
+		if !slices.ContainsFunc(both, func(deal mt5Deal) bool { return deal.PositionID == ticket && deal.exit() }) {
+			continue // by another position, or the deal of the fill not in the book yet
+		}
+		for _, deal := range both {
+			if deal.exit() && (deal.PositionID == position || deal.PositionID == ticket) {
+				deals = append(deals, deal)
+			}
+		}
+		volume += exit.Volume
+	}
+	var costs, filled float64
+	for _, deal := range b.byOrder[ticket] {
+		if deal.Entry == mt5EntryIn && deal.PositionID == ticket {
+			costs, filled = costs+deal.Commission+deal.Fee, filled+deal.Volume
+		}
+	}
+	if len(deals) == 0 || filled <= 0 {
+		return deals, 0
+	}
+	return deals, costs * min(volume/filled, 1)
 }
 
 // readExits reads the history from since, once positions were closed at the
 // market: the exit deals recorded from the answers, provisional, are replaced
 // by the ones of the history, with their profit, before the order is handed
-// back. A read failing is logged: the next polls read it, see unresolved.
+// back. A read failing is logged: the next polls read it, see awaitedExits.
 func (m *MT5) readExits(ctx context.Context, since time.Time) {
-	if err := m.readHistory(ctx, since.Add(-mt5HistoryOverlap), time.Now().Add(mt5HistoryAhead)); err != nil {
+	if err := m.readHistory(ctx, since.Add(-m.overlap), time.Now().Add(mt5HistoryAhead)); err != nil {
 		log.Warnf("[MT5] reading the deals of the close: %v", err)
 	}
 }
@@ -2170,6 +2505,7 @@ func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, l
 	var filled, value float64 // units filled, and their value at the prices of the fills
 	var prices []float64
 	var ticket, closing, first int64
+	var closings []int64 // the closing orders, one per position closed
 	fill := func(units, price float64) {
 		filled, value = filled+units, value+units*price
 		prices = append(prices, price)
@@ -2208,7 +2544,7 @@ func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, l
 			// no ticket in the answers: derived from the first position closed
 			order.ExchangeID = mt5HashID(fmt.Sprintf("mt5:close:%d:%d", first, now.UnixMilli()))
 		}
-		m.remember(mt5Known{ticket: order.ExchangeID, order: order})
+		m.remember(mt5Known{ticket: order.ExchangeID, closing: closings, order: order})
 		return order, nil
 	}
 
@@ -2230,6 +2566,9 @@ func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, l
 		}
 		if closing == 0 {
 			closing = order
+		}
+		if order != 0 {
+			closings = append(closings, order)
 		}
 		if first == 0 {
 			first = position.id()
@@ -3024,9 +3363,9 @@ func (m *MT5) legOrder(known mt5Known, since time.Time) (model.Order, error) {
 //     left the book without fill.
 //
 // A position closed whose exits are not all in the history leaves the leg NEW
-// while they are awaited, or unknown after, as is an entry without trace;
-// final settles those, as legOrder does. A leg rebuilt without side or
-// quantity takes them from its entry: the opposite side and its units.
+// while they are awaited (see awaiting), or unknown after, as is an entry
+// without trace; final settles those, as legOrder does. A leg rebuilt without
+// side or quantity takes them from its entry: the opposite side and its units.
 func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 	b := m.book
 	b.mtx.RLock()
@@ -3099,7 +3438,7 @@ func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 				last = mt5Later(last, final.at)
 				continue
 			}
-			if _, waiting := b.gone[ticket]; waiting {
+			if m.awaiting(ticket) {
 				state = max(state, mt5LegWaiting)
 			} else {
 				state = mt5LegUnknown
@@ -3107,7 +3446,7 @@ func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 			continue
 		}
 		if !m.covered(ticket) {
-			if _, waiting := b.gone[ticket]; waiting {
+			if m.awaiting(ticket) {
 				state = max(state, mt5LegWaiting)
 			} else {
 				state = mt5LegUnknown
@@ -3144,6 +3483,21 @@ func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 		order.UpdatedAt = now
 	}
 	return order, mt5LegResolved
+}
+
+// awaiting reports whether the outcome of the ticket out of the book is
+// awaited in the history: a pending order or a position gone less than
+// mt5ResolveWait ago, or a position of the bot whose exits are awaited, up to
+// mt5AwaitMax (see await). A leg of a position closed stays NEW meanwhile,
+// never settled before its exits show: FILLED by its level, or CANCELED. The
+// caller holds the lock of the book.
+func (m *MT5) awaiting(ticket int64) bool {
+	b := m.book
+	if _, waiting := b.gone[ticket]; waiting {
+		return true
+	}
+	_, awaited := b.awaited[ticket]
+	return awaited
 }
 
 func mt5Later(a, b time.Time) time.Time {

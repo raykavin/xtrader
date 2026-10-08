@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/raykavin/xtrader/tools/log"
 )
 
 // Calendar is a source of the economic calendar: the releases of the
@@ -68,8 +70,8 @@ type Event struct {
 	Previous   float64
 }
 
-// calendarEvent is an Event as the model sees it, relative to the close of the
-// candle just closed.
+// calendarEvent is an Event as the model sees it, relative to the time of the
+// analysis, see CalendarContext.
 type calendarEvent struct {
 	Time       time.Time `json:"time"`
 	Minutes    int       `json:"minutes_from_now"` // negative for a release in the past
@@ -83,7 +85,8 @@ type calendarEvent struct {
 }
 
 // CalendarContext is the economic calendar of a decision: the releases around
-// the close of the candle just closed, oldest first. Available is false when
+// the time of the analysis (now, live, the candle in progress included; else
+// the close of the candle just closed), oldest first. Available is false when
 // the calendar couldn't be read, so the model doesn't take the silence for a
 // calm market.
 type CalendarContext struct {
@@ -169,12 +172,23 @@ type MCPCalendar struct {
 	client *mcpClient
 	offset time.Duration // of the time of the trade server from UTC
 	now    func() time.Time
+	retry  time.Duration // before a tool that failed is called again, see call
 
-	mtx         sync.Mutex
-	events      map[string]mcpEvents // descriptions of the events, by currency
-	days        map[string]mcpDay    // releases of every currency, by day of the server
-	unavailable map[string]time.Time // currencies the calendar refused, until then
+	mtx     sync.Mutex
+	events  map[string]mcpEvents // descriptions of the events, by currency
+	days    map[string]mcpDay    // releases of every currency, by day of the server
+	unknown map[string]time.Time // currencies the calendar doesn't know, not asked again until then
+	empty   map[string]time.Time // currencies without any event read, logged until then
 }
+
+// mcpStatus is the status of the answer of a tool of the calendar: ok false,
+// with its error, is a tool failing, as isError is.
+type mcpStatus struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
+func (s *mcpStatus) status() *mcpStatus { return s }
 
 type mcpEvents struct {
 	byID map[string]mcpEventInfo
@@ -202,12 +216,34 @@ type mcpValue struct {
 	Revised  *float64 `json:"revised_prev_value"`
 }
 
-// The refresh of the cached calendar: the descriptions of the events, and the
-// releases of the days not over yet.
+// The refresh of the cached calendar: the descriptions of the events, the
+// releases of the days not over yet, and a currency the calendar doesn't know.
+// A tool failing for another reason, eg: the terminal busy, is called again
+// once after mcpRetry, then the read fails, the next one calling it again.
 const (
-	mcpEventsTTL = 24 * time.Hour
-	mcpDayTTL    = 5 * time.Minute
+	mcpEventsTTL  = 24 * time.Hour
+	mcpDayTTL     = 5 * time.Minute
+	mcpUnknownTTL = time.Hour
+	mcpRetry      = 500 * time.Millisecond
 )
+
+// errNoCurrencyEvents is a currency without any event in the calendar:
+// unknown to it, or none read.
+var errNoCurrencyEvents = errors.New("no event of the currency in the calendar")
+
+// mcpInvalidParams is the code of the JSON-RPC error of a request whose
+// arguments the server refuses: for the events of a currency, the currency.
+const mcpInvalidParams = -32602
+
+// mt5CalendarCurrencies are the currencies of the countries of the economic
+// calendar of MetaTrader 5 (CalendarCountries of the MQL5 reference), ALL the
+// one of the worldwide events. A call failing for another code, whatever its
+// error, eg: for XTI of XTIUSD, refuses a currency the calendar doesn't know;
+// for one of them, only the server refusing the argument does, see
+// unknownCurrency.
+var mt5CalendarCurrencies = map[string]bool{"ALL": true, "AUD": true, "BRL": true, "CAD": true, "CHF": true,
+	"CNY": true, "EUR": true, "GBP": true, "HKD": true, "INR": true, "JPY": true, "KRW": true, "MXN": true,
+	"NOK": true, "NZD": true, "SEK": true, "SGD": true, "USD": true, "ZAR": true}
 
 // MCPOption configures an MCPCalendar.
 type MCPOption func(*MCPCalendar)
@@ -232,11 +268,13 @@ func NewMCPCalendar(url, token string, options ...MCPOption) (*MCPCalendar, erro
 		return nil, fmt.Errorf("llm: the URL of the MCP server is required")
 	}
 	c := &MCPCalendar{
-		client:      newMCPClient(url, token, nil),
-		now:         time.Now,
-		events:      make(map[string]mcpEvents),
-		days:        make(map[string]mcpDay),
-		unavailable: make(map[string]time.Time),
+		client:  newMCPClient(url, token, nil),
+		now:     time.Now,
+		retry:   mcpRetry,
+		events:  make(map[string]mcpEvents),
+		days:    make(map[string]mcpDay),
+		unknown: make(map[string]time.Time),
+		empty:   make(map[string]time.Time),
 	}
 	for _, option := range options {
 		option(c)
@@ -249,13 +287,24 @@ func (c *MCPCalendar) String() string {
 }
 
 // Events returns the releases of the currencies between from and to, oldest
-// first. A currency the calendar doesn't know is skipped, and retried later.
+// first. A currency without any event in the calendar, eg: one it doesn't
+// know, asked again an hour later, is skipped; none of the currencies with
+// events is an error, as is any read failing: the calendar is then
+// unavailable, never taken for a calm one.
 func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to time.Time) ([]Event, error) {
+	if len(currencies) == 0 {
+		return nil, nil
+	}
 	var events []Event
+	var skipped []string
 	infos := make(map[string]mcpEventInfo)
 	currencyOf := make(map[string]string)
 	for _, currency := range currencies {
 		byID, err := c.descriptions(ctx, currency)
+		if errors.Is(err, errNoCurrencyEvents) {
+			skipped = append(skipped, err.Error())
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +313,7 @@ func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to 
 		}
 	}
 	if len(infos) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("llm: the calendar has no event of the currencies: %s", strings.Join(skipped, "; "))
 	}
 
 	for day := c.serverDay(from); !day.After(c.serverDay(to)); day = day.AddDate(0, 0, 1) {
@@ -307,38 +356,52 @@ func (c *MCPCalendar) Events(ctx context.Context, currencies []string, from, to 
 }
 
 // descriptions returns the events of a currency, by id, read again once a day.
-// A currency the calendar refuses has none, and is asked again an hour later.
+// A currency the calendar doesn't know, asked again an hour later, or without
+// any event, asked again on the next read, is errNoCurrencyEvents.
 func (c *MCPCalendar) descriptions(ctx context.Context, currency string) (map[string]mcpEventInfo, error) {
 	now := c.now()
 	c.mtx.Lock()
 	cached, ok := c.events[currency]
-	until, skipped := c.unavailable[currency]
+	until, unknown := c.unknown[currency]
 	c.mtx.Unlock()
 	if ok && now.Sub(cached.read) < mcpEventsTTL {
 		return cached.byID, nil
 	}
-	if skipped && now.Before(until) {
-		return nil, nil
+	if unknown && now.Before(until) {
+		return nil, fmt.Errorf("%s: %w (unknown to it)", currency, errNoCurrencyEvents)
 	}
 
 	var answer struct {
-		OK     bool `json:"ok"`
+		mcpStatus
 		Events []struct {
 			ID string `json:"id"`
 			mcpEventInfo
 		} `json:"events"`
 	}
-	err := c.client.callTool(ctx, "economic_calendar_list_events_by_currency",
-		map[string]any{"currency_code": currency}, &answer)
-	var refused *mcpToolError
+	err := c.call(ctx, "economic_calendar_list_events_by_currency", map[string]any{"currency_code": currency},
+		&answer)
 	switch {
-	case err != nil && !errors.As(err, &refused):
-		return nil, err // the server, not the currency
-	case err != nil || !answer.OK:
+	case unknownCurrency(err, currency):
 		c.mtx.Lock()
-		c.unavailable[currency] = now.Add(time.Hour)
+		c.unknown[currency] = now.Add(mcpUnknownTTL)
 		c.mtx.Unlock()
-		return nil, nil
+		log.Warnf("[LLM] the economic calendar: the currency %s skipped for %s, unknown to it: %v", currency,
+			mcpUnknownTTL, err)
+		return nil, fmt.Errorf("%s: %w (unknown to it)", currency, errNoCurrencyEvents)
+	case err != nil:
+		return nil, err // the server or the tool failing, not the currency: asked again on the next read
+	case len(answer.Events) == 0:
+		c.mtx.Lock()
+		told := now.Before(c.empty[currency])
+		if !told {
+			c.empty[currency] = now.Add(mcpUnknownTTL)
+		}
+		c.mtx.Unlock()
+		if !told {
+			log.Warnf("[LLM] the economic calendar: the currency %s skipped, none of its events read: asked "+
+				"again on the next reads", currency)
+		}
+		return nil, fmt.Errorf("%s: %w (none read)", currency, errNoCurrencyEvents)
 	}
 
 	byID := make(map[string]mcpEventInfo, len(answer.Events))
@@ -365,11 +428,11 @@ func (c *MCPCalendar) day(ctx context.Context, day time.Time) ([]mcpValue, error
 	}
 
 	var answer struct {
-		OK        bool       `json:"ok"`
+		mcpStatus
 		Truncated bool       `json:"truncated"`
 		Values    []mcpValue `json:"values"`
 	}
-	err := c.client.callTool(ctx, "economic_calendar_list_values", map[string]any{
+	err := c.call(ctx, "economic_calendar_list_values", map[string]any{
 		"datetime_from": day.Format("2006-01-02T15:04:05"),
 		"datetime_to":   day.AddDate(0, 0, 1).Format("2006-01-02T15:04:05"),
 		"limit":         5000,
@@ -381,6 +444,56 @@ func (c *MCPCalendar) day(ctx context.Context, day time.Time) ([]mcpValue, error
 	c.days[key] = mcpDay{values: answer.Values, read: now}
 	c.mtx.Unlock()
 	return answer.Values, nil
+}
+
+// call calls a tool of the calendar, decoding its result into out. A tool
+// failing (isError, or ok false) for another reason than an unknown currency
+// (see unknownCurrency), eg: the terminal busy, is called again once after
+// c.retry.
+func (c *MCPCalendar) call(ctx context.Context, tool string, args map[string]any,
+	out interface{ status() *mcpStatus }) error {
+
+	currency, _ := args["currency_code"].(string)
+	for attempt := 0; ; attempt++ {
+		*out.status() = mcpStatus{}
+		err := c.client.callTool(ctx, tool, args, out)
+		if status := out.status(); err == nil && !status.OK {
+			message := status.Error
+			if message == "" {
+				message = "ok false"
+			}
+			err = &mcpToolError{Tool: tool, Message: message}
+		}
+		var failed *mcpToolError
+		if err == nil || attempt > 0 || !errors.As(err, &failed) || unknownCurrency(err, currency) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(c.retry):
+		}
+	}
+}
+
+// unknownCurrency reports whether err, of a call for the events of currency,
+// refuses a currency the calendar doesn't know, rather than failing: any
+// error for a code that isn't a currency of the calendar (see
+// mt5CalendarCurrencies), eg: XTI; for one of them, only the server refusing
+// the argument of the call (mcpInvalidParams, not of the opening of the
+// session), deterministic. The message of a tool failing for one of them,
+// whatever it says, eg: "currency EUR not available", is never taken for
+// it: it may be transient, eg: the terminal syncing.
+func unknownCurrency(err error, currency string) bool {
+	if err == nil || currency == "" {
+		return false
+	}
+	if !mt5CalendarCurrencies[strings.ToUpper(currency)] {
+		return true
+	}
+	var opening *mcpOpenError
+	var refused *mcpError
+	return !errors.As(err, &opening) && errors.As(err, &refused) && refused.Code == mcpInvalidParams
 }
 
 // serverDay returns the day of the server holding t.

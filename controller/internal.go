@@ -286,7 +286,7 @@ func (m *Manager) handleJournalMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	list := make([]agentapi.Remembered, 0, len(remembered))
 	for _, rem := range remembered {
-		list = append(list, agentapi.Remembered{Pair: rem.Pair, Candle: rem.Candle, Action: rem.Action,
+		list = append(list, agentapi.Remembered{Pair: rem.Pair, Candle: rem.Candle, At: rem.At, Action: rem.Action,
 			Confidence: rem.Confidence, Reason: rem.Reason})
 	}
 	writeJSON(w, list)

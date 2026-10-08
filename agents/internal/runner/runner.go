@@ -17,6 +17,7 @@ import (
 
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/internal/flaglist"
 	"github.com/raykavin/xtrader/agents/internal/remote"
 	"github.com/raykavin/xtrader/agents/strategies"
 	"github.com/raykavin/xtrader/exchange"
@@ -226,7 +227,7 @@ func run(agent Agent) error {
 		minValue     = flag.Float64("min-position-value", 10, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
 		fee          = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value; MT5 CFDs charge the spread instead: half of it over the price, eg: 0.0003")
 		fraction     = flag.Float64("position-fraction", 1, "share of the free balance each position commits (0-1]")
-		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01")
+		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01; the decimals with . (a decimal comma, eg: 1,5, is refused)")
 		leverage     = flag.Float64("leverage", 1, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
@@ -296,7 +297,7 @@ func run(agent Agent) error {
 	if len(pairs) == 0 {
 		return errors.New("-pair: no pair to trade")
 	}
-	lots, err := lotsByPair(pairs, list(*lotList))
+	lots, err := sizesOf("-lot", pairs, *lotList)
 	if err != nil {
 		return err
 	}
@@ -361,7 +362,11 @@ func run(agent Agent) error {
 			exchange.RegisterMT5Pair(pair, "", *currency)
 		}
 		if lots != nil && inLots {
-			contracts, err := mt5Contracts(pairs, list(*mt5CSize))
+			contractSizes, err := flaglist.Sizes("-mt5-contract-size", *mt5CSize)
+			if err != nil {
+				return err
+			}
+			contracts, err := mt5Contracts(pairs, contractSizes)
 			if err != nil {
 				return err
 			}
@@ -613,6 +618,16 @@ func (v venue) checkSizes(exch service.Exchange) error {
 // per pair in the same order. It returns nil without any.
 func lotsByPair(pairs, sizes []string) (map[string]float64, error) {
 	return sizesByPair("-lot", pairs, sizes)
+}
+
+// sizesOf reads the flag name of a list of sizes (see flaglist.Sizes) and maps
+// them to the pairs (see sizesByPair).
+func sizesOf(name string, pairs []string, value string) (map[string]float64, error) {
+	sizes, err := flaglist.Sizes(name, value)
+	if err != nil {
+		return nil, err
+	}
+	return sizesByPair(name, pairs, sizes)
 }
 
 // sizesByPair maps the positive sizes of the flag name to the pairs: one for

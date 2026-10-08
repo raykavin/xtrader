@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -84,7 +86,7 @@ Context:
 - reanalysis_note, when present, is the note of the trader who asked for this decision: their view, their question or their request. A request to reduce the risk of the position held is followed, whatever your own reading and rules.min_confidence: to close it, EXIT; to tighten its stop loss, MODIFY_SL to the level asked, or to the one that fits the request when none is given, on its side of the price. Any other request, eg: to open or add to a position, or to widen the stop loss, is weighed like a view: decide by the strategy and the rules, which the note changes neither, as it is no evidence of the market by itself. Answer the note in the reason.
 - position is null when flat. Its entry_price, stop_loss, take_profit and unrealized_pnl are null when unknown; initial_stop_loss is the stop loss placed with the entry and r_multiple the profit of a close now in units of the risk to it, both null when unknown.
 - entry_size is the size of the position an entry opens, in units of the asset, and available_balance the balance available for it, in the quote currency.
-- economic_calendar, when present, lists the releases of the economic calendar of the currencies of the symbol around the close, oldest first: minutes_from_now is negative for a past release, and actual is null until it is published. When available is false the calendar couldn't be read: don't take its silence for a calm market. Weigh the volatility around the releases of high importance.
+- economic_calendar, when present, lists the releases of the economic calendar of the currencies of the symbol around now, oldest first: minutes_from_now is negative for a past release, and actual is null until it is published. When available is false the calendar couldn't be read: don't take its silence for a calm market. Weigh the volatility around the releases of high importance.
 - rules.setup is trend_pullback when the system allows only the entries with summary.trend (none without a trend), free otherwise; rules.min_risk_reward is the least reward over risk of an entry, null for none.
 - rules.higher_timeframes_trend, when set, is the trend all the higher timeframes agree on: the entries against it are left out of rules.allowed_actions.
 - rules.entries_blocked_by_news, when set, names the release that refuses new entries now: they are left out of rules.allowed_actions.
@@ -190,7 +192,7 @@ type PromptReporter interface {
 // eg: "# Indicators: atr, volume" or "# Indicators: ema 20 50, atr 14", for
 // Config.Indicators; ok is false without the line: all the groups.
 func StrategyIndicators(strategy string) (groups []string, ok bool) {
-	value, ok := headerValue(strategy, "Indicators:")
+	value, ok := headerValue(strategy, "indicators")
 	if !ok {
 		return nil, false
 	}
@@ -207,7 +209,7 @@ func StrategyIndicators(strategy string) (groups []string, ok bool) {
 // entries go without a take profit, "# Take profit: optional", for
 // Config.TakeProfitOptional.
 func StrategyTakeProfitOptional(strategy string) bool {
-	value, ok := headerValue(strategy, "Take profit:")
+	value, ok := headerValue(strategy, "take profit")
 	return ok && strings.EqualFold(strings.TrimSpace(value), "optional")
 }
 
@@ -215,19 +217,130 @@ func StrategyTakeProfitOptional(strategy string) bool {
 // take profit out of every entry, "# Take profit: none", for
 // Config.NoTakeProfit.
 func StrategyWithoutTakeProfit(strategy string) bool {
-	value, ok := headerValue(strategy, "Take profit:")
+	value, ok := headerValue(strategy, "take profit")
 	return ok && strings.EqualFold(strings.TrimSpace(value), "none")
 }
 
-// headerValue returns the value of the line of the header of strategy that
-// starts with key, eg: "Indicators:", and whether there is one.
-func headerValue(strategy, key string) (string, bool) {
-	for _, line := range strings.Split(strings.ReplaceAll(strategy, "\r\n", "\n"), "\n") {
+// promptLines returns the lines of strategy and the index of the first one
+// of its body, the text after its header. The header is the lines at its top
+// starting with #, up to the first line of other text, and isn't sent to the
+// model; after a blank line it goes on only with lines starting with # one of
+// which is of a key the agent reads, or reads like a daily limit in money (see
+// headerBlock), others, eg: a title "## Rules", starting the body. A line of
+// it sets what its key names (see headerField), eg: "# Indicators: atr" or
+// "# take profit : optional", the first one of a key only; the others describe
+// the prompt. A line starting with # in the body is text of the strategy, for
+// the model.
+func promptLines(strategy string) (lines []string, body int) {
+	lines = strings.Split(strings.ReplaceAll(strategy, "\r\n", "\n"), "\n")
+	seen, blank := false, false // a line of the header, a blank line after it
+	for ; body < len(lines); body++ {
+		line := strings.TrimSpace(lines[body])
+		if line == "" {
+			blank = seen
+			continue
+		}
+		if !strings.HasPrefix(line, "#") || blank && !headerBlock(lines[body:]) {
+			break
+		}
+		seen, blank = true, false
+	}
+	return lines, body
+}
+
+// headerBlock reports whether the lines starting with # at the top of lines,
+// after a blank line of the header, up to a blank line or a line of other
+// text, are of the header still: one of them of a key the agent reads, or
+// reading like a daily limit in money (see keepsHeader).
+func headerBlock(lines []string) bool {
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "#") {
-			break // the end of the header
+			return false
 		}
-		if value, found := strings.CutPrefix(strings.TrimSpace(strings.TrimPrefix(line, "#")), key); found {
+		if keepsHeader(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// headerKeys are the keys of the header lines the agent reads.
+var headerKeys = []string{"indicators", "take profit", dailyGainKey, dailyLossKey}
+
+// The amounts in a currency of a line, see moneyIn: an amount, eg: 150 or
+// 1.000,50, and a code of 3 capital letters after it, first in the value of
+// the line, or last in it.
+var (
+	moneyFirstRegexp = regexp.MustCompile(`^\s*[-+]?\d[\d.,]*\s*([A-Z]{3})\b`)
+	moneyLastRegexp  = regexp.MustCompile(`\d[\d.,]*\s*([A-Z]{3})[\s.,;:!?)]*$`)
+)
+
+// isoCurrencies are the codes of the currencies in use of ISO 4217, but the
+// ones of funds, metals and tests, and USC, the US cent of the cent accounts
+// of some brokers, eg: Exness.
+var isoCurrencies = func() map[string]bool {
+	codes := map[string]bool{"USC": true}
+	for _, code := range strings.Fields(`AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB
+		BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP
+		GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD
+		KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR
+		NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC
+		SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XCG XOF XPF YER
+		ZAR ZMW ZWG`) {
+		codes[code] = true
+	}
+	return codes
+}()
+
+// moneyIn reports whether re (see moneyFirstRegexp) matches an amount in a
+// currency in text: its code one of isoCurrencies, not any 3 capital letters,
+// eg: "2 ATR".
+func moneyIn(re *regexp.Regexp, text string) bool {
+	match := re.FindStringSubmatch(text)
+	return match != nil && isoCurrencies[match[1]]
+}
+
+// keepsHeader reports whether line, starting with #, keeps the lines after a
+// blank line of the header in it (see headerBlock): of a key the agent reads,
+// or reading like a daily limit in money (see dailyMoneyLine), refused by
+// checkDailyLines rather than left off.
+func keepsHeader(line string) bool {
+	key, _, colon := headerField(line)
+	return colon && slices.Contains(headerKeys, key) || dailyMoneyLine(line)
+}
+
+// dailyMoneyLine reports whether line, starting with #, reads like a daily
+// limit in money: a key naming a day and a limit (see dailyLike), and an
+// amount in a currency (see moneyIn) first in its value, eg: "# Daily loss
+// limits: 150 BRL" or "# Limite diário: 150 BRL por dia", or ending it, eg:
+// "# Daily loss limit 150 BRL"; not an amount in something else, eg: "##
+// Limite diário de perda: 2 ATR", nor a currency elsewhere, eg: "## Daily
+// limit: 2 trades, max 1 EUR pair".
+func dailyMoneyLine(line string) bool {
+	key, value, colon := headerField(line)
+	if !dailyLike(key) {
+		return false
+	}
+	return colon && moneyIn(moneyFirstRegexp, value) || moneyIn(moneyLastRegexp, strings.TrimSpace(line))
+}
+
+// headerField returns the key of a line starting with #, the text before its
+// colon in lower case, its words single-spaced, eg: "take profit" for
+// "# Take  profit : none", and its value, the text after the colon; the whole
+// text is the key of a line without a colon, colon false.
+func headerField(line string) (key, value string, colon bool) {
+	text := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
+	key, value, colon = strings.Cut(text, ":")
+	return strings.ToLower(strings.Join(strings.Fields(key), " ")), value, colon
+}
+
+// headerValue returns the value of the first line of the header of strategy
+// of key, eg: "indicators", and whether there is one.
+func headerValue(strategy, key string) (string, bool) {
+	lines, body := promptLines(strategy)
+	for _, line := range lines[:body] {
+		if k, value, colon := headerField(line); colon && k == key {
 			return value, true
 		}
 	}
@@ -246,14 +359,11 @@ func NormalizeIndicator(spec string) string {
 	return strings.Join(fields, " ")
 }
 
-// stripComments returns strategy without the lines starting with # at its
-// top, and without the blank lines around it.
+// stripComments returns strategy without its header (see promptLines), and
+// without the blank lines around its text.
 func stripComments(strategy string) string {
-	lines := strings.Split(strings.ReplaceAll(strategy, "\r\n", "\n"), "\n")
-	for len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "#") {
-		lines = lines[1:]
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	lines, body := promptLines(strategy)
+	return strings.TrimSpace(strings.Join(lines[body:], "\n"))
 }
 
 // decisionName is the name of the schema of a Decision, the name of the tool

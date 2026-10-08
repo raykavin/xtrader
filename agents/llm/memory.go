@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -14,7 +15,8 @@ import (
 )
 
 const (
-	// maxRemembered are the decisions of a pair kept for the memory.
+	// maxRemembered are the decisions of a pair kept for the memory, at least:
+	// Config.Memory when more.
 	maxRemembered = 20
 	// maxReason bounds the reason of a decision remembered, in characters.
 	maxReason = 220
@@ -28,7 +30,9 @@ type Memory struct {
 	Trades    []PastTrade    `json:"recent_trades"`
 }
 
-// PastDecision is a decision CandlesAgo candles before the one of now.
+// PastDecision is a decision taken CandlesAgo candles before now, the time of
+// the analysis, rounded: 0 within the last half candle, eg: an analysis of the
+// candle in progress (see Config.ConsultInterval).
 type PastDecision struct {
 	CandlesAgo int    `json:"candles_ago"`
 	Action     Action `json:"action"`
@@ -49,7 +53,8 @@ type PastTrade struct {
 	ClosedCandlesAgo int    `json:"closed_candles_ago"`
 }
 
-// remembered is a decision kept for the memory: its candle, and its action.
+// remembered is a decision kept for the memory: when it was taken (see
+// prepared), and its action.
 type remembered struct {
 	at         time.Time
 	action     Action
@@ -57,21 +62,29 @@ type remembered struct {
 	reason     string
 }
 
-// remember keeps the decision of the candle at on pair for the memory.
+// remember keeps the decision taken at at on pair for the memory: by its time,
+// not by its candle, so that the analyses of the candle in progress see the
+// ones taken before them in it.
 func (t *Trader) remember(pair string, at time.Time, d Decision) {
 	reason := d.Reason
 	if utf8.RuneCountInString(reason) > maxReason {
 		reason = string([]rune(reason)[:maxReason-1]) + "…"
 	}
 	list := append(t.remembered[pair], remembered{at: at, action: d.Action, confidence: d.Confidence, reason: reason})
-	if len(list) > maxRemembered {
-		list = list[len(list)-maxRemembered:]
+	if limit := t.rememberedLimit(); len(list) > limit {
+		list = list[len(list)-limit:]
 	}
 	t.remembered[pair] = list
 }
 
-// memory returns the memory of pair at the candle at: its Config.Memory last
-// decisions before it and trades closed.
+// rememberedLimit returns the decisions of a pair kept for the memory.
+func (t *Trader) rememberedLimit() int {
+	return max(maxRemembered, t.cfg.Memory)
+}
+
+// memory returns the memory of pair at at, the time of the analysis (see
+// dayClock): its Config.Memory last decisions taken before it and trades
+// closed, their candles counted back from it.
 func (t *Trader) memory(pair string, at time.Time) *Memory {
 	n := t.cfg.Memory
 	memory := &Memory{Decisions: []PastDecision{}, Trades: []PastTrade{}}
@@ -93,7 +106,7 @@ func (t *Trader) memory(pair string, at time.Time) *Memory {
 		if err != nil {
 			log.Warnf("[LLM] %s | the stored orders, for the memory: %v", pair, err)
 		}
-		trades := closedTrades(orders)
+		trades, _, _ := t.pairTrades(pair, orders)
 		for i := len(trades) - 1; i >= 0 && len(memory.Trades) < n; i-- {
 			trade := trades[i]
 			memory.Trades = append(memory.Trades, PastTrade{Side: describeSide(trade.side), Entry: number(trade.entry),
@@ -127,20 +140,85 @@ type openTrade struct {
 	open   model.Order
 }
 
-// closedTrades returns the trades the fills of orders closed, oldest first:
-// the position opened by the fills of a side (its average price), closed by
-// the ones of the other, the exit by a stop loss, a take profit (a grouped
-// limit order), or else at the market.
-func closedTrades(orders []model.Order) []closedTrade {
-	closed, _, _ := tradesOf(orders)
+// closedTrades returns the trades the fills of orders closed, oldest first,
+// told apart by position with link (nil for none), see tradesOf: the position
+// opened by a fill, closed by the ones of the other side, the exit by a stop
+// loss, a take profit (a grouped limit order), or else at the market.
+func closedTrades(orders []model.Order, link fillLink) []closedTrade {
+	closed, _, _, _ := tradesOf(orders, link)
 	return closed
 }
 
+// pairTrades returns the trades of orders, the stored ones of pair, see
+// tradesOf: told apart by position as the broker tells them, when it does
+// (fillPositions). The orphans are logged once.
+func (t *Trader) pairTrades(pair string, orders []model.Order) ([]closedTrade, *openTrade, map[int64]string) {
+	var link fillLink
+	if positions, ok := t.reporter.(fillPositions); ok {
+		link = positions.FillPositions
+	}
+	closed, open, roles, orphans := tradesOf(orders, link)
+	for _, fill := range orphans {
+		if t.orphans == nil {
+			t.orphans = make(map[int64]bool)
+		}
+		if t.orphans[fill.ID] {
+			continue
+		}
+		t.orphans[fill.ID] = true
+		log.Warnf("[LLM] %s | the fill of the order %d (%s %s %g at %g, %s) closes a position whose entry isn't "+
+			"among the orders of the bot, or more than it: that part is left out of its trades and of the results "+
+			"of its day", pair, fill.ID, fill.Side, fill.Type, fill.Quantity, fill.Price,
+			fill.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	return closed, open, roles
+}
+
+// lotDust is the size under which what is left of a position, or of a fill,
+// is rounding: nothing.
+const lotDust = 1e-9
+
+// fillLink tells the positions of the account the fill of an order opened, 0
+// for none, and closed, false when unknown: see fillPositions.
+type fillLink func(fill model.Order) (opened int64, closed []int64, ok bool)
+
+// fillPositions is an AccountReporter telling the positions of the account
+// the fills of the bot opened and closed, eg: the MT5 adapter, by their
+// tickets: the trades are told apart by position with it, see tradesOf.
+type fillPositions interface {
+	FillPositions(fill model.Order) (opened int64, closed []int64, ok bool)
+}
+
+// lot is a position the fills of a pair opened, see tradesOf: its side, its
+// size left, its entry, the fill that opened it, and its position at the
+// broker, the one link told, else the ExchangeID of the fill (the ticket of
+// the position on MT5).
+type lot struct {
+	side     model.SideType
+	size     float64
+	entry    float64
+	opened   time.Time
+	open     model.Order
+	position int64
+}
+
 // tradesOf returns the trades the fills of orders closed, oldest first (see
-// closedTrades), the position they leave open, nil when flat, and the role of
-// each fill: "entry", opening or adding to a position, or "exit", closing (a
-// part of) one.
-func tradesOf(orders []model.Order) ([]closedTrade, *openTrade, map[int64]string) {
+// closedTrades), the position they leave open, nil when flat, the role of each
+// fill ("entry", opening a position, or "exit", closing (a part of) one), and
+// the orphans: the fills closing a position whose entry isn't among them, left
+// out of the trades, never taken for an entry.
+//
+// Each entry opens a position of its own, as on MT5. A fill closes, of the
+// positions open on the other side:
+//   - the ones link tells, when it knows the fill (eg: MT5, by their
+//     tickets), the rest opening the position it tells, if any;
+//   - for a leg (a grouped order: a stop loss or a take profit), the newest
+//     ones opened before the leg was placed, never more;
+//   - else the oldest ones first, the rest opening a position (a reversal).
+//
+// So a fill missing, eg: an entry unstored or a position closed by hand,
+// leaves its own position aside rather than shifting every one after it.
+func tradesOf(orders []model.Order, link fillLink) ([]closedTrade, *openTrade, map[int64]string, []model.Order) {
 	var fills []model.Order
 	for _, order := range orders {
 		if order.Status == model.OrderStatusTypeFilled && order.Quantity > 0 && order.Price > 0 {
@@ -155,51 +233,119 @@ func tradesOf(orders []model.Order) ([]closedTrade, *openTrade, map[int64]string
 	})
 
 	var trades []closedTrade
+	var orphans []model.Order
 	roles := make(map[int64]string, len(fills))
-	var net, entry float64 // net signed, positive long; the average price of the open side
-	var opened time.Time
-	var opener model.Order // the fill that opened the open side
+	var lots []*lot // open, oldest first
 	for _, fill := range fills {
-		signed := fill.Quantity
-		if fill.Side == model.SideTypeSell {
-			signed = -signed
+		var opened int64
+		var positions []int64
+		linked := false
+		if link != nil {
+			opened, positions, linked = link(fill)
 		}
+		leg := fill.GroupID != nil
+
+		var targets []*lot // the positions it closes, in turn
+		matched := 0       // of positions
+		for _, l := range lots {
+			switch {
+			case l.side == fill.Side:
+			case linked:
+				if slices.Contains(positions, l.position) {
+					targets = append(targets, l)
+					matched++
+				}
+			case leg:
+				if placedAfter(fill, l.open) {
+					targets = append([]*lot{l}, targets...) // the newest first
+				}
+			default:
+				targets = append(targets, l)
+			}
+		}
+		left := fill.Quantity
+		closeLots := func(targets []*lot) {
+			for _, l := range targets {
+				if left <= lotDust {
+					return
+				}
+				size := math.Min(left, l.size)
+				trades = append(trades, closedTrade{side: l.side, size: size, entry: l.entry, exit: fill.Price,
+					exitBy: exitBy(fill), resultPct: sideSign(l.side) * (fill.Price/l.entry - 1) * 100,
+					opened: l.opened, closed: fill.UpdatedAt, open: l.open, close: fill})
+				l.size -= size
+				left -= size
+			}
+		}
+		closeLots(targets)
+		if linked && !leg && opened == 0 && len(positions) == 1 && matched == 1 && left > lotDust {
+			// an order of a previous run closing several positions, the
+			// broker telling the first one only: the next ones in turn. Never
+			// when it tells several, one of them unknown: the rest is that
+			// one's, an orphan, the others still open
+			var others []*lot
+			for _, l := range lots {
+				if l.side != fill.Side && l.size > lotDust && !slices.Contains(targets, l) {
+					others = append(others, l)
+				}
+			}
+			closeLots(others)
+		}
+		lots = slices.DeleteFunc(lots, func(l *lot) bool { return l.size <= lotDust })
+
+		exited := left < fill.Quantity-lotDust
 		switch {
-		case net == 0 || math.Signbit(net) == math.Signbit(signed):
-			if net == 0 {
-				opened, opener = fill.UpdatedAt, fill
+		case leg && left > lotDust, !leg && linked && (matched < len(positions) || opened == 0 && left > lotDust):
+			// the exit of a position whose entry isn't among the fills
+			orphans = append(orphans, fill)
+			exited = true
+		}
+		if left > lotDust && !leg && (!linked || opened != 0) {
+			position := fill.ExchangeID
+			if linked {
+				position = opened
 			}
-			entry = (entry*math.Abs(net) + fill.Price*math.Abs(signed)) / (math.Abs(net) + math.Abs(signed))
-			net += signed
-			roles[fill.ID] = "entry"
-		default:
-			side := model.SideTypeBuy
-			if net < 0 {
-				side = model.SideTypeSell
-			}
-			trades = append(trades, closedTrade{side: side, size: math.Min(math.Abs(signed), math.Abs(net)),
-				entry: entry, exit: fill.Price, exitBy: exitBy(fill),
-				resultPct: sideSign(side) * (fill.Price/entry - 1) * 100, opened: opened, closed: fill.UpdatedAt,
-				open: opener, close: fill})
+			lots = append(lots, &lot{side: fill.Side, size: left, entry: fill.Price, opened: fill.UpdatedAt,
+				open: fill, position: position})
+		}
+		roles[fill.ID] = "entry"
+		if exited {
 			roles[fill.ID] = "exit"
-			if math.Abs(signed) > math.Abs(net)+1e-12 { // a reversal: the rest opens at its price
-				entry, opened, opener = fill.Price, fill.UpdatedAt, fill
-			}
-			net += signed
-		}
-		if math.Abs(net) < 1e-12 {
-			net, entry = 0, 0
 		}
 	}
+	return trades, openOf(lots), roles, orphans
+}
+
+// placedAfter reports whether the leg was placed after the fill opened, its
+// entry: by their IDs, numbered in turn, else by their creation.
+func placedAfter(leg, entry model.Order) bool {
+	if leg.ID > 0 && entry.ID > 0 {
+		return leg.ID > entry.ID
+	}
+	return !leg.CreatedAt.Before(entry.CreatedAt)
+}
+
+// openOf returns the position lots leave open: the ones of the side of the
+// newest, their average entry, from the oldest of them; nil when none.
+func openOf(lots []*lot) *openTrade {
+	if len(lots) == 0 {
+		return nil
+	}
+	side := lots[len(lots)-1].side
 	var open *openTrade
-	if net != 0 {
-		side := model.SideTypeBuy
-		if net < 0 {
-			side = model.SideTypeSell
+	var cost float64
+	for _, l := range lots {
+		if l.side != side {
+			continue
 		}
-		open = &openTrade{side: side, size: math.Abs(net), entry: entry, opened: opened, open: opener}
+		if open == nil {
+			open = &openTrade{side: side, opened: l.opened, open: l.open}
+		}
+		open.size += l.size
+		cost += l.size * l.entry
 	}
-	return trades, open, roles
+	open.entry = cost / open.size
+	return open
 }
 
 // exitBy names what the fill closing a trade was.
@@ -232,10 +378,12 @@ type JournalEntry struct {
 }
 
 // Remembered is a decision of a Journal read back for the memory of the
-// context: its pair, the candle it was taken on, and its answer.
+// context: its pair, the candle it was taken on, when (the time of its entry,
+// zero when unknown: the close of the candle then), and its answer.
 type Remembered struct {
 	Pair       string
 	Candle     time.Time
+	At         time.Time
 	Action     Action
 	Confidence float64
 	Reason     string
@@ -260,12 +408,16 @@ type Journal interface {
 // back the last decisions of each pair it holds for the memory of the context.
 // Before the bot runs.
 func (t *Trader) SetJournal(journal Journal) error {
-	recent, err := journal.Recent(maxRemembered)
+	recent, err := journal.Recent(t.rememberedLimit())
 	if err != nil {
 		return fmt.Errorf("llm: the journal: %w", err)
 	}
 	for _, r := range recent {
-		t.remember(r.Pair, r.Candle, Decision{Action: r.Action, Confidence: r.Confidence,
+		at := r.At
+		if at.IsZero() {
+			at = r.Candle.Add(t.period) // the decision of its close, the earliest
+		}
+		t.remember(r.Pair, at, Decision{Action: r.Action, Confidence: r.Confidence,
 			Reason: strings.TrimSpace(r.Reason)})
 	}
 	if len(recent) > 0 {

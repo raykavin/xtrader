@@ -41,11 +41,16 @@ type mcpClient struct {
 	token  string
 	client *http.Client
 
+	opening sync.Mutex // one session opened at a time, see open
 	mtx     sync.Mutex // guards the session and the ids
 	session string
 	ready   bool
 	id      int64
 }
+
+// maxMCPAnswer caps an answer of the server: its JSON, or the event stream
+// read up to the event answering the request.
+const maxMCPAnswer = 16 << 20
 
 func newMCPClient(url, token string, client *http.Client) *mcpClient {
 	if client == nil {
@@ -63,6 +68,13 @@ type mcpError struct {
 func (e *mcpError) Error() string {
 	return fmt.Sprintf("MCP error %d: %s", e.Code, e.Message)
 }
+
+// mcpOpenError is the session failing to open, see open: never the answer
+// to a request within it.
+type mcpOpenError struct{ err error }
+
+func (e *mcpOpenError) Error() string { return e.err.Error() }
+func (e *mcpOpenError) Unwrap() error { return e.err }
 
 // mcpToolError is a tool that ran and failed, eg: an argument it refused.
 type mcpToolError struct {
@@ -171,10 +183,16 @@ func (c *mcpClient) request(ctx context.Context, method string, params, out any)
 }
 
 // open initializes the session once: initialize, then the initialized
-// notification.
+// notification. A session not opened to the end is dropped, so the next call
+// opens a new one: the server may have forgotten it meanwhile.
 func (c *mcpClient) open(ctx context.Context) error {
+	c.opening.Lock()
+	defer c.opening.Unlock()
 	c.mtx.Lock()
 	ready := c.ready
+	if !ready {
+		c.session = "" // the one of the answer to initialize, if any
+	}
 	c.mtx.Unlock()
 	if ready {
 		return nil
@@ -188,16 +206,22 @@ func (c *mcpClient) open(ctx context.Context) error {
 	var result struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	if err := c.post(ctx, "initialize", params, &result, false); err != nil {
-		return fmt.Errorf("llm: MCP initialize: %w", err)
-	}
-	if err := c.post(ctx, "notifications/initialized", nil, nil, true); err != nil {
-		return fmt.Errorf("llm: MCP initialized: %w", err)
+	err := c.post(ctx, "initialize", params, &result, false)
+	if err != nil {
+		err = fmt.Errorf("llm: MCP initialize: %w", err)
+	} else if err = c.post(ctx, "notifications/initialized", nil, nil, true); err != nil {
+		err = fmt.Errorf("llm: MCP initialized: %w", err)
 	}
 
 	c.mtx.Lock()
-	c.ready = true
+	c.ready = err == nil
+	if err != nil {
+		c.session = ""
+	}
 	c.mtx.Unlock()
+	if err != nil {
+		return &mcpOpenError{err: err}
+	}
 	return nil
 }
 
@@ -232,7 +256,7 @@ func (c *mcpClient) post(ctx context.Context, method string, params, out any, no
 		request.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	c.mtx.Lock()
-	if c.session != "" {
+	if c.session != "" && method != "initialize" { // a new session never carries an old one
 		request.Header.Set("Mcp-Session-Id", c.session)
 	}
 	c.mtx.Unlock()
@@ -252,15 +276,11 @@ func (c *mcpClient) post(ctx context.Context, method string, params, out any, no
 		data, _ := io.ReadAll(io.LimitReader(response.Body, maxMCPErrorBody+1))
 		return &mcpHTTPError{Status: response.StatusCode, Body: c.mcpErrorBody(data)}
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
-	if err != nil {
-		return err
-	}
 	if notification {
-		return nil
+		return nil // accepted: its body, none, left unread
 	}
 
-	payload, err := mcpPayload(response.Header.Get("Content-Type"), data, id)
+	payload, err := mcpPayload(response.Header.Get("Content-Type"), response.Body, id)
 	if err != nil {
 		return err
 	}
@@ -282,9 +302,20 @@ func (c *mcpClient) post(ctx context.Context, method string, params, out any, no
 }
 
 // mcpPayload returns the JSON-RPC answer of id from a body in JSON, or in
-// server-sent events (the data of the event answering id).
-func mcpPayload(contentType string, data []byte, id int64) ([]byte, error) {
+// server-sent events: the data of the event answering id, read as the events
+// come, as the server may hold the stream open after it. Either is read up to
+// maxMCPAnswer.
+func mcpPayload(contentType string, body io.Reader, id int64) ([]byte, error) {
+	limited := &io.LimitedReader{R: body, N: maxMCPAnswer + 1}
+	tooLarge := fmt.Errorf("the answer to the request %d is over %d MiB", id, maxMCPAnswer>>20)
 	if !strings.HasPrefix(strings.TrimSpace(contentType), "text/event-stream") {
+		data, err := io.ReadAll(limited)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxMCPAnswer {
+			return nil, tooLarge
+		}
 		return data, nil
 	}
 
@@ -300,8 +331,8 @@ func mcpPayload(contentType string, data []byte, id int64) ([]byte, error) {
 		return append([]byte(nil), event.Bytes()...), true
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 64<<10), 16<<20)
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 64<<10), maxMCPAnswer+1)
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
@@ -315,6 +346,12 @@ func mcpPayload(contentType string, data []byte, id int64) ([]byte, error) {
 			}
 			event.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
+	}
+	if limited.N <= 0 || errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		return nil, tooLarge
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 	if payload, ok := flush(); ok {
 		return payload, nil

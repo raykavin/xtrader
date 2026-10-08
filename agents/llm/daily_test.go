@@ -2,6 +2,10 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -383,4 +387,512 @@ func mustJSON(t *testing.T, value any) string {
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(data)
+}
+
+// linkedReporter is a fakeReporter telling the positions of the fills by their
+// ID too, as the MT5 adapter tells them by their tickets (see fillPositions).
+type linkedReporter struct {
+	*fakeReporter
+	links map[int64][2][]int64 // the position opened (none or one), and the ones closed
+}
+
+func (l *linkedReporter) FillPositions(fill model.Order) (int64, []int64, bool) {
+	positions, ok := l.links[fill.ID]
+	var opened int64
+	if len(positions[0]) > 0 {
+		opened = positions[0][0]
+	}
+	return opened, positions[1], ok
+}
+
+// B6: a fill of yesterday closing a position whose entry isn't among the
+// orders of the bot (a sell) never inverts the day: the long of today closed
+// at its take profit is the position of the day, its result booked, nothing
+// pending nor open, the entries free; the fill left out is logged once.
+func TestTrader_DailyOrphanFillDoesNotInvertTheDay(t *testing.T) {
+	r, orders, reporter, start := dailyRunner(t, 0)
+	linked := &linkedReporter{fakeReporter: reporter, links: map[int64][2][]int64{
+		1:  {nil, {5}},  // closes the position 5, opened by no order of the bot
+		10: {{10}, nil}, // the long of today
+		12: {nil, {10}}, // its take profit
+	}}
+	r.trader.SetAccountReporter(linked)
+	at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+	orders.add(testPair, filled(1, model.SideTypeSell, 95, 1, at(-600)),
+		filled(10, model.SideTypeBuy, 100, 1, at(10)),
+		legOf(11, 10, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeCanceled, 98, 1, at(40)),
+		legOf(12, 10, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeFilled, 104, 1, at(40)))
+	reporter.profits[12] = 40
+
+	day, blocked := r.trader.daily(testPair, r.trader.state.Load(), at(60))
+	require.Empty(t, blocked)
+	require.Len(t, day.Positions, 1)
+	require.Equal(t, "LONG", day.Positions[0].Side)
+	require.Equal(t, "closed", day.Positions[0].Status)
+	require.Equal(t, number(100), day.Positions[0].Entry)
+	require.Equal(t, number(104), day.Positions[0].Exit)
+	require.Equal(t, number(40), day.Positions[0].Result)
+	require.Zero(t, day.Result.PendingResults)
+	require.Equal(t, number(40), day.Result.Realized)
+	require.True(t, math.IsNaN(float64(day.Result.Unrealized)), "no position open")
+	require.True(t, r.trader.orphans[1], "the fill left out, logged")
+}
+
+// B6: the result of a close of the day the broker doesn't book holds the
+// entries of the pair, as documented, but past pendingResultLate it is told,
+// once: logged as an error and notified, the skip saying how late it is; then
+// told again once booked, the entries checked against the limits again.
+func TestTrader_DailyPendingResultLate(t *testing.T) {
+	r, orders, reporter, start := dailyRunner(t, 0)
+	messages := &[]string{}
+	r.trader.SetNotifier(func(message string) { *messages = append(*messages, message) })
+	st := r.trader.state.Load()
+	at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+	orders.add(testPair, closedPosition(1, model.SideTypeBuy, at(5), at(10), reporter, -20)...)
+	delete(reporter.profits, 2) // unbooked
+
+	_, blocked := r.trader.daily(testPair, st, at(15))
+	require.Contains(t, blocked, "isn't booked by the broker yet")
+	require.Empty(t, *messages, "not late yet")
+
+	late := at(10).Add(pendingResultLate)
+	_, blocked = r.trader.daily(testPair, st, late)
+	require.Contains(t, blocked, "isn't booked by the broker yet, 10 min later: the entries wait for it")
+	require.Len(t, *messages, 1)
+	require.Contains(t, (*messages)[0], "the result of the close of")
+	require.Contains(t, (*messages)[0], "(order 2) isn't booked by the broker yet, 10 min later")
+
+	// the next analyses: still blocked, told once
+	asked := len(r.provider.inputs)
+	r.trader.now = func() time.Time { return late.Add(time.Hour) }
+	r.step(100)
+	require.Len(t, r.provider.inputs, asked, "the entries still wait: not asked")
+	_, blocked = r.trader.daily(testPair, st, late.Add(2*time.Hour))
+	require.Contains(t, blocked, "isn't booked by the broker yet, 130 min later")
+	require.Len(t, *messages, 1, "told once")
+
+	// booked at last: told, the entries free under the limits
+	reporter.profits[2] = -20
+	day, blocked := r.trader.daily(testPair, st, late.Add(2*time.Hour))
+	require.Empty(t, blocked)
+	require.Equal(t, number(-20), day.Result.Realized)
+	require.Len(t, *messages, 2)
+	require.Contains(t, (*messages)[1], "(order 2) is booked by the broker")
+	_, _ = r.trader.daily(testPair, st, late.Add(2*time.Hour))
+	require.Len(t, *messages, 2, "told once")
+}
+
+// B21: the daily limits are read in any case, the spaces around the key
+// tolerated, in the whole header, blank lines included; a line that reads like
+// a daily limit but isn't one read, eg: of another key, without a colon,
+// twice, or in the text after the header, refuses the prompt rather than
+// leaving the limit off.
+func TestStrategyDailyLimits_HeaderLines(t *testing.T) {
+	for header, want := range map[string][2]float64{
+		"# daily loss limit: 150 BRL":                                            {0, 150},
+		"# Daily loss limit : 150 BRL":                                           {0, 150},
+		"#Daily  Gain   LIMIT:250 BRL":                                           {250, 0},
+		"## Daily loss limit: 150 BRL":                                           {0, 150},
+		"# t: x\n\n# Daily loss limit: 150 BRL":                                  {0, 150},
+		"# t: x\n# Daily gain limit: 250 BRL\n\n  \n# Daily loss limit: 150 BRL": {250, 150},
+		"# t: x\n\n# Flags: y\n# Daily loss limit: 150 BRL":                      {0, 150},
+		"# The daily limits of each pair, in the currency of the account":        {0, 0},
+	} {
+		gain, loss, _, err := StrategyDailyLimits(header + "\n\nText.")
+		require.NoError(t, err, header)
+		require.Equal(t, want, [2]float64{gain, loss}, header)
+	}
+	sent := systemPrompt("# t: x\n\n# Daily loss limit: 150 BRL\n\nText.")
+	require.NotContains(t, sent, "Daily loss limit", "the header, blank lines included, isn't sent")
+	require.True(t, strings.HasSuffix(sent, "Strategy:\nText."))
+
+	for strategy, want := range map[string]string{
+		"# Daily loss limits: 150 BRL\n\nText.":                             "isn't a daily limit the agent reads",
+		"# Limite diário de perda: 150 BRL\n\nText.":                        "isn't a daily limit the agent reads",
+		"# Daily loss limit 150 BRL\n\nText.":                               "isn't a daily limit the agent reads",
+		"# Max daily loss limit = 150 BRL\n\nText.":                         "isn't a daily limit the agent reads",
+		"# Daily loss limit: 150 BRL\n# daily loss limit: 100 BRL\n\nText.": "the daily loss limit is given twice",
+		"# t: x\n\n# Daily loss limits: 150 BRL\n\nText.":                   "isn't a daily limit the agent reads",
+		"# t: x\n## Limite diário: 3 operações\n\nText.":                    "in the header, it isn't sent to the model",
+	} {
+		_, _, _, err := StrategyDailyLimits(strategy)
+		require.ErrorContains(t, err, want, strategy)
+	}
+
+	// refused as a prompt of the Trader: the previous one kept
+	r, _, _, _ := dailyRunner(t, 0)
+	_, err := r.trader.promptState(Prompt{Content: "# t: x\n# daily loss limits: 150 BRL\n\nText."})
+	require.ErrorContains(t, err, `the line "# daily loss limits: 150 BRL" isn't a daily limit the agent reads`)
+}
+
+// B22: the prompt the Trader starts with, made before the account is known,
+// is checked against it once SetAccountReporter is set: limits in another
+// currency refuse it. Unknown then, it is told refused once the currency is
+// known (logged and reported to the source of the prompts), its entries
+// refused meanwhile.
+func TestTrader_CheckPromptAccount(t *testing.T) {
+	usd := promptOf(7, "usd", 2, "# usd: x\n# Daily loss limit: 150 USD\n\nText.")
+	r, prompts := promptRunner(t, func(c *Config) { c.Live = true }, usd, PromptOverrides{})
+	require.NoError(t, r.trader.CheckPromptAccount(), "no account yet")
+
+	reporter := &fakeReporter{currency: "BRL", profits: map[int64]float64{}, open: map[string]exchange.MT5OpenPosition{}}
+	r.trader.SetAccountReporter(reporter)
+	err := r.trader.CheckPromptAccount()
+	require.ErrorContains(t, err, "the prompt usd v2: the daily limits are in USD, the account in BRL")
+
+	brl := promptOf(8, "brl", 1, "# brl: x\n# Daily loss limit: 150 BRL\n\nText.")
+	ok, _ := promptRunner(t, func(c *Config) { c.Live = true }, brl, PromptOverrides{})
+	ok.trader.SetAccountReporter(reporter)
+	require.NoError(t, ok.trader.CheckPromptAccount())
+
+	// the currency of the account unknown at the start: told once known
+	unknown := &fakeReporter{profits: map[int64]float64{}, open: map[string]exchange.MT5OpenPosition{}}
+	r.trader.SetAccountReporter(unknown)
+	require.NoError(t, r.trader.CheckPromptAccount(), "the currency unknown")
+	r.trader.SetOrderSource(func(string) ([]model.Order, error) { return nil, nil })
+	st := r.trader.state.Load()
+	_, blocked := r.trader.daily(testPair, st, r.trader.now())
+	require.Equal(t, "the currency of the account is unknown: the daily limits can't be checked", blocked)
+	require.Empty(t, prompts.reports)
+
+	unknown.currency = "BRL"
+	_, blocked = r.trader.daily(testPair, st, r.trader.now())
+	require.Equal(t, "the account is in BRL, the daily limits in USD", blocked)
+	require.Len(t, prompts.reports, 1)
+	require.Equal(t, usd.Ref, prompts.reports[0].ref)
+	require.ErrorContains(t, prompts.reports[0].err, "the daily limits are in USD, the account in BRL")
+	_, _ = r.trader.daily(testPair, st, r.trader.now())
+	require.Len(t, prompts.reports, 1, "told once")
+}
+
+// B36: the operational day is the one of the zone of the agent by its name,
+// eg: America/Belem rather than Local: of TZ, a name or the path of its file,
+// else of the link of the zone of the system; an empty or unknown TZ is UTC,
+// as for time.Local.
+func TestZoneOf(t *testing.T) {
+	env := func(tz string, set bool) func(string) (string, bool) {
+		return func(name string) (string, bool) {
+			if name != "TZ" {
+				return "", false
+			}
+			return tz, set
+		}
+	}
+	dir := t.TempDir()
+	zoneinfo := filepath.Join(dir, "zoneinfo", "America")
+	require.NoError(t, os.MkdirAll(zoneinfo, 0o755))
+	belemFile := filepath.Join(zoneinfo, "Belem")
+	require.NoError(t, os.WriteFile(belemFile, []byte("TZif"), 0o644))
+	link := filepath.Join(dir, "localtime")
+	require.NoError(t, os.Symlink(belemFile, link))
+	plain := filepath.Join(dir, "plain")
+	require.NoError(t, os.WriteFile(plain, []byte("TZif"), 0o644))
+
+	for name, test := range map[string]struct {
+		lookup    func(string) (string, bool)
+		localtime string
+		want      string
+	}{
+		"a name":                        {env("America/Belem", true), link, "America/Belem"},
+		"a name with a colon":           {env(":America/Belem", true), link, "America/Belem"},
+		"the path of its file":          {env("/usr/share/zoneinfo/America/Belem", true), link, "America/Belem"},
+		"empty":                         {env("", true), link, "UTC"},
+		"unknown":                       {env("Nowhere/Land", true), link, "UTC"},
+		"unset, the link of the system": {env("", false), link, "America/Belem"},
+		"unset, not a link":             {env("", false), plain, time.Local.String()},
+		"unset, none":                   {env("", false), filepath.Join(dir, "missing"), time.Local.String()},
+	} {
+		require.Equal(t, test.want, zoneOf(test.lookup, test.localtime).String(), name)
+	}
+	belem := zoneOf(env("America/Belem", true), link)
+	at := time.Date(2026, 9, 30, 2, 30, 0, 0, time.UTC)
+	require.Equal(t, "2026-09-29T23:30:00-03:00", at.In(belem).Format(time.RFC3339), "the zone itself, not a name only")
+}
+
+// B36: the day of the context names the zone of the operational day,
+// Config.DayZone or else LocalZone, never "Local".
+func TestTrader_DailyTimeZoneNamed(t *testing.T) {
+	r, _, _, start := dailyRunner(t, 0)
+	belem, err := time.LoadLocation("America/Belem")
+	require.NoError(t, err)
+	r.trader.cfg.DayZone = belem
+	day, _ := r.trader.daily(testPair, r.trader.state.Load(), start)
+	require.Equal(t, "America/Belem", day.TimeZone)
+
+	defer func(zone func() *time.Location) { localZone = zone }(localZone)
+	localZone = func() *time.Location { return belem }
+	r.trader.cfg.DayZone = nil
+	day, _ = r.trader.daily(testPair, r.trader.state.Load(), start)
+	require.Equal(t, "America/Belem", day.TimeZone, "LocalZone by default")
+}
+
+// positionReporter is a linkedReporter booking the results of the closes by
+// their fill and the entry of the position closed, as the MT5 adapter: none
+// for a position the fill didn't close.
+type positionReporter struct {
+	*linkedReporter
+	results map[[2]int64]float64 // by the IDs of the close and of the entry
+}
+
+func (p *positionReporter) ClosedProfit(close, open model.Order) (float64, bool) {
+	profit, ok := p.results[[2]int64{close.ID, open.ID}]
+	return profit, ok
+}
+
+// B6: an exit the broker tells closing a known position and an unknown one
+// (see TestTradesOf_LinkedKnownAndUnknownPosition) books the result of the
+// known one only: the other position of the bot is open, nothing pending,
+// the entries free.
+func TestTrader_DailyLinkedKnownAndUnknownPosition(t *testing.T) {
+	r, orders, reporter, start := dailyRunner(t, 0)
+	at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+	r.trader.SetAccountReporter(&positionReporter{
+		linkedReporter: &linkedReporter{fakeReporter: reporter, links: map[int64][2][]int64{
+			1: {{11}, nil}, 2: {{33}, nil}, 3: {nil, {11, 99}},
+		}},
+		results: map[[2]int64]float64{{3, 1}: 20},
+	})
+	orders.add(testPair, filled(1, model.SideTypeBuy, 100, 1, at(10)), filled(2, model.SideTypeBuy, 101, 1, at(11)),
+		filled(3, model.SideTypeSell, 102, 2, at(12)))
+
+	day, blocked := r.trader.daily(testPair, r.trader.state.Load(), at(30))
+	require.Empty(t, blocked)
+	require.Zero(t, day.Result.PendingResults)
+	require.Equal(t, number(20), day.Result.Realized)
+	require.Len(t, day.Positions, 2)
+	require.Equal(t, [2]string{"closed", "open"}, [2]string{day.Positions[0].Status, day.Positions[1].Status})
+	require.Equal(t, number(101), day.Positions[1].Entry, "the position 33")
+	require.True(t, r.trader.orphans[3], "the rest of the exit left out, logged")
+}
+
+// B21: a title after a blank line of the header with an amount of something
+// else than a currency, eg: "2 ATR", or a currency that isn't its amount, eg:
+// "max 1 EUR pair", is text for the model, never refusing the prompt: only an
+// amount in a currency of ISO 4217 first in the value of the line, or ending
+// it, reads like a limit in money and keeps the header, refused.
+func TestStrategyDailyLimits_AmountNotInACurrency(t *testing.T) {
+	for _, title := range []string{
+		"## Limite diário de perda: 2 ATR",
+		"## Daily limit: 2 trades per NY session",
+		"## Daily limit: 2 trades, max 1 EUR pair",
+		"# Daily loss limit for 2 USD pairs",
+		"## Limite diário: 3 RSI",
+	} {
+		require.False(t, dailyMoneyLine(title), title)
+		strategy := "# Indicators: atr\n\n" + title + "\nNunca perca mais que 2 ATR no dia."
+		_, _, _, err := StrategyDailyLimits(strategy)
+		require.NoError(t, err, title)
+		require.NoError(t, CheckPrompt(strategy), title)
+		require.Contains(t, systemPrompt(strategy), "Strategy:\n"+title+"\n", "sent to the model")
+	}
+	for _, line := range []string{
+		"# Daily loss limits: 150 BRL",
+		"# Limite diário de perda: 150 BRL por dia",
+		"# Daily loss limit 150 BRL",
+		"# Max daily loss limit = 150 BRL",
+		"# Limite diário: 1.000,50 USD.",
+		"# Daily loss limits: 150 USC",
+	} {
+		require.True(t, dailyMoneyLine(line), line)
+		_, _, _, err := StrategyDailyLimits("# Indicators: atr\n\n" + line + "\n\nText.")
+		require.ErrorContains(t, err, "isn't a daily limit the agent reads", line)
+	}
+}
+
+// B21: only the header is read, and refused: a title of the text after it,
+// eg: after a blank line, or after the first line of the strategy, is text
+// for the model, never refusing the prompt (the one an agent starts with
+// would stop it), a limit there told in the log only.
+func TestStrategyDailyLimits_TitlesOfTheText(t *testing.T) {
+	for strategy, title := range map[string]string{
+		"# Indicators: atr\n\n## Limite diário: 3 operações\nText.":       "## Limite diário: 3 operações",
+		"# Indicators: atr\n\n# Daily limit: 2 trades\n\nText.":           "# Daily limit: 2 trades",
+		"# Indicators: atr\n\nText.\n# Daily limit: 2 trades":             "# Daily limit: 2 trades",
+		"# Indicators: atr\n\n## Seção\nText.":                            "## Seção",
+		"# Indicators: atr\n\nText.\n\n## Limite diário: 3 operações\nOk": "## Limite diário: 3 operações",
+		"# t: x\n\nText.\n# Daily loss limit: 150 BRL":                    "# Daily loss limit: 150 BRL",
+		"# t: x\n\nText.\n\n# Daily loss limits: 150 BRL":                 "# Daily loss limits: 150 BRL",
+	} {
+		gain, loss, _, err := StrategyDailyLimits(strategy)
+		require.NoError(t, err, strategy)
+		require.Zero(t, gain+loss, strategy)
+		require.NoError(t, CheckPrompt(strategy), strategy)
+		sent := strings.TrimPrefix(systemPrompt(strategy), basePrompt+"\n\nStrategy:\n")
+		require.Contains(t, strings.Split(sent, "\n"), title, "a line sent to the model: %s", strategy)
+		groups, ok := StrategyIndicators(strategy)
+		if strings.HasPrefix(strategy, "# Indicators:") {
+			require.True(t, ok, strategy)
+			require.Equal(t, []string{"atr"}, groups, strategy)
+		}
+	}
+	require.Equal(t, "## Seção\nText.", stripComments("# Indicators: atr\n\n## Seção\nText."))
+
+	require.Empty(t, textDailyLines("# Indicators: atr\n\n## Limite diário: 3 operações\nText."), "no amount")
+	require.Equal(t, []string{"# Daily loss limit: 150 BRL"},
+		textDailyLines("# t: x\n\nText.\n# Daily loss limit: 150 BRL"), "the limit in the text, logged")
+
+	// applied as a prompt of the Trader
+	r, _, _, _ := dailyRunner(t, 0)
+	st, err := r.trader.promptState(Prompt{Content: "# Indicators: atr\n\n## Limite diário: 3 operações\nText."})
+	require.NoError(t, err)
+	require.Contains(t, st.system, "## Limite diário: 3 operações\nText.")
+}
+
+// B21: an amount of a daily limit whose dot or comma may group the thousands
+// or be the decimal one, eg: 1.000 (a thousand on the panel, see parseAmount
+// of web/src/lib/periods.ts, but 1 for ParseFloat), is refused, the formats
+// that can't be misread taken.
+func TestStrategyDailyLimits_AmbiguousAmount(t *testing.T) {
+	for _, amount := range []string{"1.000", "1.500", "1,500", "1,000", "0.500", "1.000.000", "1.000,00",
+		"1,000.50", "12.345"} {
+		strategy := "# Daily gain limit: " + amount + " BRL\n\nText."
+		_, _, _, err := StrategyDailyLimits(strategy)
+		require.ErrorContains(t, err, "the amount "+amount+" is ambiguous", amount)
+		require.ErrorContains(t, err, "eg: 1000 or 1000.00", amount)
+	}
+	for amount, want := range map[string]float64{"1000": 1000, "1000.00": 1000, "1000,00": 1000, "1.5": 1.5,
+		"1,50": 1.5, "250,5": 250.5, "0.5": 0.5, "1500.0000": 1500} {
+		gain, _, _, err := StrategyDailyLimits("# Daily gain limit: " + amount + " BRL\n\nText.")
+		require.NoError(t, err, amount)
+		require.Equal(t, want, gain, amount)
+	}
+
+	// refused as a prompt of the Trader, rather than a limit of 1 BRL
+	r, _, _, _ := dailyRunner(t, 0)
+	_, err := r.trader.promptState(Prompt{Content: "# Daily loss limit: 1.500 BRL\n\nText."})
+	require.ErrorContains(t, err, "the amount 1.500 is ambiguous")
+}
+
+// awaitingReporter is a fakeReporter telling the positions closed at the
+// broker whose exits it hasn't booked yet, as the MT5 adapter with its
+// history lagging (see exitsAwaited).
+type awaitingReporter struct {
+	*fakeReporter
+	since   time.Time
+	awaited bool
+}
+
+func (a *awaitingReporter) ExitsAwaited(string) (time.Time, bool) { return a.since, a.awaited }
+
+// B6: a position closed by its stop loss while the history of the broker
+// lags: its legs open still, the entries wait for its result, told once late;
+// then the stop loss filled with its result booked, the loss counts, the daily
+// loss limit reached.
+func TestTrader_DailyStopLossHitHistoryLate(t *testing.T) {
+	r, orders, reporter, start := dailyRunner(t, 0)
+	messages := &[]string{}
+	r.trader.SetNotifier(func(message string) { *messages = append(*messages, message) })
+	awaiting := &awaitingReporter{fakeReporter: reporter}
+	r.trader.SetAccountReporter(awaiting)
+	st := r.trader.state.Load()
+	at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+	orders.add(testPair, filled(1, model.SideTypeBuy, 100, 1, at(10)),
+		legOf(2, 1, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeNew, 98, 1, at(10)),
+		legOf(3, 1, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeNew, 104, 1, at(10)))
+
+	day, blocked := r.trader.daily(testPair, st, at(15))
+	require.Empty(t, blocked, "open, nothing awaited")
+	require.Equal(t, "open", day.Positions[0].Status)
+
+	// closed by its stop loss at the broker, its exit not in the history
+	awaiting.since, awaiting.awaited = at(20), true
+	day, blocked = r.trader.daily(testPair, st, at(22))
+	require.Contains(t, blocked, "closed at the broker (noticed at 00:20:00), its result isn't booked yet")
+	require.True(t, day.Limits.EntriesBlocked)
+	require.Empty(t, *messages, "not late yet")
+	late := at(20).Add(pendingResultLate)
+	_, blocked = r.trader.daily(testPair, st, late)
+	require.Contains(t, blocked, "its result isn't booked yet, 10 min later: the entries wait for it")
+	require.Len(t, *messages, 1)
+	require.Contains(t, (*messages)[0], "has no exit in its history yet, 10 min later")
+	_, _ = r.trader.daily(testPair, st, late.Add(time.Minute))
+	require.Len(t, *messages, 1, "told once")
+	asked := len(r.provider.inputs)
+	r.trader.now = func() time.Time { return late.Add(time.Minute) }
+	r.step(100)
+	require.Len(t, r.provider.inputs, asked, "the entries wait: not asked")
+
+	// a close of yesterday awaited holds nothing today
+	awaiting.since = start.Add(-time.Minute)
+	_, blocked = r.trader.daily(testPair, st, at(22))
+	require.Empty(t, blocked)
+
+	// the history lists the exit: the stop loss filled, its loss booked
+	awaiting.awaited = false
+	orders[testPair][1].Status, orders[testPair][1].UpdatedAt = model.OrderStatusTypeFilled, at(20)
+	orders[testPair][2].Status, orders[testPair][2].UpdatedAt = model.OrderStatusTypeCanceled, at(20)
+	reporter.profits[2] = -160
+	day, blocked = r.trader.daily(testPair, st, late.Add(2*time.Minute))
+	require.Contains(t, blocked, "the daily loss limit of 150.00 BRL reached: -160.00 BRL")
+	require.Zero(t, day.Result.PendingResults)
+	require.Equal(t, number(-160), day.Result.Realized)
+	require.Len(t, day.Positions, 1)
+	require.Equal(t, "closed", day.Positions[0].Status)
+	require.Equal(t, "stop loss", day.Positions[0].ExitBy)
+	require.Len(t, *messages, 2, "its result told booked")
+	require.Equal(t, "✅ "+testPair+": the position closed at the broker (noticed at 00:20:00) is in its history, "+
+		"its result booked: the new entries on "+testPair+" are checked against the daily limits again.",
+		(*messages)[1])
+	_, _ = r.trader.daily(testPair, st, late.Add(3*time.Minute))
+	require.Len(t, *messages, 2, "told once")
+}
+
+// B6: the close at the broker told late (see awaitedWhy), its result told
+// once booked, as the README promises ("Quando ele chega, outra notificação
+// avisa que as entradas voltaram a ser conferidas pelos limites"): not while
+// the orders of the bot hold the position still (its legs not updated yet);
+// the result of its stop loss pending then, told once booked as a close told
+// late, without another warning.
+func TestTrader_DailyAwaitedLateAllClear(t *testing.T) {
+	for _, pendingFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending first %v", pendingFirst), func(t *testing.T) {
+			r, orders, reporter, start := dailyRunner(t, 0) // a loss of 150 BRL a day: 20 doesn't reach it
+			messages := &[]string{}
+			r.trader.SetNotifier(func(message string) { *messages = append(*messages, message) })
+			awaiting := &awaitingReporter{fakeReporter: reporter}
+			r.trader.SetAccountReporter(awaiting)
+			st := r.trader.state.Load()
+			at := func(minutes int) time.Time { return start.Add(time.Duration(minutes) * time.Minute) }
+			orders.add(testPair, filled(1, model.SideTypeBuy, 100, 1, at(10)),
+				legOf(2, 1, model.SideTypeSell, model.OrderTypeStopLoss, model.OrderStatusTypeNew, 98, 1, at(10)),
+				legOf(3, 1, model.SideTypeSell, model.OrderTypeLimitMaker, model.OrderStatusTypeNew, 104, 1, at(10)))
+
+			awaiting.since, awaiting.awaited = at(20), true
+			_, blocked := r.trader.daily(testPair, st, at(31))
+			require.Contains(t, blocked, "11 min later")
+			require.Len(t, *messages, 1, "told late")
+			require.True(t, strings.HasPrefix((*messages)[0], "⚠️"))
+
+			// the exit in the history, the legs not updated yet: not told
+			awaiting.awaited = false
+			_, _ = r.trader.daily(testPair, st, at(32))
+			require.Len(t, *messages, 1, "the orders hold the position still")
+
+			orders[testPair][1].Status, orders[testPair][1].UpdatedAt = model.OrderStatusTypeFilled, at(20)
+			orders[testPair][2].Status, orders[testPair][2].UpdatedAt = model.OrderStatusTypeCanceled, at(20)
+			if pendingFirst {
+				day, blocked := r.trader.daily(testPair, st, at(33))
+				require.Equal(t, 1, day.Result.PendingResults)
+				require.Contains(t, blocked, "the result of the close of 00:20:00 isn't booked by the broker yet, "+
+					"13 min later")
+				require.Len(t, *messages, 1, "neither the all clear nor another warning")
+			}
+			reporter.profits[2] = -20
+			day, blocked := r.trader.daily(testPair, st, at(34))
+			require.Empty(t, blocked, "the entries free again")
+			require.Equal(t, number(-20), day.Result.Realized)
+			require.Len(t, *messages, 2)
+			require.True(t, strings.HasPrefix((*messages)[1], "✅ "+testPair+": "), (*messages)[1])
+			if pendingFirst {
+				require.Contains(t, (*messages)[1], "the result of the close of 00:20:00 (order 2) is booked")
+			} else {
+				require.Contains(t, (*messages)[1], "the position closed at the broker (noticed at 00:20:00) is "+
+					"in its history")
+			}
+			_, _ = r.trader.daily(testPair, st, at(35))
+			require.Len(t, *messages, 2, "told once")
+			require.Empty(t, r.trader.awaitedLate)
+			require.Empty(t, r.trader.overdue)
+		})
+	}
 }

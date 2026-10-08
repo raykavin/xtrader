@@ -292,3 +292,32 @@ func TestAccountOptions(t *testing.T) {
 	require.Nil(t, accountOptions(&exchange.PaperWallet{}))
 	require.Len(t, accountOptions(&exchange.MT5{}), 2)
 }
+
+func TestSizesOf_DecimalCommaRefused(t *testing.T) {
+	pairs := []string{"XAUUSDm", "BTCUSDm"}
+	for _, value := range []string{"1,5", "0,05", "XAUUSDm=0,05;BTCUSDm=1", "1,5;2"} {
+		sizes, err := sizesOf("-lot", pairs, value)
+		require.ErrorContains(t, err, "-lot: ", value)
+		require.ErrorContains(t, err, "the comma may be a decimal one: separate the sizes with ; and write the "+
+			"decimals with .", value)
+		require.Nil(t, sizes, value)
+	}
+	_, err := sizesOf("-lot", []string{"XAUUSDm"}, "1,5")
+	require.ErrorContains(t, err, "the comma may be a decimal one", "one pair")
+	_, err = sizesOf("-mt5-contract-size", pairs, "100,1")
+	require.ErrorContains(t, err, `-mt5-contract-size: "100,1" is ambiguous`)
+
+	// the unambiguous ones, the comma of before among them
+	for value, want := range map[string]map[string]float64{
+		"1.5":                       {"XAUUSDm": 1.5, "BTCUSDm": 1.5},
+		"0.03;0.01":                 {"XAUUSDm": 0.03, "BTCUSDm": 0.01},
+		"0.03,0.01":                 {"XAUUSDm": 0.03, "BTCUSDm": 0.01},
+		"1;5":                       {"XAUUSDm": 1, "BTCUSDm": 5},
+		"BTCUSDm=0.03;XAUUSDm=0.01": {"XAUUSDm": 0.01, "BTCUSDm": 0.03},
+		"BTCUSDm=0.03,XAUUSDm=0.01": {"XAUUSDm": 0.01, "BTCUSDm": 0.03},
+	} {
+		sizes, err := sizesOf("-lot", pairs, value)
+		require.NoError(t, err, value)
+		require.Equal(t, want, sizes, value)
+	}
+}

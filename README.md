@@ -54,7 +54,8 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - sessão de mercado;
   - mercados correlacionados;
   - calendário econômico;
-  - memória das últimas decisões e operações.
+  - memória das últimas decisões e operações. Cada decisão conta pela hora em que foi tomada: as consultas no candle em formação (intervalo, reanálise) veem as anteriores do mesmo candle. Depois de um reinício, a memória vem do journal, também pela hora de cada decisão;
+  - posição aberta, com os candles fechados desde a entrada (`candles_held`), ou desde que o bot passou a acompanhá-la. A contagem é pelos horários dos candles, então inclui os fechamentos que o intervalo de consulta pula e não conta o tempo com o mercado fechado (fim de semana).
 - **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem.
 - **Saída que falha** (mercado fechado, cotação recusada, bridge fora do ar, bot parado): a posição não fica sem stop loss e take profit.
   - No MT5, a ordem de fechamento sai com eles no lugar. Eles saem junto com a posição, e um fechamento recusado não mexe neles.
@@ -63,10 +64,20 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - A falha, uma posição que ficou sem proteção e o fechamento concluído são avisados no painel e no Telegram.
   - Num reinício, a saída pendente não é retomada: a posição segue com a proteção, e o modelo é consultado de novo.
 - **Quando consultar:** uma decisão por fechamento de candle ou, com `llm-consult-interval`, numa agenda própria (por exemplo, a cada 10 min). Há também a **reanálise sob demanda**, pelo painel ou pelo Telegram, com uma nota para o modelo.
-- **Início do agente:** ao (re)iniciar, os ativos são analisados de uma vez, em paralelo, com as mesmas regras das outras análises: um ativo sem entrada possível (por exemplo, com a tendência maior exigida e mista) não é consultado, e a análise aparece no painel como "Não consultado", com o motivo. Cada decisão é aplicada no tick seguinte do ativo.
+- **Início do agente:** ao (re)iniciar, os ativos são analisados de uma vez, em paralelo, com as mesmas regras das outras análises: um ativo sem entrada possível (por exemplo, com a tendência maior exigida e mista) não é consultado, e a análise aparece no painel como "Não consultado", com o motivo. Cada decisão é aplicada no tick seguinte do ativo, ao preço desse tick.
+- **Entrada conferida na hora de aplicar:** o modelo responde algum tempo depois de o contexto ser lido (até `llm-timeout`; a decisão do início, num tick seguinte). Antes de enviar a entrada, o agente relê a posição e o preço:
+  - se o ativo já tem posição (por exemplo, uma ordem da boleta ou do Telegram executada durante a consulta), a entrada é recusada;
+  - a decisão é validada de novo no preço atual, com as mesmas regras do contexto: stop e alvo do lado certo, distâncias, distância mínima do stop e risco:retorno líquido do spread. No live, o preço vem da corretora (no MT5, o bid do último tick), com o spread do último candle; no backtest, é o do candle;
+  - se o preço não puder ser lido, a entrada também é recusada.
+  - A decisão recusada aparece como "Recusada pelas regras", com o motivo. Isso vale também para as recusas pelo limite diário e pela notícia na hora de aplicar.
+- **Resposta do modelo (Anthropic):** a decisão é pedida pela chamada forçada da ferramenta `trading_decision`. Um modelo que recusa a chamada forçada (por exemplo, `claude-opus-5-5`, que responde HTTP 400 "tool_choice ... not supported") recebe a ferramenta livre, com o pedido de responder com ela:
+  - só essa recusa troca o modo; outro erro 400 falha a consulta e a seguinte continua forçada. A chamada forçada é tentada de novo uma vez por hora e volta a valer se o modelo a aceitar;
+  - com a ferramenta livre, se o modelo responder só com texto, o JSON da decisão é lido do texto e passa pelas mesmas validações. Mais de uma decisão no texto, ou nenhuma, é uma resposta inválida;
+  - esses modelos pensam antes de responder, e o pensamento conta no limite de tokens: sem `llm-max-tokens`, o limite da resposta livre é 16000 (4096 na chamada forçada);
+  - uma resposta cortada (limite de tokens, janela de contexto do modelo) ou pausada é uma falha da consulta, sem decisão, mesmo com a chamada da ferramenta completa.
 - **Prompts:** editáveis e trocados com o agente rodando. A troca vale a partir da próxima análise, e cada decisão registra o prompt e a versão usados.
 - **Proteções:**
-  - confiança mínima;
+  - confiança mínima. Numa reanálise com nota do trader, uma decisão que reduz o risco da posição (EXIT, ou o stop aproximado do preço) é aplicada mesmo abaixo dela. A decisão registra isso nas anotações ("the min confidence ... waived"), junto da mensagem do trader;
   - risco:retorno mínimo;
   - spread máximo em ATR;
   - distância mínima do stop;
@@ -74,6 +85,14 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - limites diários de ganho e de perda por ativo, definidos no prompt (veja [Limites diários](#limites-diários)).
 - **Histórico do dia:** o contexto leva as posições e as ordens do ativo no dia operacional (`daily_history`), com o resultado de cada posição.
 - **Calendário econômico:** lido pelo servidor MCP do terminal MT5.
+  - As notícias do contexto (`minutes_from_now` e o valor já publicado) e o bloqueio de entradas usam a hora da análise. No live, é a hora atual, inclusive nas consultas com o candle em formação (intervalo, reanálise e início do agente); no backtest, o fechamento do candle.
+  - O bloqueio por notícia é conferido de novo na hora de aplicar a entrada, como o limite diário: uma decisão aplicada dentro da janela da notícia (resposta demorada do modelo, ou a decisão do início aplicada num tick seguinte) é recusada.
+  - Calendário indisponível: o contexto diz ao modelo que ele não pôde ser lido, o log avisa a cada 15 min e as entradas não são bloqueadas por notícia. Isso vale para o servidor fora do ar, uma ferramenta com erro ou nenhuma moeda do par com eventos no calendário.
+  - Um erro da ferramenta (ex.: terminal ocupado) é tentado de novo uma vez, meio segundo depois, e a leitura seguinte consulta outra vez. Só uma moeda que o calendário não conhece fica 1 h sem ser consultada.
+  - Moeda desconhecida: qualquer erro na consulta de um código que não é moeda do calendário do MT5 (ex.: `XTI` de `XTIUSD`). Uma moeda do calendário do MT5 só é dada como desconhecida quando o servidor recusa o parâmetro da própria chamada (JSON-RPC -32602, parâmetro inválido). A mensagem de erro da ferramenta nunca basta, qualquer que seja o texto (ex.: `currency EUR not available`, `Calendar data for currency EUR not available yet`), porque pode ser transitória (ex.: o calendário do terminal ainda sincronizando): vale como erro transitório. As moedas do calendário do MT5 são as dos países de `CalendarCountries` (USD, EUR, JPY, GBP, CAD, AUD, NZD, CHF, CNY, BRL, KRW, HKD, SGD, MXN, ZAR, INR, NOK, SEK e ALL).
+  - Moeda pulada: a desconhecida, ou uma que o calendário devolve sem nenhum evento (consultada de novo na leitura seguinte), gera um aviso no log, no máximo um por moeda a cada hora.
+  - Num par de duas moedas (ex.: EURUSD), a moeda desconhecida é pulada e as notícias da outra continuam no contexto e no bloqueio. Já um erro transitório de uma delas deixa o calendário do par inteiro indisponível nessa leitura, sem eventos parciais.
+  - A sessão MCP que falha ao abrir é descartada, e a chamada seguinte abre outra. A resposta em SSE é lida até o evento que responde à chamada, sem esperar o servidor fechar o stream (até 16 MiB).
 
 ### Agentes de estratégia
 
@@ -277,7 +296,7 @@ Um `${VAR}` sem valor viraria texto vazio. Por isso o controller e o migrator n�
 
 **Quais mudanças valem na hora:** num agente rodando, **Ativo**, **Painel de trading**, **Controle via Telegram** e o prompt. As demais ficam como "reinício pendente", aplicadas pelo botão **Reiniciar**.
 
-**Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`. Nas listas, os itens são separados por `;` (a vírgula continua aceita).
+**Parâmetros:** são as flags do agente sem campo próprio. No formulário, o nome vai sem o traço, de um lado, e o valor do outro. Cada binário lista as suas flags com `-h`, por exemplo `go run ./agents/llm/llmagent -h`. Nas listas, os itens são separados por `;` (a vírgula continua aceita). Nos tamanhos (`lot`, `mt5-contract-size`), o decimal é com ponto: um valor que pode ter vírgula decimal, como `lot = 1,5` ou `lot = 0,05`, é recusado e o agente não inicia, porque `1,5` com dois pares viraria 1 e 5 lotes; escreva `1.5` para um tamanho ou `1;5` para um por par. A vírgula como separador só é aceita entre tamanhos com ponto decimal, como no formato antigo `lot = 0.03,0.01`.
 
 | Nome                   | Valor                                             | Efeito                                                                                  |
 | ---------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -295,7 +314,7 @@ Um `${VAR}` sem valor viraria texto vazio. Por isso o controller e o migrator n�
 
 - A agenda segue o relógio: com `10m`, as consultas caem em :00, :10, :20 e assim por diante.
 - Uma consulta que cai num fechamento usa o candle fechado. As outras usam o candle em andamento.
-- Com um intervalo maior que o timeframe, os fechamentos do meio são pulados.
+- Com um intervalo maior que o timeframe, os fechamentos do meio são pulados. A memória e os candles da posição (`candles_held`) contam os candles pulados.
 - Cada consulta é uma requisição cobrada.
 
 ### Redefinir os resultados
@@ -314,6 +333,9 @@ Em **Configurações → Agentes**, o botão **Resultados** do card do agente mo
 
 - **Onde ficam:** no banco, com histórico de versões. Os 43 de exemplo vêm pelo seed.
 - **Cabeçalho:** as linhas `# Indicators:` e `# Take profit:` definem os indicadores enviados e o tratamento do take profit.
+  - O cabeçalho são as linhas do topo do prompt que começam com `#`, e não vai para o modelo. Ele termina na primeira linha de outro texto. Depois de uma linha em branco, ele só continua se o bloco seguinte de linhas com `#` trouxer uma chave que o agente lê (`# Indicators:`, `# Take profit:`, `# Daily gain limit:`, `# Daily loss limit:`) ou uma linha que pareça um limite diário em moeda (veja [Limites diários](#limites-diários)). Outro bloco depois de uma linha em branco, como um título `## Regras`, já começa o texto da estratégia.
+  - Uma linha com `#` no texto da estratégia vai para o modelo como as demais.
+  - A chave é o texto antes dos dois-pontos, sem diferenciar maiúsculas e com espaços tolerados (`# take profit : none` vale). Se a chave se repete, vale a primeira linha, exceto nos limites diários (veja abaixo).
 - **Troca:** pelo card do agente ou pelo Telegram (`/useprompt`), com o agente rodando, a partir da próxima análise.
 - **Prompt inválido para o agente:** é recusado, o anterior continua, e o motivo aparece no card.
 
@@ -327,16 +349,28 @@ Um prompt pode definir limites diários do resultado de cada ativo, no cabeçalh
 ```
 
 - **Resultado do dia:** a soma dos resultados das posições do ativo fechadas no dia operacional, como a corretora registra, com swap, comissão e taxa. Uma posição conta no dia em que fecha.
-- **Dia operacional:** começa à meia-noite do fuso do agente, o `TZ` do `.env` (America/Belem na stack).
+- **Dia operacional:** começa à meia-noite do fuso do agente, o `TZ` do `.env` (America/Belem na stack), e o contexto do modelo leva o nome desse fuso. Sem `TZ`, vale o fuso do sistema (`/etc/localtime`). `TZ` vazio ou inválido vira UTC, com aviso no log.
+- **Valor:** um número com ponto ou vírgula decimal, sem separador de milhar, e o código da moeda: `1000 BRL`, `1000.00 BRL`, `1000,00 BRL` ou `1,50 BRL`. Um ponto ou uma vírgula seguidos de exatamente 3 dígitos, como em `1.000` ou `1.500`, é ambíguo (separador de milhar ou decimal) e o prompt é recusado, com o pedido de um valor inequívoco.
+- **Linha não interpretada:** o prompt é recusado quando uma linha do cabeçalho parece um limite diário, mas o agente não a leria. Parece um limite a linha que fala de dia (`daily`, `diário`) e de limite e traz um valor. Isso inclui uma chave diferente das duas acima (por exemplo `# Daily loss limits: 150 BRL` ou `# Limite diário: 150 BRL`) e a mesma chave duas vezes. Assim, um limite escrito errado não fica desligado em silêncio.
+  - Só o cabeçalho é lido e pode recusar o prompt. Um título no texto da estratégia, como `## Limite diário: 3 operações`, vai para o modelo e nunca recusa o prompt.
+  - Uma linha de limite em moeda no texto, como `# Daily loss limit: 150 BRL` depois da primeira linha da estratégia, também vai para o modelo e não é aplicada: um aviso vai para o log quando o prompt é aplicado.
+  - Limite em moeda (o que mantém um bloco depois de uma linha em branco no cabeçalho, e o aviso do texto): a linha que fala de dia e de limite e cujo valor começa, ou cuja linha termina, com um número e o código de uma moeda da ISO 4217 (ex.: `# Limite diário: 150 BRL por dia`, `# Daily loss limit 150 BRL`; vale também `USC`, das contas em centavos). Um número de outra coisa (`## Limite diário de perda: 2 ATR`) ou uma moeda que não é o valor (`## Daily limit: 2 trades, max 1 EUR pair`, `# Daily loss limit for 2 USD pairs`) não conta: o título vai para o modelo.
+- **Pareamento:** cada saída conta para a posição que fechou. No MT5, a posição vem do ticket, para as ordens da execução atual e do histórico lido (7 dias). Quando o histórico não diz qual posição uma ordem fechou, a saída fecha as posições do outro lado pela ordem de chegada; um stop ou alvo fecha só as abertas antes dele. Isso vale para ordens mais antigas que o histórico ou, de uma execução anterior, para a ordem a mercado que abriu posição, e também para uma ordem a mercado da execução atual enquanto a saída de uma das posições que ela fechou ainda não está no histórico. Uma saída cuja entrada não está nas ordens do agente fica fora do resultado do dia e da memória do LLM, com um aviso no log, sem desarrumar as posições seguintes.
 - **Ao atingir um limite:**
   - novas entradas no ativo ficam bloqueadas até o dia seguinte;
   - o modelo nem é consultado sem posição, inclusive nas reanálises;
   - uma entrada devolvida pelo modelo é recusada;
   - os outros ativos seguem livres.
 - **Posição aberta:** continua gerenciada normalmente. O limite não força saída nem mexe no stop ou no alvo, e o resultado dela conta quando fecha.
-- **Fechamento sem resultado registrado:** enquanto a corretora não registra o resultado de um fechamento do dia, as entradas esperam, em geral por segundos.
+- **Fechamento sem resultado registrado:** enquanto a corretora não registra o resultado de um fechamento do dia, as entradas esperam, em geral por segundos. O agente relê o histórico da corretora até o resultado aparecer: a cada consulta no primeiro minuto, depois em intervalos crescentes de até 5 min, por até 24 h, com um aviso no log após o primeiro minuto.
+  - Isso vale também para uma posição fechada na corretora pelo stop, pelo alvo ou à mão, cuja saída ainda não está no histórico. O stop e o alvo dela continuam pendentes no agente até o histórico mostrar a saída; só então o stop (ou o alvo) é dado como executado, com o resultado, e o outro como cancelado. Depois de 24 h sem a saída, os dois são cancelados e o resultado fica desconhecido.
+  - Vale também depois de um reinício do agente nesse intervalo: uma posição do bot que não está mais na conta e cuja saída falta no histórico lido no início é aguardada do mesmo jeito, como fechada no início do agente (a hora do fechamento, antes dele, é desconhecida).
+  - Depois de 10 min sem o resultado, o agente registra um erro no log e envia uma notificação ao painel e ao Telegram, uma vez por fechamento. O motivo do bloqueio passa a dizer há quanto tempo o resultado é esperado.
+  - As entradas continuam esperando, no máximo até o dia seguinte, porque sem esse resultado o do dia é desconhecido. Quando ele chega, outra notificação avisa que as entradas voltaram a ser conferidas pelos limites.
 - **Operações manuais:** as da boleta e do Telegram contam no resultado, mas não são bloqueadas.
 - **Moeda:** os limites precisam estar na moeda da conta; senão, o prompt é recusado.
+  - O prompt com que o agente inicia é conferido assim que a conta é lida. Se for recusado, o motivo aparece no card e o agente para, como com outro prompt inválido.
+  - Se a moeda da conta ainda não era conhecida quando o prompt foi aplicado, a recusa aparece no card quando ela for lida, e as entradas ficam bloqueadas até outro prompt ser aplicado.
 - **Onde vale:** só em live no MT5, onde a corretora registra os resultados. Em backtest e paper, os limites não são aplicados, e um aviso vai para o log.
 
 ### Telegram

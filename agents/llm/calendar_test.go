@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/raykavin/xtrader/ui"
 )
 
 // fakeCalendar returns its events, or its error, and records the reads.
@@ -251,4 +253,119 @@ func TestMCPUnit(t *testing.T) {
 		"Measurement unit is not set": "", "Unit is not set": "", "Drilling rigs": "drilling rigs"} {
 		require.Equal(t, want, mcpUnit(value), value)
 	}
+}
+
+// liveCalendarRunner is a liveRunner reading calendar, a candle in progress
+// added, the clock 10 minutes after its open.
+func liveCalendarRunner(t *testing.T, calendar *fakeCalendar) (*traderRunner, time.Time) {
+	t.Helper()
+	r, _ := liveRunner(t, func(c *Config) {
+		c.Calendar, c.CalendarCurrencies = calendar, []string{"USD"}
+	}, 0)
+	r.inProgress(101.2)
+	now := r.df.Time[len(r.df.Time)-1].Add(10 * time.Minute)
+	r.trader.now = func() time.Time { return now }
+	return r, now
+}
+
+// Asked on the candle in progress, by the consult interval, a reanalysis or
+// at the start of the agent, the news block is at the time of the analysis,
+// not at the close of the candle before: at 12:40 on the candle of 12:30, a
+// release at 12:50 refuses the entries.
+func TestTrader_NewsBlockAtTheTimeOfTheAnalysis(t *testing.T) {
+	for _, trigger := range []string{TriggerInterval, TriggerReanalysis, TriggerStart} {
+		t.Run(trigger, func(t *testing.T) {
+			calendar := &fakeCalendar{}
+			var r *traderRunner
+			var now time.Time
+			if trigger == TriggerStart {
+				r = startRunner(t, func(c *Config) { c.Calendar, c.CalendarCurrencies = calendar, []string{"USD"} })
+				now = r.df.Time[len(r.df.Time)-1].Add(10 * time.Minute)
+				r.trader.now = func() time.Time { return now }
+			} else {
+				r, now = liveCalendarRunner(t, calendar)
+			}
+			calendar.events = []Event{release(now.Add(10*time.Minute), "cpi", ImportanceHigh, math.NaN())}
+			switch trigger {
+			case TriggerInterval:
+				r.trader.cfg.ConsultInterval = 5 * time.Minute
+			case TriggerReanalysis:
+				_, err := r.trader.Reanalyze(testPair, ui.ChannelWeb, "")
+				require.NoError(t, err)
+			}
+			asked := len(r.provider.inputs)
+
+			r.trader.OnPartialCandle(r.df, r.broker) // no answer: the fake fails when asked
+			require.Len(t, r.provider.inputs, asked, "no entry around the release: not asked")
+			d := r.lastDecision()
+			require.Equal(t, trigger, d.Trigger)
+			require.Equal(t, OutcomeSkipped, d.Outcome)
+			require.Equal(t, SkipNews, d.Reason)
+			require.Equal(t, now.Add(-2*time.Hour), calendar.from, "the window around now")
+			require.Equal(t, now.Add(4*time.Hour), calendar.to)
+		})
+	}
+}
+
+// On the candle in progress, the releases are told to the model from now: a
+// release since the close comes with its value.
+func TestTrader_CalendarAtTheTimeOfTheAnalysis(t *testing.T) {
+	calendar := &fakeCalendar{}
+	r, now := liveCalendarRunner(t, calendar)
+	calendar.events = []Event{
+		release(now.Add(-5*time.Minute), "pmi", ImportanceMedium, 0.4), // after the close, before now
+		release(now.Add(10*time.Minute), "sales", ImportanceMedium, math.NaN()),
+	}
+	r.trader.cfg.ConsultInterval = 5 * time.Minute
+	r.provider.answers = []answer{decide(ActionWait, 0.5, nil, nil, nil)}
+	r.trader.OnPartialCandle(r.df, r.broker)
+
+	in := r.provider.last()
+	require.True(t, in.Scheduled)
+	require.Len(t, in.Calendar.Events, 2)
+	pmi, sales := in.Calendar.Events[0], in.Calendar.Events[1]
+	require.Equal(t, -5, pmi.Minutes)
+	require.Equal(t, number(0.4), pmi.Actual, "published")
+	require.Equal(t, 10, sales.Minutes)
+}
+
+// The news block is checked again when an entry is applied, at the time of
+// now: the model answering late, or the decision of the start applied on a
+// later tick, inside the window of a release.
+func TestTrader_NewsBlockCheckedAtTheEntry(t *testing.T) {
+	t.Run("the model answering late", func(t *testing.T) {
+		calendar := &fakeCalendar{}
+		r, _ := liveRunner(t, func(c *Config) {
+			c.Calendar, c.CalendarCurrencies = calendar, []string{"USD"}
+		}, 0)
+		closeAt := r.nextClose() // the clock 1s after it
+		calendar.events = []Event{release(closeAt.Add(15*time.Minute+30*time.Second), "cpi", ImportanceHigh,
+			math.NaN())}
+		r.provider.asked = func() { r.trader.now = func() time.Time { return closeAt.Add(time.Minute) } }
+
+		r.step(100, enterLong(100))
+		require.Contains(t, r.provider.last().Rules.Actions, ActionEnterLong, "no block when asked")
+		require.Equal(t, OutcomeRefused, r.lastDecision().Outcome)
+		require.Zero(t, r.position())
+	})
+
+	t.Run("the decision of the start applied later", func(t *testing.T) {
+		calendar := &fakeCalendar{}
+		r := startRunner(t, func(c *Config) { c.Calendar, c.CalendarCurrencies = calendar, []string{"USD"} })
+		opened := r.df.Time[len(r.df.Time)-1] // the clock 1 minute after it
+		calendar.events = []Event{release(opened.Add(20*time.Minute), "cpi", ImportanceHigh, math.NaN())}
+		price := r.df.Close[len(r.df.Close)-2]
+		r.provider.answers = []answer{enterLong(price)}
+
+		r.trader.OnPartialCandle(r.df, r.broker)
+		r.startAsked(testPair)
+		require.Contains(t, r.provider.last().Rules.Actions, ActionEnterLong, "no block when asked")
+
+		r.trader.now = func() time.Time { return opened.Add(6 * time.Minute) }
+		r.trader.OnPartialCandle(r.df, r.broker)
+		d := r.lastDecision()
+		require.Equal(t, TriggerStart, d.Trigger)
+		require.Equal(t, OutcomeRefused, d.Outcome)
+		require.Zero(t, r.position())
+	})
 }

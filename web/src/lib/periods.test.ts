@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentPeriod, Order, Snapshot } from "../api/types";
-import { type PeriodResult, parseAmount, periodResults } from "./periods";
+import { type PeriodResult, parseAmount, periodResults, resetPeriods, withPeriod } from "./periods";
 
 function order(partial: Partial<Order>): Order {
   return {
@@ -163,5 +163,74 @@ describe("parseAmount", () => {
     for (const text of ["", " ", "-10", "abc", "1,2,3", "10 BRL", "1e5"]) {
       expect(parseAmount(text)).toBeNull();
     }
+  });
+
+  it("reads a dot after a 0 as the decimal one", () => {
+    expect(parseAmount("0.500")).toBe(0.5);
+    expect(parseAmount("0.050")).toBe(0.05);
+    expect(parseAmount("0.5")).toBe(0.5);
+    expect(parseAmount("0,500")).toBe(0.5);
+    expect(parseAmount("1.5")).toBe(1.5);
+    expect(parseAmount("12.345.678")).toBe(12345678);
+    expect(parseAmount("12.345.678,9")).toBe(12345678.9);
+  });
+
+  it("refuses the ambiguous groupings", () => {
+    for (const text of ["0.500,00", "1.23,4", "1.2345,6", "1,", ",5", "1.000.5"]) {
+      expect(parseAmount(text), text).toBeNull();
+    }
+  });
+});
+
+describe("resetPeriods", () => {
+  const before: AgentPeriod[] = [
+    { id: 2, started_at: 2000, deposit: 1000, currency: "BRL" },
+    { id: 1, started_at: 1000, ended_at: 2000, deposit: 500, currency: "BRL" },
+  ];
+  const started: AgentPeriod = { id: 3, started_at: 3000, deposit: 800, currency: "BRL" };
+
+  it("shows the periods read again after the reset", async () => {
+    const reread = [{ ...started, created_by: "admin" }, ...before];
+    const outcome = await resetPeriods(
+      before,
+      async () => started,
+      async () => reread,
+    );
+    expect(outcome).toEqual({ period: started, periods: reread, stale: null });
+  });
+
+  it("keeps the reset done when the periods can't be read again", async () => {
+    const outcome = await resetPeriods(
+      before,
+      async () => started,
+      async () => {
+        throw new Error("502 Bad Gateway");
+      },
+    );
+    expect(outcome.period).toEqual(started);
+    expect(outcome.stale).toBe("502 Bad Gateway");
+    expect(outcome.periods).toEqual([started, { ...before[0], ended_at: 3000 }, before[1]]);
+  });
+
+  it("throws on a failed reset, without reading the periods", async () => {
+    let read = false;
+    await expect(
+      resetPeriods(
+        before,
+        async () => {
+          throw new Error("409 Conflict");
+        },
+        async () => {
+          read = true;
+          return before;
+        },
+      ),
+    ).rejects.toThrow("409 Conflict");
+    expect(read).toBe(false);
+  });
+
+  it("adds a period once", () => {
+    expect(withPeriod(null, started)).toEqual([started]);
+    expect(withPeriod([started, ...before], started)).toEqual([started, ...before]);
   });
 });

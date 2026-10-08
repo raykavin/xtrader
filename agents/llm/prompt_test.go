@@ -202,3 +202,29 @@ func TestPrompts_IndicatorsSent(t *testing.T) {
 		})
 	}
 }
+
+// B21: the header is the lines at the top starting with #, the blank lines
+// among them included, for every key alike: read in any case, the spaces
+// around the key tolerated, and never sent to the model; a # line after the
+// first line of text is text.
+func TestPromptHeader_Keys(t *testing.T) {
+	strategy := "# name: x\n\n#  indicators : ATR, bb\n\n## TAKE PROFIT: none\n\nSetup: z.\n# Take profit: optional"
+	groups, ok := StrategyIndicators(strategy)
+	require.True(t, ok)
+	require.Equal(t, []string{"atr", "bb"}, groups)
+	require.True(t, StrategyWithoutTakeProfit(strategy))
+	require.False(t, StrategyTakeProfitOptional(strategy), "the line in the text isn't read")
+	require.Equal(t, "Setup: z.\n# Take profit: optional", stripComments(strategy))
+
+	require.Equal(t, "Setup: z.", stripComments("\n\n# name: x\n# Flags: y\n\nSetup: z.\n"), "blank lines first")
+	require.Equal(t, "# Flags: y\n\nSetup: z.", stripComments("\n# name: x\n\n# Flags: y\n\nSetup: z.\n"),
+		"after a blank line, a line of a key the agent doesn't read is text")
+	strategy = "# name: x\n\n# Flags: y\n# Indicators: atr\n# Daily loss limit: 150 BRL\n\nSetup: z."
+	require.Equal(t, "Setup: z.", stripComments(strategy), "with a line of a key it reads, the header")
+	groups, ok = StrategyIndicators(strategy)
+	require.True(t, ok)
+	require.Equal(t, []string{"atr"}, groups)
+	require.Error(t, CheckPrompt("# name: x\n\n# Indicators: atr\n\n"), "a header alone")
+	_, ok = StrategyIndicators("# name: x\n# Indicators (a note): atr\n\nSetup: z.")
+	require.False(t, ok, "another key")
+}
