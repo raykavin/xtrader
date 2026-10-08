@@ -5,7 +5,7 @@ Quatro serviços, no padrão de `/var/containers`:
 | Serviço | O que roda | Dados |
 |---|---|---|
 | `controller` | painel web (com login), Telegram e os agentes do banco, processos do controller | `services/controller/data` (outbox de cada agente e pidfiles em `data/pids`), `services/controller/config/config.yml` |
-| `migrator` | migrações e seeds do banco (`migrator up`), a cada subida, antes do controller; e o import único da versão anterior | `services/migrator/config/` (`config.yml`, `agents.yml` de exemplo para o import) |
+| `migrator` | migrações e seeds do banco (`migrator up`), a cada subida, antes do controller: num banco novo, os prompts e os agentes iniciais, desligados | `services/migrator/config/config.yml` |
 | `postgres` | PostgreSQL 18: agentes, prompts, usuários, Telegram, ordens, decisões e journal | `services/postgres/data` |
 | `mt5` | terminal MetaTrader 5 da Exness no Wine, numa tela virtual (Xvfb), e a bridge HTTP (`tools/mt5bridge`) que os agentes usam | `services/mt5/data` (prefixo do Wine: Python, terminal e os dados dele) |
 
@@ -28,7 +28,7 @@ deploy/docker/                      → vira /var/containers/xtrader no servidor
     │   └── data/
     ├── migrator/
     │   ├── .env
-    │   └── config/                 # config.yml e agents.yml (import)
+    │   └── config/                 # config.yml
     ├── mt5/
     │   ├── .env
     │   └── data/
@@ -64,7 +64,7 @@ sudo deploy/docker/install.sh       # ou: install.sh /outro/diretorio
 
 O script:
 - cria a estrutura;
-- copia o compose, os `config.yml` e o `agents.yml` de exemplo;
+- copia o compose e os `config.yml`;
 - cria o `.env` de cada serviço a partir do `.env.example`;
 - gera uma vez, e grava onde cada um é usado:
   - o `MT5_BRIDGE_TOKEN` (no `.env` do `mt5`);
@@ -107,12 +107,7 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
 
 ## 5. Agentes, Telegram e usuários
 
-1. **Agentes:** o banco começa sem agentes. Crie-os em **Configurações > Agentes > Novo agente** (modo, endereço da API no loopback do container, ex.: `localhost:5580`, conta MT5 com a bridge `http://mt5:18812`, modelo do LLM, parâmetros e segredos), ou importe os do `services/migrator/config/agents.yml`, no formato da versão anterior:
-
-   ```bash
-   docker compose run --rm migrator migrator -config /app/config/config.yml import -agents /app/config/agents.yml -dry-run
-   docker compose run --rm migrator migrator -config /app/config/config.yml import -agents /app/config/agents.yml
-   ```
+1. **Agentes:** num banco novo, o migrator cria os agentes iniciais pelo seed `sql/seeds/0003_agents.sql`, todos desligados e sem segredos: `llm` (a estratégia LLM em BTCUSDm e XAUUSDm, 30m, o lote e os mercados correlacionados de cada par) e `matrend-btc` (matrend em BTCUSDm 5m). Cada um é criado uma única vez: o seed nunca sobrescreve uma edição do painel nem recria um agente apagado. Defina os segredos de cada um (passo 2 e seção 6) e ligue-o em **Configurações > Agentes**. Outros agentes são criados em **Novo agente** (modo, endereço da API no loopback do container, ex.: `localhost:5580`, conta MT5 com a bridge `http://mt5:18812`, modelo do LLM, parâmetros e segredos). Nunca rode o mesmo agente aqui e em outra máquina ao mesmo tempo: eles operariam a mesma conta com o mesmo magic number.
 
    O controller lança os agentes habilitados em até 30 segundos. Depois, cada agente é editado ou excluído (desligado antes) na mesma tela; uma mudança de inicialização num agente rodando fica como "reinício pendente".
 
@@ -131,32 +126,6 @@ O terminal já vem com o servidor MCP ligado (`http://127.0.0.1:22346/mcp`, enca
 4. No painel, em **Configurações > Agentes**, defina o **Token do calendário (MCP)** do agente llm e reinicie-o. Depois apague o `MT5_VNC_PASSWORD` e rode `docker compose up -d mt5`, que desliga o VNC.
 
 Sem esse passo, o agente llm roda sem o calendário. Ficam sem efeito as notícias no contexto e o bloqueio de entradas perto de notícias de alto impacto.
-
-## Migrar do serviço atual (systemd no host)
-
-**Nunca rode os dois ao mesmo tempo.** Eles operariam a mesma conta com o mesmo magic number, gerando ordens em dobro, e disputariam o mesmo bot do Telegram.
-
-1. De preferência, faça a migração sem posição aberta. Mesmo com posição, o agente a recupera a partir das ordens importadas e do terminal.
-2. Na máquina atual, pare o serviço: `systemctl --user disable --now automator-llm.service`.
-3. Copie para `services/migrator/config/import/` (um diretório temporário):
-   - o `agents.yml` do host, com todos os agentes;
-   - o `data/` do host, com `nb-llm.db` (ordens), `nb-llm.decisions.db`, `nb-llm.decisions.attachments/` e `nb-llm.decisions.jsonl` (decisões e journal);
-   - o `~/.config/automator/automator.env` como `import.env`, trocando nele o `MT5_BRIDGE_TOKEN` pelo do `services/mt5/.env`;
-   - depois, `chown -R 1000:1000 services/migrator/config/import && chmod 600 services/migrator/config/import/import.env`: o migrator roda com o uid 1000.
-4. Importe, trocando a bridge de todos os agentes e o servidor MCP dos calendários pelos do serviço `mt5` (`-bridge` e `-calendar`), já que os do host apontam para `127.0.0.1`:
-
-   ```bash
-   docker compose up -d postgres migrator
-   docker compose run --rm migrator migrator -config /app/config/config.yml import \
-     -agents /app/config/import/agents.yml -env /app/config/import/import.env \
-     -bridge http://mt5:18812 -calendar http://mt5:22347/mcp -dry-run
-   docker compose run --rm migrator migrator -config /app/config/config.yml import \
-     -agents /app/config/import/agents.yml -env /app/config/import/import.env \
-     -bridge http://mt5:18812 -calendar http://mt5:22347/mcp
-   ```
-
-   O import traz os agentes (os da Capital e da Binance ficam de fora), o usuário do painel (senha em bcrypt), o Telegram (token e IDs), as chaves dos LLMs, os tokens (cifrados) e as ordens, decisões e journal de cada agente. O relatório nunca mostra os segredos. Repetir o import não recria o que foi apagado no painel e não regrava o Telegram já configurado (nem o importado por uma versão anterior do migrator). Num agente que já tem ordens, o import é recusado, a menos que se use `-force`. O import trava a linha de cada agente com dados a importar até terminar: rode-o com o controller parado (como neste passo), senão um agente desse nome pode não subir enquanto ele roda. Os detalhes estão em "Migração da versão anterior", no README da raiz.
-5. Apague `services/migrator/config/import/` (ele tem as chaves) e rode `docker compose up -d`. O token do MCP pode precisar do passo 6, porque o terminal é outro.
 
 ## Operação
 

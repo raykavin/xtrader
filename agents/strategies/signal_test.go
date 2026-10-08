@@ -35,8 +35,8 @@ func newSignalRunner(t *testing.T, name string, configure func(*SignalConfig)) (
 	return r, s
 }
 
-// The strategies asked for, each with the timeframes it trades on, see
-// agents.yml; the ones of other strategies are EMA + Pullback (emapullback),
+// The strategies asked for, each with the timeframes it trades on; the ones
+// of other strategies are EMA + Pullback (emapullback),
 // Breakout + ATR (atrbreakout), VWAP Trend Following (vwap) and Opening Range
 // Breakout (orb).
 func TestSignals_Coverage(t *testing.T) {

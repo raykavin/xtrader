@@ -37,7 +37,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Limites diários](#limites-diários)
   - [Telegram](#telegram)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
-  - [Migração da versão anterior](#migração-da-versão-anterior)
+  - [Agentes iniciais](#agentes-iniciais)
 - [Desenvolvimento](#desenvolvimento)
 - [API](#api)
 - [Segurança](#segurança)
@@ -226,7 +226,7 @@ navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegra
 ```
 
 - **`cmd/controller`:** o único processo que acessa o banco.
-- **`cmd/migrator`:** aplica as migrações e os seeds (`gobox/database/migrate`) e importa, uma única vez, a configuração e os dados da versão anterior. O controller não migra: ele confere a versão do schema. Cada arquivo de seed começa com um advisory lock do Postgres (`pg_advisory_xact_lock`), então dois migrators rodando ao mesmo tempo aplicam os seeds um depois do outro, sem duplicar nem falhar.
+- **`cmd/migrator`:** aplica as migrações e os seeds (`gobox/database/migrate`): num banco novo, o Telegram desligado, os prompts e os agentes iniciais (veja [Agentes iniciais](#agentes-iniciais)). A configuração fica só no banco, alterada pelo painel. O controller não migra: ele confere a versão do schema. Cada arquivo de seed começa com um advisory lock do Postgres (`pg_advisory_xact_lock`), então dois migrators rodando ao mesmo tempo aplicam os seeds um depois do outro, sem duplicar nem falhar.
 - **Agentes:** recebem a configuração pela API interna (`agentapi`). Os parâmetros viram as mesmas flags da linha de comando, e os segredos nunca passam por argumento.
 - **`tools/mt5bridge`:** uma ponte HTTP em Python para o terminal MT5, que roda no Wine, dentro do container `mt5`. Ela atende uma requisição por vez e protege as ordens:
   - cada ordem leva um prazo de 20 s, em dois headers: `X-Bridge-Deadline` (instante em ms Unix, pelo relógio do agente) e `X-Bridge-Timeout` (ms restantes, que a bridge conta pelo próprio relógio a partir do recebimento). A bridge usa o que vencer primeiro, contado no relógio monotônico. Assim, uma bridge em outro host com o relógio atrasado não envia a ordem mais tarde. Se o terminal estiver ocupado ou reconectando além do prazo, a ordem é recusada sem ir ao terminal (`504` com `"sent": false`), e nunca é executada depois que o agente desistiu dela. Um relógio da bridge adiantado encurta o prazo: o agente avisa no log quando a diferença passa de 1 s;
@@ -249,7 +249,7 @@ agents/
   internal/          runner comum e cliente remoto (outbox, config)
 cmd/
   controller/        painel, Telegram e supervisão dos agentes
-  migrator/          migrações, seeds e import da versão anterior
+  migrator/          migrações e seeds
   xtrader/           utilitários (download de candles)
 config/ configs/     leitura do config.yml e o exemplo do host
 controller/          implementação do controller
@@ -506,39 +506,14 @@ go run ./agents/trendagent -mode backtest -strategy matrend -pair XAUUSDm -timef
 
 O agente LLM também roda backtests, mas cada candle vira uma requisição paga ao modelo.
 
-### Migração da versão anterior
+### Agentes iniciais
 
-Faça uma vez só, com o serviço antigo parado. Nunca rode os dois ao mesmo tempo: eles usariam a mesma conta, o mesmo magic e o mesmo bot.
+Num banco novo, o `migrator up` cria os agentes do seed `sql/seeds/0003_agents.sql`, todos desligados e sem segredos:
 
-O import roda numa transação só e, para os agentes com dados a importar, trava a linha do agente no banco até o fim, para nenhum ID de ordem ser reservado no meio. Com journals grandes, isso pode levar minutos: um agente desse nome que esteja rodando ou iniciando espera para reservar IDs de ordem e pode não subir até o import terminar. Rode-o com o serviço antigo parado e, se o agente já existe no painel, com ele parado também.
+- **`llm`:** a estratégia LLM (OpenAI `gpt-5`, raciocínio `low`, prompt `trend_following`) em BTCUSDm e XAUUSDm, 30m, com a tendência de 4h exigida, `lot = BTCUSDm=0.01;XAUUSDm=0.02`, `llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm`, o calendário de alta importância, o painel de trading e o controle via Telegram;
+- **`matrend-btc`:** matrend em BTCUSDm 5m (`agents/trendagent`), com stop de 1 e take profit de 2 no preço e controle via Telegram.
 
-Se dois agentes da versão anterior operavam o mesmo par com o mesmo magic na mesma bridge, o segundo é importado desativado, com uma nota no relatório.
-
-```bash
-go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
-  -env ~/.config/automator/automator.env -dry-run      # o que seria importado
-go run ./cmd/migrator -config configs/config.yml import -agents agents.yml \
-  -env ~/.config/automator/automator.env
-```
-
-- **O que o import traz:**
-  - os agentes MT5;
-  - o usuário do painel;
-  - o Telegram;
-  - as chaves e os tokens, já cifrados;
-  - os dados de `data/`: ordens, decisões e journal.
-- **Repetir o import:** cada parte entra uma vez só, e o que foi mudado ou apagado no painel depois fica como está.
-  - **Agentes:** um agente com o mesmo nome no painel é mantido como está; o import nunca o altera. Um agente apagado no painel não é criado de novo nem recebe dados. Para importá-lo, crie-o no painel ou dê outro nome a ele no `agents.yml`.
-  - **Usuário do painel:** só é criado se não existir. A senha de um usuário existente nunca é trocada, e um usuário apagado não volta.
-  - **Telegram:** só é gravado uma vez, e só se ainda não estiver configurado (sem token, bot desligado e nenhum usuário autorizado, nem mesmo revogado) nem tiver sido importado por uma versão anterior do migrator, que não registrava isso (ela é reconhecida pelos registros dos arquivos de dados que importou). Depois disso, vale o que estiver no painel; por exemplo, um token apagado no painel nunca volta com o import.
-  - **Dados de `data/`:** cada arquivo é importado uma vez. Ordens, decisões e entradas do journal que já estão no banco nunca são substituídas.
-- **Agente que já tem ordens:** se o agente já existe no painel e já usou IDs de ordem, as ordens importadas pegariam os IDs das dele. Nesse caso, o import é recusado por inteiro: nada é gravado, os conflitos aparecem em `Conflicts` e o comando termina com erro, inclusive no `-dry-run`.
-- **`-force`:**
-  - importa os dados mesmo para esse agente, com os IDs das ordens importadas deslocados para depois dos que ele já usou; as decisões continuam ligadas às ordens certas;
-  - importa de novo os arquivos já importados, acrescentando só o que falta, com o mesmo deslocamento de IDs da primeira vez;
-  - não recria agente nem usuário apagado e não altera o Telegram.
-- **Relatório:** mostra o que foi gravado e o que já existia (`N written, M kept already`). Se uma ordem nova do arquivo cair num ID que o agente usou ou reservou depois do import (mesmo com a ordem dele ainda a caminho, no outbox), ou uma decisão nova apontar para um desses IDs, isso é um conflito que nem o `-force` resolve: nada é gravado; tire o agente do `agents.yml`.
-- **Nos containers:** use `-bridge http://mt5:18812 -calendar http://mt5:22347/mcp`.
+Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, nem mesmo um apagado. Os seeds rodam a cada `migrator up`, mas nunca sobrescrevem uma edição do painel nem recriam um agente apagado. Os segredos (a chave do LLM e os tokens da bridge e do calendário) nunca vão para o seed: defina-os em **Configurações > Agentes** e só então ligue o agente. Para mudar a configuração inicial de um banco novo, edite o seed; num banco existente, use o painel.
 
 ## Desenvolvimento
 

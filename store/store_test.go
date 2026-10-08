@@ -155,11 +155,13 @@ func TestSeeds_ConcurrentPopulatesSerialized(t *testing.T) {
 
 		s, err := Open(config.Database{DSN: dsn, MaxOpenConns: 2, LogLevel: "silent"}, testKey)
 		require.NoError(t, err)
-		var prompts, versions int64
+		var prompts, versions, agents int64
 		require.NoError(t, s.db.Table("prompts").Count(&prompts).Error)
 		require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
+		require.NoError(t, s.db.Table("agents").Count(&agents).Error)
 		_ = s.Close()
 		require.EqualValues(t, 43, prompts, "each prompt seeded once")
 		require.Equal(t, prompts, versions)
+		require.EqualValues(t, 2, agents, "each agent seeded once")
 	}
 }

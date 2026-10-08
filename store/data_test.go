@@ -224,15 +224,3 @@ func TestJournal_AppendsOnceAndRemembersPerPair(t *testing.T) {
 	require.EqualValues(t, 4, count)
 	require.ErrorIs(t, s.AppendJournal(ctx, agent.ID, []JournalEntry{{ID: "e", Pair: "X"}}), ErrInvalid)
 }
-
-func TestLegacyImports_KeepWhatWasImported(t *testing.T) {
-	s := testStore(t)
-	ctx := context.Background()
-	imported, err := s.LegacyImported(ctx, "data/nb-llm.db")
-	require.NoError(t, err)
-	require.False(t, imported)
-	require.NoError(t, s.MarkLegacyImported(ctx, "data/nb-llm.db", Params{"orders": "17"}))
-	imported, err = s.LegacyImported(ctx, "data/nb-llm.db")
-	require.NoError(t, err)
-	require.True(t, imported)
-}
