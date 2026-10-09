@@ -3,9 +3,15 @@ import { deletePrompt } from "../api/client";
 import type { PromptInfo } from "../api/types";
 import { formatTime } from "../lib/format";
 import { ConfirmButton } from "./ConfirmButton";
+import { Icon } from "./Icon";
+import { PageHeader } from "./PageHeader";
 import { PromptEditor } from "./PromptEditor";
+import type { SectionIntro } from "./SettingsPage";
+import { Alert, EmptyState } from "./States";
 
 interface Props {
+  /** The title of the section and what it is for. */
+  intro: SectionIntro;
   prompts: PromptInfo[];
   /** Loads the prompts again, one created, edited or deleted. */
   onChange: () => void;
@@ -19,7 +25,7 @@ type Editing = { id: number } | "new" | null;
  * agents using them, edited in a dialog; an edit reaches the agents using the
  * prompt from their next analysis.
  */
-export function PromptsSettings({ prompts, onChange }: Props) {
+export function PromptsSettings({ intro, prompts, onChange }: Props) {
   const [editing, setEditing] = useState<Editing>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,36 +39,40 @@ export function PromptsSettings({ prompts, onChange }: Props) {
     }
   };
 
+  const create = (
+    <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
+      <Icon name="plus" />
+      Novo prompt
+    </button>
+  );
+
   return (
-    <>
-      <div className="settings-toolbar">
-        <p className="settings-hint">
-          O cabeçalho do prompt (<code># Indicators:</code>, <code># Take profit:</code>) define os
-          indicadores e o take profit do agente.
-        </p>
-        <button type="button" className="button primary" onClick={() => setEditing("new")}>
-          Novo prompt
-        </button>
-      </div>
+    <div className="settings-section">
+      <PageHeader title={intro.title} description={intro.description} actions={create} />
       {error && (
-        <p className="control-feedback error" role="alert">
+        <Alert tone="error" title="O prompt não foi excluído">
           {error}
-        </p>
+        </Alert>
       )}
-      <div className="card">
+      <div className="card card-flush">
         {prompts.length === 0 ? (
-          <p className="empty">Nenhum prompt: rode o migrator (up) para os prompts de exemplo.</p>
+          <EmptyState icon="prompt" title="Nenhum prompt cadastrado" action={create}>
+            Crie um prompt, ou rode o migrator (up) para os prompts de exemplo. Sem prompt, os
+            agentes LLM usam o embutido.
+          </EmptyState>
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="table table-responsive">
               <thead>
                 <tr>
-                  <th>Nome</th>
-                  <th>Descrição</th>
-                  <th className="num">Versão</th>
-                  <th>Alterado em</th>
-                  <th>Usado por</th>
-                  <th>
+                  <th scope="col">Nome</th>
+                  <th scope="col">Descrição</th>
+                  <th scope="col" className="num">
+                    Versão
+                  </th>
+                  <th scope="col">Alterado em (UTC)</th>
+                  <th scope="col">Usado por</th>
+                  <th scope="col" className="col-actions">
                     <span className="sr-only">Ações</span>
                   </th>
                 </tr>
@@ -70,24 +80,49 @@ export function PromptsSettings({ prompts, onChange }: Props) {
               <tbody>
                 {prompts.map((prompt) => (
                   <tr key={prompt.id}>
-                    <td className="mono">{prompt.name}</td>
-                    <td className="settings-description" title={prompt.description}>
+                    <td className="mono strong" data-label="Nome">
+                      {prompt.name}
+                    </td>
+                    <td
+                      className="cell-truncate cell-fill"
+                      data-label="Descrição"
+                      title={prompt.description}
+                    >
                       {prompt.description || "—"}
                     </td>
-                    <td className="num mono">v{prompt.version}</td>
-                    <td className="mono">{formatTime(prompt.updated_at)}</td>
-                    <td>{prompt.used_by.length > 0 ? prompt.used_by.join(", ") : "—"}</td>
-                    <td>
-                      <div className="settings-actions">
+                    <td className="num mono" data-label="Versão">
+                      v{prompt.version}
+                    </td>
+                    <td className="mono" data-label="Alterado em (UTC)">
+                      {formatTime(prompt.updated_at)}
+                    </td>
+                    <td data-label="Usado por">
+                      {prompt.used_by.length > 0 ? (
+                        <span className="tag-list">
+                          {prompt.used_by.map((name) => (
+                            <span key={name} className="tag tag-mono">
+                              {name}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="cell-actions">
+                      <div className="row-actions">
                         <button
                           type="button"
-                          className="mini-btn"
+                          className="btn btn-xs"
+                          aria-label={`Editar ${prompt.name}`}
                           onClick={() => setEditing({ id: prompt.id })}
                         >
+                          <Icon name="edit" size={13} />
                           Editar
                         </button>
                         <ConfirmButton
                           label="Excluir"
+                          ariaLabel={`Excluir ${prompt.name}`}
                           question={`Excluir ${prompt.name}?`}
                           disabled={prompt.used_by.length > 0}
                           title={
@@ -113,6 +148,6 @@ export function PromptsSettings({ prompts, onChange }: Props) {
           onClose={() => setEditing(null)}
         />
       )}
-    </>
+    </div>
   );
 }

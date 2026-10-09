@@ -4,6 +4,8 @@ import type { AgentPeriod, AgentSettings, Snapshot } from "../api/types";
 import { formatMoney, formatNumber, formatPercent, formatTime, signClass } from "../lib/format";
 import { type PeriodResult, parseAmount, periodResults, resetPeriods } from "../lib/periods";
 import { ConfirmButton } from "./ConfirmButton";
+import { DialogHeader } from "./Dialog";
+import { Alert, EmptyState, Loading, Skeleton } from "./States";
 
 interface Props {
   agent: AgentSettings;
@@ -34,18 +36,26 @@ function windowLabel(result: PeriodResult, current: boolean): string {
 /** The pairs of a result, with their total when there are several. */
 function ResultTable({ result }: { result: PeriodResult }) {
   if (result.pairs.length === 0) {
-    return <p className="empty">Nenhuma operação fechada.</p>;
+    return <EmptyState compact icon="results" title="Nenhuma operação fechada no período" />;
   }
   return (
     <div className="table-wrap">
-      <table>
+      <table className="table table-compact">
         <thead>
           <tr>
-            <th>Ativo</th>
-            <th className="num">Operações</th>
-            <th className="num">Taxa de acerto</th>
-            <th className="num">Lucro líquido</th>
-            <th className="num">Fator de lucro</th>
+            <th scope="col">Ativo</th>
+            <th scope="col" className="num">
+              Operações
+            </th>
+            <th scope="col" className="num">
+              Acerto
+            </th>
+            <th scope="col" className="num">
+              Lucro líquido
+            </th>
+            <th scope="col" className="num">
+              Fator
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -104,9 +114,9 @@ function PeriodSection({
 }) {
   const { period } = result;
   return (
-    <section className="decision-section results-period">
+    <section className="results-period">
       <p className="results-window">{windowLabel(result, current)}</p>
-      <dl className="decision-meta">
+      <dl className="meta-list">
         {period && (
           <>
             <dt>Saldo inicial</dt>
@@ -247,36 +257,45 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
     // biome-ignore lint/a11y/useKeyWithClickEvents: Esc closes the dialog natively
     <dialog
       ref={dialog}
-      className="decision-dialog results-dialog"
+      className="dialog dialog-md"
       aria-labelledby="results-title"
       onClose={onClose}
       onClick={(e) => {
         if (e.target === dialog.current && !busy) close(); // the backdrop
       }}
     >
-      <header className="decision-head">
-        <h2 id="results-title">
-          Resultados <small>{agent.name}</small>
-        </h2>
-        <button type="button" className="mini-btn" onClick={close} aria-label="Fechar">
-          ✕
-        </button>
-      </header>
-      <div className="decision-body">
-        {error && <div className="banner error">{error}</div>}
-        {offline && <div className="banner">{offline}</div>}
-        {!results && !error && <p className="empty">Carregando…</p>}
-
-        {current && (
-          <>
-            <h3 className="results-heading">Período atual</h3>
-            <PeriodSection result={current} current known={known} />
-          </>
+      <DialogHeader
+        id="results-title"
+        title="Resultados"
+        subtitle={agent.name}
+        onClose={close}
+        disabled={busy}
+      />
+      <div className="dialog-body">
+        {error && (
+          <Alert tone="error" title="Não foi possível carregar os períodos">
+            {error}
+          </Alert>
+        )}
+        {offline && <Alert tone="warn">{offline}</Alert>}
+        {!results && !error && (
+          <Loading label="Carregando os resultados…">
+            <Skeleton height={140} />
+          </Loading>
         )}
 
-        <section className="decision-section results-reset" aria-labelledby="results-reset-title">
-          <h3 id="results-reset-title">Redefinir resultados</h3>
-          <p className="settings-hint">
+        {current && (
+          <section className="dialog-section">
+            <h3 className="section-title">Período atual</h3>
+            <PeriodSection result={current} current known={known} />
+          </section>
+        )}
+
+        <section className="dialog-section results-reset" aria-labelledby="results-reset-title">
+          <h3 id="results-reset-title" className="section-title">
+            Redefinir resultados
+          </h3>
+          <p className="field-hint">
             Zera Operações, Taxa de acerto, Lucro líquido e Fator de lucro de todos os ativos: os
             cards passam a contar só as operações fechadas a partir de agora. O período atual fica
             guardado com os resultados dele. As ordens continuam no histórico, e as posições abertas
@@ -286,7 +305,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
             <label className="field">
               <span className="field-label">Depósito (saldo inicial)</span>
               <input
-                className="settings-input mono"
+                className="input mono"
                 inputMode="decimal"
                 placeholder="1.000,00"
                 value={deposit}
@@ -298,7 +317,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
             <label className="field results-currency">
               <span className="field-label">Moeda</span>
               <input
-                className="settings-input mono"
+                className="input mono"
                 maxLength={3}
                 placeholder="BRL"
                 value={currency}
@@ -315,13 +334,13 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
               onConfirm={reset}
             />
           </div>
-          {feedback && <p className="control-feedback ok">{feedback}</p>}
-          {stale && <div className="banner">{stale}</div>}
+          {feedback && <Alert tone="success">{feedback}</Alert>}
+          {stale && <Alert tone="warn">{stale}</Alert>}
         </section>
 
         {earlier.length > 0 && (
-          <>
-            <h3 className="results-heading">Períodos anteriores</h3>
+          <section className="dialog-section">
+            <h3 className="section-title">Períodos anteriores</h3>
             {earlier.map((result) => (
               <PeriodSection
                 key={result.period?.id ?? "before"}
@@ -330,7 +349,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
                 known={known}
               />
             ))}
-          </>
+          </section>
         )}
       </div>
     </dialog>

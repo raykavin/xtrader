@@ -16,7 +16,10 @@ import {
   reasoningEfforts,
   tradePanelHint,
 } from "../lib/settings";
+import { DialogHeader } from "./Dialog";
+import { Icon } from "./Icon";
 import { Select, type SelectOption } from "./Select";
+import { Alert } from "./States";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -205,7 +208,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
     // biome-ignore lint/a11y/useKeyWithClickEvents: Esc closes the dialog natively
     <dialog
       ref={dialog}
-      className="decision-dialog agent-dialog"
+      className="dialog dialog-lg"
       aria-labelledby={`${formId}-title`}
       onClose={onClose}
       onCancel={(e) => {
@@ -217,351 +220,353 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
         if (JSON.stringify(values) === JSON.stringify(initial)) close();
       }}
     >
-      <header className="decision-head">
-        <h2 id={`${formId}-title`}>
-          {agent ? `Editar ${agent.name}` : "Novo agente"}
-          {agent && <small>{agentKindLabel(agent.kind)}</small>}
-        </h2>
-        <button type="button" className="mini-btn" onClick={close} aria-label="Fechar">
-          ✕
-        </button>
-      </header>
-      <form className="decision-body" onSubmit={submit} noValidate>
-        {agent?.running && (
-          <p className="settings-status warn">
-            O agente está em execução: as alterações valem quando ele for reiniciado, pelo botão
-            Reiniciar do card; desligar Iniciado pelo controller o para na hora.
-          </p>
-        )}
+      <DialogHeader
+        id={`${formId}-title`}
+        title={agent ? `Editar ${agent.name}` : "Novo agente"}
+        subtitle={agent ? agentKindLabel(agent.kind) : undefined}
+        onClose={close}
+        disabled={busy}
+      />
+      <form className="dialog-form" onSubmit={submit} noValidate>
+        <div className="dialog-body">
+          {agent?.running && (
+            <Alert tone="warn">
+              O agente está em execução: as alterações valem quando ele for reiniciado, pelo botão
+              Reiniciar do card; desligar Iniciado pelo controller o para na hora.
+            </Alert>
+          )}
 
-        <Section title="Geral" disabled={busy}>
-          <div className="agent-form-grid">
-            {creating && (
-              <>
-                <TextField
-                  label="Nome"
-                  {...text("name")}
-                  onChange={(name) => set("name", name.trim())}
-                  mono
-                  placeholder="ex.: gold-trend"
-                  hint="Não muda depois de criado."
+          <Section title="Geral" disabled={busy}>
+            <div className="form-grid">
+              {creating && (
+                <>
+                  <TextField
+                    label="Nome"
+                    {...text("name")}
+                    onChange={(name) => set("name", name.trim())}
+                    mono
+                    placeholder="ex.: gold-trend"
+                    hint="Não muda depois de criado."
+                  />
+                  <SelectField
+                    label="Tipo"
+                    value={values.kind}
+                    options={kindOptions}
+                    error={errorOf("kind")}
+                    hint="Não muda depois: o binário que o controller roda."
+                    onChange={(kind) => set("kind", kind)}
+                  />
+                </>
+              )}
+              <SelectField
+                label="Modo"
+                value={values.mode}
+                options={modeOptions}
+                error={errorOf("mode")}
+                onChange={(mode) => set("mode", mode)}
+              />
+              <TextField
+                label="Endereço da API"
+                {...text("apiAddress")}
+                mono
+                placeholder="ex.: localhost:5580"
+                hint={
+                  addressMoved ? (
+                    <span className="msg msg-warn">
+                      O painel passa a usar o endereço novo já; o agente só o escuta depois de
+                      reiniciado.
+                    </span>
+                  ) : (
+                    "host:porta onde o agente serve a API, único entre os agentes e só no loopback (localhost, 127.0.0.1 ou [::1]): só o controller a acessa."
+                  )
+                }
+              />
+            </div>
+            <div className="switch-list">
+              {creating && (
+                <Switch
+                  label="Ativo"
+                  checked={values.enabled}
+                  title="Ligado, o controller inicia o agente assim que ele for criado"
+                  onChange={(enabled) => set("enabled", enabled)}
                 />
-                <SelectField
-                  label="Tipo"
-                  value={values.kind}
-                  options={kindOptions}
-                  error={errorOf("kind")}
-                  hint="Não muda depois: o binário que o controller roda."
-                  onChange={(kind) => set("kind", kind)}
-                />
-              </>
-            )}
-            <SelectField
-              label="Modo"
-              value={values.mode}
-              options={modeOptions}
-              error={errorOf("mode")}
-              onChange={(mode) => set("mode", mode)}
-            />
-            <TextField
-              label="Endereço da API"
-              {...text("apiAddress")}
-              mono
-              placeholder="ex.: localhost:5580"
-              hint={
-                addressMoved ? (
-                  <span className="settings-status warn">
-                    O painel passa a usar o endereço novo já; o agente só o escuta depois de
-                    reiniciado.
-                  </span>
-                ) : (
-                  "host:porta onde o agente serve a API, único entre os agentes e só no loopback (localhost, 127.0.0.1 ou [::1]): só o controller a acessa."
-                )
-              }
-            />
-          </div>
-          <div className="settings-switches">
-            {creating && (
+              )}
               <Switch
-                label="Ativo"
-                checked={values.enabled}
-                title="Ligado, o controller inicia o agente assim que ele for criado"
-                onChange={(enabled) => set("enabled", enabled)}
+                label="Iniciado pelo controller"
+                checked={values.launched}
+                title="Ligado, o controller roda o processo do agente; desligado, ele roda à parte"
+                onChange={(launched) => set("launched", launched)}
               />
-            )}
-            <Switch
-              label="Iniciado pelo controller"
-              checked={values.launched}
-              title="Ligado, o controller roda o processo do agente; desligado, ele roda à parte"
-              onChange={(launched) => set("launched", launched)}
-            />
-            <Switch
-              label="Reiniciar se cair"
-              checked={values.restart}
-              title="Ligado, o controller inicia o agente de novo quando o processo sai, com as configurações com que ele foi iniciado e os segredos atuais; desligado, o agente fica parado até ser reiniciado ou até o controller reiniciar"
-              onChange={(restart) => set("restart", restart)}
-            />
-            {creating && (
-              <>
-                <Switch
-                  label="Painel de trading"
-                  checked={paper || values.tradePanel}
-                  disabled={paper}
-                  title={channelsTitle ?? tradePanelHint}
-                  onChange={(tradePanel) => set("tradePanel", tradePanel)}
-                />
-                <Switch
-                  label="Controle via Telegram"
-                  checked={paper || values.telegramControl}
-                  disabled={paper}
-                  title={channelsTitle}
-                  onChange={(telegramControl) => set("telegramControl", telegramControl)}
-                />
-              </>
-            )}
-          </div>
-          {creating &&
-            values.enabled &&
-            values.launched &&
-            (paper ? (
-              <p className="settings-hint">Ativo, o agente é iniciado assim que for criado.</p>
-            ) : (
-              <p className="settings-status warn">
-                Ativo e em live, o agente é iniciado assim que for criado e já opera a conta MT5.
-              </p>
-            ))}
-        </Section>
-
-        <Section
-          title="Conta MT5"
-          disabled={busy}
-          hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ativos em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
-        >
-          <div className="agent-form-grid">
-            <TextField
-              label="URL da bridge"
-              {...text("bridgeURL")}
-              mono
-              inputMode="url"
-              placeholder="http://mt5:18812"
-            />
-            {creating && (
-              <TextField
-                label="Token da bridge"
-                {...text("bridgeToken")}
-                type="password"
-                placeholder="opcional"
-                hint="Opcional: dá para definir depois, no card."
-              />
-            )}
-            <TextField
-              label="Magic"
-              {...text("magic")}
-              mono
-              inputMode="numeric"
-              placeholder="opcional"
-              hint="Em branco, um hash do comentário."
-            />
-            <TextField
-              label="Comentário"
-              {...text("comment")}
-              mono
-              maxLength={maxComment}
-              placeholder="opcional"
-              hint={`Até ${maxComment} caracteres; em branco, nb: e a estratégia (ex.: nb:llm).`}
-            />
-          </div>
-          <div className={values.realAllowed ? "agent-real on" : "agent-real"}>
-            <Switch
-              label="Permitir conta real"
-              checked={values.realAllowed}
-              onChange={(realAllowed) => set("realAllowed", realAllowed)}
-            />
-            <p className="settings-hint">
-              {values.realAllowed
-                ? "Atenção: o agente poderá operar uma conta real, com dinheiro de verdade."
-                : "Desligado, o agente só opera conta demo: numa conta real, ele se recusa a iniciar."}
-            </p>
-          </div>
-        </Section>
-
-        {llm && (
-          <Section title="Modelo" disabled={busy}>
-            <div className="agent-form-grid">
-              <SelectField
-                label="Provedor"
-                value={values.provider}
-                options={providerOptions}
-                error={errorOf("provider")}
-                onChange={(provider) => set("provider", provider)}
-              />
-              <TextField
-                label="Modelo"
-                {...text("model")}
-                mono
-                placeholder={`ex.: ${modelExamples[values.provider] ?? modelExamples.openai}`}
-              />
-              <TextField
-                label="URL base"
-                {...text("baseURL")}
-                mono
-                inputMode="url"
-                placeholder="opcional"
-                hint="Ex.: um proxy; em branco, a API do provedor."
-              />
-              <SelectField
-                label="Esforço de raciocínio"
-                value={values.reasoningEffort}
-                options={effortOptions}
-                hint={values.provider === "anthropic" ? "Ignorado pela Anthropic." : undefined}
-                onChange={(effort) => set("reasoningEffort", effort)}
-              />
-              <TextField
-                label="Máximo de tokens"
-                {...text("maxTokens")}
-                mono
-                inputMode="numeric"
-                placeholder="opcional"
-                hint="Por resposta, o raciocínio incluído; em branco, 4096."
-              />
-              <TextField
-                label="URL do calendário (MCP)"
-                {...text("calendarURL")}
-                mono
-                inputMode="url"
-                placeholder="opcional"
-                hint="O servidor MCP do terminal MT5, com o calendário econômico; em branco, nenhum."
+              <Switch
+                label="Reiniciar se cair"
+                checked={values.restart}
+                title="Ligado, o controller inicia o agente de novo quando o processo sai, com as configurações com que ele foi iniciado e os segredos atuais; desligado, o agente fica parado até ser reiniciado ou até o controller reiniciar"
+                onChange={(restart) => set("restart", restart)}
               />
               {creating && (
                 <>
-                  <SelectField
-                    label="Prompt"
-                    value={values.promptID}
-                    options={promptOptions}
-                    hint="Dá para trocar depois, no card, sem reiniciar."
-                    onChange={(promptID) => set("promptID", promptID)}
+                  <Switch
+                    label="Painel de trading"
+                    checked={paper || values.tradePanel}
+                    disabled={paper}
+                    title={channelsTitle ?? tradePanelHint}
+                    onChange={(tradePanel) => set("tradePanel", tradePanel)}
                   />
-                  <TextField
-                    label="Chave da API do LLM"
-                    {...text("llmAPIKey")}
-                    type="password"
-                    placeholder="opcional"
-                    hint="Opcional: dá para definir depois, no card."
-                  />
-                  <TextField
-                    label="Token do calendário (MCP)"
-                    {...text("calendarToken")}
-                    type="password"
-                    placeholder="opcional"
-                    hint="Opcional: dá para definir depois, no card."
+                  <Switch
+                    label="Controle via Telegram"
+                    checked={paper || values.telegramControl}
+                    disabled={paper}
+                    title={channelsTitle}
+                    onChange={(telegramControl) => set("telegramControl", telegramControl)}
                   />
                 </>
               )}
             </div>
+            {creating &&
+              values.enabled &&
+              values.launched &&
+              (paper ? (
+                <p className="field-hint">Ativo, o agente é iniciado assim que for criado.</p>
+              ) : (
+                <Alert tone="warn">
+                  Ativo e em live, o agente é iniciado assim que for criado e já opera a conta MT5.
+                </Alert>
+              ))}
           </Section>
-        )}
 
-        <Section
-          title="Parâmetros"
-          disabled={busy}
-          hint={
-            <>
-              As flags do agente sem campo próprio, pelo nome sem o traço, ex.:{" "}
-              <code>pair = XAUUSDm</code>, <code>lot = 0.01</code>, <code>timeframe = 15m</code>.
-              Nas listas, separe os itens com <code>;</code>, ex.:{" "}
-              <code>pair = BTCUSDm;XAUUSDm</code> e o lote de cada par,{" "}
-              <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code>. Decimais com ponto:{" "}
-              <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado. No
-              agente LLM, o lote e os mercados correlacionados vão sempre por par:{" "}
-              <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code> e{" "}
-              <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>. O agente LLM
-              exige o intervalo entre as consultas ao modelo, <code>llm-consult-interval = 5m</code>{" "}
-              (pelo relógio, nunca no fechamento do candle), diferente do <code>llm-timeout</code>,
-              o tempo máximo de uma resposta.
-            </>
-          }
-        >
-          {values.params.length > 0 && (
-            <div className="agent-params">
-              {values.params.map((row, index) => {
-                const rowError =
-                  tried || touched.has(paramId(row)) ? errors.params?.[row.id] : undefined;
-                return (
-                  <div
-                    key={row.id}
-                    className="agent-param"
-                    data-invalid={rowError ? "" : undefined}
-                  >
-                    <input
-                      id={paramId(row)}
-                      className="settings-input mono"
-                      aria-label={`Nome do parâmetro ${index + 1}`}
-                      aria-invalid={rowError ? true : undefined}
-                      aria-describedby={rowError ? `${paramId(row)}-error` : undefined}
-                      placeholder="nome"
-                      value={row.key}
-                      autoCapitalize="none"
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(e) => setRow(row.id, { key: e.target.value })}
-                      onBlur={touch(paramId(row))}
-                    />
-                    <span className="agent-param-eq" aria-hidden="true">
-                      =
-                    </span>
-                    <input
-                      className="settings-input mono"
-                      aria-label={`Valor do parâmetro ${index + 1}`}
-                      aria-invalid={rowError ? true : undefined}
-                      aria-describedby={rowError ? `${paramId(row)}-error` : undefined}
-                      placeholder="valor"
-                      value={row.value}
-                      autoCapitalize="none"
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(e) => setRow(row.id, { value: e.target.value })}
-                      onBlur={touch(paramId(row))}
-                    />
-                    <button
-                      type="button"
-                      className="mini-btn"
-                      aria-label={`Remover o parâmetro ${row.key.trim() || index + 1}`}
-                      onClick={() => removeRow(row.id)}
-                    >
-                      Remover
-                    </button>
-                    {rowError && (
-                      <span id={`${paramId(row)}-error`} className="control-feedback error">
-                        {rowError}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+          <Section
+            title="Conta MT5"
+            disabled={busy}
+            hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ativos em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
+          >
+            <div className="form-grid">
+              <TextField
+                label="URL da bridge"
+                {...text("bridgeURL")}
+                mono
+                inputMode="url"
+                placeholder="http://mt5:18812"
+              />
+              {creating && (
+                <TextField
+                  label="Token da bridge"
+                  {...text("bridgeToken")}
+                  type="password"
+                  placeholder="opcional"
+                  hint="Opcional: dá para definir depois, no card."
+                />
+              )}
+              <TextField
+                label="Magic"
+                {...text("magic")}
+                mono
+                inputMode="numeric"
+                placeholder="opcional"
+                hint="Em branco, um hash do comentário."
+              />
+              <TextField
+                label="Comentário"
+                {...text("comment")}
+                mono
+                maxLength={maxComment}
+                placeholder="opcional"
+                hint={`Até ${maxComment} caracteres; em branco, nb: e a estratégia (ex.: nb:llm).`}
+              />
             </div>
-          )}
-          <div>
-            <button type="button" className="mini-btn" onClick={addRow}>
-              Adicionar parâmetro
-            </button>
-          </div>
-        </Section>
+            <div className={values.realAllowed ? "agent-real on" : "agent-real"}>
+              <Switch
+                label="Permitir conta real"
+                checked={values.realAllowed}
+                onChange={(realAllowed) => set("realAllowed", realAllowed)}
+              />
+              <p className="field-hint">
+                {values.realAllowed
+                  ? "Atenção: o agente poderá operar uma conta real, com dinheiro de verdade."
+                  : "Desligado, o agente só opera conta demo: numa conta real, ele se recusa a iniciar."}
+              </p>
+            </div>
+          </Section>
 
-        {tried && invalid && (
-          <p className="control-feedback error" role="alert">
-            Corrija os campos destacados.
-          </p>
-        )}
-        {error && (
-          <p className="control-feedback error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="reanalysis-actions">
-          <button type="button" className="button" onClick={close} disabled={busy}>
+          {llm && (
+            <Section title="Modelo" disabled={busy}>
+              <div className="form-grid">
+                <SelectField
+                  label="Provedor"
+                  value={values.provider}
+                  options={providerOptions}
+                  error={errorOf("provider")}
+                  onChange={(provider) => set("provider", provider)}
+                />
+                <TextField
+                  label="Modelo"
+                  {...text("model")}
+                  mono
+                  placeholder={`ex.: ${modelExamples[values.provider] ?? modelExamples.openai}`}
+                />
+                <TextField
+                  label="URL base"
+                  {...text("baseURL")}
+                  mono
+                  inputMode="url"
+                  placeholder="opcional"
+                  hint="Ex.: um proxy; em branco, a API do provedor."
+                />
+                <SelectField
+                  label="Esforço de raciocínio"
+                  value={values.reasoningEffort}
+                  options={effortOptions}
+                  hint={values.provider === "anthropic" ? "Ignorado pela Anthropic." : undefined}
+                  onChange={(effort) => set("reasoningEffort", effort)}
+                />
+                <TextField
+                  label="Máximo de tokens"
+                  {...text("maxTokens")}
+                  mono
+                  inputMode="numeric"
+                  placeholder="opcional"
+                  hint="Por resposta, o raciocínio incluído; em branco, 4096."
+                />
+                <TextField
+                  label="URL do calendário (MCP)"
+                  {...text("calendarURL")}
+                  mono
+                  inputMode="url"
+                  placeholder="opcional"
+                  hint="O servidor MCP do terminal MT5, com o calendário econômico; em branco, nenhum."
+                />
+                {creating && (
+                  <>
+                    <SelectField
+                      label="Prompt"
+                      value={values.promptID}
+                      options={promptOptions}
+                      hint="Dá para trocar depois, no card, sem reiniciar."
+                      onChange={(promptID) => set("promptID", promptID)}
+                    />
+                    <TextField
+                      label="Chave da API do LLM"
+                      {...text("llmAPIKey")}
+                      type="password"
+                      placeholder="opcional"
+                      hint="Opcional: dá para definir depois, no card."
+                    />
+                    <TextField
+                      label="Token do calendário (MCP)"
+                      {...text("calendarToken")}
+                      type="password"
+                      placeholder="opcional"
+                      hint="Opcional: dá para definir depois, no card."
+                    />
+                  </>
+                )}
+              </div>
+            </Section>
+          )}
+
+          <Section
+            title="Parâmetros"
+            disabled={busy}
+            hint={
+              <>
+                As flags do agente sem campo próprio, pelo nome sem o traço, ex.:{" "}
+                <code>pair = XAUUSDm</code>, <code>lot = 0.01</code>, <code>timeframe = 15m</code>.
+                Nas listas, separe os itens com <code>;</code>, ex.:{" "}
+                <code>pair = BTCUSDm;XAUUSDm</code> e o lote de cada par,{" "}
+                <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code>. Decimais com ponto:{" "}
+                <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado. No
+                agente LLM, o lote e os mercados correlacionados vão sempre por par:{" "}
+                <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code> e{" "}
+                <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>. O agente LLM
+                exige o intervalo entre as consultas ao modelo,{" "}
+                <code>llm-consult-interval = 5m</code> (pelo relógio, nunca no fechamento do
+                candle), diferente do <code>llm-timeout</code>, o tempo máximo de uma resposta.
+              </>
+            }
+          >
+            {values.params.length > 0 && (
+              <div className="agent-params">
+                {values.params.map((row, index) => {
+                  const rowError =
+                    tried || touched.has(paramId(row)) ? errors.params?.[row.id] : undefined;
+                  return (
+                    <div
+                      key={row.id}
+                      className="agent-param"
+                      data-invalid={rowError ? "" : undefined}
+                    >
+                      <input
+                        id={paramId(row)}
+                        className="input mono"
+                        aria-label={`Nome do parâmetro ${index + 1}`}
+                        aria-invalid={rowError ? true : undefined}
+                        aria-describedby={rowError ? `${paramId(row)}-error` : undefined}
+                        placeholder="nome"
+                        value={row.key}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(e) => setRow(row.id, { key: e.target.value })}
+                        onBlur={touch(paramId(row))}
+                      />
+                      <span className="agent-param-eq" aria-hidden="true">
+                        =
+                      </span>
+                      <input
+                        className="input mono"
+                        aria-label={`Valor do parâmetro ${index + 1}`}
+                        aria-invalid={rowError ? true : undefined}
+                        aria-describedby={rowError ? `${paramId(row)}-error` : undefined}
+                        placeholder="valor"
+                        value={row.value}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(e) => setRow(row.id, { value: e.target.value })}
+                        onBlur={touch(paramId(row))}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost btn-icon"
+                        aria-label={`Remover o parâmetro ${row.key.trim() || index + 1}`}
+                        title="Remover"
+                        onClick={() => removeRow(row.id)}
+                      >
+                        <Icon name="trash" size={15} />
+                      </button>
+                      {rowError && (
+                        <span id={`${paramId(row)}-error`} className="field-error">
+                          {rowError}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div>
+              <button type="button" className="btn btn-sm" onClick={addRow}>
+                <Icon name="plus" size={14} />
+                Adicionar parâmetro
+              </button>
+            </div>
+          </Section>
+
+          {error && (
+            <Alert tone="error" title="O agente não foi salvo">
+              {error}
+            </Alert>
+          )}
+        </div>
+        <div className="dialog-foot">
+          {tried && invalid && (
+            <p className="msg msg-error dialog-foot-hint" role="alert">
+              Corrija os campos destacados.
+            </p>
+          )}
+          <button type="button" className="btn" onClick={close} disabled={busy}>
             Cancelar
           </button>
-          <button type="submit" className="button primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? "Salvando…" : action}
           </button>
         </div>
@@ -583,9 +588,9 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <fieldset className="agent-form-section" disabled={disabled}>
+    <fieldset className="form-section" disabled={disabled}>
       <legend>{title}</legend>
-      {hint && <p className="settings-hint">{hint}</p>}
+      {hint && <p className="field-hint">{hint}</p>}
       {children}
     </fieldset>
   );
@@ -631,7 +636,7 @@ function TextField({
       <input
         id={id}
         type={type}
-        className={mono ? "settings-input mono" : "settings-input"}
+        className={mono ? "input mono" : "input"}
         value={value}
         placeholder={placeholder}
         inputMode={inputMode}
@@ -645,12 +650,12 @@ function TextField({
         onBlur={onBlur}
       />
       {hint && (
-        <span id={`${id}-hint`} className="settings-hint">
+        <span id={`${id}-hint`} className="field-hint">
           {hint}
         </span>
       )}
       {error && (
-        <span id={`${id}-error`} className="control-feedback error">
+        <span id={`${id}-error`} className="field-error">
           {error}
         </span>
       )}
@@ -684,8 +689,8 @@ function SelectField({
         placeholder="Escolha"
         onChange={onChange}
       />
-      {hint && <span className="settings-hint">{hint}</span>}
-      {error && <span className="control-feedback error">{error}</span>}
+      {hint && <span className="field-hint">{hint}</span>}
+      {error && <span className="field-error">{error}</span>}
     </div>
   );
 }

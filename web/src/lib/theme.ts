@@ -43,11 +43,11 @@ const fontFamily =
 
 export const palettes: Record<Theme, Palette> = {
   dark: {
-    background: "#0f131b",
+    background: "#10141c",
     text: "#aeb6c4",
-    muted: "#7c8596",
+    muted: "#9ba5b6",
     grid: "rgba(148, 163, 184, 0.06)",
-    border: "rgba(148, 163, 184, 0.14)",
+    border: "#212937",
     up: "#2dd4bf",
     down: "#fb7185",
     volumeUp: "rgba(45, 212, 191, 0.28)",
@@ -61,17 +61,17 @@ export const palettes: Record<Theme, Palette> = {
   light: {
     background: "#ffffff",
     text: "#3b4250",
-    muted: "#5b6473",
+    muted: "#4b5567",
     grid: "rgba(15, 23, 42, 0.05)",
-    border: "rgba(15, 23, 42, 0.12)",
+    border: "#e2e6ed",
     up: "#0d9488",
     down: "#e11d48",
     volumeUp: "rgba(13, 148, 136, 0.25)",
     volumeDown: "rgba(225, 29, 72, 0.25)",
-    accent: "#0891b2",
-    equity: "#0891b2",
+    accent: "#0e7490",
+    equity: "#0e7490",
     asset: "#7c3aed",
-    crosshair: "rgba(8, 145, 178, 0.55)",
+    crosshair: "rgba(14, 116, 144, 0.55)",
     fontFamily,
   },
 };

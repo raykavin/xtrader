@@ -1,5 +1,8 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { MaxReanalysisNote } from "../api/types";
+import { DialogHeader } from "./Dialog";
+import { Icon } from "./Icon";
+import { Alert } from "./States";
 
 interface Props {
   pair: string;
@@ -53,47 +56,62 @@ export function ReanalysisDialog({ pair, onConfirm, onClose }: Props) {
     // biome-ignore lint/a11y/useKeyWithClickEvents: Esc closes the dialog natively
     <dialog
       ref={dialog}
-      className="decision-dialog reanalysis-dialog"
+      className="dialog dialog-sm"
       aria-labelledby="reanalysis-title"
       onClose={onClose}
       onClick={(e) => {
         if (e.target === dialog.current && !busy) close(); // the backdrop
       }}
     >
-      <header className="decision-head">
-        <h2 id="reanalysis-title">Reanalisar {pair}</h2>
-        <button type="button" className="mini-btn" onClick={close} aria-label="Fechar">
-          ✕
-        </button>
-      </header>
-      <form className="decision-body" onSubmit={submit}>
-        <label className="reanalysis-label" htmlFor="reanalysis-note">
-          Mensagem para o agente (Opcional)
-        </label>
-        <textarea
-          id="reanalysis-note"
-          ref={field}
-          className="reanalysis-note"
-          rows={4}
-          value={note}
-          maxLength={MaxReanalysisNote}
-          placeholder="Ex.: encerre a posição ou proteja o lucro"
-          disabled={busy}
-          onChange={(e) => setNote(e.target.value)}
-          onKeyDown={onKey}
-        />
-        <p className="reanalysis-hint">
-          O modelo considera a mensagem, mas decide pela estratégia e pelas regras.{" "}
-          <span className="mono">
-            {note.length}/{MaxReanalysisNote}
-          </span>
-        </p>
-        {error && <div className="banner error">{error}</div>}
-        <div className="reanalysis-actions">
-          <button type="button" className="button" onClick={close} disabled={busy}>
+      <DialogHeader
+        id="reanalysis-title"
+        title={`Reanalisar ${pair}`}
+        onClose={close}
+        disabled={busy}
+      />
+      <form className="dialog-form" onSubmit={submit}>
+        <div className="dialog-body">
+          <p className="dialog-lead">
+            Pede ao modelo uma nova análise de <span className="mono">{pair}</span> agora, fora do
+            intervalo de consultas.
+          </p>
+          <div className="field">
+            <label className="field-label" htmlFor="reanalysis-note">
+              Mensagem para o agente <span className="optional">(opcional)</span>
+            </label>
+            <textarea
+              id="reanalysis-note"
+              ref={field}
+              className="textarea"
+              aria-describedby="reanalysis-hint"
+              rows={4}
+              value={note}
+              maxLength={MaxReanalysisNote}
+              placeholder="Ex.: encerre a posição ou proteja o lucro"
+              disabled={busy}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={onKey}
+            />
+            <p className="field-hint split" id="reanalysis-hint">
+              <span>O modelo considera a mensagem, mas decide pela estratégia e pelas regras.</span>
+              <span className="mono">
+                {note.length}/{MaxReanalysisNote}
+              </span>
+            </p>
+          </div>
+          {error && (
+            <Alert tone="error" title="A reanálise foi recusada">
+              {error}
+            </Alert>
+          )}
+        </div>
+        <div className="dialog-foot">
+          <span className="dialog-foot-hint kbd-hint">Ctrl+Enter envia</span>
+          <button type="button" className="btn" onClick={close} disabled={busy}>
             Cancelar
           </button>
-          <button type="submit" className="button primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            <Icon name="sparkles" size={14} />
             {busy ? "Solicitando…" : "Reanalisar"}
           </button>
         </div>

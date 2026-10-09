@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createOrder } from "../api/client";
 import type { ControlsResponse } from "../api/types";
 import { formatNumber, formatPercent, formatPrice, formatQuantity } from "../lib/format";
+import { settingsHref } from "../lib/nav";
 import {
   defaultProfit,
   defaultStop,
@@ -13,6 +14,7 @@ import {
   type Side,
   type TicketLevels,
 } from "../lib/ticket";
+import { Icon } from "./Icon";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -23,7 +25,8 @@ interface Props {
   quote: string;
   /** The last close, where a market order enters. */
   lastPrice: number;
-  controls: ControlsResponse;
+  /** Null while unknown: the ticket shows, locked. */
+  controls: ControlsResponse | null;
   /** The levels of the order ticket, shared with the chart that draws them. */
   levels: TicketLevels;
   onLevelsChange: (levels: TicketLevels) => void;
@@ -135,7 +138,7 @@ function Field({
   return (
     <div className="ticket-field">
       <div className="ticket-field-head">
-        {typeof label === "string" ? <span className="ticket-field-label">{label}</span> : label}
+        {typeof label === "string" ? <span className="field-label">{label}</span> : label}
         {aside}
       </div>
       {children}
@@ -172,7 +175,7 @@ export function ControlPanel({
   const feedbackTimer = useRef<number | undefined>(undefined);
 
   // without the controls of the bot, the ticket shows, locked
-  const enabled = controls.enabled;
+  const enabled = controls?.enabled === true;
   const locked = busy || !enabled;
   const parsedAmount = Number(amount);
   const validAmount =
@@ -303,17 +306,27 @@ export function ControlPanel({
   return (
     <section className={`card ticket ${side} ${enabled ? "" : "locked"}`} aria-label="Boleta">
       <header className="ticket-head">
-        <div className="ticket-title">
-          <span>Boleta</span>
-          <strong>{pair}</strong>
-        </div>
+        <h2 className="ticket-title">Boleta</h2>
+        <span className="ticket-pair">{pair}</span>
       </header>
 
       <div className="ticket-quote">
-        <span className="ticket-quote-label">Último</span>
-        <span className="ticket-quote-price">{lastPrice > 0 ? formatPrice(lastPrice) : "—"}</span>
-        <span className="ticket-quote-unit">{quote}</span>
+        <span className="field-label">Último preço</span>
+        <span className="ticket-quote-price">
+          {lastPrice > 0 ? formatPrice(lastPrice) : "—"}
+          <small>{quote}</small>
+        </span>
       </div>
+
+      {controls !== null && !enabled && (
+        <p className="ticket-locked">
+          <Icon name="info" size={14} />
+          <span>
+            Boleta bloqueada: o painel de trading está desligado neste agente. Ligue-o em{" "}
+            <a href={settingsHref("agentes")}>Configurações › Agentes</a> para enviar ordens.
+          </span>
+        </p>
+      )}
 
       <fieldset className="ticket-sides" aria-label="Lado da ordem">
         <button
@@ -498,13 +511,17 @@ export function ControlPanel({
           <dd>{risk && reward ? `1 : ${formatNumber(reward / risk)}` : "—"}</dd>
         </dl>
 
-        {levelError && <p className="ticket-error">{levelError}</p>}
+        {levelError && (
+          <p className="msg msg-error" role="alert">
+            {levelError}
+          </p>
+        )}
 
         {confirm?.kind === "order" ? (
           <div className="ticket-actions">
             <button
               type="button"
-              className="ticket-back"
+              className="btn btn-lg"
               disabled={locked}
               onClick={() => setConfirm(null)}
             >
@@ -538,7 +555,14 @@ export function ControlPanel({
               : "Arraste as ordens no gráfico para movê-las."}
           </p>
         )}
-        {feedback && <p className={`control-feedback ${feedback.tone}`}>{feedback.text}</p>}
+        {feedback && (
+          <p
+            className={`msg msg-${feedback.tone}`}
+            role={feedback.tone === "error" ? "alert" : "status"}
+          >
+            {feedback.text}
+          </p>
+        )}
       </div>
     </section>
   );

@@ -4,6 +4,7 @@ import { LOGIN_CLOSED, loginError, nextPage } from "../lib/auth";
 import { loadTheme } from "../lib/theme";
 import { Footer } from "./Footer";
 import { LogoMark } from "./Logo";
+import { Alert } from "./States";
 
 /** Checking the session, the form ready, or the dashboard without credentials. */
 type State = "checking" | "ready" | "closed";
@@ -213,7 +214,7 @@ export function Login() {
           </label>
           <input
             id="login-username"
-            className="login-input"
+            className="input input-lg"
             name="username"
             autoComplete="username"
             autoCapitalize="none"
@@ -228,7 +229,7 @@ export function Login() {
           </label>
           <input
             id="login-password"
-            className="login-input"
+            className="input input-lg"
             type="password"
             name="password"
             autoComplete="current-password"
@@ -237,18 +238,18 @@ export function Login() {
             onChange={(e) => setPassword(e.target.value)}
           />
           {error && (
-            <div className="banner error login-error" role="alert">
+            <Alert tone="error" className="login-error">
               {error}
-            </div>
+            </Alert>
           )}
           {state === "closed" && !error && (
-            <div className="banner login-error" role="status">
+            <Alert tone="warn" className="login-error">
               {LOGIN_CLOSED}
-            </div>
+            </Alert>
           )}
           <button
             type="submit"
-            className="button primary login-submit"
+            className="btn btn-primary btn-lg login-submit"
             disabled={disabled || username === "" || password === ""}
           >
             {busy ? "Entrando…" : state === "checking" ? "Verificando sessão…" : "Entrar"}

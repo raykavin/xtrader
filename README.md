@@ -208,10 +208,9 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 - **Painel:**
   - gráfico de preço com as ordens e as linhas de stop e take profit, e um botão (ícone de mira, no topo) que volta ao candle e ao preço atuais;
   - a análise do LLM, quando o prompt desenha: zonas (caixas translúcidas), níveis e marcadores, coloridos pelo viés (alta, baixa, neutro), atrás dos candles e com os rótulos por cima; a legenda do gráfico diz de que análise são (timeframe, horário e quantas zonas de oferta e demanda). As zonas de oferta (vermelhas, hachura descendente) e de demanda (verdes, hachura ascendente) se distinguem das outras zonas pela hachura e pela borda reforçada do lado em que o preço chega (a base da oferta, o topo da demanda), com o rótulo `Oferta` ou `Demanda` seguido do rótulo do modelo; o estado aparece no preenchimento (uma zona testada fica mais clara) e na decisão, e uma rompida leva `rompida` no rótulo, esmaecida e tracejada até o candle que a rompeu. A intenção de entrada que não virou ordem (ignorada, recusada ou não executada) aparece tracejada, com o resultado no rótulo. As ordens pendentes aparecem pelo tipo (`C LIMIT`, `V STOP`), com as pernas que esperam a execução como `SL pend.` e `TP pend.` (traço longo); uma pendente encerrada fica como um segmento no preço dela durante a espera, contínuo se executada e tracejado se cancelada, expirada ou rejeitada. Tudo segue os eventos de ordens da corretora e as decisões em tempo real. No diálogo de uma decisão, **Mostrar no gráfico** desenha a análise daquela decisão, com os níveis que ela propôs, até **Voltar à análise atual**;
-  - estatísticas e curva de patrimônio;
-  - boleta de ordens;
-  - decisões do modelo, com o contexto de cada uma, e as análises em que o modelo não foi consultado ("Não consultado"), com o motivo;
-  - histórico de ordens.
+  - cards de resultados (retorno, P&L da posição aberta, operações, taxa de acerto, lucro líquido, fator de lucro);
+  - boleta de ordens, ao lado do gráfico (abaixo dele numa tela estreita);
+  - abaixo do gráfico, em abas: o histórico de ordens; as decisões do modelo, com o contexto de cada uma, e as análises em que o modelo não foi consultado ("Não consultado"), com o motivo; e a curva de patrimônio (com carteira paper). A aba escolhida fica guardada no navegador.
 - **Timeframe do gráfico:** um seletor acima do gráfico mostra o ativo em **1m, 5m, 15m, 30m, 4h ou D** (diário), e no timeframe de execução da estratégia quando ele não está entre esses. A seleção muda só a visualização: o timeframe de execução (o parâmetro `timeframe` do agente, marcado com um ponto no seletor) continua sendo o dos candles que a estratégia recebe, o das análises do LLM e o das decisões; ele só muda nas configurações do agente, com reinício.
   - No timeframe de execução, o gráfico é o de sempre (candles, indicadores, ordens e análise). Nos outros, os candles vêm do agente (`GET …/{par}/candles`), as ordens e a análise do LLM são alinhadas ao candle que contém cada horário, os indicadores da estratégia (calculados no timeframe de execução) não são desenhados, e a posição, as ordens pendentes, a boleta e a reanálise seguem as mesmas, em tempo real.
   - De onde vêm os candles: num agente ligado à corretora (MT5) ou em papel, os fechados são lidos da corretora (guardados por 2 s, uma leitura servindo a todos os painéis) e o candle em formação é montado pelo agente: acima do timeframe de execução, com os candles dele (exato); abaixo, com os preços que o gráfico recebeu (aproximado: abertura no fechamento anterior, máxima e mínima dos preços recebidos, sem volume), corrigido pela corretora quando fecha. No backtest, só os timeframes acima do de execução, múltiplos dele, montados com os candles da estratégia; os outros aparecem desativados.
@@ -219,14 +218,14 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 - **Cliente lento:** o snapshot de um ativo é montado de uma vez e só depois enviado, sem segurar o agente: um celular baixando devagar (pelo ngrok, por exemplo) não atrasa as ordens, os candles nem as outras requisições. A moeda da conta vem da conexão com o MT5, sem consulta à corretora a cada snapshot. Os candles chegam à estratégia e ao gráfico por filas separadas, na ordem, e um gráfico ocupado não atrasa a estratégia. As filas não têm limite, porque descartar ou juntar candles mudaria o que a estratégia vê: uma fila com 1000 candles ou mais (um consumidor travado) gera um aviso no log, no máximo um por minuto. Números não finitos (NaN, infinito) de uma ordem ou da posição vão como 0, e uma linha do gráfico com eles fica de fora: o snapshot e os eventos do ativo não falham por causa deles.
 - **Janela do gráfico:** o gráfico de cada ativo guarda os últimos 5000 candles fechados (cerca de 3 dias em M1, 17 em M5 e 7 meses em H1), mais o aquecimento dos indicadores antes deles. Assim, o snapshot e os indicadores, recalculados a cada fechamento e a cada snapshot, não crescem com o tempo do agente rodando. As ordens continuam todas no painel, para as estatísticas. Uma ordem anterior ao primeiro candle guardado aparece no primeiro candle, como já acontecia com as ordens de execuções anteriores. O "Buy & hold" conta só os candles do gráfico. O gráfico de um backtest guarda todos os candles.
 - **Reconexão:** quando os eventos em tempo real caem (rede, agente reiniciando) e voltam, o painel recarrega o snapshot do ativo, as decisões e o estado do bot, porque o que aconteceu durante a queda (ordens, posição, candles) não chega pelos eventos. Um navegador que não acompanha os eventos (256 na fila dele, por exemplo numa rede lenta) perde os seguintes: o agente encerra os eventos dele, e o painel reconecta e recarrega da mesma forma, em vez de ficar desatualizado. Se a conexão é recusada, o painel confere a sessão: sem sessão (expirada ou encerrada), vai ao login; com ela, ou sem resposta do painel, tenta de novo a cada 5 s.
-- **Bot:** iniciar e parar o bot de cada agente no card do topo.
-- **Configurações, em abas:**
+- **Bot:** iniciar e parar o bot de cada agente na barra do topo do painel, ao lado do agente, do par, do timeframe de execução e do modelo.
+- **Configurações, por seção (no menu lateral):**
   - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, excluir, ligar e desligar, reiniciar e definir os segredos.
   - **Resultados** (botão no card do agente): os resultados por período e a redefinição deles. Veja [Redefinir os resultados](#redefinir-os-resultados).
   - **Prompts:** editor com histórico de versões.
   - **Telegram:** liga e desliga o bot, token e IDs autorizados.
   - **Usuários.**
-- Tema claro e escuro, e layout responsivo.
+- **Navegação e layout:** um menu lateral leva ao Painel e às seções das Configurações (completo no desktop, só com ícones no tablet, gaveta pelo botão ☰ no celular); o link do Painel volta ao agente, ao par e ao timeframe deixados. Tema claro e escuro. No celular, as tabelas viram cartões e os diálogos abrem como painéis vindos de baixo; numa tabela larga demais para a tela, a coluna de ações fica fixa à direita.
 
 ### Persistência
 
@@ -393,11 +392,11 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
 
 ### Painel web
 
-- **Painel (`/`):** escolha o agente e o par no card do topo, onde também se inicia e para o bot.
+- **Painel (`/`):** escolha o agente e o par na barra do topo, onde também se inicia e para o bot.
   - A **boleta** envia ordens a mercado ou limitadas, com stop loss e take profit. As ordens pendentes podem ser arrastadas no gráfico.
   - A boleta, a movimentação das ordens e a reanálise dependem do switch **Painel de trading** do agente. Iniciar e parar o bot, não.
   - O seletor de timeframe acima do gráfico troca só a visualização (veja [Timeframe do gráfico](#painel-web)); a estratégia e o LLM seguem no timeframe de execução do agente.
-- **Configurações (`/settings`):** abas Agentes, Prompts, Telegram e Usuários, que também abrem por link (`/settings#prompts`).
+- **Configurações (`/settings`):** seções Agentes, Prompts, Telegram e Usuários, no menu lateral, que também abrem por link (`/settings#prompts`).
 
 ### Agentes e parâmetros
 

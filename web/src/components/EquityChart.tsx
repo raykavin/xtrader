@@ -109,25 +109,23 @@ export function EquityChart({ snapshot, theme }: Props) {
   }, [snapshot.equity_values, snapshot.asset_values]);
 
   return (
-    <section className="card chart-card">
-      <div className="card-title">
-        <span>
-          Patrimônio <small>{snapshot.quote}</small>
-        </span>
-        <span className="legend">
-          <span className="legend-item">
-            <span>
-              <i style={{ background: palettes[theme].equity }} />
-              Patrimônio ({snapshot.quote})
-            </span>
-            <span>
-              <i style={{ background: palettes[theme].asset }} />
-              Posição em {snapshot.asset}
-            </span>
-          </span>
-        </span>
+    <div className="panel-body">
+      <div className="panel-toolbar">
+        <p className="panel-summary">
+          Patrimônio da carteira em {snapshot.quote} e a posição em {snapshot.asset}
+        </p>
+        <ul className="legend" aria-label="Séries">
+          <li className="legend-chip">
+            <i style={{ background: palettes[theme].equity }} aria-hidden="true" />
+            Patrimônio ({snapshot.quote}) · escala à direita
+          </li>
+          <li className="legend-chip">
+            <i style={{ background: palettes[theme].asset }} aria-hidden="true" />
+            Posição em {snapshot.asset} · escala à esquerda
+          </li>
+        </ul>
       </div>
       <div ref={containerRef} className="chart equity-chart" />
-    </section>
+    </div>
   );
 }
