@@ -138,7 +138,8 @@ func (a *Anthropic) AnalyzeWith(ctx context.Context, system string, input Input)
 
 	headers := http.Header{"X-Api-Key": {a.apiKey}, "Anthropic-Version": {anthropicVersion}}
 	forced, retried := a.forced()
-	request := a.request(system, message, forced)
+	schema := schemaOf(shapeOf(input))
+	request := a.request(system, message, schema, forced)
 	data, err := a.post(ctx, "/messages", headers, request)
 	switch {
 	case forced && refusesForcedTool(err):
@@ -148,7 +149,7 @@ func (a *Anthropic) AnalyzeWith(ctx context.Context, system string, input Input)
 		} else {
 			log.Debugf("[LLM] anthropic: %s still refuses the forced call of the %s tool", a.model, decisionName)
 		}
-		request = a.request(system, message, false)
+		request = a.request(system, message, schema, false)
 		data, err = a.post(ctx, "/messages", headers, request)
 	case retried && err == nil:
 		a.autoSince.Store(0)
@@ -313,9 +314,9 @@ func withoutBlock(text string, start, end int) string {
 const answerWithTheTool = "\n\nAnswer only with a call of the " + decisionName + " tool."
 
 // request is the request of the decision of message, with the instructions
-// system: the tool of the decision forced, or left to the model, asked to
-// answer with it.
-func (a *Anthropic) request(system, message string, forced bool) anthropicRequest {
+// system and the schema of the decision: the tool of the decision forced, or
+// left to the model, asked to answer with it.
+func (a *Anthropic) request(system, message string, schema json.RawMessage, forced bool) anthropicRequest {
 	choice := anthropicToolChoice{Type: "tool", Name: decisionName}
 	maxTokens := a.maxTokens
 	if !forced {
@@ -331,7 +332,7 @@ func (a *Anthropic) request(system, message string, forced bool) anthropicReques
 		System:    system,
 		Messages:  []anthropicMessage{{Role: "user", Content: message}},
 		Tools: []anthropicTool{{Name: decisionName, Description: decisionDescription,
-			InputSchema: decisionSchema}},
+			InputSchema: schema}},
 		ToolChoice: choice,
 	}
 }

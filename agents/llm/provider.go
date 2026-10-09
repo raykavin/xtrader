@@ -395,7 +395,7 @@ func retryAfter(header http.Header) time.Duration {
 // against its context.
 func (c client) decide(raw []byte, in Input) (Decision, error) {
 	log.Debugf("[LLM] %s %s | %s | answer: %s", in.Symbol, in.Timeframe, c, raw)
-	decision, err := ParseDecision(raw)
+	decision, err := parseDecision(raw, shapeOf(in))
 	if err != nil {
 		return Decision{}, fmt.Errorf("%s: %w", c.name, err)
 	}

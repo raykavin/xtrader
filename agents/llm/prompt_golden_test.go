@@ -26,6 +26,12 @@ type promptReading struct {
 	Refused       string   `json:"refused"`      // why the prompt is refused, empty when taken
 	HeaderLines   int      `json:"header_lines"` // the lines not sent to the model
 	TextSHA256    string   `json:"text_sha256"`  // of the strategy sent to the model
+
+	// the pending orders, the drawings and the parts of the context the
+	// header asks for, absent without them
+	PendingOrders []string `json:"pending_orders,omitempty"`
+	Drawings      bool     `json:"drawings,omitempty"`
+	Context       []string `json:"context,omitempty"`
 }
 
 // readPrompt returns how the agent reads strategy.
@@ -43,6 +49,12 @@ func readPrompt(strategy string) promptReading {
 	if err == nil {
 		err = CheckPrompt(strategy)
 	}
+	if err == nil {
+		err = checkHeader(strategy)
+	}
+	reading.PendingOrders, _ = StrategyPendingOrders(strategy)
+	reading.Drawings, _ = StrategyDrawings(strategy)
+	reading.Context, _ = StrategyContext(strategy)
 	if err != nil {
 		reading.Refused = err.Error()
 	}
@@ -79,5 +91,5 @@ func TestPrompts_Interpretation(t *testing.T) {
 	want, err := os.ReadFile(path)
 	require.NoError(t, err, "go test -run TestPrompts_Interpretation -update writes it")
 	require.JSONEq(t, string(want), string(data))
-	require.Len(t, got, 44, "the 43 prompts seeded and the default one")
+	require.Len(t, got, 45, "the 44 prompts seeded and the default one")
 }

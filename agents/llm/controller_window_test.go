@@ -189,7 +189,9 @@ func TestTrader_ControllerAsksAsOnTheWholeHistory(t *testing.T) {
 	}
 
 	require.Len(t, provider.inputs, len(refProvider.inputs))
-	require.GreaterOrEqual(t, len(provider.inputs), 3*(candles-warmup), "the closes and the slots asked")
+	// the 3 slots of each candle, the one of its open on its first tick, but
+	// for the one the decision of the start is applied in, taken by it
+	require.GreaterOrEqual(t, len(provider.inputs), 3*(candles-warmup)-1, "the slots asked")
 	identical := 0
 	for i := range provider.inputs {
 		if provider.inputs[i] == refProvider.inputs[i] {

@@ -122,27 +122,38 @@ func TestTrader_StartWithoutAnyEntry(t *testing.T) {
 		r.trader.OnPartialCandle(tc.df, r.broker) // the start handled: not tried again
 	}
 	r.trader.now = func() time.Time { return closeAt.Add(15*time.Minute + time.Second) }
-	r.trader.OnCandle(r.df, r.broker) // the candle in progress closed
+	r.trader.OnCandle(r.df, r.broker) // the candle in progress closed: never asked at a close
+	r.slotTick()                      // the slot of its close
 	require.Empty(t, r.provider.inputs, "never asked without an entry")
-	require.Equal(t, TriggerCandle, r.lastDecision().Trigger)
+	require.Equal(t, TriggerInterval, r.lastDecision().Trigger)
 	require.Equal(t, OutcomeSkipped, r.lastDecision().Outcome)
 }
 
 // The candle in progress closing before the decision of the start is applied:
-// the decision awaited and applied first, then the close asked.
-func TestTrader_StartAppliedBeforeTheClose(t *testing.T) {
-	r := startRunner(t, nil)
+// the decision awaited and applied at the close, the model not asked at it;
+// the slot it is applied in taken, the next one asked.
+func TestTrader_StartAppliedAtTheClose(t *testing.T) {
+	r := startRunner(t, func(c *Config) { c.ConsultInterval = 5 * time.Minute })
 	opened := r.df.Time[len(r.df.Time)-1]
 	r.provider.answers = []answer{decide(ActionWait, 0.4, nil, nil, nil), decide(ActionWait, 0.45, nil, nil, nil)}
 	r.trader.OnPartialCandle(r.df, r.broker)
 
 	r.trader.now = func() time.Time { return opened.Add(15*time.Minute + time.Second) }
 	r.trader.OnCandle(r.df, r.broker)
-	require.Empty(t, r.provider.answers, "the start and the close asked")
+	require.Len(t, r.provider.answers, 1, "the start asked, not the close")
 	require.Empty(t, r.trader.starting)
+	require.Equal(t, TriggerStart, r.lastDecision().Trigger, "applied")
+	r.slotTick()
+	require.Len(t, r.provider.answers, 1, "the slot of the close taken by the start applied in it")
+
+	r.add(r.df.Close.Last(0)) // the candle in progress, the next slot
+	r.trader.now = func() time.Time { return r.df.Time[len(r.df.Time)-1].Add(5*time.Minute + time.Second) }
+	r.trader.Indicators(r.df)
+	r.trader.OnPartialCandle(r.df, r.broker)
+	require.Empty(t, r.provider.answers, "the next slot asked")
 	decisions, err := r.trader.Decisions(testPair, 2)
 	require.NoError(t, err)
 	require.Len(t, decisions, 2)
-	require.Equal(t, TriggerCandle, decisions[0].Trigger, "the last one")
+	require.Equal(t, TriggerInterval, decisions[0].Trigger, "the last one")
 	require.Equal(t, TriggerStart, decisions[1].Trigger)
 }

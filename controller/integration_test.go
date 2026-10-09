@@ -824,7 +824,7 @@ func TestSettingsAPI_ThePrompts(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var prompts ui.PromptsResponse
 	require.NoError(t, json.Unmarshal([]byte(body), &prompts))
-	assert.Len(t, prompts.Prompts, 43)
+	assert.Len(t, prompts.Prompts, 44)
 
 	resp, body = call(http.MethodPost, "/api/prompts", ui.PromptRequest{Name: "breakout_v2",
 		Description: secret("the breakouts"), Content: secret("# Indicators: atr\n\nSetup: v1")})

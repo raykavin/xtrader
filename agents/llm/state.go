@@ -24,11 +24,15 @@ type promptState struct {
 	takeProfitOptional bool              // see Config.TakeProfitOptional
 	noTakeProfit       bool              // see Config.NoTakeProfit
 	daily              dailyLimits       // see Config.DailyGain
+	pendingOrders      []string          // see Config.PendingOrders
+	drawings           bool              // see Config.Drawings
+	smc                bool              // see Config.SMC
 }
 
 // newPromptState returns the state of the prompt ref, with the instructions
-// system, empty for the ones of the provider, and the indicators and the take
-// profit of cfg, which it validates.
+// system, empty for the ones of the provider, and the indicators, the take
+// profit, the pending orders, the drawings and the context of cfg, which it
+// validates.
 func newPromptState(cfg Config, ref ui.DecisionPrompt, system string) (*promptState, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -37,8 +41,15 @@ func newPromptState(cfg Config, ref ui.DecisionPrompt, system string) (*promptSt
 	lookback, need := sizing(cfg, extras)
 	return &promptState{ref: ref, system: system, indicators: slices.Clone(cfg.Indicators), extras: extras,
 		lookback: lookback, need: need, takeProfitOptional: cfg.TakeProfitOptional,
-		noTakeProfit: cfg.NoTakeProfit,
-		daily:        dailyLimits{gain: cfg.DailyGain, loss: cfg.DailyLoss, currency: cfg.DailyCurrency}}, nil
+		noTakeProfit:  cfg.NoTakeProfit,
+		daily:         dailyLimits{gain: cfg.DailyGain, loss: cfg.DailyLoss, currency: cfg.DailyCurrency},
+		pendingOrders: slices.Clone(cfg.PendingOrders), drawings: cfg.Drawings, smc: cfg.SMC}, nil
+}
+
+// pends reports whether the prompt lets the model place the pending orders of
+// kind, see Config.PendingOrders.
+func (s *promptState) pends(kind string) bool {
+	return slices.Contains(s.pendingOrders, kind)
 }
 
 // sizing returns the candles the indicators of cfg need, the groups and the
@@ -85,6 +96,9 @@ func (t *Trader) promptState(p Prompt) (*promptState, error) {
 		return nil, err
 	}
 	if _, _, _, err := StrategyDailyLimits(content); err != nil {
+		return nil, err
+	}
+	if err := checkHeader(content); err != nil {
 		return nil, err
 	}
 	for _, line := range textDailyLines(content) {

@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { decisionAttachmentUrl, fetchDecision } from "../api/client";
-import type { Decision } from "../api/types";
+import type { Analysis, Decision } from "../api/types";
+import { decisionAnalysis } from "../lib/analysis";
 import {
+  biasLabel,
   decisionActionLabel,
   decisionOutcomeLabel,
   decisionReason,
   decisionTone,
   decisionTriggerLabel,
+  drawingKindLabel,
+  drawingPlace,
   formatConfidence,
   isImage,
   isSkipped,
@@ -22,13 +26,15 @@ interface Props {
   decisionId: string;
   quote: string;
   onClose: () => void;
+  /** Draws the analysis of the decision on the chart, in place of the last one. */
+  onShowOnChart?: (analysis: Analysis) => void;
 }
 
 /**
  * The justification of a decision of the language model of the strategy, its
  * annotations and the images it returned, in a modal dialog.
  */
-export function DecisionDialog({ agent, decisionId, quote, onClose }: Props) {
+export function DecisionDialog({ agent, decisionId, quote, onClose, onShowOnChart }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +77,21 @@ export function DecisionDialog({ agent, decisionId, quote, onClose }: Props) {
       </header>
       {error && <div className="banner error">{error}</div>}
       {!decision && !error && <p className="empty">Carregando…</p>}
-      {decision && <DecisionDetails agent={agent} decision={decision} quote={quote} />}
+      {decision && (
+        <DecisionDetails
+          agent={agent}
+          decision={decision}
+          quote={quote}
+          onShowOnChart={
+            onShowOnChart
+              ? (analysis) => {
+                  onShowOnChart(analysis);
+                  close();
+                }
+              : undefined
+          }
+        />
+      )}
     </dialog>
   );
 }
@@ -80,11 +100,15 @@ function DecisionDetails({
   agent,
   decision,
   quote,
+  onShowOnChart,
 }: {
   agent: string;
   decision: Decision;
   quote: string;
+  onShowOnChart?: (analysis: Analysis) => void;
 }) {
+  const drawings = decision.drawings ?? [];
+  const drawable = drawings.length > 0 || (decision.entry != null && decision.action !== undefined);
   const tone = decisionTone(decision.action);
   const levels = [
     { name: "Entrada", value: decision.entry },
@@ -104,11 +128,25 @@ function DecisionDetails({
         <span className={`badge outcome ${decision.outcome}`}>
           {decisionOutcomeLabel(decision.outcome)}
         </span>
+        {onShowOnChart && drawable && (
+          <button
+            type="button"
+            className="mini-btn"
+            title="Desenhar as marcações e os níveis desta análise no gráfico"
+            onClick={() => onShowOnChart(decisionAnalysis(decision))}
+          >
+            Mostrar no gráfico
+          </button>
+        )}
       </div>
 
       <dl className="decision-meta">
         <dt>{isSkipped(decision) ? "Analisada em" : "Decidida em"}</dt>
         <dd className="mono">{formatTime(decision.decided_at)} UTC</dd>
+        <dt>Ativo</dt>
+        <dd className="mono">
+          {decision.pair} · timeframe {decision.timeframe}
+        </dd>
         <dt>Candle</dt>
         <dd className="mono">
           {formatTime(decision.candle)} · {decision.timeframe}
@@ -178,6 +216,25 @@ function DecisionDetails({
               <li key={level.name}>
                 <span>{level.name}</span>
                 <span className="mono">{formatPrice(level.value ?? 0)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {drawings.length > 0 && (
+        <section className="decision-section">
+          <h3>Marcações no gráfico</h3>
+          <ul className="decision-list">
+            {drawings.map((drawing) => (
+              <li key={drawing.id}>
+                <span>
+                  {drawingKindLabel(drawing.kind)} · {drawing.label}{" "}
+                  <small>
+                    {drawing.timeframe} · {biasLabel(drawing.bias)}
+                  </small>
+                </span>
+                <span className="mono">{drawingPlace(drawing)}</span>
               </li>
             ))}
           </ul>

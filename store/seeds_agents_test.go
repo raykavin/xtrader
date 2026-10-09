@@ -11,9 +11,9 @@ import (
 	"github.com/raykavin/xtrader/internal/pgtest"
 )
 
-// The agents of a new database come from sql/seeds/0003_agents.sql, both off
-// and without secrets: inserted once, never overwriting an edit nor bringing
-// back an agent deleted.
+// The agents of a new database come from sql/seeds/0003_agents.sql, all of
+// them off and without secrets: inserted once, never overwriting an edit nor
+// bringing back an agent deleted.
 func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	dsn := testDatabase(t)
 	pgtest.MigrateSeeded(t, dsn, "..")
@@ -25,7 +25,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 2)
+	require.Len(t, agents, 3)
 
 	llm, err := s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
@@ -76,6 +76,27 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Nil(t, matrend.LLM)
 	require.Less(t, llm.Position, matrend.Position, "in the order of the file")
 
+	// the agent of the prompt smc_ict, a magic number of its own on the account
+	// of llm, its risk left to the operator
+	smc, err := s.AgentByName(ctx, "llm-smc")
+	require.NoError(t, err)
+	require.Equal(t, "llm", smc.Kind)
+	require.False(t, smc.Enabled, "off until its secrets and its risk are set")
+	require.Equal(t, "localhost:5581", smc.APIAddress)
+	require.True(t, smc.TradePanel)
+	require.Equal(t, llm.Params, smc.Params, "the pairs, the lots and the timeframe of llm")
+	require.Equal(t, "http://mt5:18812", smc.Account.BridgeURL)
+	require.Equal(t, "nb:llm-smc", *smc.Account.Comment)
+	require.Empty(t, smc.Account.BridgeToken)
+	require.Empty(t, smc.LLM.APIKey)
+	smcPrompt, err := s.PromptByName(ctx, "smc_ict")
+	require.NoError(t, err)
+	require.Equal(t, smcPrompt.ID, *smc.LLM.PromptID)
+	require.Equal(t, Params{"llm-setup": "free", "llm-candles": "60", "llm-higher-timeframes": "4h",
+		"llm-correlated": "BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm", "calendar-importance": "high"},
+		smc.LLM.Params)
+	require.Less(t, matrend.Position, smc.Position)
+
 	// run again on every migration: nothing doubled, an edit kept
 	params := llm.AllParams()
 	params["lot"] = "BTCUSDm=0.05;XAUUSDm=0.05"
@@ -84,7 +105,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 2)
+	require.Len(t, agents, 3)
 	llm, err = s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
 	require.Equal(t, "BTCUSDm=0.05;XAUUSDm=0.05", llm.Params["lot"], "the edit kept")
@@ -96,5 +117,5 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 1)
+	require.Len(t, agents, 2)
 }

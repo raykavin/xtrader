@@ -117,7 +117,7 @@ func (o *OpenAI) AnalyzeWith(ctx context.Context, system string, input Input) (D
 			{Role: "user", Content: message},
 		},
 		ResponseFormat: openAIFormat{Type: "json_schema", JSONSchema: openAIJSONSchema{Name: decisionName,
-			Description: decisionDescription, Strict: true, Schema: decisionSchema}},
+			Description: decisionDescription, Strict: true, Schema: schemaOf(shapeOf(input))}},
 		MaxCompletionTokens: o.maxTokens,
 		ReasoningEffort:     o.reasoning,
 	}

@@ -963,6 +963,33 @@ tbody tr:last-child td {
   color: var(--accent);
 }
 
+/* the chart alone on the screen: its card over the whole of it, in the
+   fullscreen of the browser or over the page, the chart filling it */
+.chart-card.chart-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100%;
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  backdrop-filter: none;
+}
+
+.chart-card.chart-fullscreen .price-chart,
+.trade-area .chart-card.chart-fullscreen .price-chart {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  contain: size;
+}
+
+.chart-fullscreen-open,
+.chart-fullscreen-open body {
+  overflow: hidden;
+}
+
 /* the chart fills its card; contain keeps its canvas, sized in pixels, from
    holding the card at a former height */
 .trade-area .price-chart {
@@ -1559,6 +1586,98 @@ tbody tr:last-child td {
   margin-left: var(--space-3);
   font-family: var(--font-mono);
   font-size: 11.5px;
+  color: var(--neg);
+}
+
+/* the analysis of the language model drawn on the chart: which one, and the
+   way back to the last one when one of the list is shown */
+.chart-analysis {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.chart-analysis .mini-btn {
+  font-size: 11px;
+  padding: 1px 7px;
+}
+
+/* the timeframe the chart is shown on, apart from the one of the strategy:
+   a pill per timeframe, the one of execution marked with a dot */
+.chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timeframes {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.timeframes legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.timeframes .timeframe {
+  position: relative;
+  min-width: 34px;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timeframes .timeframe:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.timeframes .timeframe[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.timeframes .timeframe.execution::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.timeframes .timeframe:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.timeframe-note.error {
   color: var(--neg);
 }
 
@@ -2216,6 +2335,12 @@ tbody tr:last-child td {
 
   .legend {
     display: none;
+  }
+
+  /* the analysis drawn on a line of its own under the pair */
+  .chart-analysis {
+    display: flex;
+    margin: var(--space-1) 0 0;
   }
 
   .price-chart,

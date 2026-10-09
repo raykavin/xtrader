@@ -55,6 +55,8 @@ const (
 	SkipHigherTrend  = "higher_trend"  // no trend of the higher timeframes, one required
 	SkipAgainstTrend = "against_trend" // the entries allowed all against the higher trend
 	SkipRateLimited  = "rate_limited"  // the provider rate limited
+
+	SkipPendingCancel = "pending_cancel" // the cancel of the pending order sent, its outcome awaited
 )
 
 // skip is why an analysis doesn't ask the model, see Trader.prepare: its code,
@@ -554,6 +556,7 @@ func (t *Trader) keep(d ui.Decision, attachments []Attachment) {
 		log.Warnf("[LLM] %s | the decision %s: %v", d.Pair, d.ID, err)
 		return
 	}
+	t.noteAnalysis(d) // drawn before the listeners are told, see ui.Chart
 	t.decisionsMtx.RLock()
 	listeners := slices.Clone(t.listeners)
 	t.decisionsMtx.RUnlock()
@@ -688,6 +691,7 @@ func (t *Trader) decisionRecord(st *promptState, input Input, trigger, requested
 		record.Action, record.Confidence, record.Reason = string(d.Action), d.Confidence, d.Reason
 		record.Entry, record.StopLoss, record.TakeProfit = d.Entry, d.StopLoss, d.TakeProfit
 		record.Levels, record.Notes = uiLevels(d.Levels), uiNotes(d.Notes)
+		record.Drawings = uiDrawings(d.Drawings)
 	}
 	switch {
 	case err == nil:
@@ -696,6 +700,7 @@ func (t *Trader) decisionRecord(st *promptState, input Input, trigger, requested
 	default:
 		record.Outcome, record.Error = OutcomeFailed, err.Error()
 		record.Action, record.Confidence, record.Reason = "", 0, ""
+		record.Drawings = nil
 	}
 	return record
 }

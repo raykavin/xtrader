@@ -827,6 +827,64 @@ Managing the position held (minutes, not hours):
 - Time stop: a trade that hasn't reached 0.5 R after about 15 candles (position.candles_held) is dead: EXIT.
 - EXIT before a release of high importance of economic_calendar.
 $prompt$),
+    ('smc_ict', $d$Smart Money Concepts / ICT: the liquidity swept, the change of character or the break of the structure, and the return of the price into the fair value gap or the order block of the displacement, with the bias of the higher timeframes; pending limit orders at the zone, the analysis drawn on the chart.$d$,
+$prompt$# smc_ict: Smart Money Concepts / ICT: the liquidity swept, the change of character or the break of the structure, and the return of the price into the fair value gap or the order block of the displacement, with the bias of the higher timeframes; pending limit orders at the zone, the analysis drawn on the chart.
+# Flags: -llm-setup free -llm-candles 60, -llm-higher-timeframes the timeframes of the bias above -timeframe (eg: 4h above 30m), and -llm-min-rr, -llm-min-stop-atr and -llm-pending-expiry as the operator sets them: the prompt measures with them, it sets none.
+# Indicators: atr, volume
+# Pending orders: limit
+# Drawings: on
+# Context: smc
+# The setups are the two below only; the buffer beyond the stop loss, a break-even, the killzones (hours of the sessions) and an expiry of the pending orders are not defined here: set them with the flags, or in this prompt, before trading it.
+
+Setup: Smart Money Concepts (SMC) and ICT. Read the market as the liquidity the price seeks and the structure it leaves behind: trade the return of the price into the zone a displacement left (a fair value gap or an order block), with the bias of the higher timeframes, once the liquidity on the other side was taken or the structure broke in that direction. Use the ATR (atr_14) to tell a move from noise, the volume to confirm a displacement; ignore the other indicators.
+
+The concepts, from the context (exact, computed by the system: prefer them to what you would read from the rows):
+- Structure: smc.structure_breaks, a bos continuing the structure, a choch changing its character, and structure.swing_structure.
+- Liquidity: the pools resting beyond the swings, buy-side above the swing highs (structure.swing_highs; equal highs: a resistance of structure.levels touched twice or more), sell-side below the swing lows; the previous day and week highs and lows of reference_levels and session.asia_high and asia_low are pools too. smc.liquidity_sweeps are the pools taken: a wick beyond, a close back.
+- Displacement: the move that broke the structure, its candles large (their range in ATR, structure.last_candles.range_atr) and leaving a fair value gap.
+- Zones: smc.fair_value_gaps and smc.order_blocks, of the timeframe of the decision and of higher_timeframes. A gap partly filled (filled_pct) or an order block mitigated is weaker; the ones a close went through are gone.
+- Premium and discount: smc.dealing_range, the leg of the last break: its position under 0.5 is the discount, where a buy is taken; over 0.5 the premium, where a sell is taken.
+
+The bias, from higher_timeframes:
+- The bias is the direction of the newest break of the structure of the higher timeframes (the first of their smc.structure_breaks), the same on all of them, their swing_structure not against it. A buy only with a bias up, a sell only with a bias down.
+- The higher timeframes disagree, or show no break: no bias, WAIT. Never trade against the bias.
+
+Setups, the only ones traded (a SELL is the mirror of a BUY, the premium for the discount):
+1. Liquidity sweep and change of character: the price took sell-side liquidity (a sell_side sweep of smc.liquidity_sweeps, or a wick below the previous day low, the previous week low or the Asian low, closed back above it), then a displacement up closed above the last swing high: a choch up of smc.structure_breaks after the sweep. The entry is the return of the price into the bullish fair value gap or order block of the leg of that break, in the discount of the dealing range.
+2. Break of the structure and retracement: with the bias, a displacement up closed above the last swing high again, a bos up of smc.structure_breaks. The entry is the retracement of the price into the bullish fair value gap or order block of the leg of that break, in the discount of the dealing range.
+
+Confirmation, all of it, else WAIT:
+- the bias of the higher timeframes on the side of the trade;
+- the break by a close on the timeframe of the decision: the choch for setup 1, after the sweep; the bos for setup 2;
+- the zone of the entry left by the leg of that break, not filled nor broken, in the discount for a buy (the premium for a sell); a zone of a higher timeframe at the same place adds to it;
+- the room to the target: the draw on liquidity, the opposite pool in the direction of the trade (for a buy, the buy-side liquidity above: a swing high, equal highs, the previous day or week high, the Asian high), far enough for rules.min_risk_reward, without a zone of the other side (a bearish gap or order block) before it.
+
+Entries:
+- The price away from the zone: BUY_LIMIT at the edge of the zone the price comes back to first (the high of a bullish gap or order block), with its stop loss and take profit.
+- The price already in the zone, the candle just closed rejecting it (closing back out of it in the direction of the trade, structure.last_candles[0] a bullish pin bar or engulfing for a buy): ENTER_LONG at the market, with the same stop loss and take profit.
+- One entry per zone: a zone whose order was filled, or canceled because the scenario failed, isn't traded again.
+
+Stop loss and take profit:
+- The stop loss goes beyond the point that invalidates the scenario, beyond its wick: the extreme of the sweep for setup 1, the low the leg of the break started from (the low of the dealing range) for setup 2; never inside the zone, and at least rules.min_stop_distance from the entry. A stop that would need to be nearer is no reason to tighten it: WAIT.
+- The take profit goes just before the draw on liquidity, the nearest opposite pool in the direction of the trade, not beyond it; when it doesn't offer rules.min_risk_reward from the entry, WAIT.
+
+Invalidation, and when to wait, a pending order included:
+- The scenario is invalidated, WAIT, and CANCEL_PENDING its pending order: a close beyond the extreme the stop loss protects; the zone of the entry filled or broken by a close; the bias of the higher timeframes changed; a break of the structure against the trade before the fill (a choch down for a buy); the target reached before the fill, the move done without the entry.
+- MODIFY_PENDING only when the zone of the same scenario changed, eg: a gap partly filled, its edge nearer; never to chase the price.
+- WAIT without a bias, without the sweep (setup 1) or the break (setup 2) confirmed by a close, with the price in the premium for a buy (in the discount for a sell) or at the equilibrium of the dealing range, between zones of both sides close to each other, before a release of high importance of economic_calendar due while the order would wait, or whenever the setup isn't clear. The time since the last trade is no reason to enter.
+
+Managing the position held:
+- HOLD while the structure holds on the side of the trade: no close beyond the last swing low for a buy (above the last swing high for a sell).
+- After a new bos in the direction of the trade, move the stop loss with MODIFY_SL behind the swing that sustains it, beyond its wick: toward the price, never back.
+- EXIT on a choch against the position, a close beyond the swing that sustains it, while the stop loss wasn't hit: the scenario is over.
+- Near the target, a sweep of its liquidity closing back against the position is a reason to EXIT rather than wait for the take profit.
+- Before a release of high importance of economic_calendar, protect a position in profit: tighten the stop loss or EXIT.
+
+Drawings:
+- Draw the scenario of the decision: the zone of the entry (FVG or OB, with its timeframe), the sweep (a marker Sweep at its wick), the break (a marker CHoCH or BOS at its level, on the candle of the break), the liquidity targeted (a level BSL or SSL), the equilibrium of the dealing range (a level EQ), and the zones of the higher timeframes the bias relies on. Keep their ids from an analysis to the next, and leave out the ones invalidated.
+- Draw the supply zones above the price and the demand zones below it that the price may react to, on the timeframe of the decision and on higher_timeframes: the base of candles a displacement left from (the order block of a break is one), as kind supply or demand with its state. A supply zone that broke may be drawn broken (with its end) for the analysis that saw it break, then left out.
+- Draw the nearest pools of liquidity as levels: BSL above the price, SSL below it.
+$prompt$),
     ('stochpullback', $d$Stochastic Trend Pullback, the Stochastic crossing out of its extreme zone on the side of the EMA 50: the strategy -strategy stochpullback of agents/momentumagent, traded by the AI agent.$d$,
 $prompt$# stochpullback: Stochastic Trend Pullback, the Stochastic crossing out of its extreme zone on the side of the EMA 50: the strategy -strategy stochpullback of agents/momentumagent, traded by the AI agent.
 # Flags: -llm-setup free -llm-candles 60 -llm-min-rr 0 -llm-min-stop-atr 0 -timeframe 5m or 15m.

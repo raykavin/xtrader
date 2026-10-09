@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -63,6 +64,9 @@ func promptRunner(t *testing.T, configure func(*Config), first Prompt, overrides
 	cfg.PositionSize = map[string]float64{testPair: 10}
 	if configure != nil {
 		configure(&cfg)
+	}
+	if cfg.Live && cfg.ConsultInterval == 0 {
+		cfg.ConsultInterval = 15 * time.Minute // required live
 	}
 	provider := &fakeProvider{t: t}
 	trader, err := New(cfg, provider, WithPrompt(first, overrides))

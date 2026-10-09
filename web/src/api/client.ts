@@ -12,6 +12,7 @@ import type {
   AgentStatus,
   AgentsResponse,
   CandleEvent,
+  CandlesResponse,
   ControlMoveRequest,
   ControlOrderRequest,
   ControlOrderResponse,
@@ -145,6 +146,26 @@ export function fetchSnapshot(
   signal?: AbortSignal,
 ): Promise<Snapshot> {
   return getJSON<Snapshot>(agentPath(agent, `/${encodeURIComponent(pair)}/snapshot`), signal);
+}
+
+/**
+ * Fetches the candles of pair on timeframe, the last limit of them (the
+ * agent's default when 0): the ones of the strategy on its own timeframe,
+ * else read or built by the agent for the chart alone.
+ */
+export function fetchCandles(
+  agent: string,
+  pair: string,
+  timeframe: string,
+  limit = 0,
+  signal?: AbortSignal,
+): Promise<CandlesResponse> {
+  const query = new URLSearchParams({ timeframe });
+  if (limit > 0) query.set("limit", String(limit));
+  return getJSON<CandlesResponse>(
+    agentPath(agent, `/${encodeURIComponent(pair)}/candles?${query}`),
+    signal,
+  );
 }
 
 export function ordersCSVUrl(agent: string, pair: string): string {

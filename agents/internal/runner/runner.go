@@ -519,7 +519,8 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 	if err != nil {
 		return err
 	}
-	chart, err := dash.chart(strategy, wallet)
+	// the other timeframes shown read from the market data of MT5
+	chart, err := dash.chart(strategy, wallet, ui.WithCandleSource(feed))
 	if err != nil {
 		return err
 	}
@@ -562,7 +563,8 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 	if err != nil {
 		return err
 	}
-	chart, err := dash.chart(strategy, nil, accountOptions(broker)...)
+	// the other timeframes shown read from the broker
+	chart, err := dash.chart(strategy, nil, append(accountOptions(broker), ui.WithCandleSource(broker))...)
 	if err != nil {
 		return err
 	}

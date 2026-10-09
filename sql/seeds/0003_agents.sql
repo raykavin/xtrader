@@ -54,3 +54,34 @@ WITH agent AS (
 )
 INSERT INTO agent_accounts (agent_id, exchange, bridge_url)
 SELECT id, 'mt5', 'http://mt5:18812' FROM agent;
+
+-- llm-smc: the LLM strategy with the prompt smc_ict (Smart Money Concepts /
+-- ICT: the pending limit orders at the zones of the structure, the analysis
+-- drawn on the chart), on the pairs, the lots, the timeframe, the higher
+-- timeframe of the bias, the correlated markets and the model of the agent
+-- llm, operated from the dashboard and from Telegram. Its comment of its own,
+-- nb:llm-smc, gives it a magic number of its own: its orders and positions are
+-- kept apart from the ones of llm on the same account. The rules of risk the
+-- prompt measures with (llm-min-rr, llm-min-stop-atr, llm-max-spread-atr) and
+-- the expiry of its pending orders (llm-pending-expiry) are left to the
+-- operator, set in its parameters before it is turned on.
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'llm-smc', 'llm', FALSE, 'live', 'localhost:5581', TRUE, TRUE, TRUE, TRUE,
+           '{"pair": "BTCUSDm;XAUUSDm", "timeframe": "30m", "lot": "BTCUSDm=0.01;XAUUSDm=0.02",
+             "leverage": "400"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'llm-smc')
+    RETURNING id
+), account AS (
+    INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+    SELECT id, 'mt5', 'http://mt5:18812', 'nb:llm-smc' FROM agent
+)
+INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
+SELECT agent.id, 'openai', 'gpt-5', 'low',
+       (SELECT id FROM prompts WHERE name = 'smc_ict' AND deleted_at IS NULL),
+       'http://mt5:22347/mcp',
+       '{"llm-setup": "free", "llm-candles": "60", "llm-higher-timeframes": "4h",
+         "llm-correlated": "BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm", "calendar-importance": "high"}'::jsonb
+FROM agent;

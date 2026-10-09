@@ -76,7 +76,7 @@ func TestMigrations_ApplyAtomicallyAndTheSeedsRunAgain(t *testing.T) {
 	require.NoError(t, s.db.Table("prompts").Count(&prompts).Error)
 	require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
 	require.NoError(t, s.db.Table("telegram_settings").Count(&telegram).Error)
-	require.EqualValues(t, 43, prompts, "the prompts seeded")
+	require.EqualValues(t, 44, prompts, "the prompts seeded")
 	require.Equal(t, prompts, versions)
 	require.EqualValues(t, 1, telegram)
 
@@ -160,8 +160,8 @@ func TestSeeds_ConcurrentPopulatesSerialized(t *testing.T) {
 		require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
 		require.NoError(t, s.db.Table("agents").Count(&agents).Error)
 		_ = s.Close()
-		require.EqualValues(t, 43, prompts, "each prompt seeded once")
+		require.EqualValues(t, 44, prompts, "each prompt seeded once")
 		require.Equal(t, prompts, versions)
-		require.EqualValues(t, 2, agents, "each agent seeded once")
+		require.EqualValues(t, 3, agents, "each agent seeded once")
 	}
 }

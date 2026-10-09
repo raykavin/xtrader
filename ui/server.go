@@ -33,6 +33,7 @@ func (c *Chart) router() http.Handler {
 		r.Get("/decisions/{id}", c.handleDecision)
 		r.Get("/decisions/{id}/attachments/{index}", c.handleDecisionAttachment)
 		r.Get("/{pair}/snapshot", c.handleSnapshot)
+		r.Get("/{pair}/candles", c.handleCandles)
 		r.Get("/{pair}/orders.csv", c.handleOrdersCSV)
 	})
 

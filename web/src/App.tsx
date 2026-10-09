@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelOrder,
   fetchAgents,
+  fetchCandles,
   fetchControls,
   fetchDecisions,
   fetchPairs,
@@ -10,7 +11,14 @@ import {
   subscribeEvents,
   UI_VERSION,
 } from "./api/client";
-import type { AgentStatus, ControlsResponse, Decision, Order, Snapshot } from "./api/types";
+import type {
+  AgentStatus,
+  Analysis,
+  ControlsResponse,
+  Decision,
+  Order,
+  Snapshot,
+} from "./api/types";
 import { AgentBar } from "./components/AgentBar";
 import { ControlPanel } from "./components/ControlPanel";
 import { DecisionDialog } from "./components/DecisionDialog";
@@ -22,7 +30,13 @@ import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
 import { StatsBar } from "./components/StatsBar";
 import { pickAgent } from "./lib/agents";
-import { applyDecisionEvent, DECISIONS, linkOrders, reanalysisState } from "./lib/decisions";
+import {
+  applyAnalysisEvent,
+  applyDecisionEvent,
+  DECISIONS,
+  linkOrders,
+  reanalysisState,
+} from "./lib/decisions";
 import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
 import {
   applyCandleEvent,
@@ -34,6 +48,18 @@ import {
 } from "./lib/stats";
 import { loadTheme, saveTheme, type Theme } from "./lib/theme";
 import { applyPendingOrder, noLevels, type TicketLevels } from "./lib/ticket";
+import {
+  applyViewPrice,
+  freshGap,
+  mergeView,
+  shownTimeframe,
+  timeframeLabel,
+  type ViewCandles,
+  viewKey,
+  viewOf,
+  viewSnapshot,
+  viewTimeframes,
+} from "./lib/timeframes";
 
 function pairFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("pair");
@@ -44,6 +70,24 @@ function setPairInURL(pair: string) {
   url.searchParams.set("pair", pair);
   window.history.replaceState(null, "", url);
 }
+
+function timeframeFromURL(): string | null {
+  return new URLSearchParams(window.location.search).get("tf");
+}
+
+function setTimeframeInURL(timeframe: string | null) {
+  const url = new URL(window.location.href);
+  if (timeframe) url.searchParams.set("tf", timeframe);
+  else url.searchParams.delete("tf");
+  window.history.replaceState(null, "", url);
+}
+
+/** How often the candles of a timeframe shown are read again, in ms. */
+const VIEW_REFRESH = 15000;
+/** The candles read again, the last ones, merged into the ones shown. */
+const VIEW_REFRESH_CANDLES = 60;
+/** The time between two reads of the candles shown asked by the prices, in ms. */
+const VIEW_STALE_WAIT = 3000;
 
 function agentFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("agent");
@@ -149,9 +193,35 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [decisionsError, setDecisionsError] = useState<string | null>(null);
   const [shownDecision, setShownDecision] = useState<string | null>(null);
+  // the analysis of a decision of the list shown on the chart of its pair, in
+  // place of the last one, until the trader goes back to it
+  const [shownAnalysis, setShownAnalysis] = useState<{ pair: string; analysis: Analysis } | null>(
+    null,
+  );
   const [reloads, setReloads] = useState(0);
   // bumped as the events are back after a drop: what they missed is loaded again
   const [resyncs, setResyncs] = useState(noResyncs);
+  // The timeframe the chart is shown on, as asked (null: the one of the
+  // strategy), and the candles of one other than the one of the strategy:
+  // read from the agent, and kept up to date with its prices. The trading of
+  // the strategy stays on its own timeframe whatever the one shown.
+  const [askedTimeframe, setAskedTimeframe] = useState<string | null>(timeframeFromURL);
+  const [view, setView] = useState<ViewCandles | null>(null);
+  const [viewError, setViewError] = useState<string | null>(null);
+  const [viewReloads, setViewReloads] = useState(0);
+  const shown = snapshot ? shownTimeframe(snapshot, askedTimeframe) : "";
+  const execution = snapshot?.timeframe ?? "";
+  // the key of the candles shown, null for the ones of the strategy: an
+  // answer of another key, eg: late, of the timeframe shown before, is left out
+  const shownKey =
+    pair && snapshot?.pair === pair && shown && execution && shown !== execution
+      ? viewKey(agent, pair, shown)
+      : null;
+  const shownKeyRef = useRef(shownKey);
+  shownKeyRef.current = shownKey;
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const viewReadAt = useRef(0);
   const pairRef = useRef<string | null>(pair);
   pairRef.current = pair;
   const snapshotRef = useRef<Snapshot | null>(snapshot);
@@ -234,6 +304,69 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     return () => controller.abort();
   }, [agent, pair, reloads, resyncs.snapshot]);
 
+  useEffect(() => setTimeframeInURL(askedTimeframe), [askedTimeframe]);
+
+  // The candles of the timeframe shown, other than the one of the strategy:
+  // read whole as it is chosen, and again as the events are back after a drop
+  // or after a gap; the ones of another timeframe never shown meanwhile.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again as the events are back
+  useEffect(() => {
+    setView((current) => (current?.key === shownKey ? current : null));
+    setViewError(null);
+    if (!shownKey || !pair) return;
+    const key = shownKey;
+    const controller = new AbortController();
+    fetchCandles(agent, pair, shown, 0, controller.signal)
+      .then((response) => {
+        if (shownKeyRef.current !== key) return;
+        viewReadAt.current = Date.now();
+        setView(viewOf(key, response));
+        setViewError(null);
+      })
+      .catch((e) => {
+        if (controller.signal.aborted || shownKeyRef.current !== key) return;
+        setViewError(e instanceof Error ? e.message : String(e));
+      });
+    return () => controller.abort();
+  }, [agent, pair, shown, shownKey, viewReloads, resyncs.snapshot]);
+
+  // The last candles of the timeframe shown read again, merged into the ones
+  // shown: the ones complete at the broker in place of the ones in progress.
+  const refreshView = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!shownKey || !pair) {
+      refreshView.current = () => {};
+      return;
+    }
+    const key = shownKey;
+    const controller = new AbortController();
+    const refresh = () => {
+      const current = viewRef.current;
+      if (!current || current.key !== key) return;
+      viewReadAt.current = Date.now();
+      fetchCandles(agent, pair, shown, VIEW_REFRESH_CANDLES, controller.signal)
+        .then((response) => {
+          if (shownKeyRef.current !== key) return;
+          const before = viewRef.current;
+          if (before && before.key === key && freshGap(before, response.candles)) {
+            setViewReloads((n) => n + 1); // missed some: read whole again
+            return;
+          }
+          setView((v) => mergeView(v, key, response.candles));
+        })
+        .catch(() => {
+          // the candles shown kept; read again on the next turn
+        });
+    };
+    refreshView.current = refresh;
+    const timer = window.setInterval(refresh, VIEW_REFRESH);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      refreshView.current = () => {};
+    };
+  }, [agent, pair, shown, shownKey]);
+
   // The decisions of the language model of the strategy, when it keeps them:
   // loaded with the pair, then followed on the events, and loaded again as
   // the events are back after a drop, the ones shown kept meanwhile.
@@ -300,6 +433,20 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
           }
         }
         setSnapshot((s) => (s ? applyCandleEvent(s, event) : s));
+        // the price in the candle of the timeframe shown, read again once
+        // its period is over
+        const shownView = viewRef.current;
+        if (shownView && shownView.pair === event.pair) {
+          const now = Math.max(Date.now() / 1000, event.candle.time);
+          const { stale } = applyViewPrice(shownView, event.candle.close, now);
+          if (stale) {
+            if (Date.now() - viewReadAt.current >= VIEW_STALE_WAIT) refreshView.current();
+          } else {
+            setView((v) =>
+              v && v.key === shownView.key ? applyViewPrice(v, event.candle.close, now).view : v,
+            );
+          }
+        }
       },
       onOrder: (event) => {
         setSnapshot((s) => (s ? applyOrderEvent(s, event) : s));
@@ -307,7 +454,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       onControls: setControls,
       onDecision: (event) => {
         setDecisions((list) => applyDecisionEvent(list, event, pairRef.current));
-        setSnapshot((s) => (s ? linkOrders(s, event.decision) : s));
+        setSnapshot((s) => (s ? applyAnalysisEvent(linkOrders(s, event.decision), event) : s));
       },
     });
   }, [agent]);
@@ -319,6 +466,20 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     [snapshot, since],
   );
   const pnl = useMemo(() => (snapshot ? positionPnL(snapshot) : null), [snapshot]);
+  // the snapshot drawn on the chart: on the timeframe shown, its candles, none
+  // while they load (never the ones of another timeframe)
+  const chartSnapshot = useMemo(() => {
+    if (!snapshot || !shownKey) return snapshot;
+    if (view && view.key === shownKey) return viewSnapshot(snapshot, view);
+    return { ...snapshot, candles: [], indicators: [] };
+  }, [snapshot, shownKey, view]);
+  const timeframeNote = !shownKey
+    ? null
+    : viewError
+      ? { text: `Candles de ${timeframeLabel(shown)}: ${viewError}`, error: true }
+      : view?.key !== shownKey
+        ? { text: `Carregando candles de ${timeframeLabel(shown)}…` }
+        : null;
   const interactive = controls?.enabled === true;
   const ticket = useMemo(() => ({ levels, onLevel: setLevel }), [levels, setLevel]);
 
@@ -348,16 +509,30 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
             {pairs.length === 0 ? "Aguardando o primeiro candle…" : "Carregando…"}
           </div>
         )}
-        {snapshot && stats && (
+        {snapshot && chartSnapshot && stats && (
           <div className={loading ? "content loading" : "content"}>
             <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} since={since} />
             <div className="trade-area">
               <PriceChart
-                snapshot={snapshot}
+                snapshot={chartSnapshot}
                 theme={theme}
                 layoutKey={agent ?? ""}
                 ticket={interactive ? ticket : undefined}
                 onMoveOrder={interactive ? handleMoveOrder : undefined}
+                position={pnl}
+                timeframe={shown}
+                timeframes={viewTimeframes(snapshot)}
+                onTimeframeChange={setAskedTimeframe}
+                timeframeNote={timeframeNote}
+                analysis={chartAnalysis(
+                  snapshot.pair,
+                  shownAnalysis?.pair === snapshot.pair
+                    ? shownAnalysis.analysis
+                    : snapshot.analysis,
+                )}
+                onAnalysisReset={
+                  shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
+                }
               />
               <ControlPanel
                 agent={agent}
@@ -399,6 +574,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                 decisionId={shownDecision}
                 quote={snapshot.quote}
                 onClose={() => setShownDecision(null)}
+                onShowOnChart={(analysis) => setShownAnalysis({ pair: snapshot.pair, analysis })}
               />
             )}
           </div>
@@ -407,4 +583,10 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       <Footer />
     </div>
   );
+}
+
+/** The analysis drawn on the chart of pair: none of another pair. */
+function chartAnalysis(pair: string, analysis: Analysis | null | undefined): Analysis | null {
+  if (!analysis || (analysis.pair && analysis.pair !== pair)) return null;
+  return analysis;
 }

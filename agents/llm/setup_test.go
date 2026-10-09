@@ -149,21 +149,24 @@ func TestTrader_OneRequestPerCandle(t *testing.T) {
 }
 
 // Live, the candles of history (eg: handed after a restart, the terminal not
-// synced yet) update the indicators but aren't asked: they would be traded at
-// the market of now.
+// synced yet) update the indicators but aren't asked, as no close is: they
+// would be traded at the market of now. The first candle in progress after
+// them asks about the start.
 func TestTrader_LiveSkipsHistory(t *testing.T) {
 	r := newTraderRunner(t, func(c *Config) { c.Live = true }, 0)
 	next := r.nextClose() // the close of the next candle added
 	r.trader.now = func() time.Time { return next.Add(5 * time.Hour) }
-	r.step(100)
-	r.step(100.5)
+	for _, close := range []float64{100, 100.5} { // the closes of the history, as handed after a restart
+		r.add(close)
+		r.trader.Indicators(r.df)
+		r.trader.OnCandle(r.df, r.broker)
+	}
 	require.Empty(t, r.provider.inputs, "history: not asked")
-	require.Equal(t, 2, r.trader.history[testPair])
 
-	r.trader.now = func() time.Time { return r.nextClose().Add(2 * time.Second) }
-	r.step(101, decide(ActionWait, 0.4, nil, nil, nil))
+	r.provider.answers = []answer{decide(ActionWait, 0.4, nil, nil, nil)}
+	r.slotTick() // the first candle in progress after them, live: the start
+	r.startAsked(testPair)
 	require.Len(t, r.provider.inputs, 1, "the live candle is")
-	require.Zero(t, r.trader.history[testPair])
 }
 
 // The levels of the last decision are drawn on the chart: what the model saw.

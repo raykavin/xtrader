@@ -93,6 +93,9 @@ func newTraderRunner(t *testing.T, configure func(*Config), holding float64) *tr
 	if configure != nil {
 		configure(&cfg)
 	}
+	if cfg.Live && cfg.ConsultInterval == 0 {
+		cfg.ConsultInterval = 15 * time.Minute // required live: a slot at each close of the candles of the tests
+	}
 	provider := &fakeProvider{t: t}
 	trader, err := New(cfg, provider)
 	require.NoError(t, err)
@@ -135,14 +138,48 @@ func (r *traderRunner) add(close float64) {
 }
 
 // step closes a candle at close, the provider answering answers, all of them
-// asked.
+// asked: in a backtest at its close; live, where the model is never asked at
+// a close, on the first tick of the next candle, see slotTick.
 func (r *traderRunner) step(close float64, answers ...answer) {
 	r.t.Helper()
 	r.add(close)
 	r.provider.answers = answers
 	r.trader.Indicators(r.df)
 	r.trader.OnCandle(r.df, r.broker)
+	if r.trader.cfg.Live {
+		r.slotTick()
+	}
 	require.Empty(r.t, r.provider.answers, "answers not asked")
+}
+
+// slotTick hands to OnPartialCandle the first tick of the candle after the
+// last one closed, a second after its open, at the close: live, the slot of
+// the consult interval on that close is asked on it. The candle in progress
+// is taken off after, the clock of the Trader as it was.
+func (r *traderRunner) slotTick() {
+	r.t.Helper()
+	df := r.df
+	n := len(df.Close)
+	at := df.Time[n-1].Add(15 * time.Minute)
+	price := df.Close.Last(0)
+	now := r.trader.now
+	r.trader.now = func() time.Time { return at.Add(time.Second) }
+	defer func() { r.trader.now = now }()
+	df.Time = append(df.Time, at)
+	df.Open = append(df.Open, price)
+	df.Close = append(df.Close, price)
+	df.High = append(df.High, price)
+	df.Low = append(df.Low, price)
+	df.Volume = append(df.Volume, 1)
+	r.trader.Indicators(df)
+	r.trader.OnPartialCandle(df, r.broker)
+	df.Time, df.Open, df.Close = df.Time[:n], df.Open[:n], df.Close[:n]
+	df.High, df.Low, df.Volume = df.High[:n], df.Low[:n], df.Volume[:n]
+	for key, series := range df.Metadata {
+		if len(series) > n {
+			df.Metadata[key] = series[:n]
+		}
+	}
 }
 
 // startAsked waits for the model asked about the start of pair, apart (see

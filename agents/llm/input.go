@@ -74,7 +74,39 @@ type Input struct {
 	EntrySize number    `json:"entry_size"`        // of the position an entry opens, in units of the asset
 	Balance   number    `json:"available_balance"` // quote available for new positions
 
+	// PendingOrder is the pending entry waiting on the pair for its fill,
+	// while flat, see Config.PendingOrders: nil without one.
+	PendingOrder *PendingOrder `json:"pending_order,omitempty"`
+
+	// SMC is the structure of the candles in smart money concepts, for a
+	// prompt that asks for it, see Config.SMC: nil otherwise.
+	SMC *SMC `json:"smc,omitempty"`
+
+	// Drawings are the drawings on the chart of the last analysis of the
+	// pair, for a prompt that draws (see Config.Drawings): the model keeps the
+	// ones still valid. Absent without any.
+	Drawings []Drawing `json:"chart_drawings,omitempty"`
+
 	Rules Rules `json:"rules"`
+
+	// drawings tells the decision of the context holds drawings, see
+	// Config.Drawings: the schema of the decision asked, not sent.
+	drawings bool
+}
+
+// PendingOrder is the pending entry waiting on the pair for its fill: Type the
+// action that places it, eg: BUY_LIMIT, its entry, its stop loss and take
+// profit at the broker (null without one), its size in units of the asset, the
+// candles closed since it was placed, and who placed it: model, the model
+// itself, or trader, someone else, eg: from the dashboard.
+type PendingOrder struct {
+	Type       Action `json:"type"`
+	Entry      number `json:"entry_price"`
+	StopLoss   number `json:"stop_loss"`
+	TakeProfit number `json:"take_profit"`
+	Size       number `json:"size"`
+	Candles    int    `json:"candles_pending"`
+	PlacedBy   string `json:"placed_by"`
 }
 
 // CandleInProgress is the candle not closed yet of a reanalysis: its open time,
@@ -201,6 +233,13 @@ type Rules struct {
 	// limit reached, or a result unknown yet; a position held is managed as
 	// usual.
 	EntriesBlockedByDailyLimit string `json:"entries_blocked_by_daily_limit,omitempty"`
+
+	// PendingOrders are the types of the pending entries the model may place,
+	// limit and stop, see Config.PendingOrders, and PendingExpiry the candles
+	// after which one not filled is canceled, 0 for never, see
+	// Config.PendingExpiry.
+	PendingOrders []string `json:"pending_orders,omitempty"`
+	PendingExpiry int      `json:"pending_expiry_candles,omitempty"`
 }
 
 // number is a number of the context, written with 8 significant digits, and

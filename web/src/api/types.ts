@@ -119,6 +119,47 @@ export interface Snapshot {
    * its reanalysis. Absent for the other strategies.
    */
   llm?: LLMInfo;
+  /**
+   * Analysis is the last analysis of the language model of the strategy on
+   * the pair, drawn on the chart, see AnalysisSource: absent without one.
+   */
+  analysis?: Analysis;
+  /**
+   * Timeframe is the one of the strategy, of its Candles, the one it trades
+   * and its language model analyzes on; Timeframes are the ones the chart of
+   * the pair may be shown on, see GET /api/{pair}/candles: showing another
+   * one changes what is drawn only, never the trading.
+   */
+  timeframe?: string;
+  timeframes?: ViewTimeframe[];
+}
+/**
+ * ViewTimeframe is a timeframe the chart of a pair may be shown on: Execution
+ * tells the one of the strategy; Available that its candles can be read, eg:
+ * not one below the timeframe of the strategy in a backtest.
+ */
+export interface ViewTimeframe {
+  timeframe: string;
+  execution?: boolean;
+  available: boolean;
+}
+/**
+ * CandlesResponse is the payload of GET /api/{pair}/candles?timeframe=&limit=:
+ * the candles of Pair on Timeframe, oldest first, the last one in progress,
+ * limit at most (1000 by default, 5000 at most). ExecutionTimeframe is the one
+ * of the strategy, which trades on its own candles whatever the timeframe
+ * shown. Source tells where they come from: strategy, its own candles; broker,
+ * the complete ones read from the broker, the ones in progress since built by
+ * the chart (above the timeframe of the strategy, from its candles; below it,
+ * from the prices it received, without their volume); resampled, built from the
+ * candles of the strategy, a timeframe above its own.
+ */
+export interface CandlesResponse {
+  pair: string;
+  timeframe: string;
+  execution_timeframe: string;
+  source: string;
+  candles: Candle[];
 }
 /**
  * LLMInfo is the language model of the strategy of a bot, see
@@ -168,6 +209,152 @@ export interface Level {
  * slice, not nil, when there are none.
  */
 export type LevelsSource = any;
+/**
+ * The kinds of a Drawing: a zone of the structure, eg: a fair value gap; a
+ * supply zone, where sellers pushed the price down from, and a demand zone,
+ * where buyers pushed it up from; a level; a marker.
+ */
+export const DrawingZone = "zone";
+/**
+ * The kinds of a Drawing: a zone of the structure, eg: a fair value gap; a
+ * supply zone, where sellers pushed the price down from, and a demand zone,
+ * where buyers pushed it up from; a level; a marker.
+ */
+export const DrawingSupply = "supply";
+/**
+ * The kinds of a Drawing: a zone of the structure, eg: a fair value gap; a
+ * supply zone, where sellers pushed the price down from, and a demand zone,
+ * where buyers pushed it up from; a level; a marker.
+ */
+export const DrawingDemand = "demand";
+/**
+ * The kinds of a Drawing: a zone of the structure, eg: a fair value gap; a
+ * supply zone, where sellers pushed the price down from, and a demand zone,
+ * where buyers pushed it up from; a level; a marker.
+ */
+export const DrawingLevel = "level";
+/**
+ * The kinds of a Drawing: a zone of the structure, eg: a fair value gap; a
+ * supply zone, where sellers pushed the price down from, and a demand zone,
+ * where buyers pushed it up from; a level; a marker.
+ */
+export const DrawingMarker = "marker";
+/**
+ * The states of a supply or demand zone, see Drawing: fresh, the price never
+ * back into it since it formed; tested, the price came back into it and it
+ * held; broken, a close beyond its far edge (above a supply zone, below a
+ * demand one) invalidated it, at To.
+ */
+export const ZoneFresh = "fresh";
+/**
+ * The states of a supply or demand zone, see Drawing: fresh, the price never
+ * back into it since it formed; tested, the price came back into it and it
+ * held; broken, a close beyond its far edge (above a supply zone, below a
+ * demand one) invalidated it, at To.
+ */
+export const ZoneTested = "tested";
+/**
+ * The states of a supply or demand zone, see Drawing: fresh, the price never
+ * back into it since it formed; tested, the price came back into it and it
+ * held; broken, a close beyond its far edge (above a supply zone, below a
+ * demand one) invalidated it, at To.
+ */
+export const ZoneBroken = "broken";
+/**
+ * The biases of a Drawing.
+ */
+export const BiasBullish = "bullish";
+/**
+ * The biases of a Drawing.
+ */
+export const BiasBearish = "bearish";
+/**
+ * The biases of a Drawing.
+ */
+export const BiasNeutral = "neutral";
+/**
+ * Drawing is a mark of the analysis of a language model on the chart: Kind
+ * zone, a range of prices from Low to High, eg: a fair value gap or an order
+ * block; supply or demand, a zone of supply or of demand from Low to High,
+ * its State telling whether it holds (fresh, tested) or broke (broken);
+ * level, a price, eg: a pool of liquidity; marker, a point at Price, eg: a
+ * break of structure. It starts at From, the open time of a candle, and ends
+ * at To, absent while it holds: drawn up to the last candle. Label names it on
+ * the chart, eg: FVG; Bias colors it, bullish, bearish or neutral; Timeframe is
+ * the one it was read on, eg: 4h for a zone of a higher timeframe. ID is the
+ * one the model keeps for the same structure from an analysis to the next.
+ */
+export interface Drawing {
+  id: string;
+  kind: string;
+  label: string;
+  bias: string;
+  timeframe: string;
+  from: number /* int64 */;
+  to?: number /* int64 */;
+  price?: number /* float64 */;
+  low?: number /* float64 */;
+  high?: number /* float64 */;
+  state?: string;
+}
+/**
+ * The order types of an Intent.
+ */
+export const IntentMarket = "market";
+/**
+ * The order types of an Intent.
+ */
+export const IntentLimit = "limit";
+/**
+ * The order types of an Intent.
+ */
+export const IntentStop = "stop";
+/**
+ * Intent is the entry a decision proposed without placing it: Action is the
+ * one of the decision, eg: BUY_LIMIT, of Side BUY or SELL, its OrderType
+ * market, limit or stop, at Entry with its StopLoss and TakeProfit, and
+ * Outcome what came of it (ignored under the min confidence, refused by the
+ * rules, or applied but failed at the broker), Error why.
+ */
+export interface Intent {
+  action: string;
+  side: string;
+  order_type: string;
+  entry?: number /* float64 */;
+  stop_loss?: number /* float64 */;
+  take_profit?: number /* float64 */;
+  outcome: string;
+  error?: string;
+}
+/**
+ * Analysis is what the chart draws of the last analysis of the language model
+ * of the strategy on a pair, see AnalysisSource: its Pair, the decision it
+ * comes from (DecisionID, its Timeframe, the one of the strategy whatever the
+ * timeframe the chart shows, the open time of the candle of its context,
+ * when it was decided, its Action and its Outcome), its Drawings, and its
+ * Intent, the entry it proposed without placing an order, if any. The orders
+ * it placed are drawn as any order. An analysis of the model that answered
+ * replaces the one before, whatever its outcome; one that didn't (a request
+ * failed, or skipped) leaves it.
+ */
+export interface Analysis {
+  pair: string;
+  decision_id: string;
+  timeframe: string;
+  candle: number /* int64 */;
+  decided_at: number /* int64 */;
+  action: string;
+  outcome: string;
+  drawings: Drawing[];
+  intent?: Intent;
+}
+/**
+ * AnalysisSource is a strategy drawing on the chart the last analysis of its
+ * language model on each pair, see Analysis: ChartAnalysis returns it, false
+ * when there is none yet. Called from the handlers of the chart holding its
+ * lock, it must be safe for concurrent use, and must not block.
+ */
+export type AnalysisSource = any;
 /**
  * PairsResponse lists the pairs known by the dashboard.
  */
@@ -353,12 +540,13 @@ export interface BalanceResponse {
  * RequestedBy, the channel of a reanalysis it answers, and RequestNote, the
  * note the trader sent with it, if any), the model, the prompt and its
  * latency, the position held then, what the model answered
- * with its justification (Reason), its levels, its notes and its attachments,
- * and what came of it (Outcome: applied; ignored, its confidence under the
+ * with its justification (Reason), its levels, its drawings (see Drawing:
+ * absent for a strategy that draws none), its notes and its attachments, and
+ * what came of it (Outcome: applied; ignored, its confidence under the
  * minimum; refused, breaking the rules of the context; failed, no answer;
  * skipped, an analysis that didn't ask the model, eg: no entry to open while
  * flat, Reason then the code of why and Error its detail), with the orders it
- * placed or moved.
+ * placed, moved or canceled.
  */
 export interface Decision {
   id: string;
@@ -381,6 +569,7 @@ export interface Decision {
   stop_loss?: number /* float64 */;
   take_profit?: number /* float64 */;
   levels: Level[];
+  drawings?: Drawing[];
   notes: DecisionNote[];
   attachments: DecisionAttachment[];
   outcome: string;
@@ -428,11 +617,13 @@ export interface DecisionsResponse {
 /**
  * DecisionEvent is sent on the SSE stream (event: decision) with a decision of
  * the language model of the strategy as it is kept, and again as the orders it
- * places are linked to it.
+ * places are linked to it. Analysis is the analysis of the pair drawn on the
+ * chart once it is kept, see AnalysisSource: absent without one.
  */
 export interface DecisionEvent {
   pair: string;
   decision: Decision;
+  analysis?: Analysis;
 }
 /**
  * ReanalysisRequest is the payload of POST /api/controls/reanalyze: the pair
