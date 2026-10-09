@@ -1,7 +1,9 @@
 // The decisions of the language model of a strategy (see Decision): their
 // Portuguese labels, and how the events of the API update what is shown.
 
-import type { ControlsResponse, Decision, DecisionEvent, Snapshot } from "../api/types";
+import type { ControlsResponse, Decision, DecisionEvent, Drawing, Snapshot } from "../api/types";
+import { isSupplyDemand, zoneStateLabel } from "./analysis";
+import { formatChartPrice, formatTime } from "./format";
 
 const actions: Record<string, string> = {
   WAIT: "Aguardar",
@@ -11,6 +13,12 @@ const actions: Record<string, string> = {
   EXIT: "Sair",
   MODIFY_SL: "Mover stop",
   MODIFY_TP: "Mover alvo",
+  BUY_LIMIT: "Compra limite",
+  SELL_LIMIT: "Venda limite",
+  BUY_STOP: "Compra stop",
+  SELL_STOP: "Venda stop",
+  MODIFY_PENDING: "Alterar pendente",
+  CANCEL_PENDING: "Cancelar pendente",
 };
 
 const outcomes: Record<string, string> = {
@@ -36,6 +44,7 @@ const skips: Record<string, string> = {
   higher_trend: "Sem tendência definida nos timeframes maiores (exigida para entrar)",
   against_trend: "Entradas permitidas só contra a tendência dos timeframes maiores",
   rate_limited: "Provedor do modelo com limite de requisições",
+  pending_cancel: "O cancelamento da ordem pendente aguarda a confirmação da corretora",
 };
 
 const triggers: Record<string, string> = {
@@ -56,6 +65,16 @@ const noteKinds: Record<string, string> = {
 
 const levelKinds: Record<string, string> = { support: "Suporte", resistance: "Resistência" };
 
+const drawingKinds: Record<string, string> = {
+  zone: "Zona",
+  supply: "Oferta",
+  demand: "Demanda",
+  level: "Nível",
+  marker: "Marcador",
+};
+
+const biases: Record<string, string> = { bullish: "alta", bearish: "baixa", neutral: "neutro" };
+
 /** The label of value, or value itself when it has none. */
 function label(labels: Record<string, string>, value: string): string {
   return labels[value] ?? value;
@@ -66,6 +85,23 @@ export const decisionActionLabel = (action: string | undefined) =>
 export const decisionOutcomeLabel = (outcome: string) => label(outcomes, outcome);
 export const noteKindLabel = (kind: string) => label(noteKinds, kind);
 export const levelKindLabel = (kind: string) => label(levelKinds, kind);
+export const drawingKindLabel = (kind: string) => label(drawingKinds, kind);
+export const biasLabel = (bias: string) => label(biases, bias);
+
+/**
+ * Where a drawing of a decision is: the range of a zone (of supply or demand
+ * too, with its state) or the price of a level or a marker, from its candle,
+ * to the candle it ended at, if any.
+ */
+export function drawingPlace(drawing: Drawing): string {
+  const price =
+    drawing.kind === "zone" || isSupplyDemand(drawing)
+      ? `${formatChartPrice(drawing.low ?? 0)} – ${formatChartPrice(drawing.high ?? 0)}`
+      : formatChartPrice(drawing.price ?? 0);
+  const state = drawing.state ? ` · ${zoneStateLabel(drawing.state)}` : "";
+  const end = drawing.to != null ? ` até ${formatTime(drawing.to)}` : "";
+  return `${price}${state} · desde ${formatTime(drawing.from)}${end}`;
+}
 
 /** Whether the analysis didn't ask the model, see decisionReason. */
 export const isSkipped = (decision: Decision) => decision.outcome === "skipped";
@@ -96,8 +132,15 @@ export function formatConfidence(confidence: number): string {
 
 /** The side of the action, for its color: buy, sell or none. */
 export function decisionTone(action: string | undefined): "buy" | "sell" | "" {
-  if (action === "ENTER_LONG") return "buy";
-  if (action === "ENTER_SHORT" || action === "EXIT") return "sell";
+  if (action === "ENTER_LONG" || action === "BUY_LIMIT" || action === "BUY_STOP") return "buy";
+  if (
+    action === "ENTER_SHORT" ||
+    action === "EXIT" ||
+    action === "SELL_LIMIT" ||
+    action === "SELL_STOP"
+  ) {
+    return "sell";
+  }
   return "";
 }
 
@@ -158,6 +201,17 @@ export function applyDecisionEvent(
   const next = [event.decision, ...list.filter((d) => d.id !== event.decision.id)];
   next.sort((a, b) => b.decided_at - a.decided_at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   return next.slice(0, DECISIONS);
+}
+
+/**
+ * The snapshot with the analysis of the event, drawn on the chart: the one of
+ * its pair once the decision is kept, see DecisionEvent; the snapshot as it is
+ * when the analysis didn't change, eg: an analysis skipped.
+ */
+export function applyAnalysisEvent(snapshot: Snapshot, event: DecisionEvent): Snapshot {
+  if (event.pair !== snapshot.pair || !event.analysis) return snapshot;
+  if (JSON.stringify(event.analysis) === JSON.stringify(snapshot.analysis)) return snapshot;
+  return { ...snapshot, analysis: event.analysis };
 }
 
 /**

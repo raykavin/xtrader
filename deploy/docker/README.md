@@ -91,7 +91,7 @@ docker compose up -d
 docker compose logs -f mt5
 ```
 
-A ordem é `postgres` → `migrator` (migrações e os 43 prompts de exemplo) → `controller`, que também espera o `mt5` ficar saudável. Na **primeira subida**, o `mt5` cria o prefixo do Wine e instala o Python, os pacotes da bridge e o terminal, que é baixado pelo instalador da Exness. Isso leva alguns minutos. Se o `controller` não subir porque a instalação passou do `start_period`, basta rodar `docker compose up -d` de novo.
+A ordem é `postgres` → `migrator` (migrações e os 44 prompts de exemplo) → `controller`, que também espera o `mt5` ficar saudável. Na **primeira subida**, o `mt5` cria o prefixo do Wine e instala o Python, os pacotes da bridge e o terminal, que é baixado pelo instalador da Exness. Isso leva alguns minutos. Se o `controller` não subir porque a instalação passou do `start_period`, basta rodar `docker compose up -d` de novo.
 
 Para conferir:
 

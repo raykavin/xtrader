@@ -101,11 +101,74 @@ var defaultStrategy string
 // defaultSystemPrompt is the instructions of the model with defaultStrategy.
 var defaultSystemPrompt = systemPrompt(defaultStrategy)
 
+// smcContextPrompt describes the structure in smart money concepts of the
+// context, see SMC: a line of the context of basePrompt, sent with the
+// prompts that ask for it (see StrategyContext).
+const smcContextPrompt = `
+- smc, when present (in higher_timeframes too, for each of them), is the structure of the candles in smart money concepts, computed by the system on the swings of structure (3 candles on each side), on the candles of structure: structure_breaks (newest first: a close beyond the last swing high, direction up, or the last swing low, down, not broken yet; kind bos when the break before it went the same way, choch when it went the other way, break for the first one of the candles; level the swing broken, swing_time its candle, time the candle of the break), fair_value_gaps (the gaps of three candles not filled yet, the nearest to the price first: bullish when the low of the third candle is above the high of the first, the gap a support below the price; bearish when its high is under the low of the first, a resistance above it; low and high the part not traded into yet, filled_pct the share of the gap traded into since, size_atr the size of the gap, distance_atr the distance of the middle of its part left from the price, positive above, time the open of its middle candle), order_blocks (the last candle against the move that broke the structure, before it: bullish, the last bearish candle before the low the break up started from, a support; bearish, the last bullish candle before the high the break down started from, a resistance; low and high its range, time its candle, break_time the candle of its break, mitigated when the price traded back into it since; the ones a close went through are left out), liquidity_sweeps (newest first: a wick beyond a swing that closed back without breaking it, side buy_side above a swing high, sell_side below a swing low; level the swing, extreme the wick, time its candle) and dealing_range (the leg of the last break, from its low to its high, direction the one of the break: equilibrium its middle, position where the price is in it, 0 at its low and 1 at its high, under 0.5 the discount, over 0.5 the premium, beyond 0 and 1 out of the range). They are exact: prefer them to the ones you would read from the rows, and weigh each by its size in ATR, its age and its timeframe.`
+
+// pendingOrdersPrompt is the part of the instructions of the pending orders,
+// sent with the prompts that place them (see StrategyPendingOrders): it
+// prevails over the rules of basePrompt on the entries at the market.
+const pendingOrdersPrompt = `Pending orders, of the types of rules.pending_orders (limit, stop):
+- BUY_LIMIT: a pending buy at entry, below the ask, filled when the price comes down to it; stop_loss below entry, take_profit above it.
+- SELL_LIMIT: a pending sell at entry, above the bid, filled when the price comes up to it; stop_loss above entry, take_profit below it.
+- BUY_STOP: a pending buy at entry, above the ask, filled when the price rises to it; stop_loss below entry, take_profit above it.
+- SELL_STOP: a pending sell at entry, below the bid, filled when the price falls to it; stop_loss above entry, take_profit below it.
+- They are entries: allowed while flat only, when rules.allowed_actions lists them, one pending order at a time on the symbol. rules.max_entry_distance is for the entries at the market only: entry, stop_loss and take_profit of a pending order are within rules.max_level_distance of the price.
+- A pending order is filled at its entry: its reward over risk is measured from entry, at least rules.min_risk_reward, and its stop loss leaves at least rules.min_stop_distance of room from entry once filled, net of the spread. The take profit follows the rules of the entries at the market (optional when rules.take_profit_optional is true, null when rules.no_take_profit is true).
+- pending_order, when present, is the pending order waiting for its fill: its type, entry_price, stop_loss, take_profit, size, candles_pending since it was placed, and placed_by, model when you placed it, trader when the trader did. While it waits no other entry is allowed: WAIT keeps it as it is; MODIFY_PENDING moves it, entry, stop_loss and take_profit its new levels (the current ones to keep them; a take_profit only when it has one: its levels are moved, never added nor removed); CANCEL_PENDING cancels it, its prices null. Cancel it, or move it, as soon as the setup behind it is invalidated or changed: a pending order is no reason to keep a setup.
+- Once filled, it is the position held, managed as any other.
+- The system cancels a pending order by itself, without asking you, when an entry of its type isn't allowed anymore (eg: a daily limit reached, the window of a release of the news block, the trend of the higher timeframes, the spread, the direction of the positions), when a position is held on the symbol, and once rules.pending_expiry_candles candles closed without its fill, when set.`
+
+// drawingsPrompt is the part of the instructions of the drawings, sent with
+// the prompts that draw (see StrategyDrawings).
+const drawingsPrompt = `Drawings:
+- List in drawings the structures your analysis relies on, whatever the action, 20 at most, drawn on the chart for the trader to see the scenario and follow your decisions, the only part of your answer drawn: kind zone, a range of prices from low to high (eg: a fair value gap, an order block, the premium or the discount of a range); supply, a supply zone, the range of the base of candles the price dropped away from strongly (sellers in control there); demand, a demand zone, the range of the base the price rallied away from strongly (buyers in control there); level, one price (eg: a pool of liquidity, an equilibrium); marker, a point at price (eg: a break of structure, a sweep). The prices that don't apply to its kind are null: low and high are for a zone, of supply and of demand too, price for a level and a marker.
+- state is the one of a supply or demand zone, null for the other kinds: fresh while the price hasn't come back into it since it formed, tested once it came back into it and the zone held, broken once a candle of its timeframe closed beyond its far edge (above a supply zone, below a demand one). A fresh or tested zone has no end (to null) and no close of its timeframe beyond its far edge; a broken one ends (to) at the candle that broke it. Draw a zone of supply or demand once, under one id, and keep its id while it holds.
+- label names it on the chart in a few characters, eg: FVG, OB, BSL, SSL, BOS, CHoCH, EQ, Sweep; bias is bullish, bearish or neutral; timeframe is the one it was read on, the timeframe of the decision or one of higher_timeframes.
+- from is the open time of the candle it starts at, written as the candles of the context write their time, never after the last candle; to is the open time of the candle it ended at, or null while it holds (drawn up to now).
+- id names it, short, the same for the same structure from an analysis to the next: chart_drawings, when present, are the drawings of your last analysis, on the chart now. Each analysis replaces them all: repeat the ones still valid (the ones changed with their new prices, eg: a gap partly filled), and leave out the ones invalidated or replaced (eg: a gap filled, an order block broken, a liquidity swept, which may become a marker of the sweep).
+- Draw only what the context shows: the prices and the times of the candles, of structure, of smc, of higher_timeframes or of reference_levels, never estimated beyond them.`
+
 // systemPrompt returns the instructions of the model with strategy, the same
 // for every provider and every candle: what changes is in the context of the
-// user message. The comment lines at the top of strategy aren't sent.
+// user message. The comment lines at the top of strategy aren't sent. The
+// parts of the context, the pending orders and the drawings the header of
+// strategy asks for (see StrategyContext, StrategyPendingOrders and
+// StrategyDrawings) follow the part the code relies on, the strategy last.
 func systemPrompt(strategy string) string {
-	return basePrompt + "\n\nStrategy:\n" + stripComments(strategy)
+	return instructions(strategy) + "\n\nStrategy:\n" + stripComments(strategy)
+}
+
+// levelsInstruction is the rule of basePrompt asking for the supports and
+// resistances drawn on the chart, see Decision.Levels: left out of the
+// instructions of a prompt with drawings of its own (see StrategyDrawings),
+// whose chart shows what it draws only.
+const levelsInstruction = "- List in levels the supports and resistances your analysis relies on (the ones " +
+	"of the strategy, the nearest to the price first, 8 at most), whatever the action, or none: they are " +
+	"drawn on the chart for the trader to see what you saw.\n"
+
+// instructions returns the part of the instructions of strategy the code
+// relies on: basePrompt, with the parts its header asks for, see
+// systemPrompt. A prompt with drawings has no levels: its drawings are the
+// only part of the answer drawn.
+func instructions(strategy string) string {
+	system := basePrompt
+	drawings, _ := StrategyDrawings(strategy)
+	if drawings {
+		system = strings.Replace(system, levelsInstruction, "", 1)
+	}
+	if contexts, _ := StrategyContext(strategy); slices.Contains(contexts, ContextSMC) {
+		system += smcContextPrompt
+	}
+	if kinds, _ := StrategyPendingOrders(strategy); len(kinds) > 0 {
+		system += "\n\n" + pendingOrdersPrompt
+	}
+	if drawings {
+		system += "\n\n" + drawingsPrompt
+	}
+	return system
 }
 
 // ReadStrategy reads the strategy of the instructions from a file, eg: one of
@@ -172,7 +235,25 @@ func (c Config) withPrompt(content string, o PromptOverrides) Config {
 	if o.Indicators != nil {
 		c.Indicators = o.Indicators
 	}
+	// checked by promptState, see checkHeader
+	c.PendingOrders, _ = StrategyPendingOrders(content)
+	c.Drawings, _ = StrategyDrawings(content)
+	contexts, _ := StrategyContext(content)
+	c.SMC = slices.Contains(contexts, ContextSMC)
 	return c
+}
+
+// checkHeader fails on the lines of the header of strategy the agent reads
+// with a value it doesn't know, eg: "# Pending orders: market".
+func checkHeader(strategy string) error {
+	if _, err := StrategyPendingOrders(strategy); err != nil {
+		return err
+	}
+	if _, err := StrategyDrawings(strategy); err != nil {
+		return err
+	}
+	_, err := StrategyContext(strategy)
+	return err
 }
 
 // PromptSource is where the Trader reads the prompt to analyze with at the
@@ -221,6 +302,89 @@ func StrategyWithoutTakeProfit(strategy string) bool {
 	return ok && strings.EqualFold(strings.TrimSpace(value), "none")
 }
 
+// The keys of the header lines of the pending orders, of the drawings and of
+// the context, see StrategyPendingOrders, StrategyDrawings and
+// StrategyContext.
+const (
+	pendingOrdersKey = "pending orders"
+	drawingsKey      = "drawings"
+	contextKey       = "context"
+)
+
+// ContextSMC is the part of the context of the structure in smart money
+// concepts, see StrategyContext and SMC.
+const ContextSMC = "smc"
+
+// StrategyPendingOrders returns the types of the pending orders the header of
+// strategy lets the model place, for Config.PendingOrders, of PendingTypes in
+// their order: eg: limit and stop for "# Pending orders: limit, stop". None
+// without the line, or with "none"; an unknown type fails.
+func StrategyPendingOrders(strategy string) ([]string, error) {
+	value, ok := headerValue(strategy, pendingOrdersKey)
+	if !ok {
+		return nil, nil
+	}
+	set := make(map[string]bool)
+	for _, kind := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t'
+	}) {
+		switch {
+		case kind == "none":
+		case slices.Contains(PendingTypes, kind):
+			set[kind] = true
+		default:
+			return nil, fmt.Errorf("# Pending orders: the type %q, none of %s (or none)", kind,
+				strings.Join(PendingTypes, ", "))
+		}
+	}
+	var kinds []string
+	for _, kind := range PendingTypes {
+		if set[kind] {
+			kinds = append(kinds, kind)
+		}
+	}
+	return kinds, nil
+}
+
+// StrategyDrawings reports whether the header of strategy asks the model to
+// draw its analysis on the chart, "# Drawings: on", for Config.Drawings: off
+// without the line or with "off"; another value fails.
+func StrategyDrawings(strategy string) (bool, error) {
+	value, ok := headerValue(strategy, drawingsKey)
+	if !ok {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("# Drawings: %q, on or off", strings.TrimSpace(value))
+}
+
+// StrategyContext returns the parts of the context the header of strategy
+// adds to the one of every prompt, eg: smc for "# Context: smc" (see
+// Config.SMC): none without the line; an unknown part fails.
+func StrategyContext(strategy string) ([]string, error) {
+	value, ok := headerValue(strategy, contextKey)
+	if !ok {
+		return nil, nil
+	}
+	var parts []string
+	for _, part := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t'
+	}) {
+		if part != ContextSMC {
+			return nil, fmt.Errorf("# Context: the part %q, not %s", part, ContextSMC)
+		}
+		if !slices.Contains(parts, part) {
+			parts = append(parts, part)
+		}
+	}
+	return parts, nil
+}
+
 // promptLines returns the lines of strategy and the index of the first one
 // of its body, the text after its header. The header is the lines at its top
 // starting with #, up to the first line of other text, and isn't sent to the
@@ -266,7 +430,8 @@ func headerBlock(lines []string) bool {
 }
 
 // headerKeys are the keys of the header lines the agent reads.
-var headerKeys = []string{"indicators", "take profit", dailyGainKey, dailyLossKey}
+var headerKeys = []string{"indicators", "take profit", pendingOrdersKey, drawingsKey, contextKey, dailyGainKey,
+	dailyLossKey}
 
 // The amounts in a currency of a line, see moneyIn: an amount, eg: 150 or
 // 1.000,50, and a code of 3 capital letters after it, first in the value of
@@ -422,6 +587,131 @@ var decisionSchema = json.RawMessage(`{
 	"required": ["reason", "action", "confidence", "entry", "stop_loss", "take_profit", "levels"],
 	"additionalProperties": false
 }`)
+
+// The parts of the schema of a decision with the pending orders and the
+// drawings, see schemaOf: the descriptions of the prices, and the properties of
+// the levels and of the drawings, which take their place.
+const (
+	pendingEntryDescription = "Entry price of ENTER_LONG and ENTER_SHORT, the current price; the price of the " +
+		"pending order of BUY_LIMIT, SELL_LIMIT, BUY_STOP and SELL_STOP, or its new one on MODIFY_PENDING. Null " +
+		"for the other actions."
+	pendingStopDescription = "Stop loss of an entry, at the market or pending, of MODIFY_PENDING, of " +
+		"MODIFY_SL, or the current one on HOLD. Null otherwise."
+	pendingProfitDescription = "Take profit of an entry, at the market or pending (null for none only when " +
+		"rules.take_profit_optional is true, always null when rules.no_take_profit is true), of MODIFY_PENDING " +
+		"(null only when the pending order has none), of MODIFY_TP, or the current one on HOLD. Null otherwise."
+	levelsProperty = `"levels": {
+			"type": "array",
+			"description": "The supports and resistances the analysis relies on, the nearest to the price first, 8 at most; empty when none. Drawn on the chart, they don't trade.",
+			"items": {
+				"type": "object",
+				"properties": {
+					"kind": {"type": "string", "enum": ["support", "resistance"]},
+					"price": {"type": "number"}
+				},
+				"required": ["kind", "price"],
+				"additionalProperties": false
+			}
+		}`
+	drawingsProperty = `"drawings": {
+			"type": "array",
+			"description": "The structures the analysis relies on, drawn on the chart, 20 at most; empty when none. They don't trade.",
+			"items": {
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Short name, the same for the same structure from an analysis to the next."},
+					"kind": {"type": "string", "enum": ["zone", "supply", "demand", "level", "marker"]},
+					"label": {"type": "string", "description": "Its name on the chart, a few characters, eg: FVG, OB, BOS."},
+					"bias": {"type": "string", "enum": ["bullish", "bearish", "neutral"]},
+					"timeframe": {"type": "string", "description": "The timeframe it was read on."},
+					"from": {"type": "string", "description": "Open time of the candle it starts at, as the context writes the times."},
+					"to": {"type": ["string", "null"], "description": "Open time of the candle it ended at, null while it holds."},
+					"price": {"type": ["number", "null"], "description": "Price of a level or of a marker, null for a zone."},
+					"low": {"type": ["number", "null"], "description": "Low of a zone, null otherwise."},
+					"high": {"type": ["number", "null"], "description": "High of a zone, null otherwise."},
+					"state": {"type": ["string", "null"], "description": "State of a supply or demand zone: fresh, tested or broken; null for the other kinds."}
+				},
+				"required": ["id", "kind", "label", "bias", "timeframe", "from", "to", "price", "low", "high", "state"],
+				"additionalProperties": false
+			}
+		}`
+)
+
+// schemas are the schemas of the decisions of the shapes with the pending
+// orders or the drawings, see schemaOf.
+var schemas = map[decisionShape]json.RawMessage{
+	{pending: true}:                 extendedSchema(decisionShape{pending: true}),
+	{drawings: true}:                extendedSchema(decisionShape{drawings: true}),
+	{pending: true, drawings: true}: extendedSchema(decisionShape{pending: true, drawings: true}),
+}
+
+// schemaOf returns the JSON schema of a decision of shape: decisionSchema,
+// with the actions of the pending orders and the drawings of the shape.
+func schemaOf(shape decisionShape) json.RawMessage {
+	if schema, ok := schemas[shape]; ok {
+		return schema
+	}
+	return decisionSchema
+}
+
+// extendedSchema returns the schema of a decision of shape: the one of
+// decisionSchema, the reason first, with the actions of the pending orders and
+// their prices when shape.pending, and the drawings last when shape.drawings.
+func extendedSchema(shape decisionShape) json.RawMessage {
+	quote := func(text string) string {
+		data, _ := json.Marshal(text)
+		return string(data)
+	}
+	actions := make([]string, 0, len(shape.actions()))
+	for _, action := range shape.actions() {
+		actions = append(actions, quote(string(action)))
+	}
+	entry := "Entry price of ENTER_LONG and ENTER_SHORT, the current price. Null for the other actions."
+	stop := "Stop loss of an entry, of MODIFY_SL, or the current one on HOLD. Null otherwise."
+	profit := "Take profit of an entry (null for none only when rules.take_profit_optional is true, always null " +
+		"when rules.no_take_profit is true), of MODIFY_TP, or the current one on HOLD. Null otherwise."
+	if shape.pending {
+		entry, stop, profit = pendingEntryDescription, pendingStopDescription, pendingProfitDescription
+	}
+	// the supports and resistances drawn, but for the shape with its own
+	// drawings, the only ones drawn then
+	extra, required := ",\n\t\t"+levelsProperty, `, "levels"`
+	if shape.drawings {
+		extra, required = ",\n\t\t"+drawingsProperty, `, "drawings"`
+	}
+	return json.RawMessage(fmt.Sprintf(`{
+	"type": "object",
+	"properties": {
+		"reason": {
+			"type": "string",
+			"description": "Evidence of the context behind the decision, in one or two short sentences, in rules.reason_language."
+		},
+		"action": {
+			"type": "string",
+			"enum": [%s],
+			"description": "One of rules.allowed_actions."
+		},
+		"confidence": {
+			"type": "number",
+			"description": "Confidence of the analysis, from 0 to 1."
+		},
+		"entry": {
+			"type": ["number", "null"],
+			"description": %s
+		},
+		"stop_loss": {
+			"type": ["number", "null"],
+			"description": %s
+		},
+		"take_profit": {
+			"type": ["number", "null"],
+			"description": %s
+		}%s
+	},
+	"required": ["reason", "action", "confidence", "entry", "stop_loss", "take_profit"%s],
+	"additionalProperties": false
+}`, strings.Join(actions, ", "), quote(entry), quote(stop), quote(profit), extra, required))
+}
 
 // userMessage returns the user message of the context: its JSON.
 func userMessage(in Input) (string, error) {

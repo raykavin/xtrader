@@ -116,10 +116,13 @@ type Config struct {
 
 	// ConsultInterval is the time between the consultations of the model
 	// about each pair, on a schedule of the clock (eg: 10m at :00, :10,
-	// :20...), 0 for one at each close of Timeframe. A consultation falling
-	// on the close of a candle is the one of the close; the others, live
-	// only, are asked on the candle in progress (see Input.Scheduled); the
-	// closes between two consultations are left out. 10s at least.
+	// :20...), 10s at least. Live, it is required and the only schedule of
+	// the model: each slot is asked on the first candle in progress of the
+	// pair in it (see Input.Scheduled), a slot on the close of a candle on the
+	// first one of the next candle, and the model is never asked at the close
+	// of a candle (see OnCandle), besides the start and the reanalyses. In a
+	// backtest, which has no candles in progress, the model is asked at the
+	// closes on the schedule, at each close when 0.
 	ConsultInterval time.Duration
 
 	// Direction, MinPositionValue, PositionFraction, Leverage and PositionSize
@@ -198,6 +201,35 @@ type Config struct {
 	// risk:reward is checked, so MinRiskReward must be 0. Exclusive with
 	// TakeProfitOptional.
 	NoTakeProfit bool
+
+	// PendingOrders are the types of the pending entries the model may place,
+	// of PendingTypes: limit (BUY_LIMIT and SELL_LIMIT) and stop (BUY_STOP and
+	// SELL_STOP), with their stop loss and take profit at the broker (see
+	// service.ProtectionBroker), none when empty. Read from the header of the
+	// prompt, "# Pending orders: limit, stop" (see StrategyPendingOrders). A
+	// pending entry is an entry: allowed while flat, one at a time on a pair,
+	// under the rules of the entries (the daily limits, the news block, the
+	// spread, the setup, the direction, the higher trend), measured from its
+	// price; the model keeps it, moves it (MODIFY_PENDING) or cancels it
+	// (CANCEL_PENDING) at its next analyses, and the Trader cancels it once an
+	// entry of its type isn't allowed anymore, or a position is held on the
+	// pair. Filled, it is the position held.
+	PendingOrders []string
+
+	// PendingExpiry cancels a pending entry once that many candles closed
+	// since it was placed without its fill, 0 for never: the broker keeps it
+	// until it is canceled otherwise.
+	PendingExpiry int
+
+	// Drawings asks the model to draw on the chart the structures its
+	// analysis relies on (see Drawing), read from the header of the prompt,
+	// "# Drawings: on" (see StrategyDrawings).
+	Drawings bool
+
+	// SMC adds to the context the structure of the candles, and of the higher
+	// timeframes, in smart money concepts (see SMC), read from the header of
+	// the prompt, "# Context: smc" (see StrategyContext).
+	SMC bool
 
 	// StructureCandles are the candles the price structure of the context is
 	// computed on (see Structure), more than the Candles sent as rows: the
@@ -338,7 +370,11 @@ func (c Config) validate() error {
 		return fmt.Errorf("the daily limits need the currency of the account, a code of 3 letters, eg: BRL, not %q",
 			c.DailyCurrency)
 	case c.ConsultInterval < 0 || (c.ConsultInterval > 0 && c.ConsultInterval < minConsultInterval):
-		return fmt.Errorf("the consult interval must be 0 (at each close) or at least %s", minConsultInterval)
+		return fmt.Errorf("the consult interval must be at least %s, or 0 in a backtest (at each close)",
+			minConsultInterval)
+	case c.Live && c.ConsultInterval == 0:
+		return errors.New("the consult interval (llm-consult-interval, eg: 5m) is required live: the model is " +
+			"asked on its schedule only, never at the close of a candle")
 	case c.MinPositionValue <= 0:
 		return errors.New("min position value must be positive")
 	case c.PositionFraction <= 0 || c.PositionFraction > 1:
@@ -363,6 +399,10 @@ func (c Config) validate() error {
 		return errors.New("the take profit can't be both optional and none")
 	case c.NoTakeProfit && c.MinRiskReward > 0:
 		return errors.New("a min risk:reward needs a take profit: without one, the reward of an entry is unknown")
+	case c.PendingExpiry < 0:
+		return errors.New("the expiry of the pending orders can't be negative")
+	case slices.ContainsFunc(c.PendingOrders, func(kind string) bool { return !slices.Contains(PendingTypes, kind) }):
+		return fmt.Errorf("invalid pending orders %v: of %s", c.PendingOrders, strings.Join(PendingTypes, ", "))
 	case c.CalendarAhead < 0 || c.CalendarBack < 0 || c.NewsBlockBefore < 0 || c.NewsBlockAfter < 0:
 		return errors.New("the windows of the calendar and of the news block can't be negative")
 	case c.CalendarImportance < ImportanceLow || c.CalendarImportance > ImportanceHigh ||
@@ -433,6 +473,12 @@ type Trader struct {
 
 	levelsMtx sync.Mutex
 	levels    map[string][]Level // of the last decision, by pair: drawn on the chart, see ChartLevels
+
+	pendings map[string]*pendingOrder // the pending entries followed, by pair, see Config.PendingOrders
+
+	analysisMtx sync.Mutex
+	analyses    map[string]ui.Decision // the last decision answered of each pair, drawn on the chart, see ChartAnalysis
+	restored    map[string]bool        // the pairs whose analysis was read back from the store, see restoreAnalysis
 
 	now func() time.Time // the wall clock of the rate limits
 
@@ -588,6 +634,7 @@ func New(cfg Config, provider Provider, opts ...Option) (*Trader, error) {
 		starting:  make(map[string]*starting),
 		history:   make(map[string]int),
 		levels:    make(map[string][]Level),
+		pendings:  make(map[string]*pendingOrder),
 		now:       time.Now,
 
 		fetched:    make(map[string]fetched),
@@ -739,16 +786,22 @@ func (t *Trader) chart(df *model.Dataframe, st *promptState) []strategy.ChartInd
 	return append(indicators, panes...)
 }
 
+// OnCandle follows the candle just closed of df: live, the model isn't asked
+// at the close (see Config.ConsultInterval), only the exit that failed retried
+// and the pending order followed; in a backtest, the model is asked about it
+// on the schedule, see onClose.
 func (t *Trader) OnCandle(df *model.Dataframe, broker service.Broker) {
 	t.finishStart(df, broker, true) // the decision of the start first, asked before the close
-	if !t.onClose(df, broker, TriggerCandle) {
-		t.retryExit(df, broker) // a close left out of the analyses: the exit retried all the same
+	if t.cfg.Live || !t.onClose(df, broker, TriggerCandle) {
+		t.retryExit(df, broker)    // a close left out of the analyses: the exit retried all the same
+		t.guardPending(df, broker) // and the pending order followed
 	}
 }
 
 // onClose asks the model about the candle just closed of df, once per candle,
-// trigger telling why: at its close, or on the first candle after the start.
-// It reports whether the candle is analyzed, false when it is left out.
+// trigger telling why: at its close in a backtest, or on the first candle in
+// progress after the start. It reports whether the candle is analyzed, false
+// when it is left out.
 func (t *Trader) onClose(df *model.Dataframe, broker service.Broker, trigger string) bool {
 	if len(df.Close) == 0 {
 		return false
@@ -822,7 +875,8 @@ func (t *Trader) analyze(df *model.Dataframe, broker service.Broker, run analysi
 
 // prepared is an analysis ready to ask the model, see prepare: its candles,
 // its market, its prompt, the position followed, its context, why it is
-// asked, and its time (see dayClock), the one its decision is remembered at.
+// asked, its time (see dayClock), the one its decision is remembered at, and
+// what happened to the pending order of the pair, told with its decision.
 type prepared struct {
 	df, market  *model.Dataframe
 	st          *promptState
@@ -831,6 +885,7 @@ type prepared struct {
 	trigger     string
 	requestedBy string
 	at          time.Time
+	pending     *pendingEvent
 }
 
 // prepare begins the analysis of the closed candles of df, at the market of
@@ -841,12 +896,16 @@ type prepared struct {
 // caller ends the analysis, see endAnalysis.
 func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysis) (*prepared, string) {
 	st := t.refreshPrompt(df) // the analysis goes on with it, whatever the switches meanwhile
+	t.restoreAnalysis(df.Pair)
 	requested := t.beginAnalysis(df.Pair)
 
 	price := run.market.Close.Last(0)
 	var trade *trade
+	ev := &pendingEvent{}
 	skipped := func(s skip) (*prepared, string) {
-		t.keep(t.skipRecord(df, st, run.trigger, requested, price, trade, s), nil)
+		record := t.skipRecord(df, st, run.trigger, requested, price, trade, s)
+		pendingRecord(&record, ev)
+		t.keep(record, nil)
 		return nil, "the model wasn't asked: " + s.detail
 	}
 	asset, quote, err := broker.Position(df.Pair)
@@ -856,7 +915,9 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 	}
 
 	at := t.dayClock(df)
-	trade = t.follow(df, heldSide(asset*price, t.cfg.MinPositionValue), at)
+	held := heldSide(asset*price, t.cfg.MinPositionValue)
+	t.refreshPending(df, broker, st, held, at, ev) // filled, it is the position followed
+	trade = t.follow(df, held, at)
 	if trade != nil && trade.exiting {
 		// a close that failed: retried at the close of a candle, and on the
 		// ticks once due
@@ -867,7 +928,33 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 		return skipped(skip{SkipCloseRetry, "a close that failed was retried first"})
 	}
 
-	input, why := t.context(df, run.market, broker, st, trade, asset, quote, price)
+	pending := t.pendingOf(df.Pair)
+	if trade != nil {
+		pending = nil // a position held: its cancel is retried, see refreshPending
+	}
+	input, why := t.context(df, run.market, broker, st, trade, pending, asset, quote, price)
+	enriched, kept := false, false
+	if pending != nil {
+		// kept while an entry of its type is allowed now, as if flat without
+		// it: the higher trend of the context included
+		if why.code == "" {
+			t.enrich(df, &input, st, at)
+			enriched = true
+			why = t.higherTrend(df.Pair, &input)
+		}
+		if t.checkPending(df, broker, pending, &input, why, at, ev) {
+			if pending.canceling {
+				return skipped(skip{SkipPendingCancel, "the cancel of " + pending.describe() + " is awaited"})
+			}
+			kept, why = true, skip{}
+			input.PendingOrder = pending.context(t, df, at)
+			input.Rules.Actions = []Action{ActionWait, ActionModifyPending, ActionCancelPending}
+		} else {
+			// canceled: the analysis goes on flat, afresh
+			input, why = t.context(df, run.market, broker, st, nil, nil, asset, quote, price)
+			enriched = false
+		}
+	}
 	if why.code != "" {
 		return skipped(why) // flat without any entry to open: nothing to ask
 	}
@@ -878,7 +965,9 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 			until.Sub(now).Round(time.Second))})
 	}
 
-	t.enrich(df, &input, st, at)
+	if !enriched {
+		t.enrich(df, &input, st, at)
+	}
 	if requested != nil {
 		input.ReanalysisNote = requested.note
 	}
@@ -893,11 +982,14 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 			input.CandleInProgress.Time = run.market.Time[last].UTC()
 		}
 	}
-	if why := t.higherTrend(df.Pair, &input); why.code != "" {
-		return skipped(why) // only WAIT left: nothing to ask
+	if !kept {
+		if why := t.higherTrend(df.Pair, &input); why.code != "" {
+			return skipped(why) // only WAIT left: nothing to ask
+		}
 	}
 
-	p := &prepared{df: df, market: run.market, st: st, trade: trade, input: input, trigger: run.trigger, at: at}
+	p := &prepared{df: df, market: run.market, st: st, trade: trade, input: input, trigger: run.trigger, at: at,
+		pending: ev}
 	if requested != nil {
 		p.requestedBy = string(requested.channel)
 	}
@@ -916,6 +1008,7 @@ func (t *Trader) finish(p *prepared, broker service.Broker, r reply) string {
 		return "no decision: the agent stopped before the model answered"
 	}
 	decision, kept, err := t.conclude(p, r)
+	pendingRecord(&kept, p.pending)
 	if err != nil {
 		t.keep(kept, decision.Attachments)
 		return describeDecision(kept) // no decision, no trade
@@ -1002,23 +1095,23 @@ func (t *Trader) finishStart(df *model.Dataframe, broker service.Broker, wait bo
 	return true
 }
 
-// OnPartialCandle asks the model on the candles in progress, live only: once
-// on the first one after the start, about the candle closed before it, the
-// decision (and the levels on the chart) of the start rather than at the next
-// close, a whole period later; on the one after a reanalysis is asked, at its
+// OnPartialCandle asks the model on the candles in progress, live only, the
+// only place it is asked live: once on the first one after the start, about
+// the candle closed before it; on the one after a reanalysis is asked, at its
 // price, see Reanalyze; and on the first one of each slot of ConsultInterval
-// starting within the candle in progress, the close taking the slot it falls
-// on, even when its candle is still handed in progress past it, the close
-// late: the model is never asked twice at the close. The decision of the
-// start, asked apart for the pairs to be asked at once (see startApart), is
-// applied on the next one, and takes the slots it is asked in. The candles in
-// progress are otherwise left to their close. On each of them, the close of
-// an exit that failed is retried once due, see retryClose.
+// from the open of the candle in progress to its close, a slot on the close
+// of a candle asked on the first one of the next candle, the candle closed
+// with the others (never on a candle still handed in progress past its close,
+// the close late, complete but not confirmed). The decision of the start,
+// asked apart for the pairs to be asked at once (see startApart), is applied
+// on the next one, and takes the slots it is asked in. On each of them, the
+// close of an exit that failed is retried once due, see retryClose.
 func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 	if len(df.Close) == 0 {
 		return
 	}
-	t.retryExit(df, broker) // at the price of now
+	t.retryExit(df, broker)    // at the price of now
+	t.guardPending(df, broker) // the pending order followed, at the price of now
 	if !t.cfg.Live || len(df.Close) < 2 {
 		return
 	}
@@ -1030,15 +1123,18 @@ func (t *Trader) OnPartialCandle(df *model.Dataframe, broker service.Broker) {
 		return
 	}
 	if t.reanalysisPending(df.Pair) {
+		if interval := t.cfg.ConsultInterval; interval > 0 {
+			t.consulted[df.Pair] = t.now().Truncate(interval) // the slot it is asked in, answered by it
+		}
 		t.analyze(closed(df), broker, analysis{trigger: TriggerReanalysis, market: df, inProgress: true})
 		return
 	}
 	if interval := t.cfg.ConsultInterval; interval > 0 && len(df.Time) == len(df.Close) {
 		slot := t.now().Truncate(interval)
 		opened := df.Time[len(df.Time)-1]
-		// within the candle in progress only: a slot at or past its close is the
-		// one of the close, asked once it comes
-		within := slot.After(opened) && (t.period <= 0 || slot.Before(opened.Add(t.period)))
+		// within the candle in progress only, from its open: a slot at or past
+		// its close is asked on the next candle, once this one is closed
+		within := !slot.Before(opened) && (t.period <= 0 || slot.Before(opened.Add(t.period)))
 		if within && t.consulted[df.Pair].Before(slot) {
 			t.consulted[df.Pair] = slot
 			t.analyze(closed(df), broker, analysis{trigger: TriggerInterval, market: df, inProgress: true})
@@ -1282,6 +1378,18 @@ func (t *Trader) conclude(p *prepared, r reply) (Decision, ui.Decision, error) {
 	if err == nil {
 		err = decision.Validate(input)
 	}
+	switch {
+	case !input.drawings:
+		decision.Drawings = nil // a provider plugged in may draw all the same
+	case decision.Action != "":
+		// drawn only once valid, whatever the decision: they only inform
+		var dropped []string
+		decision.Drawings, dropped = cleanDrawings(decision.Drawings, input)
+		if len(dropped) > 0 {
+			decision.Notes = append(decision.Notes, Note{Kind: "text",
+				Text: "drawings left out: " + strings.Join(dropped, "; ")})
+		}
+	}
 	kept := t.decisionRecord(st, input, trigger, requestedBy, r.at, latency, decision, err)
 	t.record(st, input, latency, decision, err, kept.ID, trigger, requestedBy)
 	if err != nil {
@@ -1331,32 +1439,67 @@ func (t *Trader) apply(df *model.Dataframe, broker service.Broker, st *promptSta
 			d.Confidence)
 	}
 
+	refused := func(why string) ([]model.Order, string, string) {
+		log.Infof("[LLM] %s %s | %s refused: %s", df.Pair, t.cfg.Timeframe, d.Action, why)
+		return nil, OutcomeRefused, why
+	}
+	profit := 0.0 // none: the stop loss alone, see Config.TakeProfitOptional
+	if d.TakeProfit != nil {
+		profit = *d.TakeProfit
+	}
+	failed := func(err error) string { // the decision applied, the broker failing
+		if err == nil {
+			return waived
+		}
+		why := "the broker: " + err.Error()
+		if waived != "" {
+			why = waived + "; " + why
+		}
+		return why
+	}
 	var orders []model.Order
 	switch d.Action {
-	case ActionEnterLong, ActionEnterShort:
+	case ActionEnterLong, ActionEnterShort, ActionBuyLimit, ActionSellLimit, ActionBuyStop, ActionSellStop:
 		// the daily limits again, whatever the decision: a close booked since
 		// the context was read
 		now := t.dayClock(df)
 		if _, limited := t.daily(df.Pair, st, now); limited != "" {
-			log.Infof("[LLM] %s %s | %s refused: %s", df.Pair, t.cfg.Timeframe, d.Action, limited)
-			return nil, OutcomeRefused, limited
+			return refused(limited)
 		}
 		// and the news block, at the time of now: the model may answer late
 		if blocked := t.newsBlocked(df.Pair, now); blocked != "" {
-			why := "no entry around the release " + blocked
-			log.Infof("[LLM] %s %s | %s refused: %s", df.Pair, t.cfg.Timeframe, d.Action, why)
-			return nil, OutcomeRefused, why
+			return refused("no entry around the release " + blocked)
 		}
 		// and the position and the price of now, last
 		if why := t.recheck(df, broker, input, d); why != "" {
-			log.Infof("[LLM] %s %s | %s refused: %s", df.Pair, t.cfg.Timeframe, d.Action, why)
-			return nil, OutcomeRefused, why
+			return refused(why)
 		}
-		profit := 0.0 // none: the stop loss alone, see Config.TakeProfitOptional
-		if d.TakeProfit != nil {
-			profit = *d.TakeProfit
+		if d.Action.pendingKind() != "" {
+			placed, err := t.place(df, broker, d.Action, float64(input.EntrySize), *d.Entry, *d.StopLoss, profit)
+			return placed, OutcomeApplied, failed(err)
 		}
 		orders = t.open(df, broker, d.Action.side(), float64(input.EntrySize), *d.StopLoss, profit)
+	case ActionModifyPending:
+		p := t.pendingOf(df.Pair)
+		if p == nil {
+			return refused("the pending order isn't waiting anymore: filled or canceled since the context was read")
+		}
+		if why := t.recheck(df, broker, input, d); why != "" {
+			return refused(why)
+		}
+		moved, err := t.modifyPending(df, broker, p, *d.Entry, *d.StopLoss, profit)
+		return moved, OutcomeApplied, failed(err)
+	case ActionCancelPending:
+		p := t.pendingOf(df.Pair)
+		if p == nil {
+			return nil, OutcomeApplied, "the pending order wasn't waiting anymore: filled or canceled since the " +
+				"context was read"
+		}
+		ev := &pendingEvent{}
+		if !t.cancelPending(df.Pair, broker, p, "decided by the model", ev) {
+			return nil, OutcomeApplied, failed(errors.New(ev.notes[len(ev.notes)-1]))
+		}
+		return ev.orders, OutcomeApplied, waived
 	case ActionExit:
 		log.Infof("[LLM] %s %s | EXIT | close %f", df.Pair, t.cfg.Timeframe, df.Close.Last(0))
 		if _, order := t.close(df, broker, tr); order != nil {
@@ -1402,6 +1545,12 @@ func (t *Trader) recheck(df *model.Dataframe, broker service.Broker, input Input
 		return fmt.Sprintf("a %s position of %g is held on the pair now, opened since the context was read",
 			describeSide(held), math.Abs(asset))
 	}
+	if p := t.pendingOf(df.Pair); p != nil {
+		if d.Action != ActionModifyPending {
+			return p.describe() + " is waiting on the pair now, placed since the context was read"
+		}
+		now.PendingOrder = p.context(t, df, t.dayClock(df)) // its levels of now
+	}
 	if err := d.Validate(now); err != nil {
 		return fmt.Sprintf("at the price of now, %g: %v", float64(now.Price), err)
 	}
@@ -1433,9 +1582,13 @@ func (t *Trader) priceNow(df *model.Dataframe, broker service.Broker, input Inpu
 
 // reducesRisk reports whether the decision reduces the risk of the position
 // held of its context: EXIT closes it, and MODIFY_SL moves its stop loss toward
-// the price. Such a decision, asked by the trader in the note of a
-// reanalysis, is applied whatever its confidence.
+// the price; or the risk of its pending order: CANCEL_PENDING cancels it. Such
+// a decision, asked by the trader in the note of a reanalysis, is applied
+// whatever its confidence.
 func reducesRisk(in Input, d Decision) bool {
+	if d.Action == ActionCancelPending {
+		return in.PendingOrder != nil
+	}
 	if in.Position == nil {
 		return false
 	}
@@ -1453,9 +1606,11 @@ func reducesRisk(in Input, d Decision) bool {
 // closePrice, the price of now, the quotes of market, and why there is nothing
 // to decide (see skip), none when there is: flat without any entry to open,
 // eg: the balance too low for a position, or a broker that can't place the
-// stop loss and take profit with the order.
-func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st *promptState, tr *trade, asset,
-	quote, closePrice float64) (Input, skip) {
+// stop loss and take profit with the order. Flat with the pending order p
+// waiting, the entries are the ones allowed as if without it, the size its
+// own: see checkPending.
+func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st *promptState, tr *trade,
+	p *pendingOrder, asset, quote, closePrice float64) (Input, skip) {
 
 	nan := number(math.NaN())
 	candles := t.candles(df)
@@ -1484,6 +1639,11 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 			TakeProfitOptional: st.takeProfitOptional,
 			NoTakeProfit:       st.noTakeProfit,
 		},
+		drawings: st.drawings,
+	}
+	if len(st.pendingOrders) > 0 {
+		input.Rules.PendingOrders = slices.Clone(st.pendingOrders)
+		input.Rules.PendingExpiry = t.cfg.PendingExpiry
 	}
 	if t.cfg.MinRiskReward > 0 {
 		input.Rules.MinRiskReward = number(t.cfg.MinRiskReward)
@@ -1536,12 +1696,16 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 			log.Infof("[LLM] %s %s | no entry: %s", df.Pair, t.cfg.Timeframe, blocked)
 			return input, skip{SkipNews, "no entry around the release " + blocked}
 		}
-		size, ok := t.size(df.Pair, quote, closePrice)
-		if !ok {
-			return input, skip{SkipSize, "no position fits the balance and the sizing"}
+		if p == nil {
+			size, ok := t.size(df.Pair, quote, closePrice)
+			if !ok {
+				return input, skip{SkipSize, "no position fits the balance and the sizing"}
+			}
+			input.EntrySize = number(size)
+		} else {
+			input.EntrySize = number(p.entry.Quantity) // its funds reserved: the size its own
 		}
-		input.EntrySize = number(size)
-		entries, why := t.entries(df, input)
+		entries, why := t.entries(df, input, st)
 		for _, entry := range entries {
 			if opens(t.cfg.Direction, entry.side()) {
 				input.Rules.Actions = append(input.Rules.Actions, entry)
@@ -1604,26 +1768,36 @@ func (t *Trader) setup() string {
 	return t.cfg.Setup
 }
 
-// entries returns the entries the model may choose from when flat, and why
-// there is none: SetupTrendPullback leaves only the one with the trend of
-// Summary.Trend, and a spread wider than MaxSpreadATR none.
-func (t *Trader) entries(df *model.Dataframe, input Input) ([]Action, skip) {
+// entries returns the entries the model may choose from when flat, at the
+// market and, with the prompt st placing them, the pending orders of its
+// types (see Config.PendingOrders), and why there is none: SetupTrendPullback
+// leaves only the ones with the trend of Summary.Trend, and a spread wider
+// than MaxSpreadATR none.
+func (t *Trader) entries(df *model.Dataframe, input Input, st *promptState) ([]Action, skip) {
 	spread, atr := float64(input.Spread), last(df, "llm_atr")
 	if t.cfg.MaxSpreadATR > 0 && known(spread) && known(atr) && atr > 0 && spread > t.cfg.MaxSpreadATR*atr {
 		return nil, skip{SkipSpread, fmt.Sprintf("the spread %g is wider than %g ATR (%g)", spread,
 			t.cfg.MaxSpreadATR, atr)}
 	}
-	if t.setup() != SetupTrendPullback {
-		return []Action{ActionEnterLong, ActionEnterShort}, skip{}
+	market := []Action{ActionEnterLong, ActionEnterShort}
+	if t.setup() == SetupTrendPullback {
+		switch input.Summary.Trend {
+		case "up":
+			market = []Action{ActionEnterLong}
+		case "down":
+			market = []Action{ActionEnterShort}
+		default:
+			return nil, skip{SkipSetup,
+				"no trend for the trend pullback setup (the close and the EMAs not on the same side of the SMA)"}
+		}
 	}
-	switch input.Summary.Trend {
-	case "up":
-		return []Action{ActionEnterLong}, skip{}
-	case "down":
-		return []Action{ActionEnterShort}, skip{}
+	entries := slices.Clone(market)
+	for _, kind := range st.pendingOrders {
+		for _, entry := range market {
+			entries = append(entries, pendingAction(entry.side(), kind))
+		}
 	}
-	return nil, skip{SkipSetup,
-		"no trend for the trend pullback setup (the close and the EMAs not on the same side of the SMA)"}
+	return entries, skip{}
 }
 
 // calendar adds the economic calendar to the context of the analysis at at
@@ -1672,6 +1846,32 @@ func (t *Trader) newsBlocked(pair string, at time.Time) string {
 		return ""
 	}
 	return t.newsBlock(events, at)
+}
+
+// nextNewsBlock returns when the window of the news block of the next release
+// of pair after at starts, among the ones of the calendar up to
+// Config.CalendarAhead after it: zero without one, without a news block, or
+// with a calendar that can't be read. A pending order waiting is canceled
+// then, see guardPending.
+func (t *Trader) nextNewsBlock(pair string, at time.Time) time.Time {
+	currencies := t.calendarCurrencies(pair)
+	if len(currencies) == 0 || t.cfg.NewsBlockBefore == 0 && t.cfg.NewsBlockAfter == 0 {
+		return time.Time{}
+	}
+	events, err := t.readCalendar(pair, currencies, at, at.Add(max(t.cfg.CalendarAhead, t.cfg.NewsBlockBefore)))
+	if err != nil {
+		return time.Time{}
+	}
+	var next time.Time
+	for _, event := range events {
+		if event.Importance < t.cfg.NewsBlockImportance || !event.Timed() {
+			continue
+		}
+		if start := event.Time.Add(-t.cfg.NewsBlockBefore); start.After(at) && (next.IsZero() || start.Before(next)) {
+			next = start
+		}
+	}
+	return next
 }
 
 // newsBlock returns the release of events blocking new entries at at, if any,
@@ -1791,13 +1991,13 @@ func (t *Trader) higherTrend(pair string, input *Input) skip {
 		return skip{SkipHigherTrend, why}
 	}
 
-	against := ActionEnterShort
+	against := model.SideTypeSell
 	if trend == "down" {
-		against = ActionEnterLong
+		against = model.SideTypeBuy
 	}
 	input.Rules.HigherTrend = trend
 	input.Rules.Actions = slices.DeleteFunc(slices.Clone(input.Rules.Actions), func(a Action) bool {
-		return a == against
+		return a.side() == against // the entries at the market and pending against the trend
 	})
 	if len(input.Rules.Actions) <= 1 {
 		log.Infof("[LLM] %s %s | no entry: the higher timeframes trend %s, against the entries allowed", pair,
@@ -1826,10 +2026,16 @@ func (t *Trader) enrich(df *model.Dataframe, input *Input, st *promptState, at t
 			atr = series[max(len(series)-len(candles), 0):]
 		}
 		input.Structure = computeStructure(candles, atr)
+		if st.smc {
+			input.SMC = computeSMC(candles, atr, float64(input.Price))
+		}
+	}
+	if st.drawings {
+		input.Drawings = t.chartDrawings(df.Pair)
 	}
 	closeAt := input.Time.Add(t.period) // the close of the candle just closed
 	if t.feeder != nil {
-		input.HigherTimeframes = t.frames(df.Pair, float64(input.Price))
+		input.HigherTimeframes = t.frames(df.Pair, float64(input.Price), st.smc)
 		input.Reference = t.reference(df, closeAt)
 		input.Correlated = t.correlated(df)
 	}

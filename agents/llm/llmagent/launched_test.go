@@ -73,12 +73,37 @@ func launchedRunRecords(t *testing.T, cfg agentapi.Config) (int64, []agentapi.Re
 	return requests.Load(), slices.Clone(records), err
 }
 
+// withInterval returns params with the consult interval, required live and
+// paper.
+func withInterval(params map[string]string) map[string]string {
+	out := map[string]string{"llm-consult-interval": "5m"}
+	for key, value := range params {
+		out[key] = value
+	}
+	return out
+}
+
+// Live and paper, an LLM agent without the consult interval refuses to start,
+// never connecting to the bridge: the model is asked on it only, never at the
+// close of a candle.
+func TestRun_ConsultIntervalRequired(t *testing.T) {
+	for _, mode := range []string{"live", "paper"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := agentapi.Config{ID: 1, Name: "llm", Kind: "llm", Mode: mode, Account: &agentapi.Account{},
+				LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test"}}
+			requests, err := launchedRun(t, cfg)
+			require.ErrorContains(t, err, "the consult interval (llm-consult-interval, eg: 5m) is required live")
+			require.Zero(t, requests, "never connected")
+		})
+	}
+}
+
 // Launched by the controller, an LLM agent trades the book the controller
 // keeps apart from the ones of the other agents, its comment and its magic
 // number by default as the controller computes them.
 func TestRun_TradesTheBookOfItsSettings(t *testing.T) {
 	model := func(params map[string]string) *agentapi.LLM {
-		return &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test", Params: params}
+		return &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test", Params: withInterval(params)}
 	}
 	comment, magic := " nb:gold ", int64(42)
 	for _, cfg := range []agentapi.Config{
@@ -102,7 +127,7 @@ func TestRun_TradesTheBookOfItsSettings(t *testing.T) {
 // positions the controller doesn't keep apart from the other agents.
 func TestRun_RefusesTheBookOfOtherSettings(t *testing.T) {
 	cfg := agentapi.Config{ID: 1, Name: "gold", Kind: "trend", Mode: "live", Account: &agentapi.Account{},
-		LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test"}}
+		LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test", Params: withInterval(nil)}}
 	requests, err := launchedRun(t, cfg)
 	require.ErrorContains(t, err, "the agent gold trades the bridge")
 	require.ErrorContains(t, err, `(comment "nb:llm")`)
@@ -155,7 +180,7 @@ func TestRun_PromptStatusWaitsForTheAccount(t *testing.T) {
 	for mode, told := range map[string]bool{"live": false, "paper": true} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := agentapi.Config{ID: 1, Name: "llm", Kind: "llm", Mode: mode, Account: &agentapi.Account{},
-				LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test"}}
+				LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-test", Params: withInterval(nil)}}
 			requests, records, err := launchedRunRecords(t, cfg)
 			require.ErrorContains(t, err, "mt5: the bridge at")
 			require.NotZero(t, requests)

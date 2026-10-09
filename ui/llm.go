@@ -100,9 +100,47 @@ func (c *Chart) decisionOf(orderID int64) string {
 	return c.decisions.OrderDecision(orderID)
 }
 
-// onDecision sends a decision kept by the strategy to the dashboards.
+// onDecision sends a decision kept by the strategy to the dashboards, with the
+// analysis of its pair drawn on the chart once it is kept.
 func (c *Chart) onDecision(decision Decision) {
-	c.events.publish("decision", DecisionEvent{Pair: decision.Pair, Decision: decision})
+	c.events.publish("decision", DecisionEvent{Pair: decision.Pair, Decision: decision,
+		Analysis: c.analysis(decision.Pair)})
+}
+
+// analysis returns the analysis of the language model of the strategy on pair
+// drawn on the chart, nil without one, see AnalysisSource: its drawings and
+// the prices of its intent that aren't finite, which JSON can't write, left
+// out.
+func (c *Chart) analysis(pair string) *Analysis {
+	source, ok := c.strategy.(AnalysisSource)
+	if !ok {
+		return nil
+	}
+	analysis, ok := source.ChartAnalysis(pair)
+	if !ok {
+		return nil
+	}
+	drawings := make([]Drawing, 0, len(analysis.Drawings))
+	for _, drawing := range analysis.Drawings {
+		if finitePrices(drawing.Price, drawing.Low, drawing.High) {
+			drawings = append(drawings, drawing)
+		}
+	}
+	analysis.Drawings = drawings
+	if intent := analysis.Intent; intent != nil && !finitePrices(intent.Entry, intent.StopLoss, intent.TakeProfit) {
+		analysis.Intent = nil
+	}
+	return &analysis
+}
+
+// finitePrices reports whether the prices set are finite.
+func finitePrices(prices ...*float64) bool {
+	for _, price := range prices {
+		if price != nil && !finite(*price) {
+			return false
+		}
+	}
+	return true
 }
 
 // requireDecisions returns the decisions of the strategy, or replies 404 for a

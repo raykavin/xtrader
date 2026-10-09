@@ -20,9 +20,26 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Candle, Indicator, Metric, Order, Snapshot } from "../api/types";
+import type {
+  Analysis,
+  Candle,
+  Indicator,
+  Metric,
+  Order,
+  Snapshot,
+  ViewTimeframe,
+} from "../api/types";
+import { AnalysisPrimitive } from "../chart/analysisDrawings";
 import { type DraggableLine, LineDragger } from "../chart/dragLines";
 import { type TradeLine, TradeLinesPrimitive } from "../chart/tradeLines";
+import {
+  analysisCaption,
+  analysisShapes,
+  endedPendingSegments,
+  isPendingEntry,
+  pendingEntryLegs,
+  pendingEntryTitle,
+} from "../lib/analysis";
 import {
   formatChartPrice,
   formatCompact,
@@ -30,9 +47,10 @@ import {
   formatProfit,
   LOCALE,
 } from "../lib/format";
-import { positionPnL } from "../lib/stats";
+import { type PositionPnL, positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
+import { candleUpdates, timeframeLabel } from "../lib/timeframes";
 
 interface Props {
   snapshot: Snapshot;
@@ -46,6 +64,26 @@ interface Props {
   };
   /** With the control panel: moves a pending order dropped at price. */
   onMoveOrder?: (order: Order, price: number) => Promise<void>;
+  /** The analysis of the language model drawn: the last one, or one of the list shown. */
+  analysis?: Analysis | null;
+  /** Back to the last analysis, when one of the list is shown. */
+  onAnalysisReset?: () => void;
+  /**
+   * The timeframe of the candles of snapshot, the one of the strategy (see
+   * Snapshot.timeframe) or another one shown, see timeframes.
+   */
+  timeframe?: string;
+  /** The timeframes the chart may be shown on, with the selector, see onTimeframeChange. */
+  timeframes?: ViewTimeframe[];
+  /** Shows the chart on another timeframe: the trading of the strategy as it is. */
+  onTimeframeChange?: (timeframe: string) => void;
+  /** How the candles of the timeframe shown stand, eg: loading, or why they failed. */
+  timeframeNote?: { text: string; error?: boolean } | null;
+  /**
+   * The open position, of the strategy: its line kept whatever the candles
+   * shown; from the last candle of snapshot when absent.
+   */
+  position?: PositionPnL | null;
 }
 
 /** A price line of the chart: a pending order, or a level of the order ticket. */
@@ -55,6 +93,7 @@ interface LineSpec {
   title: string;
   dashed: boolean;
   dotted?: boolean; // a level of the analysis of the strategy, see Snapshot.levels
+  largeDashed?: boolean; // a leg of a pending entry, waiting for its fill
   onDrag?: (price: number) => void;
   onDrop?: (price: number) => Promise<void> | void;
 }
@@ -70,12 +109,14 @@ interface ChartState {
   volume: ISeriesApi<"Histogram">;
   markers: ISeriesMarkersPluginApi<Time>;
   tradeLines: TradeLinesPrimitive;
+  analysis: AnalysisPrimitive;
   priceLines: Map<string, IPriceLine>;
   dragger: LineDragger;
   metrics: Map<string, MetricSeries>;
   paneByIndicator: Map<string, number>;
   pair: string;
-  candleCount: number;
+  timeframe: string;
+  drawn: Candle[]; // the candles drawn, see candleUpdates
   paneCount: number;
   indicators: string; // the names of the indicators drawn
 }
@@ -218,7 +259,9 @@ function buildMarkers(orders: Order[], candles: Candle[], palette: Palette): Ser
 /**
  * OCO orders (stop loss / limit maker) are drawn as a line from the price
  * where they were created (ref_price) to their trigger price, over the time
- * they were open. Green for take-profit targets, red for stop losses.
+ * they were open. Green for take-profit targets, red for stop losses. The
+ * pending entries that ended are drawn at their price over the time they
+ * waited, see endedPendingSegments.
  */
 function buildTradeLines(orders: Order[], candles: Candle[], palette: Palette): TradeLine[] {
   if (candles.length === 0) return [];
@@ -245,6 +288,16 @@ function buildTradeLines(orders: Order[], candles: Candle[], palette: Palette): 
       toPrice: order.price,
       color: isStop ? palette.down : palette.up,
       dashed: order.status !== "FILLED",
+    });
+  }
+  for (const segment of endedPendingSegments(orders, candles, palette)) {
+    lines.push({
+      fromTime: segment.fromTime,
+      fromPrice: segment.price,
+      toTime: segment.toTime,
+      toPrice: segment.price,
+      color: segment.color,
+      dashed: segment.dashed,
     });
   }
   return lines;
@@ -333,12 +386,62 @@ function CrosshairIcon() {
   );
 }
 
-export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrder }: Props) {
+/** Four corners, out to enter the fullscreen, in to leave it. */
+function FullscreenIcon({ leave }: { leave: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d={
+          leave
+            ? "M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"
+            : "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+        }
+      />
+    </svg>
+  );
+}
+
+/**
+ * How the chart is shown alone: in the fullscreen of the browser, or over the
+ * page where the browser has none (eg: the Safari of the iPhone).
+ */
+type Fullscreen = "browser" | "page" | null;
+
+export function PriceChart({
+  snapshot,
+  theme,
+  layoutKey = "",
+  ticket,
+  onMoveOrder,
+  analysis,
+  onAnalysisReset,
+  timeframe = "",
+  timeframes = [],
+  onTimeframeChange,
+  timeframeNote,
+  position,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLElement>(null);
   const stateRef = useRef<ChartState | null>(null);
+  const [fullscreen, setFullscreen] = useState<Fullscreen>(null);
   const lastClose = useRef(0);
   lastClose.current = snapshot.candles[snapshot.candles.length - 1]?.close ?? 0;
-  const pnl = useMemo(() => positionPnL(snapshot), [snapshot]);
+  const ownPnL = useMemo(() => positionPnL(snapshot), [snapshot]);
+  const pnl = position === undefined ? ownPnL : position;
+  const execution = timeframes.find((v) => v.execution)?.timeframe ?? snapshot.timeframe ?? "";
+  const otherView = timeframe !== "" && execution !== "" && timeframe !== execution;
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const layoutRef = useRef(layoutKey);
@@ -373,6 +476,8 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
 
     const tradeLines = new TradeLinesPrimitive();
     candles.attachPrimitive(tradeLines);
+    const analysisDrawings = new AnalysisPrimitive(palette.fontFamily, palette.background);
+    candles.attachPrimitive(analysisDrawings);
     const markers = createSeriesMarkers(candles, []);
     const dragger = new LineDragger(container, candles, (price) =>
       roundPrice(price, lastClose.current || price),
@@ -395,12 +500,14 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
       volume,
       markers,
       tradeLines,
+      analysis: analysisDrawings,
       priceLines: new Map(),
       dragger,
       metrics: new Map(),
       paneByIndicator: new Map(),
       pair: "",
-      candleCount: 0,
+      timeframe: "",
+      drawn: [],
       paneCount: 0,
       indicators: "",
     };
@@ -423,18 +530,20 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     const palette = palettes[theme];
     const specs = new Map<string, LineSpec>();
 
+    // the pending entries, a stop one included, apart from the legs: the ones
+    // waiting for the fill of an entry (pend.) apart from the ones of a position
+    const waiting = pendingEntryLegs(snapshot.orders);
     for (const { order, kind, price, movable } of pendingLines(snapshot.orders)) {
-      const side = order.side === "BUY" ? "C" : "V";
+      const entry = isPendingEntry(order);
+      const pending = waiting.has(order.id);
       specs.set(`order:${order.id}`, {
         price,
-        color: kind === "stop" ? palette.down : kind === "profit" ? palette.up : palette.accent,
-        title:
-          kind === "limit"
-            ? `${side} ${formatCompact(order.quantity)}`
-            : kind === "stop"
-              ? "SL"
-              : "TP",
+        color: entry ? palette.accent : kind === "stop" ? palette.down : palette.up,
+        title: entry
+          ? pendingEntryTitle(order)
+          : `${kind === "stop" ? "SL" : "TP"}${pending ? " pend." : ""}`,
         dashed: false,
+        largeDashed: pending,
         onDrop:
           movable && onMoveOrder
             ? (to) =>
@@ -511,9 +620,11 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
         lineWidth: 1 as const,
         lineStyle: spec.dotted
           ? LineStyle.Dotted
-          : spec.dashed
-            ? LineStyle.Dashed
-            : LineStyle.Solid,
+          : spec.largeDashed
+            ? LineStyle.LargeDashed
+            : spec.dashed
+              ? LineStyle.Dashed
+              : LineStyle.Solid,
         axisLabelVisible: true,
       };
       const line = existing ?? state.candles.createPriceLine(options);
@@ -525,6 +636,16 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     }
     state.dragger.setLines(draggable);
   }, [snapshot.orders, snapshot.levels, pnl, theme, levels, onLevel, onMoveOrder]);
+
+  // The analysis of the language model: its zones, levels and markers, and
+  // the prices of its intent, drawn behind the candles, see AnalysisPrimitive.
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) return;
+    const palette = palettes[theme];
+    state.analysis.background = palette.background;
+    state.analysis.setShapes(analysisShapes(analysis, snapshot.candles, palette));
+  }, [analysis, snapshot.candles, theme]);
 
   // A move refused shows for a while.
   useEffect(() => {
@@ -552,7 +673,8 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     state.tradeLines.setLines(buildTradeLines(orders, candles, palette));
   }, [theme]);
 
-  // Data changes: full reload when the pair changes, incremental otherwise.
+  // Data changes: drawn again whole, the chart fit to them, on another pair,
+  // timeframe or indicators; else the candles changed only, see candleUpdates.
   useEffect(() => {
     const state = stateRef.current;
     if (!state) return;
@@ -560,20 +682,25 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     // other indicators, eg: the prompt of the strategy switched, are drawn
     // again whole, their panes with them
     const indicators = snapshot.indicators.map((i) => i.name).join("\n");
-    const incremental =
+    const same =
       state.pair === snapshot.pair &&
-      state.indicators === indicators &&
-      snapshot.candles.length >= state.candleCount &&
-      snapshot.candles.length - state.candleCount <= 5;
+      state.timeframe === timeframe &&
+      state.indicators === indicators;
+    const updates = same ? candleUpdates(state.drawn, snapshot.candles) : null;
+    const incremental = updates !== null;
 
-    if (!incremental) {
+    if (!updates) {
       state.candles.setData(snapshot.candles.map(toCandle));
       state.volume.setData(snapshot.candles.map((c) => toVolume(c, palette)));
     } else {
-      // from the last candle drawn: the one in progress changes until its close
-      for (const c of snapshot.candles.slice(Math.max(0, state.candleCount - 1))) {
-        state.candles.update(toCandle(c));
-        state.volume.update(toVolume(c, palette));
+      // from the last candle drawn: the one in progress changes until its
+      // close; before it, the ones read again changed, eg: a candle of a
+      // timeframe below the one of the strategy built from its prices
+      for (const { index, historical } of updates) {
+        const c = snapshot.candles[index];
+        if (!c) continue;
+        state.candles.update(toCandle(c), historical);
+        state.volume.update(toVolume(c, palette), historical);
       }
     }
 
@@ -581,7 +708,7 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     const seen = new Set<string>();
     let nextPane =
       Math.max(1, ...state.paneByIndicator.values()) + (state.paneByIndicator.size ? 1 : 0);
-    if (!incremental) {
+    if (!same) {
       nextPane = 1;
       for (const { series } of state.metrics.values()) state.chart.removeSeries(series);
       state.metrics.clear();
@@ -631,7 +758,7 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     // Give indicator panes a sensible share of the height, when they come or
     // go: the user may resize them in between.
     const panes = state.chart.panes();
-    if (panes.length !== state.paneCount || !incremental) {
+    if (panes.length !== state.paneCount || !same) {
       const saved = loadPaneFactors(paneKey(layoutKey, snapshot.pair), panes.length);
       for (const [index, pane] of panes.entries()) {
         pane.setStretchFactor(saved?.[index] ?? (index === 0 ? 3 : 1));
@@ -642,8 +769,10 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
     state.markers.setMarkers(buildMarkers(snapshot.orders, snapshot.candles, palette));
     state.tradeLines.setLines(buildTradeLines(snapshot.orders, snapshot.candles, palette));
 
-    if (!incremental) {
-      autoScale(state.chart); // the prices of this pair, whatever the scale of the one before
+    if (!same || (state.drawn.length === 0 && snapshot.candles.length > 0)) {
+      // the prices of this pair, whatever the scale of the one before; the
+      // candles of a timeframe once loaded
+      autoScale(state.chart);
       state.chart.timeScale().fitContent();
     }
     // drawn on the next frame: the width of its price scale known then
@@ -652,10 +781,59 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
       setScaleWidth((previous) => (previous === width ? previous : width));
     });
     state.pair = snapshot.pair;
-    state.candleCount = snapshot.candles.length;
+    state.timeframe = timeframe;
+    state.drawn = snapshot.candles;
     state.indicators = indicators;
     return () => window.cancelAnimationFrame(frame);
-  }, [snapshot, theme, layoutKey]);
+  }, [snapshot, theme, layoutKey, timeframe]);
+
+  // The fullscreen of the browser left, eg: with Esc, followed.
+  useEffect(() => {
+    const changed = () =>
+      setFullscreen((current) =>
+        document.fullscreenElement && document.fullscreenElement === cardRef.current
+          ? "browser"
+          : current === "browser"
+            ? null
+            : current,
+      );
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+
+  // Over the page: the page under it kept still, and Esc leaves it.
+  useEffect(() => {
+    if (fullscreen !== "page") return;
+    const leave = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(null);
+    };
+    document.documentElement.classList.add("chart-fullscreen-open");
+    window.addEventListener("keydown", leave);
+    return () => {
+      document.documentElement.classList.remove("chart-fullscreen-open");
+      window.removeEventListener("keydown", leave);
+    };
+  }, [fullscreen]);
+
+  // The chart alone on the screen, its card in the fullscreen of the
+  // browser, or over the page where it has none; the same button leaves it.
+  const toggleFullscreen = () => {
+    const card = cardRef.current;
+    if (!card) return;
+    if (fullscreen === "browser") {
+      void document.exitFullscreen().catch(() => setFullscreen(null));
+      return;
+    }
+    if (fullscreen === "page") {
+      setFullscreen(null);
+      return;
+    }
+    if (document.fullscreenEnabled && typeof card.requestFullscreen === "function") {
+      card.requestFullscreen().catch(() => setFullscreen("page"));
+    } else {
+      setFullscreen("page");
+    }
+  };
 
   // The last candle at the right edge, the price scales fit to the data.
   const goLive = () => {
@@ -666,13 +844,33 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
   };
 
   return (
-    <section className="card chart-card">
+    <section
+      ref={cardRef}
+      className={fullscreen ? "card chart-card chart-fullscreen" : "card chart-card"}
+    >
       <div className="card-title">
         <span>
           {snapshot.pair} <small>preço · volume · indicadores</small>
           {moveError && <span className="chart-error">{moveError}</span>}
+          {analysis && (
+            <span className="chart-analysis" title="Marcações da análise do LLM no gráfico">
+              {analysisCaption(analysis)}
+              {onAnalysisReset && (
+                <button type="button" className="mini-btn" onClick={onAnalysisReset}>
+                  Voltar à análise atual
+                </button>
+              )}
+            </span>
+          )}
         </span>
         <span className="legend">
+          {otherView && (
+            <span className="legend-item">
+              <span title="Os indicadores da estratégia são calculados nos candles do timeframe de execução">
+                indicadores no {timeframeLabel(execution)}
+              </span>
+            </span>
+          )}
           {snapshot.indicators.map((indicator) => (
             <span key={indicator.name} className="legend-item">
               {indicator.metrics.map((metric, index) => (
@@ -685,8 +883,58 @@ export function PriceChart({ snapshot, theme, layoutKey = "", ticket, onMoveOrde
           ))}
         </span>
       </div>
+      {timeframes.length > 0 && (
+        <div className="chart-toolbar">
+          <fieldset className="timeframes">
+            <legend>Timeframe do gráfico</legend>
+            {timeframes.map((view) => {
+              const label = timeframeLabel(view.timeframe);
+              const title = !view.available
+                ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
+                : view.execution
+                  ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
+                  : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
+              return (
+                <button
+                  key={view.timeframe}
+                  type="button"
+                  className={view.execution ? "timeframe execution" : "timeframe"}
+                  aria-pressed={view.timeframe === timeframe}
+                  disabled={!view.available || !onTimeframeChange}
+                  title={title}
+                  onClick={() => onTimeframeChange?.(view.timeframe)}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </fieldset>
+          {otherView && !timeframeNote && (
+            <span className="timeframe-note">
+              Visualização {timeframeLabel(timeframe)}: ordens e análise do{" "}
+              {timeframeLabel(execution)} alinhadas aos candles
+            </span>
+          )}
+          {timeframeNote && (
+            <span className={timeframeNote.error ? "timeframe-note error" : "timeframe-note"}>
+              {timeframeNote.text}
+            </span>
+          )}
+        </div>
+      )}
       <div className="chart-frame">
         <div ref={containerRef} className="chart price-chart" />
+        <button
+          type="button"
+          className="icon-button chart-live"
+          style={{ right: scaleWidth + 8 + 28 + 6 }}
+          title={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
+          aria-label={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
+          aria-pressed={fullscreen !== null}
+          onClick={toggleFullscreen}
+        >
+          <FullscreenIcon leave={fullscreen !== null} />
+        </button>
         <button
           type="button"
           className="icon-button chart-live"

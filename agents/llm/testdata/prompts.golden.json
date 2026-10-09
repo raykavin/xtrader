@@ -478,6 +478,26 @@
     "header_lines": 8,
     "text_sha256": "9825d8cfc25d51cdd82a97d77d8463908237606ce16977b839ddf0e941a11483"
   },
+  "smc_ict": {
+    "indicators": [
+      "atr",
+      "volume"
+    ],
+    "take_profit": "required",
+    "daily_gain": 0,
+    "daily_loss": 0,
+    "daily_currency": "",
+    "refused": "",
+    "header_lines": 8,
+    "text_sha256": "f04265a761f62a1863acd80f02eb8bef4b8fb2f91780ca04caa115d2e50e3fcf",
+    "pending_orders": [
+      "limit"
+    ],
+    "drawings": true,
+    "context": [
+      "smc"
+    ]
+  },
   "stochpullback": {
     "indicators": [
       "ema 50",

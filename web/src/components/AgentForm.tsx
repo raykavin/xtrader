@@ -474,7 +474,10 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
               <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado. No
               agente LLM, o lote e os mercados correlacionados vão sempre por par:{" "}
               <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code> e{" "}
-              <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>.
+              <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>. O agente LLM
+              exige o intervalo entre as consultas ao modelo, <code>llm-consult-interval = 5m</code>{" "}
+              (pelo relógio, nunca no fechamento do candle), diferente do <code>llm-timeout</code>,
+              o tempo máximo de uma resposta.
             </>
           }
         >

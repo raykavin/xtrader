@@ -47,17 +47,19 @@ func TestTrader_RepeatedSkipsKeptAsOne(t *testing.T) {
 		require.Equal(t, run.ID, d.ID)
 	}
 
-	// the close, skipped for the same reason: the same record
+	// the close, not asked, and the slot after it, skipped for the same
+	// reason: the same record
 	last := len(r.df.Close) - 1
 	r.df.Close[last] = 100.6
 	r.trader.now = func() time.Time { return opened.Add(15*time.Minute + time.Second) }
 	r.trader.Indicators(r.df)
 	r.trader.OnCandle(r.df, r.broker)
+	r.slotTick()
 	decisions, err = r.trader.Decisions(testPair, 100)
 	require.NoError(t, err)
 	require.Len(t, decisions, 2)
 	require.Equal(t, run.ID, decisions[0].ID)
-	require.Equal(t, "skipped 31 times in a row for the same reason (candle 1, interval 30), the last at "+
+	require.Equal(t, "skipped 31 times in a row for the same reason (interval 31), the last at "+
 		opened.Add(15*time.Minute+time.Second).UTC().Format("2006-01-02 15:04:05")+" UTC, at the price of 100.6",
 		decisions[0].Notes[0].Text)
 

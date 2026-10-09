@@ -40,7 +40,8 @@ type CandleSource interface {
 // Frame is a higher timeframe of the pair: its trend (EMA 20 against EMA 50,
 // and the close against the EMA 50) with the last two values of both EMAs, its
 // swing structure, its ATR, its levels (see Structure.Levels) around the price
-// of now, and its last candles.
+// of now, its last candles, and its structure in smart money concepts for a
+// prompt that asks for them (see Config.SMC).
 type Frame struct {
 	Timeframe      string   `json:"timeframe"`
 	Trend          string   `json:"trend"`
@@ -50,6 +51,7 @@ type Frame struct {
 	ATR            number   `json:"atr"`
 	Levels         []Zone   `json:"levels"`
 	Candles        Candles  `json:"candles"`
+	SMC            *SMC     `json:"smc,omitempty"`
 }
 
 // Reference holds the levels of the previous day and week, and of the day so
@@ -152,21 +154,23 @@ func (t *Trader) fetch(pair, timeframe string, limit int) []model.Candle {
 	return candles
 }
 
-// frames returns the higher timeframes of pair, their levels around price.
-func (t *Trader) frames(pair string, price float64) []Frame {
+// frames returns the higher timeframes of pair, their levels around price,
+// with their structure in smart money concepts when smc.
+func (t *Trader) frames(pair string, price float64, smc bool) []Frame {
 	var frames []Frame
 	for _, timeframe := range t.higher {
 		candles := t.fetch(pair, timeframe, frameCandles)
 		if len(candles) < 2*pivotStrength+1 {
 			continue
 		}
-		frames = append(frames, t.frame(timeframe, candles, price))
+		frames = append(frames, t.frame(timeframe, candles, price, smc))
 	}
 	return frames
 }
 
-// frame returns the summary of the candles of timeframe, oldest first.
-func (t *Trader) frame(timeframe string, candles []model.Candle, price float64) Frame {
+// frame returns the summary of the candles of timeframe, oldest first, with
+// their structure in smart money concepts when smc.
+func (t *Trader) frame(timeframe string, candles []model.Candle, price float64, smc bool) Frame {
 	closes, highs, lows := columns(candles)
 	atr := nans(len(candles))
 	if len(candles) > t.cfg.ATRLen {
@@ -190,7 +194,7 @@ func (t *Trader) frame(timeframe string, candles []model.Candle, price float64) 
 	if len(closes) > frameSlow {
 		fast, slow = lastNumbers(indicator.EMA(closes, frameFast), 2), lastNumbers(indicator.EMA(closes, frameSlow), 2)
 	}
-	return Frame{
+	frame := Frame{
 		Timeframe:      timeframe,
 		Trend:          trendOf(closes),
 		EMAFast:        fast,
@@ -200,6 +204,10 @@ func (t *Trader) frame(timeframe string, candles []model.Candle, price float64) 
 		Levels:         levels(found, width, price, len(candles)-1, frameLevelsPerSide),
 		Candles:        Candles(sent),
 	}
+	if smc {
+		frame.SMC = computeSMC(candles, atr, price)
+	}
+	return frame
 }
 
 // reference returns the levels of the previous day and week of pair, and of

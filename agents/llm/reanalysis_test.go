@@ -24,6 +24,8 @@ func liveRunner(t *testing.T, configure func(*Config), holding float64) (*trader
 		}
 	}, holding)
 	r.trader.now = func() time.Time { return r.df.Time[len(r.df.Time)-1].Add(15*time.Minute + time.Second) }
+	// started: the first close of the runner asked on its slot, as the next ones
+	r.trader.handled[testPair] = r.df.Time[len(r.df.Time)-1]
 	messages := &[]string{}
 	r.trader.SetNotifier(func(message string) { *messages = append(*messages, message) })
 	answer := decide(ActionWait, 0.4, nil, nil, nil)
@@ -94,23 +96,23 @@ func TestTrader_Reanalysis(t *testing.T) {
 	require.Len(t, r.provider.inputs, 2, "the start, then the reanalysis")
 }
 
-// The close of the candle answers a reanalysis asked before it: the model
-// isn't asked twice.
-func TestTrader_ReanalysisAnsweredByTheClose(t *testing.T) {
+// A reanalysis asked before a slot of the consult interval is asked on its
+// tick and takes the slot: the model isn't asked twice.
+func TestTrader_ReanalysisTakesTheSlot(t *testing.T) {
 	r, messages := liveRunner(t, nil, 0)
 	_, err := r.trader.Reanalyze(testPair, ui.ChannelWeb, "")
 	require.NoError(t, err)
 
-	r.step(100.2, decide(ActionWait, 0.5, nil, nil, nil))
+	r.step(100.2, decide(ActionWait, 0.5, nil, nil, nil)) // not at the close: on the tick of the slot after it
 	d := r.lastDecision()
-	require.Equal(t, TriggerCandle, d.Trigger)
+	require.Equal(t, TriggerReanalysis, d.Trigger)
 	require.Equal(t, "web", d.RequestedBy)
 	require.Len(t, *messages, 1)
 	require.False(t, r.trader.reanalysisPending(testPair))
 
-	r.inProgress(100.4)
+	r.inProgress(100.4) // in the same slot
 	r.trader.OnPartialCandle(r.df, r.broker)
-	require.Len(t, r.provider.inputs, 2, "not asked again")
+	require.Len(t, r.provider.inputs, 2, "the slot not asked again")
 }
 
 // hookProvider calls during before it answers as its provider does.

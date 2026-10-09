@@ -79,6 +79,15 @@ type Chart struct {
 
 	panics *recovery.Reporter // see Chart
 	window int                // the candles of a pair kept, see WithCandleWindow
+
+	// the timeframes shown other than the one of the strategy, see
+	// WithCandleSource: the source of their candles, the prices received for
+	// their candles in progress (under mu), and the candles read lately
+	source    CandleSource
+	ticks     map[string][]tick
+	viewMu    sync.Mutex
+	viewCache map[string]viewCached
+	clock     func() time.Time // the wall clock of the prices received
 }
 
 // ChartCandles are the closed candles of a pair the chart keeps by default,
@@ -289,6 +298,9 @@ func New(options ...Option) (*Chart, error) {
 		orderByID: make(map[int64]model.Order),
 		events:    newBroker(),
 		window:    ChartCandles,
+		ticks:     make(map[string][]tick),
+		viewCache: make(map[string]viewCached),
+		clock:     time.Now,
 	}
 	c.panics = recovery.NewReporter(c.OnError)
 
@@ -370,6 +382,7 @@ func (c *Chart) OnCandle(candle model.Candle) {
 		Volume: candle.Volume,
 	}
 	c.candles[candle.Pair] = append(candles, dto)
+	c.recordTick(candle.Pair, candle.Close)
 
 	df := c.dataframe[candle.Pair]
 	if df == nil {
@@ -478,6 +491,7 @@ func (c *Chart) onPartialCandle(candle model.Candle) {
 		return
 	}
 	c.partial[candle.Pair] = dto
+	c.recordTick(candle.Pair, candle.Close)
 	if c.events.hasSubscribers() {
 		event, ok := c.safely(candle, func() CandleEvent {
 			return CandleEvent{Pair: candle.Pair, Candle: dto, Indicators: []IndicatorUpdate{}, Partial: true,
@@ -574,6 +588,9 @@ func (c *Chart) snapshot(pair string) Snapshot {
 		Position:        c.position(pair),
 		AccountCurrency: c.accountCurrency(),
 		LLM:             c.llm(),
+		Analysis:        c.analysis(pair),
+		Timeframe:       c.executionTimeframe(),
+		Timeframes:      c.viewTimeframes(),
 	}
 }
 

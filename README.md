@@ -22,6 +22,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 ## Sumário
 
 - [Recursos](#recursos)
+  - [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Requisitos](#requisitos)
@@ -57,16 +58,16 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - calendário econômico;
   - memória das últimas decisões e operações. Cada decisão conta pela hora em que foi tomada: as consultas no candle em formação (intervalo, reanálise) veem as anteriores do mesmo candle. Depois de um reinício, a memória vem do journal, também pela hora de cada decisão;
   - posição aberta, com os candles fechados desde a entrada (`candles_held`), ou desde que o bot passou a acompanhá-la. A contagem é pelos horários dos candles, então inclui os fechamentos que o intervalo de consulta pula e não conta o tempo com o mercado fechado (fim de semana).
-- **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem.
+- **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem. Um prompt pode liberar também ordens pendentes e marcações no gráfico (veja [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)).
 - **Saída que falha** (mercado fechado, cotação recusada, bridge fora do ar, bot parado): a posição não fica sem stop loss e take profit.
   - No MT5, a ordem de fechamento sai com eles no lugar. Eles saem junto com a posição, e um fechamento recusado não mexe neles.
   - No paper, as pernas reservam a posição: são canceladas antes do fechamento e, se ele falhar, recolocadas nos mesmos níveis.
   - O fechamento é tentado de novo, sem consultar o modelo, a cada fechamento de candle e nos ticks, com intervalo crescente (30s, 1 min, 2 min... até 15 min).
   - A falha, uma posição que ficou sem proteção e o fechamento concluído são avisados no painel e no Telegram.
   - Num reinício, a saída pendente não é retomada: a posição segue com a proteção, e o modelo é consultado de novo.
-- **Quando consultar:** uma decisão por fechamento de candle ou, com `llm-consult-interval`, numa agenda própria (por exemplo, a cada 10 min). Há também a **reanálise sob demanda**, pelo painel ou pelo Telegram, com uma nota para o modelo.
+- **Quando consultar:** só pela agenda do `llm-consult-interval` (por exemplo, a cada 5 min), obrigatório em live e paper, além do início do agente e da **reanálise sob demanda**, pelo painel ou pelo Telegram, com uma nota para o modelo. O modelo nunca é consultado no fechamento de um candle; um agente LLM sem o intervalo não inicia (o erro aparece no log e no painel). Só o backtest, que não tem candles em andamento, consulta nos fechamentos: os da agenda, ou todos sem o intervalo.
 - **Início do agente:** ao (re)iniciar, os ativos são analisados de uma vez, em paralelo, com as mesmas regras das outras análises: um ativo sem entrada possível (por exemplo, com a tendência maior exigida e mista) não é consultado, e a análise aparece no painel como "Não consultado", com o motivo. Cada decisão é aplicada no tick seguinte do ativo, ao preço desse tick.
-- **"Não consultado" repetido:** as análises de um ativo que não consultam o modelo pelo mesmo motivo, em sequência (no intervalo de consulta e nos fechamentos, com a mesma posição e o mesmo prompt), ficam num registro só: o primeiro. Uma anotação no registro diz quantas foram, os gatilhos e a última, com a hora, o preço e o detalhe dela quando muda. Por exemplo, um ativo bloqueado por notícia com consulta a cada 10 s gera um registro, e não 360 por hora. Um motivo diferente, uma decisão do modelo, o início do agente ou uma reanálise começam outro registro.
+- **"Não consultado" repetido:** as análises de um ativo que não consultam o modelo pelo mesmo motivo, em sequência (no intervalo de consulta, com a mesma posição e o mesmo prompt), ficam num registro só: o primeiro. Uma anotação no registro diz quantas foram, os gatilhos e a última, com a hora, o preço e o detalhe dela quando muda. Por exemplo, um ativo bloqueado por notícia com consulta a cada 10 s gera um registro, e não 360 por hora. Um motivo diferente, uma decisão do modelo, o início do agente ou uma reanálise começam outro registro.
 - **Entrada conferida na hora de aplicar:** o modelo responde algum tempo depois de o contexto ser lido (até `llm-timeout`; a decisão do início, num tick seguinte). Antes de enviar a entrada, o agente relê a posição e o preço:
   - se o ativo já tem posição (por exemplo, uma ordem da boleta ou do Telegram executada durante a consulta), a entrada é recusada;
   - a decisão é validada de novo no preço atual, com as mesmas regras do contexto: stop e alvo do lado certo, distâncias, distância mínima do stop e risco:retorno líquido do spread. No live, o preço vem da corretora (no MT5, o bid do último tick), com o spread do último candle; no backtest, é o do candle;
@@ -102,7 +103,44 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - Eventos sem horário: o `time_mode` do evento é lido. Um evento do dia inteiro (`Event takes all day`), sem hora (`no time`) ou provisório (`tentative`, só o dia conhecido) vem do calendário às 00:00 do servidor, que não é a hora dele. Ele nunca bloqueia entradas e aparece no contexto o dia inteiro, com `time_mode` (`all_day`, `no_time` ou `tentative`) e o valor publicado só depois do fim do dia. Um provisório ou sem hora cuja hora o calendário já informa (diferente de 00:00) vale como um evento com hora, inclusive no bloqueio. Sem `time_mode`, o evento vale como um com hora, como antes.
   - A sessão MCP que falha ao abrir é descartada, e a chamada seguinte abre outra. A resposta em SSE é lida até o evento que responde à chamada, sem esperar o servidor fechar o stream (até 16 MiB).
 
-### Agentes de estratégia
+### SMC/ICT, ordens pendentes e marcações
+
+O prompt `smc_ict` (agente inicial `llm-smc`) analisa o mercado por Smart Money Concepts / ICT. Os recursos que ele usa são ligados por linhas do cabeçalho do prompt e servem a qualquer prompt; os prompts sem essas linhas funcionam exatamente como antes (mesmas instruções, mesmo schema, mesmo contexto).
+
+| Linha do cabeçalho              | Efeito                                                                                                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `# Pending orders: limit, stop` | libera as ordens pendentes dos tipos listados (`limit`: `BUY_LIMIT`/`SELL_LIMIT`; `stop`: `BUY_STOP`/`SELL_STOP`), mais `MODIFY_PENDING` e `CANCEL_PENDING` |
+| `# Drawings: on`                | o modelo devolve as marcações da análise (`drawings`), as únicas desenhadas no gráfico: o prompt define o que aparece, sem as linhas S/R (`levels`) |
+| `# Context: smc`                | o contexto ganha `smc`, a estrutura em conceitos SMC calculada pelo código, no timeframe da decisão e nos maiores                                     |
+
+Um valor desconhecido numa dessas linhas recusa o prompt, como os limites diários.
+
+- **Setups do `smc_ict`:** só dois, ambos a favor do viés dos timeframes maiores (a direção da quebra de estrutura mais recente deles):
+  1. **Varredura de liquidez + CHoCH:** a liquidez de um lado é tomada (um pavio além de um swing, da máxima/mínima do dia ou da semana anteriores ou do range asiático, fechando de volta), um deslocamento fecha além do último swing do outro lado (CHoCH), e a entrada é o retorno do preço ao FVG ou ao order block dessa perna, no desconto (compra) ou no prêmio (venda) do dealing range.
+  2. **BOS + retração:** com o viés, uma nova quebra de estrutura (BOS) com deslocamento, e a entrada na retração ao FVG ou ao order block da perna, no desconto ou no prêmio.
+  - Confirmação: o viés, a quebra por fechamento no timeframe da decisão (depois da varredura, no setup 1), a zona da entrada intacta e espaço até o alvo (a liquidez oposta) para o `llm-min-rr`. Sem um deles, `WAIT`.
+  - Entrada: limit na borda da zona por onde o preço volta; a mercado, com o mesmo stop e alvo, quando o candle fechado já rejeita a zona.
+  - Stop: além do ponto que invalida o cenário (o extremo da varredura, ou a origem da perna da quebra), nunca dentro da zona; alvo: logo antes da liquidez oposta.
+  - Invalidação (o modelo cancela a pendente): fechamento além do extremo protegido pelo stop, a zona preenchida ou rompida, o viés trocado, uma quebra contra a operação antes da execução, o alvo atingido antes da execução.
+  - Gestão: mantém enquanto a estrutura segura; a cada novo BOS a favor, move o stop para trás do swing que o sustenta; sai num CHoCH contra; protege antes de notícia de alta importância.
+  - O prompt não define valores de risco: usa o `llm-min-rr`, o `llm-min-stop-atr`, o `llm-max-level-atr` e o `llm-pending-expiry` do agente. O buffer além do stop, um break-even, as killzones e a validade das pendentes ficam para o operador definir.
+- **Contexto `smc`** (definições mecânicas sobre os swings de 3 candles da estrutura, sem limite de tamanho inventado: o modelo pesa cada item pelo tamanho em ATR):
+  - `structure_breaks`: fechamentos além do último swing não rompido, `bos` (mesma direção da quebra anterior) ou `choch` (direção contrária), os 4 mais recentes;
+  - `fair_value_gaps`: gaps de três candles ainda não preenchidos (a parte restante, quanto já foi tomado, tamanho e distância em ATR), os 3 mais próximos de cada lado;
+  - `order_blocks`: o último candle contrário antes da perna que quebrou a estrutura, marcado como mitigado quando o preço voltou a ele e descartado quando um fechamento o atravessa, os 2 mais próximos de cada lado;
+  - `liquidity_sweeps`: pavios além de um swing que fecharam de volta sem rompê-lo, os 3 mais recentes;
+  - `dealing_range`: a perna da última quebra, com o equilíbrio (50%) e a posição do preço (abaixo de 0,5, desconto; acima, prêmio).
+- **Ordens pendentes:**
+  - Entram pelas mesmas APIs da boleta (`CreateOrderLimitProtected`/`CreateOrderStopProtected`), com stop loss e take profit na própria ordem; no MT5, a pendente leva o SL/TP na corretora e vale até ser cancelada (GTC).
+  - Validadas como entradas, medidas a partir do preço da pendente: lado do mercado do tipo (compra limit abaixo do ask, compra stop acima dele; venda limit acima do bid, venda stop abaixo dele), stop e alvo dos lados certos da entrada, distâncias até `llm-max-level-atr`, risco:retorno (`llm-min-rr`) e folga do stop (`llm-min-stop-atr`, líquida do spread). Valem também a confiança mínima, o setup, a direção, o filtro de tendência dos timeframes maiores, o spread máximo, o limite diário e o bloqueio por notícia, conferidos de novo no preço de quando a decisão é aplicada.
+  - Uma pendente por ativo, só sem posição. Enquanto ela espera, o modelo a vê no contexto (`pending_order`: tipo, preços, tamanho, candles de espera e quem a colocou) e só pode mantê-la (`WAIT`), alterá-la (`MODIFY_PENDING`, com todos os níveis novos; os que já existem são movidos, nunca acrescentados nem removidos) ou cancelá-la (`CANCEL_PENDING`).
+  - Alteração: a limit e as pernas são movidas na corretora, na ordem que mantém cada nível do lado certo a cada passo. O gatilho de uma stop não pode ser movido pelas corretoras: a stop é cancelada e colocada de novo nos níveis novos.
+  - Cancelada pelo próprio agente, sem consultar o modelo, quando uma entrada do tipo dela deixa de ser permitida (limite diário, notícia, tendência dos timeframes maiores, spread, direção ou um prompt sem esse tipo), quando aparece uma posição no ativo (ela somaria à posição) e depois de `llm-pending-expiry` candles, se definido. A janela da notícia é vigiada também nos ticks. O motivo fica nas anotações da análise, e o cancelamento nos ticks é notificado no painel e no Telegram.
+  - Executada, vira a posição acompanhada, com as pernas dela; executada em parte, o resto é cancelado. Expirada, rejeitada ou cancelada fora do agente, sai do acompanhamento, com anotação.
+  - Depois de um reinício, a pendente aberta do ativo (só de um tipo que o prompt usa) é acompanhada de novo pelas ordens guardadas, com as pernas e com `placed_by` lido do vínculo da decisão. Uma pendente da boleta também é acompanhada, como as posições abertas por fora; com um prompt sem ordens pendentes, as pendentes da boleta continuam intocadas, como antes.
+- **Marcações:** zonas (de `low` a `high`), zonas de oferta (`supply`) e de demanda (`demand`), níveis e marcadores, cada um com id, rótulo, viés, timeframe e horários (`from`, e `to` quando terminou), ligados à decisão que os desenhou (`decisions[].drawings`). São validados antes de desenhar: tipo conhecido, id único, rótulo, timeframe da decisão ou de um timeframe maior do contexto, horários em RFC 3339 até o último candle, preços positivos; uma marcação inválida é descartada (até 20 por decisão) com o motivo nas anotações, sem recusar a decisão. Cada análise respondida substitui as marcações da anterior, mesmo recusada ou ignorada; uma consulta que falhou ou foi pulada mantém a anterior. O modelo recebe as marcações atuais (`chart_drawings`) para manter os ids das que continuam valendo e deixar de fora as invalidadas.
+- **O que é desenhado:** um prompt sem `# Drawings:` recebe das instruções do sistema o pedido dos suportes e resistências da análise (`levels`, até 8), desenhados como linhas pontilhadas **S**/**R** de ponta a ponta do gráfico. Com `# Drawings: on`, esse pedido e o campo `levels` saem das instruções e do schema: o gráfico mostra só as marcações que o modelo devolve, conforme o texto do prompt (o `smc_ict`, por exemplo, desenha a liquidez mais próxima como níveis BSL e SSL). Um `levels` enviado mesmo assim é descartado, com uma anotação na decisão.
+- **Oferta e demanda:** a zona de oferta é a base de onde o preço caiu com força, a de demanda a base de onde subiu com força, com o estado (`state`) que o modelo identificou: `fresh` (o preço não voltou a ela), `tested` (voltou e ela segurou) ou `broken` (um candle do timeframe dela fechou além da borda distante: acima da oferta, abaixo da demanda). O código confere a coerência antes de desenhar e descarta, com o motivo nas anotações: uma zona `fresh` ou `tested` com fim (`to`), ou já rompida pelo último fechamento do timeframe dela no contexto; uma `broken` sem o candle que a rompeu (`to`); um estado desconhecido; e a mesma zona (tipo, timeframe, `low` e `high`) repetida sob outro id. Cada zona fica ligada ao ativo, ao timeframe em que foi lida e à decisão que a desenhou, e a análise seguinte a substitui (mantida pelo id enquanto vale, deixada de fora quando invalidada).
 
 | Família    | Binário                | Estratégias                                                                                                                                                                           |
 | ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -169,10 +207,15 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 
 - **Painel:**
   - gráfico de preço com as ordens e as linhas de stop e take profit, e um botão (ícone de mira, no topo) que volta ao candle e ao preço atuais;
+  - a análise do LLM, quando o prompt desenha: zonas (caixas translúcidas), níveis e marcadores, coloridos pelo viés (alta, baixa, neutro), atrás dos candles e com os rótulos por cima; a legenda do gráfico diz de que análise são (timeframe, horário e quantas zonas de oferta e demanda). As zonas de oferta (vermelhas, hachura descendente) e de demanda (verdes, hachura ascendente) se distinguem das outras zonas pela hachura e pela borda reforçada do lado em que o preço chega (a base da oferta, o topo da demanda), com o rótulo `Oferta` ou `Demanda` seguido do rótulo do modelo; o estado aparece no preenchimento (uma zona testada fica mais clara) e na decisão, e uma rompida leva `rompida` no rótulo, esmaecida e tracejada até o candle que a rompeu. A intenção de entrada que não virou ordem (ignorada, recusada ou não executada) aparece tracejada, com o resultado no rótulo. As ordens pendentes aparecem pelo tipo (`C LIMIT`, `V STOP`), com as pernas que esperam a execução como `SL pend.` e `TP pend.` (traço longo); uma pendente encerrada fica como um segmento no preço dela durante a espera, contínuo se executada e tracejado se cancelada, expirada ou rejeitada. Tudo segue os eventos de ordens da corretora e as decisões em tempo real. No diálogo de uma decisão, **Mostrar no gráfico** desenha a análise daquela decisão, com os níveis que ela propôs, até **Voltar à análise atual**;
   - estatísticas e curva de patrimônio;
   - boleta de ordens;
   - decisões do modelo, com o contexto de cada uma, e as análises em que o modelo não foi consultado ("Não consultado"), com o motivo;
   - histórico de ordens.
+- **Timeframe do gráfico:** um seletor acima do gráfico mostra o ativo em **1m, 5m, 15m, 30m, 4h ou D** (diário), e no timeframe de execução da estratégia quando ele não está entre esses. A seleção muda só a visualização: o timeframe de execução (o parâmetro `timeframe` do agente, marcado com um ponto no seletor) continua sendo o dos candles que a estratégia recebe, o das análises do LLM e o das decisões; ele só muda nas configurações do agente, com reinício.
+  - No timeframe de execução, o gráfico é o de sempre (candles, indicadores, ordens e análise). Nos outros, os candles vêm do agente (`GET …/{par}/candles`), as ordens e a análise do LLM são alinhadas ao candle que contém cada horário, os indicadores da estratégia (calculados no timeframe de execução) não são desenhados, e a posição, as ordens pendentes, a boleta e a reanálise seguem as mesmas, em tempo real.
+  - De onde vêm os candles: num agente ligado à corretora (MT5) ou em papel, os fechados são lidos da corretora (guardados por 2 s, uma leitura servindo a todos os painéis) e o candle em formação é montado pelo agente: acima do timeframe de execução, com os candles dele (exato); abaixo, com os preços que o gráfico recebeu (aproximado: abertura no fechamento anterior, máxima e mínima dos preços recebidos, sem volume), corrigido pela corretora quando fecha. No backtest, só os timeframes acima do de execução, múltiplos dele, montados com os candles da estratégia; os outros aparecem desativados.
+  - O painel relê os últimos candles do timeframe mostrado a cada 15 s e quando o período do último termina, e leva o preço de cada evento ao candle em formação. Uma resposta de um timeframe ou ativo anterior, atrasada, é descartada: enquanto o novo carrega, o gráfico fica vazio com "Carregando candles de …", nunca com os candles de outro timeframe. O timeframe escolhido fica no endereço (`?tf=4h`).
 - **Cliente lento:** o snapshot de um ativo é montado de uma vez e só depois enviado, sem segurar o agente: um celular baixando devagar (pelo ngrok, por exemplo) não atrasa as ordens, os candles nem as outras requisições. A moeda da conta vem da conexão com o MT5, sem consulta à corretora a cada snapshot. Os candles chegam à estratégia e ao gráfico por filas separadas, na ordem, e um gráfico ocupado não atrasa a estratégia. As filas não têm limite, porque descartar ou juntar candles mudaria o que a estratégia vê: uma fila com 1000 candles ou mais (um consumidor travado) gera um aviso no log, no máximo um por minuto. Números não finitos (NaN, infinito) de uma ordem ou da posição vão como 0, e uma linha do gráfico com eles fica de fora: o snapshot e os eventos do ativo não falham por causa deles.
 - **Janela do gráfico:** o gráfico de cada ativo guarda os últimos 5000 candles fechados (cerca de 3 dias em M1, 17 em M5 e 7 meses em H1), mais o aquecimento dos indicadores antes deles. Assim, o snapshot e os indicadores, recalculados a cada fechamento e a cada snapshot, não crescem com o tempo do agente rodando. As ordens continuam todas no painel, para as estatísticas. Uma ordem anterior ao primeiro candle guardado aparece no primeiro candle, como já acontecia com as ordens de execuções anteriores. O "Buy & hold" conta só os candles do gráfico. O gráfico de um backtest guarda todos os candles.
 - **Reconexão:** quando os eventos em tempo real caem (rede, agente reiniciando) e voltam, o painel recarrega o snapshot do ativo, as decisões e o estado do bot, porque o que aconteceu durante a queda (ordens, posição, candles) não chega pelos eventos. Um navegador que não acompanha os eventos (256 na fila dele, por exemplo numa rede lenta) perde os seguintes: o agente encerra os eventos dele, e o painel reconecta e recarrega da mesma forma, em vez de ficar desatualizado. Se a conexão é recusada, o painel confere a sessão: sem sessão (expirada ou encerrada), vai ao login; com ela, ou sem resposta do painel, tenta de novo a cada 5 s.
@@ -192,7 +235,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - prompts com versões;
   - agentes, contas MT5 e configuração dos modelos;
   - Telegram;
-  - ordens, decisões com anexos e journal;
+  - ordens, decisões com anexos, marcações (`decision_drawings`, desde a migração 18) e journal;
   - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
@@ -306,7 +349,7 @@ export XTRADER_BOOTSTRAP_USERNAME=admin XTRADER_BOOTSTRAP_PASSWORD='...'
 
 cp configs/config.example.yml configs/config.yml
 (cd web && bun install --frozen-lockfile && bun run build)   # o painel em web/dist
-go run ./cmd/migrator -config configs/config.yml up          # schema e seeds (43 prompts)
+go run ./cmd/migrator -config configs/config.yml up          # schema e seeds (44 prompts)
 go run ./cmd/controller -config configs/config.yml           # ou: tools/automator.sh start configs/config.yml
 ```
 
@@ -353,6 +396,7 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
 - **Painel (`/`):** escolha o agente e o par no card do topo, onde também se inicia e para o bot.
   - A **boleta** envia ordens a mercado ou limitadas, com stop loss e take profit. As ordens pendentes podem ser arrastadas no gráfico.
   - A boleta, a movimentação das ordens e a reanálise dependem do switch **Painel de trading** do agente. Iniciar e parar o bot, não.
+  - O seletor de timeframe acima do gráfico troca só a visualização (veja [Timeframe do gráfico](#painel-web)); a estratégia e o LLM seguem no timeframe de execução do agente.
 - **Configurações (`/settings`):** abas Agentes, Prompts, Telegram e Usuários, que também abrem por link (`/settings#prompts`).
 
 ### Agentes e parâmetros
@@ -391,18 +435,21 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
 | `timeframe`            | `30m`                                             | timeframe dos candles                                                                   |
 | `lot`                  | `BTCUSDm=0.01;XAUUSDm=0.02`                       | lote fixo de cada par pelo nome (nos agentes de estratégia, também `0.01` para todos)   |
 | `leverage`             | `400`                                             | teto de segurança: recusa uma posição maior que saldo × alavancagem                     |
-| `llm-consult-interval` | `10m`                                             | consulta ao modelo a cada 10 min (mínimo de 10s); sem ele, uma por fechamento de candle |
+| `llm-consult-interval` | `5m`                                              | consulta ao modelo a cada 5 min (mínimo de 10s); obrigatório no agente LLM em live e paper |
 | `llm-timeout`          | `2m`                                              | tempo máximo de uma requisição ao modelo                                                |
 | `llm-correlated`       | `BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm`        | mercados correlacionados de cada par pelo nome, unidos por `+`                          |
 | `llm-candles`          | `60`                                              | candles recentes enviados ao modelo                                                     |
 | `llm-setup`            | `free` ou `trend_pullback`                        | modo de decisão do modelo                                                               |
+| `llm-pending-expiry`   | `N` (candles, a definir)                          | cancela uma pendente não executada depois de N candles (sem ele, só o modelo e as regras cancelam) |
 | `outbox-quarantine`    | `true`                                            | inicia mesmo com o outbox ilegível, movido para `.corrupt-<hora>` (veja Registros)      |
 
 **Sobre `llm-consult-interval`:**
 
-- A agenda segue o relógio: com `10m`, as consultas caem em :00, :10, :20 e assim por diante.
-- Uma consulta que cai num fechamento usa o candle fechado. As outras usam o candle em andamento.
-- Com um intervalo maior que o timeframe, os fechamentos do meio são pulados. A memória e os candles da posição (`candles_held`) contam os candles pulados.
+- É a única agenda do modelo em live e paper, e é obrigatório: sem ele, o agente LLM não inicia. Não confundir com o `llm-timeout`, que é o tempo máximo de uma resposta.
+- A agenda segue o relógio: com `5m`, as consultas caem em :00, :05, :10 e assim por diante, cada uma no primeiro tick do ativo dentro do horário, com o candle em andamento (`scheduled` no contexto do modelo).
+- O fechamento de um candle nunca consulta o modelo. Um horário da agenda que coincide com um fechamento (ex.: :15 num timeframe de 15m) é consultado no primeiro tick do candle seguinte, já com o candle fechado no contexto; um candle ainda entregue em andamento depois do horário de fechamento (fechamento atrasado na corretora) não é consultado.
+- O início do agente e uma reanálise ocupam o horário em que são consultados: o modelo não é consultado de novo nele.
+- Com um intervalo maior que o timeframe, os candles do meio ficam sem consulta. A memória e os candles da posição (`candles_held`) contam esses candles.
 - Cada consulta é uma requisição cobrada.
 
 ### Redefinir os resultados
@@ -419,9 +466,9 @@ Em **Configurações → Agentes**, o botão **Resultados** do card do agente mo
 
 ### Prompts
 
-- **Onde ficam:** no banco, com histórico de versões. Os 43 de exemplo vêm pelo seed.
-- **Cabeçalho:** as linhas `# Indicators:` e `# Take profit:` definem os indicadores enviados e o tratamento do take profit.
-  - O cabeçalho são as linhas do topo do prompt que começam com `#`, e não vai para o modelo. Ele termina na primeira linha de outro texto. Depois de uma linha em branco, ele só continua se o bloco seguinte de linhas com `#` trouxer uma chave que o agente lê (`# Indicators:`, `# Take profit:`, `# Daily gain limit:`, `# Daily loss limit:`) ou uma linha que pareça um limite diário em moeda (veja [Limites diários](#limites-diários)). Outro bloco depois de uma linha em branco, como um título `## Regras`, já começa o texto da estratégia.
+- **Onde ficam:** no banco, com histórico de versões. Os 44 de exemplo vêm pelo seed.
+- **Cabeçalho:** as linhas `# Indicators:` e `# Take profit:` definem os indicadores enviados e o tratamento do take profit; `# Pending orders:`, `# Drawings:` e `# Context:` ligam as ordens pendentes, as marcações e o contexto SMC (veja [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)).
+  - O cabeçalho são as linhas do topo do prompt que começam com `#`, e não vai para o modelo. Ele termina na primeira linha de outro texto. Depois de uma linha em branco, ele só continua se o bloco seguinte de linhas com `#` trouxer uma chave que o agente lê (`# Indicators:`, `# Take profit:`, `# Pending orders:`, `# Drawings:`, `# Context:`, `# Daily gain limit:`, `# Daily loss limit:`) ou uma linha que pareça um limite diário em moeda (veja [Limites diários](#limites-diários)). Outro bloco depois de uma linha em branco, como um título `## Regras`, já começa o texto da estratégia.
   - Uma linha com `#` no texto da estratégia vai para o modelo como as demais.
   - A chave é o texto antes dos dois-pontos, sem diferenciar maiúsculas e com espaços tolerados (`# take profit : none` vale). Se a chave se repete, vale a primeira linha, exceto nos limites diários (veja abaixo).
 - **Horários e estrutura:** os horários de `vwap` (a âncora) e de `range` (início, fim e fim das operações) valem pelo relógio do fuso informado, inclusive nos dias de troca do horário de verão (antes, nesses dias, ficavam 1 h deslocados). O `atr_percentile` da estrutura ignora os ATRs ainda em aquecimento (o 0 que o talib escreve nos primeiros candles), que antes contavam como os mais calmos.
@@ -511,7 +558,8 @@ O agente LLM também roda backtests, mas cada candle vira uma requisição paga 
 Num banco novo, o `migrator up` cria os agentes do seed `sql/seeds/0003_agents.sql`, todos desligados e sem segredos:
 
 - **`llm`:** a estratégia LLM (OpenAI `gpt-5`, raciocínio `low`, prompt `trend_following`) em BTCUSDm e XAUUSDm, 30m, com a tendência de 4h exigida, `lot = BTCUSDm=0.01;XAUUSDm=0.02`, `llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm`, o calendário de alta importância, o painel de trading e o controle via Telegram;
-- **`matrend-btc`:** matrend em BTCUSDm 5m (`agents/trendagent`), com stop de 1 e take profit de 2 no preço e controle via Telegram.
+- **`matrend-btc`:** matrend em BTCUSDm 5m (`agents/trendagent`), com stop de 1 e take profit de 2 no preço e controle via Telegram;
+- **`llm-smc`:** a estratégia LLM com o prompt `smc_ict` (ordens pendentes limit, marcações no gráfico e contexto SMC), nos pares, lotes, timeframe (30m), timeframe maior (4h), mercados correlacionados e modelo do `llm`, com comentário próprio (`nb:llm-smc`), e por isso magic próprio, separado do `llm` na mesma conta. Os parâmetros de risco medidos pelo prompt (`llm-min-rr`, `llm-min-stop-atr`, `llm-max-spread-atr`) e a validade das pendentes (`llm-pending-expiry`) ficam para o operador definir antes de ligar o agente.
 
 Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, nem mesmo um apagado. Os seeds rodam a cada `migrator up`, mas nunca sobrescrevem uma edição do painel nem recriam um agente apagado. Os segredos (a chave do LLM e os tokens da bridge e do calendário) nunca vão para o seed: defina-os em **Configurações > Agentes** e só então ligue o agente. Para mudar a configuração inicial de um banco novo, edite o seed; num banco existente, use o painel.
 
@@ -540,6 +588,7 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - `/api/auth/login`, `/api/auth/logout` e `/api/auth/session`;
   - `/api/agents` e `/api/agents/{agente}/…`: proxy da API de cada agente (snapshot, eventos SSE, controles, decisões). O proxy não repassa ao agente os cookies, `Authorization`, `Proxy-Authorization`, `X-CSRF-Token`, `Origin`, `Referer`, `Sec-Fetch-*`, `Forwarded` nem `X-Forwarded-*` do navegador. Da resposta do agente, só passam os headers do conteúdo (tipo, tamanho, `Content-Disposition`, cache), nunca `Set-Cookie`, e só os tipos que a API serve: JSON, `text/event-stream`, CSV, texto, as imagens PNG, JPEG, GIF e WebP dos anexos e os downloads (`Content-Disposition: attachment`). Qualquer outro tipo, como HTML ou SVG, vira `502`;
   - `/api/settings/agents[/{nome}[/restart]]`, `/api/prompts[/{id}]`, `/api/settings/telegram[/users[/{id}]]` e `/api/users[/{id}]`;
+  - `GET /api/agents/{agente}/{par}/candles?timeframe=4h&limit=1000`: os candles do par no timeframe pedido (`1m`, `5m`, `15m`, `30m`, `4h`, `1d` ou `D`, ou o de execução; sem `timeframe`, o de execução), os últimos `limit` (1000 por padrão, até 5000), o último em formação, com `execution_timeframe` e a origem (`strategy`, `broker` ou `resampled`). `400` para um timeframe fora da lista, `404` para um par desconhecido, `409` para um timeframe indisponível no modo do agente (abaixo do de execução no backtest), `502` quando a leitura na corretora falha. O snapshot traz `timeframe` (o de execução) e `timeframes` (os do seletor, com `execution` e `available`);
   - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory`, `outbox` e `outbox/check` (responde como o `outbox`, sem gravar nada).

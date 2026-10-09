@@ -31,22 +31,89 @@ const (
 	ActionModifySL Action = "MODIFY_SL"
 	// ActionModifyTP moves the take profit of the position held.
 	ActionModifyTP Action = "MODIFY_TP"
+
+	// ActionBuyLimit places a pending buy at entry, below the ask, filled when
+	// the price comes down to it, with its stop loss and take profit at the
+	// broker, see Config.PendingOrders.
+	ActionBuyLimit Action = "BUY_LIMIT"
+	// ActionSellLimit places a pending sell at entry, above the bid, filled
+	// when the price comes up to it.
+	ActionSellLimit Action = "SELL_LIMIT"
+	// ActionBuyStop places a pending buy at entry, above the ask, filled when
+	// the price rises to it.
+	ActionBuyStop Action = "BUY_STOP"
+	// ActionSellStop places a pending sell at entry, below the bid, filled
+	// when the price falls to it.
+	ActionSellStop Action = "SELL_STOP"
+	// ActionModifyPending moves the entry, the stop loss and the take profit
+	// of the pending order waiting.
+	ActionModifyPending Action = "MODIFY_PENDING"
+	// ActionCancelPending cancels the pending order waiting.
+	ActionCancelPending Action = "CANCEL_PENDING"
 )
 
 // Actions are the actions of a Decision, in the order of the schema.
 var Actions = []Action{ActionWait, ActionEnterLong, ActionEnterShort, ActionHold, ActionExit, ActionModifySL,
 	ActionModifyTP}
 
-// side returns the side of the position an entry opens, none for the other
-// actions.
+// PendingActions are the actions of the pending orders, in the order of the
+// schema, after Actions, for the prompts that place them (see
+// Config.PendingOrders).
+var PendingActions = []Action{ActionBuyLimit, ActionSellLimit, ActionBuyStop, ActionSellStop,
+	ActionModifyPending, ActionCancelPending}
+
+// The types of the pending orders, see Config.PendingOrders.
+const (
+	PendingLimit = "limit"
+	PendingStop  = "stop"
+)
+
+// PendingTypes are the types of the pending orders, in their order.
+var PendingTypes = []string{PendingLimit, PendingStop}
+
+// side returns the side of the position an entry opens, at the market or
+// pending, none for the other actions.
 func (a Action) side() model.SideType {
 	switch a {
-	case ActionEnterLong:
+	case ActionEnterLong, ActionBuyLimit, ActionBuyStop:
 		return model.SideTypeBuy
-	case ActionEnterShort:
+	case ActionEnterShort, ActionSellLimit, ActionSellStop:
 		return model.SideTypeSell
 	}
 	return ""
+}
+
+// pendingKind returns the type of the pending order the action places, limit
+// or stop, none for the other actions.
+func (a Action) pendingKind() string {
+	switch a {
+	case ActionBuyLimit, ActionSellLimit:
+		return PendingLimit
+	case ActionBuyStop, ActionSellStop:
+		return PendingStop
+	}
+	return ""
+}
+
+// pendingAction returns the action placing a pending order of kind on side.
+func pendingAction(side model.SideType, kind string) Action {
+	switch {
+	case side == model.SideTypeBuy && kind == PendingLimit:
+		return ActionBuyLimit
+	case side == model.SideTypeSell && kind == PendingLimit:
+		return ActionSellLimit
+	case side == model.SideTypeBuy && kind == PendingStop:
+		return ActionBuyStop
+	case side == model.SideTypeSell && kind == PendingStop:
+		return ActionSellStop
+	}
+	return ""
+}
+
+// entry reports whether the action opens a position, at the market or with a
+// pending order: the daily limits and the news block refuse it.
+func (a Action) entry() bool {
+	return a.side() != ""
 }
 
 // trades reports whether the action sends orders: all of them but WAIT and
@@ -80,6 +147,11 @@ type Decision struct {
 	// on the chart: what the model saw. They don't trade.
 	Levels []Level `json:"levels"`
 
+	// Drawings are the structures the analysis relies on, drawn on the chart
+	// for a prompt that asks for them (see Config.Drawings): its zones, its
+	// levels and its markers. They don't trade.
+	Drawings []Drawing `json:"drawings,omitempty"`
+
 	// Notes and Attachments are what the provider returned beside the
 	// decision, kept with it (see Trader.SetDecisionStore): its notes, eg: the
 	// text of the model beside the call of the decision, and its files, eg:
@@ -107,19 +179,67 @@ type Level struct {
 // schema; levels may be missing from the answer of a provider without it.
 var decisionFields = []string{"reason", "action", "confidence", "entry", "stop_loss", "take_profit", "levels"}
 
+// decisionShape is the shape of the decision a context asks for, the one of
+// its schema (see schemaOf): the actions of the pending orders and the
+// drawings, for a prompt that has them.
+type decisionShape struct {
+	pending  bool // the actions of PendingActions, see Config.PendingOrders
+	drawings bool // the drawings, see Config.Drawings
+}
+
+// shapeOf returns the shape of the decision the context in asks for.
+func shapeOf(in Input) decisionShape {
+	return decisionShape{pending: len(in.Rules.PendingOrders) > 0, drawings: in.drawings}
+}
+
+// fields returns the fields of a decision of the shape: with the drawings in
+// place of the levels, the only part of the answer drawn then.
+func (s decisionShape) fields() []string {
+	if s.drawings {
+		fields := slices.DeleteFunc(slices.Clone(decisionFields), func(name string) bool { return name == "levels" })
+		return append(fields, "drawings")
+	}
+	return decisionFields
+}
+
+// actions returns the actions of a decision of the shape.
+func (s decisionShape) actions() []Action {
+	if s.pending {
+		return append(slices.Clone(Actions), PendingActions...)
+	}
+	return Actions
+}
+
 // ParseDecision decodes the JSON of a decision as the schema describes it:
 // every field present and no other, a known action, a confidence from 0 to 1,
 // the prices null or positive, and a reason. Its errors wrap
-// ErrInvalidResponse.
+// ErrInvalidResponse. It reads the decision of a prompt without pending
+// orders nor drawings, see parseDecision.
 func ParseDecision(data []byte) (Decision, error) {
+	return parseDecision(data, decisionShape{})
+}
+
+// parseDecision decodes the JSON of a decision of shape, see ParseDecision:
+// the actions of the pending orders known with them, and the drawings read
+// one by one with them, may they be missing (none), a drawing that isn't one
+// of the schema left out with a note.
+func parseDecision(data []byte, shape decisionShape) (Decision, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return Decision{}, invalidResponse("not a JSON object: %v", err)
 	}
-	for _, name := range decisionFields {
+	var notes []Note
+	if _, ok := fields["levels"]; ok && shape.drawings {
+		// asked for the drawings only: the levels sent all the same left out,
+		// never drawn, the decision kept
+		delete(fields, "levels")
+		notes = append(notes, Note{Kind: "text", Text: "levels left out: the prompt draws its drawings only"})
+	}
+	known := shape.fields()
+	for _, name := range known {
 		raw, ok := fields[name]
 		switch {
-		case !ok && name == "levels":
+		case !ok && (name == "levels" || name == "drawings"):
 		case !ok:
 			return Decision{}, invalidResponse("missing field %q", name)
 		case string(raw) == "null" && (name == "action" || name == "confidence" || name == "reason"):
@@ -127,11 +247,45 @@ func ParseDecision(data []byte) (Decision, error) {
 		}
 	}
 	for name := range fields {
-		if !slices.Contains(decisionFields, name) {
+		if !slices.Contains(known, name) {
 			return Decision{}, invalidResponse("unknown field %q", name)
 		}
 	}
 
+	raw, ok := fields["drawings"]
+	delete(fields, "drawings")
+	rest, err := json.Marshal(fields)
+	if err != nil {
+		return Decision{}, invalidResponse("%v", err)
+	}
+	d, err := parseDecisionFields(rest, shape)
+	if err != nil {
+		return Decision{}, err
+	}
+	d.Notes = append(d.Notes, notes...)
+	if !ok {
+		return d, nil
+	}
+	var items []json.RawMessage
+	if string(raw) != "null" {
+		if err := json.Unmarshal(raw, &items); err != nil {
+			d.Notes = append(d.Notes, Note{Kind: "text", Text: "drawings left out: not a list: " + err.Error()})
+		}
+	}
+	for i, item := range items {
+		var drawing Drawing
+		if err := json.Unmarshal(item, &drawing); err != nil {
+			d.Notes = append(d.Notes, Note{Kind: "text", Text: fmt.Sprintf("drawing #%d left out: %v", i+1, err)})
+			continue
+		}
+		d.Drawings = append(d.Drawings, drawing)
+	}
+	return d, nil
+}
+
+// parseDecisionFields decodes the JSON of the fields of a decision of shape
+// but its drawings, checked already, see parseDecision.
+func parseDecisionFields(data []byte, shape decisionShape) (Decision, error) {
 	var d Decision
 	if err := json.Unmarshal(data, &d); err != nil {
 		return Decision{}, invalidResponse("%v", err)
@@ -139,7 +293,7 @@ func ParseDecision(data []byte) (Decision, error) {
 	d.Reason = strings.TrimSpace(d.Reason)
 
 	switch {
-	case !slices.Contains(Actions, d.Action):
+	case !slices.Contains(shape.actions(), d.Action):
 		return Decision{}, invalidResponse("unknown action %q", d.Action)
 	case math.IsNaN(d.Confidence) || d.Confidence < 0 || d.Confidence > 1:
 		return Decision{}, invalidResponse("confidence %v out of [0, 1]", d.Confidence)
@@ -188,12 +342,41 @@ func cleanLevels(levels []Level) []Level {
 //     from it than the current one unless the rules let it widen;
 //   - MODIFY_TP needs a take profit on the winning side of the price;
 //   - HOLD may repeat the levels of the position, which must then be on their
-//     sides of the price too.
+//     sides of the price too;
+//   - BUY_LIMIT, SELL_LIMIT, BUY_STOP and SELL_STOP need an entry on the side
+//     of the price of their type, its stop loss and take profit on their sides
+//     of the entry, see validatePending;
+//   - MODIFY_PENDING needs the pending order of the context and its new
+//     levels, validated as the ones of its placement, with the levels it has:
+//     a stop loss, and a take profit when it has one, never one otherwise;
+//   - CANCEL_PENDING needs the pending order of the context.
 //
 // Its errors wrap ErrInvalidDecision.
 func (d Decision) Validate(in Input) error {
 	if !slices.Contains(in.Rules.Actions, d.Action) {
 		return invalidDecision("%s is not an allowed action: %v", d.Action, in.Rules.Actions)
+	}
+
+	switch d.Action {
+	case ActionBuyLimit, ActionSellLimit, ActionBuyStop, ActionSellStop:
+		return d.validatePending(in, d.Action)
+	case ActionModifyPending, ActionCancelPending:
+		pending := in.PendingOrder
+		if pending == nil {
+			return invalidDecision("%s without a pending order", d.Action)
+		}
+		if d.Action == ActionCancelPending {
+			return nil
+		}
+		switch hasProfit := known(float64(pending.TakeProfit)); {
+		case hasProfit && d.TakeProfit == nil:
+			return invalidDecision("%s without the take profit of the pending order, %g: its levels are moved, "+
+				"never removed", d.Action, float64(pending.TakeProfit))
+		case !hasProfit && d.TakeProfit != nil:
+			return invalidDecision("%s with the take profit %g: the pending order has none, and none is added",
+				d.Action, *d.TakeProfit)
+		}
+		return d.validatePending(in, pending.Type)
 	}
 
 	price := float64(in.Price)
@@ -294,6 +477,86 @@ func (d Decision) Validate(in Input) error {
 			return err
 		}
 		return checkDistances(in, *d.TakeProfit)
+	}
+	return nil
+}
+
+// validatePending checks the levels of d, the ones of a pending order placed by
+// action (BUY_LIMIT, SELL_LIMIT, BUY_STOP or SELL_STOP), or moved to them,
+// against the context in: the entry on its side of the market of now (a buy
+// limit below the ask and a buy stop above it, a sell limit above the bid and
+// a sell stop below it), the stop loss on the losing side of the entry and the
+// take profit on its winning side (or none, as for the entries at the market,
+// see Validate), all of them within rules.max_level_distance of the price. As
+// the order is filled at its entry, the risk and the reward are measured from
+// it: the reward over the risk at least rules.min_risk_reward, and the room of
+// the stop loss, from the entry net of the spread once filled (the bid of a
+// long, the ask of a short), at least rules.min_stop_distance.
+func (d Decision) validatePending(in Input, action Action) error {
+	side, kind := action.side(), action.pendingKind()
+	switch {
+	case in.Rules.NoTakeProfit && d.TakeProfit != nil:
+		return invalidDecision("%s with the take profit %g: the positions go without one, the stop loss alone "+
+			"closes them", d.Action, *d.TakeProfit)
+	case d.Entry == nil || d.StopLoss == nil:
+		return invalidDecision("%s needs an entry and a stop loss", d.Action)
+	case d.TakeProfit == nil && !in.Rules.TakeProfitOptional && !in.Rules.NoTakeProfit:
+		return invalidDecision("%s needs an entry, a stop loss and a take profit", d.Action)
+	}
+	entry, sign := *d.Entry, sideSign(side)
+
+	bid, ask := float64(in.Price), float64(in.Price)
+	if spread := float64(in.Spread); known(spread) && spread > 0 {
+		ask += spread
+	}
+	if known(float64(in.Bid)) && known(float64(in.Ask)) {
+		bid, ask = float64(in.Bid), float64(in.Ask)
+	}
+	market, where := ask, "below the ask"
+	if side == model.SideTypeSell {
+		market, where = bid, "above the bid"
+	}
+	if kind == PendingStop {
+		where = map[model.SideType]string{model.SideTypeBuy: "above the ask", model.SideTypeSell: "below the bid"}[side]
+	}
+	// a limit rests on the side of the market the price comes back to, a stop
+	// on the side it moves on to
+	beyond := sign * (entry - market)
+	if kind == PendingLimit && beyond >= 0 || kind == PendingStop && beyond <= 0 {
+		return invalidDecision("the entry %g of a %s must be %s, %g", entry, action, where, market)
+	}
+
+	if err := checkStop(side, *d.StopLoss, entry); err != nil {
+		return err
+	}
+	levels := []float64{entry, *d.StopLoss}
+	if d.TakeProfit != nil {
+		if err := checkProfit(side, *d.TakeProfit, entry); err != nil {
+			return err
+		}
+		levels = append(levels, *d.TakeProfit)
+	}
+	if err := checkDistances(in, levels...); err != nil {
+		return err
+	}
+
+	risk := sign * (entry - *d.StopLoss)
+	if minimum := float64(in.Rules.MinStopDistance); known(minimum) && minimum > 0 {
+		room := risk
+		if spread := float64(in.Spread); known(spread) && spread > 0 {
+			room -= spread // the bid of a long once filled at the ask, the ask of a short filled at the bid
+		}
+		if room < minimum {
+			return invalidDecision("the stop loss %g leaves %.8g of room before it is hit once filled at %g (net of "+
+				"the spread), under the %.8g required: inside the noise", *d.StopLoss, room, entry, minimum)
+		}
+	}
+	if minimum := float64(in.Rules.MinRiskReward); d.TakeProfit != nil && known(minimum) && minimum > 0 {
+		reward := sign * (*d.TakeProfit - entry)
+		if ratio := reward / risk; ratio < minimum {
+			return invalidDecision("the risk:reward %.2f (reward %.8g, risk %.8g from the entry %g) is under the %g "+
+				"required", ratio, reward, risk, entry, minimum)
+		}
 	}
 	return nil
 }

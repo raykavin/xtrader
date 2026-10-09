@@ -33,7 +33,10 @@ import (
 // tools/mt5bridge. On every candle close the model gets the context of the pair
 // (candles, indicators, prices, position) and answers WAIT, ENTER_LONG,
 // ENTER_SHORT, HOLD, EXIT, MODIFY_SL or MODIFY_TP, which the bot validates and
-// executes, see package llm.
+// executes, see package llm. A prompt may let it place pending orders too
+// (BUY_LIMIT, SELL_LIMIT, BUY_STOP and SELL_STOP, moved with MODIFY_PENDING
+// and canceled with CANCEL_PENDING), and draw its analysis on the chart: see
+// the headers of package llm, eg: the prompt smc_ict.
 //
 // The live mode runs launched by the controller (cmd/controller), from the
 // settings of the agent in its database: the flags, the API key of the
@@ -88,7 +91,7 @@ func run() error {
 		maxTokens     = flag.Int("llm-max-tokens", 0, "tokens of an answer at most, the reasoning included (default 4096; 16000 for a model of anthropic that refuses the forced tool call, eg: claude-opus-5-5, as it thinks before it answers)")
 		reasoning     = flag.String("llm-reasoning", "", "effort of the models that reason, none, minimal, low, medium, high or xhigh, as the model takes them (eg: minimal only the older ones, none and xhigh only the newer ones; the API refuses the others); less spends fewer output tokens (default: the model's; ignored by anthropic)")
 		timeout       = flag.Duration("llm-timeout", cfg.Timeout, "time a decision may take, the request to the provider")
-		consult       = flag.Duration("llm-consult-interval", 0, "time between the consultations of the model about each pair, eg: 10m or 2h, 10s at least, on a schedule of the clock (10m: at :00, :10, :20...): one falling on the close of a candle is the one of the close, the others, live only, on the candle in progress, the closes between them left out; each consultation is a billed request (default: one at each close of -timeframe)")
+		consult       = flag.Duration("llm-consult-interval", 0, "time between the consultations of the model about each pair, eg: 5m or 2h, 10s at least, on a schedule of the clock (5m: at :00, :05, :10...), required live and paper: the model is asked on it only, on the candle in progress, never at the close of a candle (besides the start and the reanalyses); each consultation is a billed request (a backtest asks at the closes on the schedule, at each close without it)")
 		candles       = flag.Int("llm-candles", cfg.Candles, "candles of the context of the model, the last ones")
 		confidence    = flag.Float64("llm-min-confidence", cfg.MinConfidence, "confidence, from 0 to 1, under which the entries, exits and moves are ignored")
 		maxEntryATR   = flag.Float64("llm-max-entry-atr", cfg.MaxEntryATR, "how far the entry of a decision may be from the close, in ATR, as it is filled at the market (0: no limit)")
@@ -111,6 +114,7 @@ func run() error {
 		higherTrend   = flag.Bool("llm-higher-trend-filter", false, "only the entries with the trend the higher timeframes agree on (all up: longs only; all down: shorts only)")
 		higherTrendIn = flag.Bool("llm-higher-trend-required", false, "the trend the higher timeframes agree on required for every entry: -llm-higher-trend-filter, and no entry at all without such a trend (they don't agree, mixed or unknown)")
 		maxSpread     = flag.Float64("llm-max-spread-atr", cfg.MaxSpreadATR, "no entry while the spread is wider than that many ATR, eg: 0.1 (0: no limit)")
+		pendingExpiry = flag.Int("llm-pending-expiry", cfg.PendingExpiry, "candles after which a pending order not filled is canceled, for a prompt placing them ('# Pending orders:' of its header); the model keeps it, moves it or cancels it at each analysis meanwhile (0: no expiry)")
 		language      = flag.String("llm-language", cfg.Language, "language of the reasons of the decisions, eg: pt-BR or en")
 		mode          = flag.String("mode", "backtest", "backtest, paper or live")
 		exchangeName  = flag.String("exchange", "mt5", "exchange traded: mt5, MetaTrader 5 through tools/mt5bridge")
@@ -275,6 +279,7 @@ func run() error {
 	cfg.TickVolume = true // the CFDs of MT5: the count of the ticks
 	cfg.MinRiskReward = *minRR
 	cfg.MaxSpreadATR = *maxSpread
+	cfg.PendingExpiry = *pendingExpiry
 	cfg.MinStopATR = *minStop
 	cfg.HigherTrendFilter = *higherTrend
 	cfg.HigherTrendRequired = *higherTrendIn
@@ -311,7 +316,7 @@ func run() error {
 	}
 	cadence := "a decision per " + cfg.Timeframe + " candle close"
 	if cfg.ConsultInterval > 0 {
-		cadence = fmt.Sprintf("a decision every %s on %s candles", cfg.ConsultInterval, cfg.Timeframe)
+		cadence = fmt.Sprintf("a decision every %s on the clock, on %s candles", cfg.ConsultInterval, cfg.Timeframe)
 	}
 	log.Infof("[SETUP] LLM: %v, %s, prompt %s, %d candles kept", provider, cadence, describePrompt(prompt),
 		trader.WarmupPeriod())
@@ -466,7 +471,8 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 	if err != nil {
 		return err
 	}
-	chart, err := dash.chart(trader, wallet)
+	// the other timeframes shown read from the market data of MT5
+	chart, err := dash.chart(trader, wallet, ui.WithCandleSource(feed))
 	if err != nil {
 		return err
 	}
@@ -542,7 +548,8 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 	if err != nil {
 		return err
 	}
-	chart, err := dash.chart(trader, nil, extra...)
+	// the other timeframes shown read from the broker
+	chart, err := dash.chart(trader, nil, append(extra, ui.WithCandleSource(broker))...)
 	if err != nil {
 		return err
 	}

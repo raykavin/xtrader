@@ -68,8 +68,14 @@ func TestPrompts(t *testing.T) {
 			require.Contains(t, strategy, "# Flags:", "its header gives the flags that fit it")
 
 			prompt := systemPrompt(strategy)
-			require.True(t, strings.HasPrefix(prompt, basePrompt+"\n\nStrategy:\n"))
-			sent := strings.TrimPrefix(prompt, basePrompt)
+			require.True(t, strings.HasPrefix(prompt, instructions(strategy)+"\n\nStrategy:\n"))
+			pending, _ := StrategyPendingOrders(strategy)
+			drawings, _ := StrategyDrawings(strategy)
+			contexts, _ := StrategyContext(strategy)
+			if len(pending) == 0 && !drawings && len(contexts) == 0 {
+				require.Equal(t, basePrompt, instructions(strategy), "the instructions of the code, as before")
+			}
+			sent := strings.TrimPrefix(prompt, instructions(strategy))
 			require.NotContains(t, sent, "\n#", "the header isn't sent")
 			require.Contains(t, sent, "Setup")
 			require.Contains(t, sent, "Stop loss and take profit:")

@@ -72,6 +72,15 @@ type attachmentRow struct {
 
 func (attachmentRow) TableName() string { return "decision_attachments" }
 
+// drawingsRow is the drawings of a decision, see ui.Drawing, in their order.
+type drawingsRow struct {
+	AgentID    int64
+	DecisionID string
+	Drawings   []ui.Drawing `gorm:"serializer:json"`
+}
+
+func (drawingsRow) TableName() string { return "decision_drawings" }
+
 // decisionColumns are the columns a decision rewrites: all but its keys.
 var decisionColumns = []string{"pair", "timeframe", "candle_at", "decided_at", "trigger", "requested_by",
 	"request_note", "model", "prompt_id", "prompt_name", "prompt_version", "latency_ms", "price", "position",
@@ -145,9 +154,27 @@ func (s *Store) SaveDecision(ctx context.Context, id int64, d ui.Decision, attac
 		if err := s.conn(ctx).Clauses(conflict).Create(&row).Error; err != nil {
 			return err
 		}
-		_, _, err := s.saveDecisionParts(ctx, id, d, attachments)
-		return err
+		if _, _, err := s.saveDecisionParts(ctx, id, d, attachments); err != nil {
+			return err
+		}
+		return s.saveDrawings(ctx, id, d, overwrite)
 	})
+}
+
+// saveDrawings keeps the drawings of the decision d of the agent of id, if any:
+// in place of the ones kept when overwrite, else only when missing, as the
+// decision.
+func (s *Store) saveDrawings(ctx context.Context, id int64, d ui.Decision, overwrite bool) error {
+	if len(d.Drawings) == 0 {
+		return nil
+	}
+	keys := []clause.Column{{Name: "agent_id"}, {Name: "decision_id"}}
+	conflict := clause.OnConflict{Columns: keys, DoNothing: true}
+	if overwrite {
+		conflict = clause.OnConflict{Columns: keys, DoUpdates: clause.AssignmentColumns([]string{"drawings"})}
+	}
+	return s.conn(ctx).Clauses(conflict).Create(&drawingsRow{AgentID: id, DecisionID: d.ID,
+		Drawings: d.Drawings}).Error
 }
 
 // saveDecisionParts keeps the links of the orders of the decision d of the
@@ -270,6 +297,14 @@ func (s *Store) decisions(ctx context.Context, id int64, rows []decisionRow) ([]
 	if err != nil {
 		return nil, err
 	}
+	var drawn []drawingsRow
+	if err := s.conn(ctx).Where("agent_id = ? AND decision_id IN ?", id, ids).Find(&drawn).Error; err != nil {
+		return nil, err
+	}
+	drawings := make(map[string][]ui.Drawing, len(drawn))
+	for _, row := range drawn {
+		drawings[row.DecisionID] = row.Drawings
+	}
 	orders := make(map[string][]int64)
 	for _, link := range links {
 		orders[link.DecisionID] = append(orders[link.DecisionID], link.OrderID)
@@ -286,6 +321,9 @@ func (s *Store) decisions(ctx context.Context, id int64, rows []decisionRow) ([]
 		}
 		if list := attachments[row.ID]; list != nil {
 			d.Attachments = list
+		}
+		if list := drawings[row.ID]; len(list) > 0 {
+			d.Drawings = list
 		}
 		decisions = append(decisions, d)
 	}
