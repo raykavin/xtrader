@@ -35,3 +35,5 @@
 # the keys and the data of the containers (deploy/docker)
 /deploy/docker/services/*/data/*
 !/deploy/docker/services/*/data/.gitkeep
+# the bytecode of the bridge and its tests, see tools/mt5bridge
+__pycache__/

@@ -19,6 +19,11 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
+try:
+    import numpy
+except ImportError:
+    numpy = None
+
 LOGIN = 198974329
 TOKEN = "secret"
 
@@ -36,10 +41,14 @@ class Scalar(float):
 
 
 class Rates(list):
-    """A structured numpy array, as copy_rates_* return it."""
+    """A structured numpy array, as copy_rates_* return it: tolist() makes its
+    rows tuples of Python values."""
 
     class dtype:
         names = ("time", "open")
+
+    def tolist(self):
+        return [tuple(row[name].item() for name in self.dtype.names) for row in self]
 
 
 class Package:
@@ -446,6 +455,154 @@ class TokenTest(BridgeTest):
         self.assertEqual(200, self.get("s\u00e9nha".encode()), "as a Go client sends it: UTF-8")
         self.assertEqual(401, self.get("s\u00e9nha".encode("latin-1")))
         self.assertEqual(401, self.get(b"senha"))
+
+
+class ConnectionTest(BridgeTest):
+    """Connections persist (HTTP/1.1): every answer leaves the connection at the
+    start of the next request, the body read even of a request refused."""
+
+    def connection(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        return connection
+
+    def send(self, connection, method, path, body=None, headers=None):
+        connection.request(method, path, body=body, headers={"X-Bridge-Token": TOKEN, **(headers or {})})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read()), response.getheader("Connection")
+
+    def test_one_connection_for_the_requests(self):
+        connection = self.connection()
+        self.assertEqual(200, self.send(connection, "GET", "/health")[0])
+        sock = connection.sock
+        self.assertIsNotNone(sock, "kept open after the answer")
+        self.assertEqual(401, self.send(connection, "POST", "/order", b'{"action": 1}' * 100,
+                                        {"X-Bridge-Token": "wrong"})[0])
+        self.assertEqual(404, self.send(connection, "POST", "/nowhere", b'{"action": 1}')[0])
+        self.assertEqual(400, self.send(connection, "POST", "/order", b'{"action": 1}',
+                                        {mt5bridge.DEADLINE_HEADER: "soon"})[0])
+        self.assertEqual(200, self.send(connection, "GET", "/positions")[0])
+        self.assertIs(sock, connection.sock, "the bodies refused read: the connection goes on")
+        self.assertEqual([], PACKAGE.sends)
+
+    def test_a_chunked_body_closes_the_connection(self):
+        connection = self.connection()
+        connection.request("POST", "/order", body=iter([b'{"action": 1}']), encode_chunked=True,
+                           headers={"X-Bridge-Token": TOKEN, "Transfer-Encoding": "chunked"})
+        response = connection.getresponse()
+        self.assertEqual(411, response.status)
+        self.assertEqual("close", response.getheader("Connection"))
+        self.assertEqual([], PACKAGE.sends)
+
+    def test_an_invalid_length_closes_the_connection(self):
+        for length in ("abc", "-1", str(mt5bridge.MAX_BODY + 1)):
+            connection = self.connection()
+            connection.putrequest("POST", "/order")
+            connection.putheader("X-Bridge-Token", TOKEN)
+            connection.putheader("Content-Length", length)
+            connection.endheaders()
+            response = connection.getresponse()
+            self.assertEqual(400, response.status, length)
+            self.assertEqual("close", response.getheader("Connection"), length)
+        self.assertEqual([], PACKAGE.sends)
+
+
+class ErrorsTest(BridgeTest):
+    def test_times_out_of_range_are_400_keeping_the_terminal(self):
+        initialized = PACKAGE.initialized
+        for path in ("/deals?from=0&to=99999999999999", "/history_orders?from=-99999999999999&to=10",
+                     "/rates?symbol=XAUUSDm&timeframe=M5&from=0&to=99999999999999"):
+            status, answer = self.request("GET", path)
+            self.assertEqual(400, status, path)
+            self.assertIn("invalid", answer["error"], path)
+        self.assertEqual([], PACKAGE.calls, "never asked to the terminal")
+        self.assertEqual(initialized, PACKAGE.initialized, "not connected again")
+
+    def test_an_error_of_the_bridge_keeps_the_terminal(self):
+        PACKAGE.lists["positions_get"] = lambda: 1 / 0
+        initialized = PACKAGE.initialized
+        status, answer = self.request("GET", "/positions")
+        self.assertEqual(500, status)
+        self.assertIn("ZeroDivisionError", answer["error"])
+        PACKAGE.lists["positions_get"] = ()
+        self.assertEqual((200, []), self.request("GET", "/positions"))
+        self.assertEqual(initialized, PACKAGE.initialized, "the terminal still answers: not connected again")
+
+    def test_the_terminal_gone_during_a_call_is_503(self):
+        def gone():
+            PACKAGE.connected = False
+            raise RuntimeError("IPC broken")
+        PACKAGE.lists["positions_get"] = gone
+        initialized = PACKAGE.initialized
+        self.assertEqual(503, self.request("GET", "/positions")[0])
+        PACKAGE.lists["positions_get"] = ()
+        self.assertEqual((200, []), self.request("GET", "/positions"))
+        self.assertEqual(initialized + 1, PACKAGE.initialized, "connected again by the next request")
+
+    def test_numbers_not_finite_are_refused_unsent(self):
+        for fields in ({"magic": float("inf")}, {"sl": float("nan")}, {"volume": 10 ** 400}, {"type": 1.5}):
+            status, answer = self.request("POST", "/order", {"action": 1, "symbol": "XAUUSDm", **fields})
+            self.assertEqual(400, status, fields)
+            self.assertIs(False, answer["sent"], fields)
+        self.assertEqual([], PACKAGE.sends)
+
+    def test_the_integers_of_floats_are_floats(self):
+        self.assertEqual(200, self.request("POST", "/order", {"action": 1, "symbol": "XAUUSDm", "volume": 1,
+                                                              "sl": 0, "tp": 0, "magic": 7.0})[0])
+        request = PACKAGE.sends[0][1]
+        self.assertEqual((float, float, float, int), tuple(type(request[k]) for k in ("volume", "sl", "tp", "magic")))
+
+    def test_a_symbol_unread_is_502(self):
+        PACKAGE.error = (-1, "Terminal: Call failed")
+        with unittest.mock.patch.object(mt5bridge.mt5, "symbol_info", create=True, return_value=None):
+            status, answer = self.request("GET", "/symbol?symbol=XAUUSDm")
+        self.assertEqual(502, status)
+        self.assertEqual(-1, answer["retcode"])
+
+
+class SelectTest(BridgeTest):
+    """A symbol is selected in the Market Watch once per connection, and again
+    after a read of it failed, eg: removed by hand."""
+
+    RATES = "/rates?symbol=XAUUSDm&timeframe=M5&count=2"
+
+    def test_selected_once_per_connection(self):
+        with unittest.mock.patch.object(mt5bridge.mt5, "symbol_select", return_value=True) as select:
+            for _ in range(3):
+                self.assertEqual((200, []), self.request("GET", self.RATES))
+            self.assertEqual(1, select.call_count)
+            PACKAGE.connected = False  # the terminal restarted
+            self.assertEqual((200, []), self.request("GET", self.RATES))
+            self.assertEqual(2, select.call_count, "selected again on the new connection")
+
+    def test_a_failed_read_selects_again(self):
+        PACKAGE.error = (-1, "Terminal: Call failed")
+        reads = iter([RatesTest.LATEST, None, RatesTest.LATEST])
+        PACKAGE.lists["copy_rates_from_pos"] = lambda symbol, timeframe, start, count: next(reads)
+        candle = [{"time": 600.0, "open": 4286.5}]
+        with unittest.mock.patch.object(mt5bridge.mt5, "symbol_select", return_value=True) as select:
+            self.assertEqual((200, candle), self.request("GET", self.RATES))
+            self.assertEqual((200, candle), self.request("GET", self.RATES))
+        self.assertEqual(2, select.call_count)
+
+
+class EncodingTest(unittest.TestCase):
+    @unittest.skipIf(numpy is None, "without numpy")
+    def test_rates_json_of_a_structured_array(self):
+        dtype = numpy.dtype([("time", "<i8"), ("open", "<f8"), ("tick_volume", "<u8"), ("spread", "<i4")])
+        rates = numpy.array([(60, 4286.5, 12, 3), (120, 4287.25, 7, 2)], dtype=dtype)
+        candles = mt5bridge.rates_json(rates)
+        self.assertEqual([{"time": 60, "open": 4286.5, "tick_volume": 12, "spread": 3},
+                          {"time": 120, "open": 4287.25, "tick_volume": 7, "spread": 2}], candles)
+        self.assertEqual([int, float, int, int], [type(v) for v in candles[0].values()], "Python values")
+        self.assertEqual([], mt5bridge.rates_json(rates[:0]))
+
+    def test_dumps_with_and_without_orjson(self):
+        payload = {"retcode": 10009, "price": 4286.5, "comment": "nb:test#a1b2c3", "deals": []}
+        self.assertEqual(payload, json.loads(mt5bridge.dumps(payload)))
+        with unittest.mock.patch.object(mt5bridge, "orjson", None):
+            self.assertEqual(b'{"retcode":10009,"price":4286.5,"comment":"nb:test#a1b2c3","deals":[]}',
+                             mt5bridge.dumps(payload))
 
 
 if __name__ == "__main__":

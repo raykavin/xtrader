@@ -12,7 +12,8 @@ eg: a terminal installed afresh in a container. It listens on 127.0.0.1 unless
 refuses a real account without --allow-real, and refuses every trading request
 with --read-only. --portable keeps the data of the terminal in its folder (its
 /portable mode). Times are Unix seconds (candles, deals) or milliseconds (ticks),
-as the terminal reports them.
+as the terminal reports them. Connections persist (HTTP/1.1): a body comes with
+its Content-Length, never chunked. With orjson installed, it encodes the answers.
 
 Endpoints (JSON):
     GET  /health                       terminal and account state
@@ -48,7 +49,7 @@ checks the account before order_send: the terminal logged in another account
 than --login, or a real one without --allow-real, eg: switched by hand, refuses
 it (409). A POST /order refused before order_send answers "sent": false (504
 for its deadline passed), so the client knows it was not executed; without it,
-an error after order_send (502, 503) leaves the outcome unknown.
+an error after order_send (500, 502, 503) leaves the outcome unknown.
 """
 
 import argparse
@@ -56,6 +57,7 @@ import datetime as dt
 import hmac
 import ipaddress
 import json
+import math
 import os
 import subprocess
 import threading
@@ -64,6 +66,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import MetaTrader5 as mt5
+
+try:
+    import orjson
+except ImportError:
+    orjson = None
 
 TIMEFRAMES = {
     "M1": mt5.TIMEFRAME_M1, "M3": mt5.TIMEFRAME_M3, "M5": mt5.TIMEFRAME_M5,
@@ -86,6 +93,9 @@ INT_FIELDS = {"action", "magic", "order", "deviation", "type", "type_filling", "
               "position", "position_by"}
 
 MAX_RATES = 100000
+
+# the largest body of a request read, in bytes
+MAX_BODY = 1 << 20
 
 # the headers of the deadline of a request: in Unix milliseconds, and in
 # milliseconds from its receipt; and the furthest one taken, in seconds from now
@@ -124,6 +134,8 @@ class Terminal:
         self.lock = threading.Lock()
         self.connected = False
         self.process = None  # the terminal the bridge opened, if any
+        self.info = None  # terminal_info() of the request under the lock
+        self.selected = set()  # the symbols selected in the Market Watch since connecting
 
     def launch(self):
         """Opens the terminal of --path, unless the one the bridge opened still
@@ -138,6 +150,7 @@ class Terminal:
         time.sleep(self.args.startup)
 
     def connect(self):
+        self.selected = set()
         self.launch()
         kwargs = {"login": self.args.login, "server": self.args.server, "timeout": self.args.timeout * 1000}
         if self.args.path:
@@ -179,34 +192,63 @@ class Terminal:
         if problem:
             raise BridgeError(409, "%s: trade request refused" % problem)
 
+    def select(self, symbol):
+        """Selects symbol in the Market Watch, once per connection. Under the lock."""
+        if symbol in self.selected:
+            return True
+        if not mt5.symbol_select(symbol, True):
+            return False
+        self.selected.add(symbol)
+        return True
+
+    def reselect(self, symbol):
+        """Selects symbol again after a read of it failed, eg: removed from the
+        Market Watch by hand, and reports whether it is selected, so worth
+        reading again. Under the lock."""
+        self.selected.discard(symbol)
+        return self.select(symbol)
+
     def call(self, fn, deadline=None):
         """Runs fn with the terminal, connecting again when it was lost, eg: the
-        terminal closed, which initialize starts again with --path. With a
-        deadline (a time.monotonic()), it waits for the terminal until then at
-        most, a request behind a slow one or a reconnection, and refuses to
-        start fn after it (504)."""
+        terminal closed, which initialize starts again with --path; self.info is
+        its terminal_info(). An exception of fn is the terminal lost (503) only
+        when terminal_info() no longer answers, else an error of the bridge
+        (500). With a deadline (a time.monotonic()), it waits for the terminal
+        until then at most, a request behind a slow one or a reconnection, and
+        refuses to start fn after it (504)."""
         if deadline is None:
             self.lock.acquire()
         elif not self.lock.acquire(timeout=max(deadline - time.monotonic(), 0)):
             raise BridgeError(504, "the deadline of the request passed waiting for the terminal: not sent to it")
         try:
             check_deadline(deadline, "waiting for the terminal")
-            if self.connected and mt5.terminal_info() is None:
+            self.info = mt5.terminal_info() if self.connected else None
+            if self.connected and self.info is None:
                 self.connected = False
                 mt5.shutdown()
             if not self.connected:
                 self.connect()
                 check_deadline(deadline, "connecting to the terminal")
+                self.info = mt5.terminal_info()
             try:
                 return fn()
             except BridgeError:
                 raise
-            except Exception as exc:  # the terminal went away: reconnect on the next call
+            except Exception as exc:
+                if mt5.terminal_info() is not None:
+                    raise BridgeError(500, "%s: %s" % (type(exc).__name__, exc))
                 self.connected = False
                 mt5.shutdown()
                 raise BridgeError(503, "terminal: %s" % exc)
         finally:
             self.lock.release()
+
+
+def dumps(payload):
+    """The JSON of an answer, by orjson when installed."""
+    if orjson is not None:
+        return orjson.dumps(payload)
+    return json.dumps(payload, separators=(",", ":")).encode()
 
 
 def record(value):
@@ -222,43 +264,41 @@ def record(value):
     return value
 
 
-def listing(what, value, convert=record):
-    """The JSON list of the records the package returned, by convert: None is
-    an error of the terminal (502), unless last_error() reports none, as for
-    nothing to list; an empty tuple or array is an empty list. Under the lock,
-    right after the call."""
+def listing(what, value):
+    """The records the package returned, converted by record out of the lock:
+    None is an error of the terminal (502), unless last_error() reports none,
+    as for nothing to list. Under the lock, right after the call."""
     if value is None:
         code, message = mt5.last_error()
         if code != RES_S_OK:
             raise BridgeError(502, "%s: %s" % (what, message), code)
-        return []
-    return convert(value)
+        return ()
+    return value
 
 
 def rates_json(rates):
+    """The JSON candles of copy_rates_*, converted out of the lock."""
+    if len(rates) == 0:
+        return []
     names = rates.dtype.names
-    return [{name: row[name].item() for name in names} for row in rates]
+    return [dict(zip(names, row)) for row in rates.tolist()]
 
 
 def rates_listing(what, symbol, timeframe, rates):
-    """The JSON candles copy_rates_* returned, see listing: None with an error
-    is a range outside the history of the terminal, answered empty, when the
-    latest candle of the symbol reads, eg: before the start of its history or
-    beyond its "Max. bars in chart" (-1 of CopyRates); else the error (502).
-    Under the lock, right after the call."""
+    """The candles copy_rates_* returned, see listing: None with an error is a
+    range outside the history of the terminal, answered empty, when the latest
+    candle of the symbol reads, eg: before the start of its history or beyond
+    its "Max. bars in chart" (-1 of CopyRates); else the error (502). Under the
+    lock, right after the call."""
     if rates is not None:
-        return rates_json(rates)
+        return rates
     code, message = mt5.last_error()
     if code == RES_S_OK:
-        return []
+        return ()
     latest = mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)
     if latest is not None and len(latest) > 0:
-        return []
+        return ()
     raise BridgeError(502, "%s: %s" % (what, message), code)
-
-
-def utc(seconds):
-    return dt.datetime.fromtimestamp(int(seconds), tz=dt.timezone.utc)
 
 
 def query_int(query, name, default=None):
@@ -273,6 +313,16 @@ def query_int(query, name, default=None):
         raise BridgeError(400, "invalid %s: %r" % (name, values[0]))
 
 
+def query_time(query, name):
+    """The parameter name, in Unix seconds, as a UTC datetime, refused (400)
+    beyond what the platform converts, eg: negative on Windows."""
+    seconds = query_int(query, name)
+    try:
+        return dt.datetime.fromtimestamp(seconds, tz=dt.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        raise BridgeError(400, "invalid %s: %d" % (name, seconds))
+
+
 def query_symbol(query, required=True):
     symbol = (query.get("symbol") or [""])[0]
     if required and not symbol:
@@ -285,7 +335,25 @@ def terminal_error(what):
     return BridgeError(502, "%s: %s" % (what, message), code)
 
 
+def trade_number(field, value):
+    """The value of a numeric field of a trade request as order_send takes it,
+    refused (400) when not a finite number, or not an integer for INT_FIELDS."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            if field in FLOAT_FIELDS:
+                number = float(value)
+                if math.isfinite(number):
+                    return number
+            elif value == int(value):
+                return int(value)
+        except (OverflowError, ValueError):
+            pass
+    raise BridgeError(400, "%s must be %s" % (field, "a number" if field in FLOAT_FIELDS else "an integer"))
+
+
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
     terminal = None
     token = ""
     read_only = False
@@ -296,12 +364,29 @@ class Handler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     def reply(self, status, payload):
-        data = json.dumps(payload).encode()
+        data = dumps(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
+
+    def read_body(self):
+        """The body of the request, read before any answer so that the next
+        request of the connection starts after it."""
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise BridgeError(411, "a Content-Length is required")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_BODY:
+            self.close_connection = True
+            raise BridgeError(400, "invalid Content-Length, at most %d" % MAX_BODY)
+        return self.rfile.read(length)
 
     def authorized(self):
         """Whether the request carries the token, compared in constant time:
@@ -336,31 +421,33 @@ class Handler(BaseHTTPRequestHandler):
         """Runs fn with the terminal, within the deadline of the request."""
         return self.terminal.call(fn, self.deadline)
 
-    def handle_request(self, method):
-        if not self.authorized():
-            self.reply(401, {"error": "invalid X-Bridge-Token"})
-            return
+    def respond(self, method):
+        """The payload of the request, or its BridgeError."""
         url = urlparse(self.path)
-        query = parse_qs(url.query)
+        raw = self.read_body()
+        if not self.authorized():
+            raise BridgeError(401, "invalid X-Bridge-Token")
+        self.deadline = self.request_deadline()
+        route = ROUTES.get((method, url.path))
+        if route is None:
+            raise BridgeError(404, "no route %s %s" % (method, url.path))
+        body = json.loads(raw or b"{}") if method == "POST" else None
+        return route(self, parse_qs(url.query), body)
+
+    def handle_request(self, method):
         try:
-            self.deadline = self.request_deadline()
-            route = ROUTES.get((method, url.path))
-            if route is None:
-                raise BridgeError(404, "no route %s %s" % (method, url.path))
-            body = None
-            if method == "POST":
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) or b"{}")
-            self.reply(200, route(self, query, body))
+            status, payload = 200, self.respond(method)
         except BridgeError as exc:
-            payload = {"error": str(exc)}
+            status, payload = exc.status, {"error": str(exc)}
             if exc.retcode is not None:
                 payload["retcode"] = exc.retcode
             if exc.sent is False:
                 payload["sent"] = False
-            self.reply(exc.status, payload)
         except json.JSONDecodeError as exc:
-            self.reply(400, {"error": "invalid JSON: %s" % exc})
+            status, payload = 400, {"error": "invalid JSON: %s" % exc}
+        except Exception as exc:
+            status, payload = 500, {"error": "%s: %s" % (type(exc).__name__, exc)}
+        self.reply(status, payload)
 
     def do_GET(self):
         self.handle_request("GET")
@@ -372,12 +459,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def health(self, query, body):
         def fn():
-            info = mt5.terminal_info()
+            info = self.terminal.info
             account = mt5.account_info()
+            version = mt5.version()
             return {
                 "connected": bool(info and info.connected),
                 "trade_allowed": bool(info and info.trade_allowed),
-                "build": mt5.version()[1] if mt5.version() else 0,
+                "build": version[1] if version else 0,
                 "login": account.login if account else 0,
                 "server": account.server if account else "",
                 "read_only": self.read_only,
@@ -392,28 +480,35 @@ class Handler(BaseHTTPRequestHandler):
             account = mt5.account_info()
             if account is None:
                 raise terminal_error("account_info")
-            return record(account)
-        return self.run(fn)
+            return account
+        return record(self.run(fn))
 
     def symbol(self, query, body):
         symbol = query_symbol(query)
 
         def fn():
-            if not mt5.symbol_select(symbol, True):
+            if not self.terminal.select(symbol):
                 raise BridgeError(404, "no symbol %s" % symbol)
-            return record(mt5.symbol_info(symbol))
-        return self.run(fn)
+            info = mt5.symbol_info(symbol)
+            if info is None and self.terminal.reselect(symbol):
+                info = mt5.symbol_info(symbol)
+            if info is None:
+                raise terminal_error("symbol_info %s" % symbol)
+            return info
+        return record(self.run(fn))
 
     def tick(self, query, body):
         symbol = query_symbol(query)
 
         def fn():
-            mt5.symbol_select(symbol, True)
+            self.terminal.select(symbol)
             tick = mt5.symbol_info_tick(symbol)
+            if tick is None and self.terminal.reselect(symbol):
+                tick = mt5.symbol_info_tick(symbol)
             if tick is None:
                 raise terminal_error("symbol_info_tick %s" % symbol)
-            return record(tick)
-        return self.run(fn)
+            return tick
+        return record(self.run(fn))
 
     def rates(self, query, body):
         symbol = query_symbol(query)
@@ -422,48 +517,52 @@ class Handler(BaseHTTPRequestHandler):
         if timeframe is None:
             raise BridgeError(400, "invalid timeframe %s, one of %s" % (name, ", ".join(TIMEFRAMES)))
         if "from" in query:
-            start, end = query_int(query, "from"), query_int(query, "to")
+            start, end = query_time(query, "from"), query_time(query, "to")
+            what = "copy_rates_range %s" % symbol
 
-            def fn():
-                mt5.symbol_select(symbol, True)
-                return rates_listing("copy_rates_range %s" % symbol, symbol, timeframe,
-                                     mt5.copy_rates_range(symbol, timeframe, utc(start), utc(end)))
+            def copy():
+                return mt5.copy_rates_range(symbol, timeframe, start, end)
         else:
             count, first = query_int(query, "count"), query_int(query, "start", 0)
             if not 0 < count <= MAX_RATES:
                 raise BridgeError(400, "count must be in (0, %d]" % MAX_RATES)
+            what = "copy_rates_from_pos %s" % symbol
 
-            def fn():
-                mt5.symbol_select(symbol, True)
+            def copy():
                 # within the "Max. bars in chart" of the terminal, beyond which
                 # copy_rates_from_pos refuses the whole request
-                info = mt5.terminal_info()
-                bars = getattr(info, "maxbars", 0) if info is not None else 0
-                wanted = count
-                if bars > 0:
-                    if first >= bars:
-                        return []
-                    wanted = min(count, bars - first)
-                return rates_listing("copy_rates_from_pos %s" % symbol, symbol, timeframe,
-                                     mt5.copy_rates_from_pos(symbol, timeframe, first, wanted))
-        return self.run(fn)
+                bars = getattr(self.terminal.info, "maxbars", 0)
+                if bars <= 0:
+                    return mt5.copy_rates_from_pos(symbol, timeframe, first, count)
+                if first >= bars:
+                    return ()
+                return mt5.copy_rates_from_pos(symbol, timeframe, first, min(count, bars - first))
+
+        def fn():
+            self.terminal.select(symbol)
+            rates = copy()
+            if rates is None and self.terminal.reselect(symbol):
+                rates = copy()
+            return rates_listing(what, symbol, timeframe, rates)
+        return rates_json(self.run(fn))
 
     def positions(self, query, body):
         symbol = query_symbol(query, required=False)
-        return self.run(lambda: listing("positions_get",
-                                        mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()))
+        return record(self.run(lambda: listing("positions_get",
+                                               mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get())))
 
     def orders(self, query, body):
         symbol = query_symbol(query, required=False)
-        return self.run(lambda: listing("orders_get", mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()))
+        return record(self.run(lambda: listing("orders_get",
+                                               mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get())))
 
     def deals(self, query, body):
-        start, end = query_int(query, "from"), query_int(query, "to")
-        return self.run(lambda: listing("history_deals_get", mt5.history_deals_get(utc(start), utc(end))))
+        start, end = query_time(query, "from"), query_time(query, "to")
+        return record(self.run(lambda: listing("history_deals_get", mt5.history_deals_get(start, end))))
 
     def history_orders(self, query, body):
-        start, end = query_int(query, "from"), query_int(query, "to")
-        return self.run(lambda: listing("history_orders_get", mt5.history_orders_get(utc(start), utc(end))))
+        start, end = query_time(query, "from"), query_time(query, "to")
+        return record(self.run(lambda: listing("history_orders_get", mt5.history_orders_get(start, end))))
 
     def trade_request(self, body):
         if self.read_only:
@@ -477,15 +576,8 @@ class Handler(BaseHTTPRequestHandler):
             raise BridgeError(400, "missing action")
         request = dict(body)
         for field, value in request.items():
-            number = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if field in FLOAT_FIELDS:
-                if not number:
-                    raise BridgeError(400, "%s must be a number" % field)
-                request[field] = float(value)
-            elif field in INT_FIELDS:
-                if not number or value != int(value):
-                    raise BridgeError(400, "%s must be an integer" % field)
-                request[field] = int(value)
+            if field in FLOAT_FIELDS or field in INT_FIELDS:
+                request[field] = trade_number(field, value)
         return request
 
     def order(self, query, body):
@@ -504,10 +596,10 @@ class Handler(BaseHTTPRequestHandler):
             result = mt5.order_send(request)
             if result is None:
                 raise terminal_error("order_send")
-            return record(result)
+            return result
         try:
             request = self.trade_request(body)
-            return self.run(fn)
+            return record(self.run(fn))
         except BridgeError as exc:
             if not sent:
                 exc.sent = False
@@ -520,8 +612,8 @@ class Handler(BaseHTTPRequestHandler):
             result = mt5.order_check(request)
             if result is None:
                 raise terminal_error("order_check")
-            return record(result)
-        return self.run(fn)
+            return result
+        return record(self.run(fn))
 
 
 ROUTES = {
@@ -587,8 +679,9 @@ def main():
     Handler.terminal, Handler.token, Handler.read_only = terminal, args.token, args.read_only
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.verbose = args.verbose
-    print("mt5bridge: account %d on %s, http://%s:%d%s" % (
-        args.login, args.server, args.host, args.port, " (read-only)" if args.read_only else ""), flush=True)
+    print("mt5bridge: account %d on %s, http://%s:%d%s%s" % (
+        args.login, args.server, args.host, args.port, " (read-only)" if args.read_only else "",
+        "" if orjson is not None else " (without orjson)"), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:  # Ctrl+C, or the controller stopping it
