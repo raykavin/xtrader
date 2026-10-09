@@ -15,12 +15,18 @@ import {
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
+import { Icon } from "./Icon";
+import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
+import type { SectionIntro } from "./SettingsPage";
+import { EmptyState } from "./States";
 import { StatusIcon } from "./StatusIcon";
 import { Switch } from "./Switch";
 
 interface Props {
+  /** The title of the section and what it is for. */
+  intro: SectionIntro;
   agents: AgentSettings[];
   prompts: PromptInfo[];
   /** Replaces an agent changed by the page. */
@@ -43,7 +49,7 @@ type Editing = { agent: AgentSettings } | "new" | null;
  * New agents and the settings of each one are edited in a dialog; a disabled
  * one is deleted, its orders and its decisions kept.
  */
-export function AgentsSettings({ agents, prompts, onChange, onReload }: Props) {
+export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: Props) {
   const id = useId();
   const [editing, setEditing] = useState<Editing>(null);
   // the kind of the group shown: the first group until another is chosen
@@ -64,51 +70,49 @@ export function AgentsSettings({ agents, prompts, onChange, onReload }: Props) {
       <button
         key={group.kind}
         type="button"
-        className={group === shown ? "agent-group active" : "agent-group"}
+        className="filter-chip"
         aria-pressed={group === shown}
         aria-controls={`${id}-agents`}
         aria-label={`${group.label}: ${group.agents.length} ${group.agents.length === 1 ? "agente" : "agentes"}, ${enabled}`}
         onClick={() => setKind(group.kind)}
       >
         {group.label}
-        <span className="agent-group-count">{group.agents.length}</span>
-        <span className={group.enabled > 0 ? "agent-group-enabled on" : "agent-group-enabled"}>
-          {enabled}
-        </span>
+        <span className="filter-count">{group.agents.length}</span>
+        <span className={group.enabled > 0 ? "filter-note on" : "filter-note"}>{enabled}</span>
       </button>
     );
   };
 
+  const create = (
+    <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
+      <Icon name="plus" />
+      Novo agente
+    </button>
+  );
+
   return (
-    <div className="settings-agents">
-      <div className="settings-toolbar">
-        <p className="settings-hint">
-          Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt valem
-          na hora; as demais alterações, quando ele for reiniciado.
-        </p>
-        <button type="button" className="button primary" onClick={() => setEditing("new")}>
-          Novo agente
-        </button>
-      </div>
+    <div className="settings-section">
+      <PageHeader title={intro.title} description={intro.description} actions={create} />
       {!shown ? (
-        <p className="empty">
-          Nenhum agente cadastrado: crie um em Novo agente, ou importe os da versão anterior com o
-          migrator (import).
-        </p>
+        <div className="card">
+          <EmptyState icon="bot" title="Nenhum agente cadastrado" action={create}>
+            Crie o primeiro agente para operar uma estratégia ou um modelo de linguagem.
+          </EmptyState>
+        </div>
       ) : (
         <>
-          <fieldset className="agent-groups" aria-label="Grupos de agentes">
+          <fieldset className="filter-bar" aria-label="Grupos de agentes">
             {groups.filter((g) => g.kind === "llm").map(groupButton)}
             {strategies.length > 0 && (
-              <fieldset className="agent-groups-set" aria-labelledby={`${id}-strategies`}>
-                <span id={`${id}-strategies`} className="field-label">
+              <fieldset className="filter-set" aria-labelledby={`${id}-strategies`}>
+                <span id={`${id}-strategies`} className="filter-heading">
                   Estratégias
                 </span>
                 {strategies.map(groupButton)}
               </fieldset>
             )}
           </fieldset>
-          <div id={`${id}-agents`} className="settings-grid">
+          <div id={`${id}-agents`} className="agent-grid">
             {shown.agents.map((agent) => (
               <AgentCard
                 key={agent.name}
@@ -224,61 +228,64 @@ function AgentCard({
   const footnote = [agentNote(agent), outboxNote(agent)].filter(Boolean).join(" · ");
 
   return (
-    <article className={`card settings-agent ${state.tone}`} aria-label={`Agente ${agent.name}`}>
-      <header className="agent-head">
+    <article className={`card agent-card ${state.tone}`} aria-label={`Agente ${agent.name}`}>
+      <header className="agent-card-head">
         <div className="agent-title">
-          <h2 className="agent-name" title={agent.name}>
+          <h3 className="agent-name" title={agent.name}>
             {agent.name}
-          </h2>
+          </h3>
           <span className={`status-chip ${state.tone}`}>
             <StatusIcon mark={state.mark} />
             {state.label}
           </span>
         </div>
         <div className="agent-meta">
-          <span>{agentKindLabel(agent.kind)}</span>
-          <span className="badge">{agent.mode}</span>
-          {summary.length > 0 && (
-            <span className="agent-summary">
-              {summary.map((part) => (
-                <span key={part.label} className="mono" title={part.label}>
-                  {part.value}
-                </span>
-              ))}
+          <span className="tag">{agentKindLabel(agent.kind)}</span>
+          <span
+            className={paper ? "tag" : "tag tag-live"}
+            title={paper ? "Carteira simulada" : "Conta MT5"}
+          >
+            {agent.mode}
+          </span>
+          {summary.map((part) => (
+            <span key={part.label} className="tag tag-mono" title={part.label}>
+              {part.value}
             </span>
-          )}
+          ))}
         </div>
-        <span className="settings-agent-address mono" title="Endereço da API">
+        <span className="agent-address mono" title="Endereço da API">
           {agent.api_address}
         </span>
       </header>
 
-      <div className="agent-switches">
-        <Switch
-          label="Ativo"
-          checked={agent.enabled}
-          disabled={busy}
-          title="Ligado, o controller o inicia; desligado, o para"
-          onChange={(enabled) => change({ enabled })}
-        />
-        <Switch
-          label="Painel de trading"
-          checked={paper || agent.trade_panel}
-          disabled={busy || paper}
-          title={channelsTitle ?? tradePanelHint}
-          onChange={(trade_panel) => change({ trade_panel })}
-        />
-        <Switch
-          label="Controle via Telegram"
-          checked={paper || agent.telegram_control}
-          disabled={busy || paper}
-          title={channelsTitle}
-          onChange={(telegram_control) => change({ telegram_control })}
-        />
+      <div className="agent-block">
+        <div className="agent-switches">
+          <Switch
+            label="Ativo"
+            checked={agent.enabled}
+            disabled={busy}
+            title="Ligado, o controller o inicia; desligado, o para"
+            onChange={(enabled) => change({ enabled })}
+          />
+          <Switch
+            label="Painel de trading"
+            checked={paper || agent.trade_panel}
+            disabled={busy || paper}
+            title={channelsTitle ?? tradePanelHint}
+            onChange={(trade_panel) => change({ trade_panel })}
+          />
+          <Switch
+            label="Controle via Telegram"
+            checked={paper || agent.telegram_control}
+            disabled={busy || paper}
+            title={channelsTitle}
+            onChange={(telegram_control) => change({ telegram_control })}
+          />
+        </div>
       </div>
 
       {llm && (
-        <div className="field settings-prompt">
+        <div className="agent-block field">
           <span className="field-label">Prompt</span>
           <Select
             caption="Prompt"
@@ -290,76 +297,107 @@ function AgentCard({
               )
             }
           />
-          {status && <p className={`settings-status ${status.tone}`}>{status.text}</p>}
-          <p className="settings-hint">A troca vale a partir da próxima análise, sem reiniciar.</p>
+          {status && (
+            <p
+              className={
+                status.tone === "on"
+                  ? "msg msg-ok"
+                  : status.tone === "warn"
+                    ? "msg msg-warn"
+                    : "msg"
+              }
+            >
+              {status.text}
+            </p>
+          )}
+          <p className="field-hint">A troca vale a partir da próxima análise, sem reiniciar.</p>
         </div>
       )}
 
-      <div className="settings-secrets">
-        {llm && (
+      <div className="agent-block">
+        <h4 className="section-title">
+          <Icon name="key" size={13} />
+          Segredos
+        </h4>
+        <div className="secret-list">
+          {llm && (
+            <SecretField
+              label="Chave da API do LLM"
+              set={agent.secrets.llm_api_key}
+              disabled={busy}
+              onSave={secret("llm_api_key")}
+            />
+          )}
           <SecretField
-            label="Chave da API do LLM"
-            set={agent.secrets.llm_api_key}
+            label="Token da bridge MT5"
+            set={agent.secrets.bridge_token}
             disabled={busy}
-            onSave={secret("llm_api_key")}
+            onSave={secret("bridge_token")}
           />
-        )}
-        <SecretField
-          label="Token da bridge MT5"
-          set={agent.secrets.bridge_token}
-          disabled={busy}
-          onSave={secret("bridge_token")}
-        />
-        {llm && (
-          <SecretField
-            label="Token do calendário (MCP)"
-            set={agent.secrets.calendar_token}
-            disabled={busy}
-            onSave={secret("calendar_token")}
-          />
-        )}
+          {llm && (
+            <SecretField
+              label="Token do calendário (MCP)"
+              set={agent.secrets.calendar_token}
+              disabled={busy}
+              onSave={secret("calendar_token")}
+            />
+          )}
+        </div>
       </div>
 
-      <footer className="settings-footer">
-        {footnote && <span className="settings-hint">{footnote}</span>}
-        <span className="settings-actions">
+      <footer className="agent-card-foot">
+        {footnote && <p className="agent-note">{footnote}</p>}
+        <div className="agent-actions">
           <button
             type="button"
-            className="mini-btn"
+            className="btn btn-sm"
             aria-label={`Resultados de ${agent.name}`}
             title="Os resultados por período, e a redefinição deles"
             onClick={() => setResults(true)}
           >
+            <Icon name="results" size={14} />
             Resultados
           </button>
           <button
             type="button"
-            className="mini-btn"
+            className="btn btn-sm"
             aria-label={`Editar ${agent.name}`}
             disabled={busy}
             onClick={onEdit}
           >
+            <Icon name="edit" size={14} />
             Editar
           </button>
-          <ConfirmButton
-            label="Excluir"
-            question={`Excluir ${agent.name}?`}
-            disabled={busy || agent.enabled || stopping}
-            title={deleteTitle}
-            onConfirm={remove}
-          />
           <button
             type="button"
-            className={agent.restart_pending ? "mini-btn accent" : "mini-btn"}
+            className={agent.restart_pending ? "btn btn-sm btn-primary" : "btn btn-sm"}
+            aria-label={`Reiniciar ${agent.name}`}
+            title={
+              agent.restart_pending
+                ? "Aplica as configurações de inicialização alteradas"
+                : "Reinicia o processo do agente"
+            }
             disabled={busy || !agent.enabled || !agent.launched}
             onClick={restart}
           >
+            <Icon name="restart" size={14} />
             Reiniciar
           </button>
-        </span>
+          <span className="agent-actions-end">
+            <ConfirmButton
+              label="Excluir"
+              icon="trash"
+              ariaLabel={`Excluir ${agent.name}`}
+              question={`Excluir ${agent.name}?`}
+              disabled={busy || agent.enabled || stopping}
+              title={deleteTitle}
+              onConfirm={remove}
+            />
+          </span>
+        </div>
       </footer>
       {error && (
-        <p className="control-feedback error" role="alert">
+        <p className="msg msg-error" role="alert">
           {error}
         </p>
       )}

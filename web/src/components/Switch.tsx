@@ -20,7 +20,7 @@ export function Switch({ checked, onChange, label, disabled = false, title }: Pr
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="switch-track" aria-hidden="true" />
-      <span className="ticket-field-label">{label}</span>
+      <span className="switch-label">{label}</span>
     </label>
   );
 }

@@ -51,6 +51,7 @@ import { type PositionPnL, positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
 import { candleUpdates, timeframeLabel } from "../lib/timeframes";
+import { Icon } from "./Icon";
 
 interface Props {
   snapshot: Snapshot;
@@ -364,52 +365,6 @@ function autoScale(chart: IChartApi) {
   for (const [index] of chart.panes().entries()) {
     chart.priceScale("right", index).applyOptions({ autoScale: true });
   }
-}
-
-/** A crosshair, of the button that brings the chart to the current price. */
-function CrosshairIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <circle cx="12" cy="12" r="7" />
-      <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
-    </svg>
-  );
-}
-
-/** Four corners, out to enter the fullscreen, in to leave it. */
-function FullscreenIcon({ leave }: { leave: boolean }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d={
-          leave
-            ? "M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"
-            : "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
-        }
-      />
-    </svg>
-  );
 }
 
 /**
@@ -843,48 +798,27 @@ export function PriceChart({
     state.chart.timeScale().scrollToRealTime();
   };
 
+  const legend = snapshot.indicators.flatMap((indicator) =>
+    indicator.metrics.map((metric, index) => ({
+      key: metricKey(indicator, metric, index),
+      color: seriesColor(metric.color, palettes[theme].accent),
+      label: metric.name ? `${indicator.name} ${metric.name}` : indicator.name,
+    })),
+  );
+  const shownLabel = timeframeLabel(timeframe || execution);
+
   return (
     <section
       ref={cardRef}
       className={fullscreen ? "card chart-card chart-fullscreen" : "card chart-card"}
+      aria-label={`Gráfico de ${snapshot.pair}`}
     >
-      <div className="card-title">
-        <span>
-          {snapshot.pair} <small>preço · volume · indicadores</small>
-          {moveError && <span className="chart-error">{moveError}</span>}
-          {analysis && (
-            <span className="chart-analysis" title="Marcações da análise do LLM no gráfico">
-              {analysisCaption(analysis)}
-              {onAnalysisReset && (
-                <button type="button" className="mini-btn" onClick={onAnalysisReset}>
-                  Voltar à análise atual
-                </button>
-              )}
-            </span>
-          )}
-        </span>
-        <span className="legend">
-          {otherView && (
-            <span className="legend-item">
-              <span title="Os indicadores da estratégia são calculados nos candles do timeframe de execução">
-                indicadores no {timeframeLabel(execution)}
-              </span>
-            </span>
-          )}
-          {snapshot.indicators.map((indicator) => (
-            <span key={indicator.name} className="legend-item">
-              {indicator.metrics.map((metric, index) => (
-                <span key={metricKey(indicator, metric, index)}>
-                  <i style={{ background: seriesColor(metric.color, "var(--accent)") }} />
-                  {metric.name ? `${indicator.name} ${metric.name}` : indicator.name}
-                </span>
-              ))}
-            </span>
-          ))}
-        </span>
-      </div>
-      {timeframes.length > 0 && (
-        <div className="chart-toolbar">
+      <header className="chart-head">
+        <div className="chart-title">
+          <h2>{snapshot.pair}</h2>
+          {shownLabel && <span className="chart-tf">{shownLabel}</span>}
+        </div>
+        {timeframes.length > 0 && (
           <fieldset className="timeframes">
             <legend>Timeframe do gráfico</legend>
             {timeframes.map((view) => {
@@ -900,6 +834,7 @@ export function PriceChart({
                   type="button"
                   className={view.execution ? "timeframe execution" : "timeframe"}
                   aria-pressed={view.timeframe === timeframe}
+                  aria-label={view.execution ? `${label} (execução)` : label}
                   disabled={!view.available || !onTimeframeChange}
                   title={title}
                   onClick={() => onTimeframeChange?.(view.timeframe)}
@@ -909,41 +844,89 @@ export function PriceChart({
               );
             })}
           </fieldset>
-          {otherView && !timeframeNote && (
-            <span className="timeframe-note">
-              Visualização {timeframeLabel(timeframe)}: ordens e análise do{" "}
-              {timeframeLabel(execution)} alinhadas aos candles
-            </span>
+        )}
+      </header>
+
+      {(legend.length > 0 || analysis || otherView) && (
+        <div className="chart-sub">
+          {legend.length > 0 && (
+            <ul className="legend" aria-label="Indicadores">
+              {legend.map((item) => (
+                <li key={item.key} className="legend-chip">
+                  <i style={{ background: item.color }} aria-hidden="true" />
+                  {item.label}
+                </li>
+              ))}
+              {otherView && (
+                <li
+                  className="legend-chip note"
+                  title="Os indicadores da estratégia são calculados nos candles do timeframe de execução"
+                >
+                  calculados no {timeframeLabel(execution)}
+                </li>
+              )}
+            </ul>
           )}
-          {timeframeNote && (
-            <span className={timeframeNote.error ? "timeframe-note error" : "timeframe-note"}>
-              {timeframeNote.text}
+          {analysis && (
+            <span className="analysis-chip" title="Marcações da análise do LLM no gráfico">
+              <Icon name="sparkles" size={13} />
+              <span className="analysis-chip-text">{analysisCaption(analysis)}</span>
+              {onAnalysisReset && (
+                <button type="button" className="btn btn-xs" onClick={onAnalysisReset}>
+                  Voltar à análise atual
+                </button>
+              )}
             </span>
           )}
         </div>
       )}
+
+      {(moveError || timeframeNote || (otherView && !timeframeNote)) && (
+        <div className="chart-notes">
+          {moveError && (
+            <p className="msg msg-error" role="alert">
+              {moveError}
+            </p>
+          )}
+          {otherView && !timeframeNote && (
+            <p className="msg">
+              Visualização em {timeframeLabel(timeframe)}: ordens e análise do{" "}
+              {timeframeLabel(execution)} alinhadas aos candles.
+            </p>
+          )}
+          {timeframeNote && (
+            <p
+              className={timeframeNote.error ? "msg msg-error" : "msg"}
+              role={timeframeNote.error ? "alert" : "status"}
+            >
+              {timeframeNote.text}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="chart-frame">
         <div ref={containerRef} className="chart price-chart" />
         <button
           type="button"
-          className="icon-button chart-live"
-          style={{ right: scaleWidth + 8 + 28 + 6 }}
-          title={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
+          className="btn btn-icon chart-overlay-btn"
+          style={{ right: scaleWidth + 8 + 32 + 6 }}
+          title={fullscreen ? "Sair da tela cheia (Esc)" : "Gráfico em tela cheia"}
           aria-label={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
           aria-pressed={fullscreen !== null}
           onClick={toggleFullscreen}
         >
-          <FullscreenIcon leave={fullscreen !== null} />
+          <Icon name={fullscreen ? "shrink" : "expand"} size={15} />
         </button>
         <button
           type="button"
-          className="icon-button chart-live"
+          className="btn btn-icon chart-overlay-btn"
           style={{ right: scaleWidth + 8 }}
           title="Ir para o preço atual"
           aria-label="Ir para o preço atual"
           onClick={goLive}
         >
-          <CrosshairIcon />
+          <Icon name="crosshair" size={15} />
         </button>
       </div>
     </section>

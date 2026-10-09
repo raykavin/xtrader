@@ -15,10 +15,10 @@ interface Props {
 type Feedback = { tone: "ok" | "error"; text: string };
 
 /**
- * The bot of the agent, on the card atop the dashboard: whether it runs, and
- * its start, or its stop confirmed in place, whatever the trade panel, which
- * gates the orders only. Without a bot to control, eg: of a backtest, only
- * that it is off.
+ * The bot of the agent, at the end of the bar atop the panel: whether it
+ * runs, and its start, or its stop confirmed in place, whatever the trade
+ * panel, which gates the orders only. Without a bot to control, eg: of a
+ * backtest, only that it is off.
  */
 export function BotControl({ agent, controls, onControlsChange }: Props) {
   const [confirming, setConfirming] = useState(false);
@@ -74,51 +74,59 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
     });
 
   return (
-    <div className="field bot-control">
-      <span className="field-label">Bot</span>
+    <div className="bot-control">
       <div className="bot-control-row">
+        <span className="bot-control-label">Bot</span>
         <span className={`status-chip ${!enabled ? "" : running ? "running" : "stopped"}`}>
           <StatusIcon mark={!enabled ? undefined : running ? "play" : "stop"} />
           {controls === null ? "…" : enabled ? botStatusLabel(controls.status) : "desativado"}
         </span>
         {!enabled ? null : running ? (
           confirming ? (
-            <>
+            <fieldset className="confirm" aria-label="Confirmar a parada do bot">
+              <span className="confirm-question">Parar o bot?</span>
               <button
                 type="button"
-                className="mini-btn danger"
+                className="btn btn-sm btn-danger"
                 disabled={busy}
                 onClick={handleStop}
               >
-                Confirmar
+                Parar
               </button>
               <button
                 type="button"
-                className="mini-btn"
+                className="btn btn-sm"
                 disabled={busy}
                 onClick={() => setConfirming(false)}
               >
                 Voltar
               </button>
-            </>
+            </fieldset>
           ) : (
             <button
               type="button"
-              className="mini-btn"
+              className="btn btn-sm btn-danger-outline"
               disabled={busy}
               onClick={() => setConfirming(true)}
             >
+              <StatusIcon mark="stop" />
               Parar bot
             </button>
           )
         ) : (
-          <button type="button" className="mini-btn accent" disabled={busy} onClick={handleStart}>
+          <button
+            type="button"
+            className="btn btn-sm btn-success"
+            disabled={busy}
+            onClick={handleStart}
+          >
+            <StatusIcon mark="play" />
             Iniciar bot
           </button>
         )}
       </div>
       {feedback && (
-        <p className={`control-feedback ${feedback.tone}`} role="status">
+        <p className={`msg msg-${feedback.tone}`} role="status">
           {feedback.text}
         </p>
       )}

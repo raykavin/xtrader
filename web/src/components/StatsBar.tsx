@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Snapshot } from "../api/types";
 import {
   formatNumber,
@@ -52,7 +53,7 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
 
   // The open position, next to the hero: what the bot holds now.
   const position: Tile = {
-    label: "P&L",
+    label: "P&L aberto",
     value: pnl ? formatProfit(pnl.profit) : "—",
     unit: pnl ? pnl.currency : undefined,
     tone: pnl ? signClass(pnl.profit) : "",
@@ -114,8 +115,8 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
           <div className="stat">
             <span className="stat-label">{hero.label}</span>
             <span className={`stat-value ${hero.tone ?? ""}`}>{hero.value}</span>
+            {hero.hint && <span className="stat-hint">{hero.hint}</span>}
           </div>
-          {hero.hint && <span className="stat-hint">{hero.hint}</span>}
           {hasEquity && (
             <Sparkline
               className="sparkline"
@@ -124,18 +125,23 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
             />
           )}
         </div>
-        <div className="stat-hero">
+        <div className={pnl ? "stat-hero" : "stat-hero idle"}>
           <div className="stat">
             <span className="stat-label">{position.label}</span>
             <span className={`stat-value ${position.tone ?? ""}`}>
               {position.value}
               {position.unit && <span className="unit">{position.unit}</span>}
             </span>
+            {position.hint && <span className="stat-hint">{position.hint}</span>}
           </div>
-          {position.hint && <span className="stat-hint">{position.hint}</span>}
+          {pnl && (
+            <span className={`side-chip ${pnl.side === "BUY" ? "buy" : "sell"}`}>
+              {pnl.side === "BUY" ? "Comprado" : "Vendido"}
+            </span>
+          )}
         </div>
       </div>
-      <div className="stat-strip">
+      <div className="stat-strip" style={{ "--cols": stripColumns(tiles.length) } as CSSProperties}>
         {tiles.map((tile) => (
           <div key={tile.label} className="stat">
             <span className="stat-label">{tile.label}</span>
@@ -149,4 +155,9 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
       </div>
     </section>
   );
+}
+
+/** The columns of the strip: a row of up to 4 cards, else 2 rows as tall as the heroes. */
+function stripColumns(count: number): number {
+  return count > 4 ? Math.ceil(count / 2) : Math.max(count, 1);
 }

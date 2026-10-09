@@ -1,4 +1,5 @@
 import { clampPage, PAGE_SIZE, pageCount, pageList } from "../lib/pagination";
+import { Icon } from "./Icon";
 
 interface Props {
   /** The page shown, from 0. */
@@ -33,7 +34,7 @@ export function Paginator({ page, total, onPage }: Props) {
           aria-label="Página anterior"
           onClick={() => onPage(current - 1)}
         >
-          ‹
+          <Icon name="chevronLeft" size={14} />
         </button>
         {pages.map((p, i) =>
           p === null ? (
@@ -60,7 +61,7 @@ export function Paginator({ page, total, onPage }: Props) {
           aria-label="Próxima página"
           onClick={() => onPage(current + 1)}
         >
-          ›
+          <Icon name="chevronRight" size={14} />
         </button>
       </div>
     </nav>

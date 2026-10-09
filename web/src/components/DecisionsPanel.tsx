@@ -14,8 +14,11 @@ import {
 } from "../lib/decisions";
 import { formatTime } from "../lib/format";
 import { pageRows } from "../lib/pagination";
+import { Icon } from "./Icon";
 import { Paginator } from "./Paginator";
 import { ReanalysisDialog } from "./ReanalysisDialog";
+import { Alert, EmptyState } from "./States";
+import { TimeCell } from "./TimeCell";
 
 interface Props {
   agent: string;
@@ -65,26 +68,26 @@ export function DecisionsPanel({
   };
 
   return (
-    <section className="card decisions" aria-label="Decisões do LLM">
-      <div className="card-title">
-        <span>
-          Decisões do LLM <small>{model}</small>
-          {feedback && (
-            <span className={feedback.tone === "ok" ? "decision-feedback" : "chart-error"}>
-              {feedback.text}
-            </span>
-          )}
-        </span>
+    <div className="panel-body decisions">
+      <div className="panel-toolbar">
+        <p className="panel-summary">
+          {decisions.length === 1 ? "1 decisão" : `${decisions.length} decisões`} em{" "}
+          <span className="mono">{pair}</span> · modelo <span className="mono">{model}</span>
+        </p>
         <button
           type="button"
-          className="button"
+          className="btn btn-sm btn-primary"
           disabled={reanalysis !== "enabled"}
           title={button.title}
           onClick={() => setAsking(true)}
         >
+          <Icon name="sparkles" size={14} />
           {button.label}
         </button>
       </div>
+      {feedback && (
+        <Alert tone={feedback.tone === "ok" ? "success" : "error"}>{feedback.text}</Alert>
+      )}
       {asking && (
         <ReanalysisDialog
           pair={pair}
@@ -92,77 +95,100 @@ export function DecisionsPanel({
           onClose={() => setAsking(false)}
         />
       )}
-      {error && <div className="banner error">{error}</div>}
+      {error && (
+        <Alert tone="error" title="Não foi possível carregar as decisões">
+          {error}
+        </Alert>
+      )}
       {decisions.length === 0 ? (
-        <p className="empty">Nenhuma decisão ainda.</p>
+        <EmptyState compact icon="sparkles" title="Nenhuma decisão ainda">
+          Cada análise do modelo neste par aparece aqui, com a justificativa, inclusive as que não
+          geraram ordem.
+        </EmptyState>
       ) : (
         <div className="table-wrap">
-          <table>
+          <table className="table table-responsive">
             <thead>
               <tr>
-                <th>Hora (UTC)</th>
-                <th>Origem</th>
-                <th>Ação</th>
-                <th className="num">Confiança</th>
-                <th>Resultado</th>
-                <th>Justificativa</th>
-                <th aria-label="Detalhes" />
+                <th scope="col">Hora (UTC)</th>
+                <th scope="col">Origem</th>
+                <th scope="col">Ação</th>
+                <th scope="col" className="num">
+                  Confiança
+                </th>
+                <th scope="col">Resultado</th>
+                <th scope="col">Justificativa</th>
+                <th scope="col" className="col-actions">
+                  <span className="sr-only">Detalhes</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {pageRows(decisions, page).map((decision) => (
-                <tr key={decision.id}>
-                  <td className="mono">{formatTime(decision.decided_at)}</td>
-                  <td>
-                    {decisionTriggerLabel(decision)}
-                    {decision.request_note && (
-                      <span
-                        className="note-mark"
-                        title={`Mensagem: ${decision.request_note}`}
-                        role="img"
-                        aria-label="Com mensagem do trader"
-                      >
-                        💬
+              {pageRows(decisions, page).map((decision) => {
+                const tone = decisionTone(decision.action);
+                return (
+                  <tr key={decision.id}>
+                    <td className="mono" data-label="Hora (UTC)">
+                      <TimeCell unix={decision.decided_at} />
+                    </td>
+                    <td data-label="Origem">
+                      {decisionTriggerLabel(decision)}
+                      {decision.request_note && (
+                        <span
+                          className="note-mark"
+                          title={`Mensagem: ${decision.request_note}`}
+                          role="img"
+                          aria-label="Com mensagem do trader"
+                        >
+                          <Icon name="message" size={13} />
+                        </span>
+                      )}
+                    </td>
+                    <td data-label="Ação">
+                      {tone ? (
+                        <span className={`side-chip ${tone}`}>
+                          {decisionActionLabel(decision.action)}
+                        </span>
+                      ) : (
+                        decisionActionLabel(decision.action)
+                      )}
+                    </td>
+                    <td className="num mono" data-label="Confiança">
+                      {decision.action ? formatConfidence(decision.confidence) : "—"}
+                    </td>
+                    <td data-label="Resultado">
+                      <span className={`badge outcome ${decision.outcome}`}>
+                        {decisionOutcomeLabel(decision.outcome)}
                       </span>
-                    )}
-                  </td>
-                  <td
-                    className={
-                      decisionTone(decision.action) === "buy"
-                        ? "pos"
-                        : decisionTone(decision.action) === "sell"
-                          ? "neg"
-                          : ""
-                    }
-                  >
-                    {decisionActionLabel(decision.action)}
-                  </td>
-                  <td className="num mono">
-                    {decision.action ? formatConfidence(decision.confidence) : "—"}
-                  </td>
-                  <td>
-                    <span className={`badge outcome ${decision.outcome}`}>
-                      {decisionOutcomeLabel(decision.outcome)}
-                    </span>
-                  </td>
-                  <td
-                    className="decision-cell"
-                    title={isSkipped(decision) ? decision.error : decision.reason || decision.error}
-                  >
-                    {decisionReason(decision)}
-                  </td>
-                  <td className="num">
-                    <button type="button" className="table-btn" onClick={() => onShow(decision.id)}>
-                      Ver
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td
+                      className="cell-truncate cell-fill decision-cell"
+                      data-label="Justificativa"
+                      title={
+                        isSkipped(decision) ? decision.error : decision.reason || decision.error
+                      }
+                    >
+                      {decisionReason(decision)}
+                    </td>
+                    <td className="num cell-actions">
+                      <button
+                        type="button"
+                        className="btn btn-xs"
+                        aria-label={`Ver a decisão de ${formatTime(decision.decided_at)}`}
+                        onClick={() => onShow(decision.id)}
+                      >
+                        <Icon name="eye" size={13} />
+                        Ver
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
       <Paginator page={page} total={decisions.length} onPage={setPage} />
-    </section>
+    </div>
   );
 }

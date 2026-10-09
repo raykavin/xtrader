@@ -19,6 +19,9 @@ import {
 } from "../lib/decisions";
 import { formatNumber, formatPrice, formatTime } from "../lib/format";
 import { promptLabel } from "../lib/settings";
+import { DialogHeader } from "./Dialog";
+import { Icon } from "./Icon";
+import { Alert, Loading, Skeleton } from "./States";
 
 interface Props {
   agent: string;
@@ -62,21 +65,35 @@ export function DecisionDialog({ agent, decisionId, quote, onClose, onShowOnChar
     // biome-ignore lint/a11y/useKeyWithClickEvents: Esc closes the dialog natively
     <dialog
       ref={dialog}
-      className="decision-dialog"
+      className="dialog dialog-md"
       aria-labelledby="decision-title"
       onClose={onClose}
       onClick={(e) => {
         if (e.target === dialog.current) close(); // the backdrop
       }}
     >
-      <header className="decision-head">
-        <h2 id="decision-title">Justificativa (LLM)</h2>
-        <button type="button" className="mini-btn" onClick={close} aria-label="Fechar">
-          ✕
-        </button>
-      </header>
-      {error && <div className="banner error">{error}</div>}
-      {!decision && !error && <p className="empty">Carregando…</p>}
+      <DialogHeader
+        id="decision-title"
+        title="Justificativa da decisão"
+        subtitle="LLM"
+        onClose={close}
+      />
+      {error && (
+        <div className="dialog-body">
+          <Alert tone="error" title="Não foi possível carregar a decisão">
+            {error}
+          </Alert>
+        </div>
+      )}
+      {!decision && !error && (
+        <div className="dialog-body">
+          <Loading label="Carregando a decisão…">
+            <Skeleton height={32} />
+            <Skeleton height={140} />
+            <Skeleton height={96} />
+          </Loading>
+        </div>
+      )}
       {decision && (
         <DecisionDetails
           agent={agent}
@@ -117,7 +134,7 @@ function DecisionDetails({
   ].filter((level) => level.value !== undefined && level.value !== null);
 
   return (
-    <div className="decision-body">
+    <div className="dialog-body">
       <div className="decision-summary">
         <span className={`decision-action ${tone}`}>{decisionActionLabel(decision.action)}</span>
         {decision.action && (
@@ -131,16 +148,17 @@ function DecisionDetails({
         {onShowOnChart && drawable && (
           <button
             type="button"
-            className="mini-btn"
+            className="btn btn-sm btn-primary decision-show"
             title="Desenhar as marcações e os níveis desta análise no gráfico"
             onClick={() => onShowOnChart(decisionAnalysis(decision))}
           >
+            <Icon name="chart" size={14} />
             Mostrar no gráfico
           </button>
         )}
       </div>
 
-      <dl className="decision-meta">
+      <dl className="meta-list">
         <dt>{isSkipped(decision) ? "Analisada em" : "Decidida em"}</dt>
         <dd className="mono">{formatTime(decision.decided_at)} UTC</dd>
         <dt>Ativo</dt>
@@ -184,21 +202,21 @@ function DecisionDetails({
       </dl>
 
       {decision.request_note && (
-        <section className="decision-section">
-          <h3>Mensagem do trader</h3>
+        <section className="dialog-section">
+          <h3 className="section-title">Mensagem do trader</h3>
           <p className="decision-reason">{decision.request_note}</p>
         </section>
       )}
 
       {isSkipped(decision) ? (
-        <section className="decision-section">
-          <h3>Por que o modelo não foi consultado</h3>
+        <section className="dialog-section">
+          <h3 className="section-title">Por que o modelo não foi consultado</h3>
           <p className="decision-reason">{decisionReason(decision)}</p>
           {decision.error && <p className="decision-detail">{decision.error}</p>}
         </section>
       ) : (
-        <section className="decision-section">
-          <h3>Justificativa</h3>
+        <section className="dialog-section">
+          <h3 className="section-title">Justificativa</h3>
           {decision.reason ? (
             <p className="decision-reason">{decision.reason}</p>
           ) : (
@@ -209,9 +227,9 @@ function DecisionDetails({
       )}
 
       {levels.length > 0 && (
-        <section className="decision-section">
-          <h3>Níveis da decisão</h3>
-          <ul className="decision-list">
+        <section className="dialog-section">
+          <h3 className="section-title">Níveis da decisão</h3>
+          <ul className="kv-list">
             {levels.map((level) => (
               <li key={level.name}>
                 <span>{level.name}</span>
@@ -223,9 +241,9 @@ function DecisionDetails({
       )}
 
       {drawings.length > 0 && (
-        <section className="decision-section">
-          <h3>Marcações no gráfico</h3>
-          <ul className="decision-list">
+        <section className="dialog-section">
+          <h3 className="section-title">Marcações no gráfico</h3>
+          <ul className="kv-list">
             {drawings.map((drawing) => (
               <li key={drawing.id}>
                 <span>
@@ -242,9 +260,9 @@ function DecisionDetails({
       )}
 
       {(decision.levels.length > 0 || decision.notes.length > 0) && (
-        <section className="decision-section">
-          <h3>Anotações</h3>
-          <ul className="decision-list">
+        <section className="dialog-section">
+          <h3 className="section-title">Anotações</h3>
+          <ul className="kv-list">
             {decision.levels.map((level) => (
               <li key={`${level.kind}-${level.price}`}>
                 <span>{levelKindLabel(level.kind)}</span>
@@ -270,8 +288,8 @@ function DecisionDetails({
       )}
 
       {decision.attachments.length > 0 && (
-        <section className="decision-section">
-          <h3>Imagens e arquivos</h3>
+        <section className="dialog-section">
+          <h3 className="section-title">Imagens e arquivos</h3>
           <div className="decision-attachments">
             {decision.attachments.map((attachment) => {
               const url = decisionAttachmentUrl(agent, decision.id, attachment.index);
@@ -280,7 +298,8 @@ function DecisionDetails({
                   <img src={url} alt={`Imagem ${attachment.index + 1} da decisão`} loading="lazy" />
                 </a>
               ) : (
-                <a key={attachment.index} className="button" href={url} download>
+                <a key={attachment.index} className="btn btn-sm" href={url} download>
+                  <Icon name="download" size={14} />
                   Arquivo {attachment.index + 1} ({attachment.media_type},{" "}
                   {formatNumber(attachment.size / 1024)} KB)
                 </a>
@@ -290,8 +309,8 @@ function DecisionDetails({
         </section>
       )}
 
-      <section className="decision-section">
-        <h3>Ordens</h3>
+      <section className="dialog-section">
+        <h3 className="section-title">Ordens</h3>
         <p className="mono">
           {decision.order_ids.length > 0
             ? decision.order_ids.map((id) => `#${id}`).join(", ")

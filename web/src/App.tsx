@@ -9,7 +9,6 @@ import {
   fetchSnapshot,
   moveOrder,
   subscribeEvents,
-  UI_VERSION,
 } from "./api/client";
 import type {
   AgentStatus,
@@ -20,15 +19,17 @@ import type {
   Snapshot,
 } from "./api/types";
 import { AgentBar } from "./components/AgentBar";
+import { AppShell } from "./components/AppShell";
 import { ControlPanel } from "./components/ControlPanel";
 import { DecisionDialog } from "./components/DecisionDialog";
 import { DecisionsPanel } from "./components/DecisionsPanel";
 import { EquityChart } from "./components/EquityChart";
-import { Footer } from "./components/Footer";
-import { Header } from "./components/Header";
+import { Icon } from "./components/Icon";
 import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
+import { Alert, EmptyState, Loading, Skeleton } from "./components/States";
 import { StatsBar } from "./components/StatsBar";
+import { type TabItem, Tabs, tabIds } from "./components/Tabs";
 import { pickAgent } from "./lib/agents";
 import {
   applyAnalysisEvent,
@@ -37,6 +38,7 @@ import {
   linkOrders,
   reanalysisState,
 } from "./lib/decisions";
+import { rememberDashboard, sessionStore, settingsHref } from "./lib/nav";
 import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
 import {
   applyCandleEvent,
@@ -142,22 +144,30 @@ export function App() {
 
   if (!agent) {
     return (
-      <div className="app">
-        <Header theme={theme} onThemeToggle={toggleTheme} version={UI_VERSION} />
-        <main>
-          {error ? (
-            <div className="banner error">{error}</div>
-          ) : loaded && agents.length === 0 ? (
-            // the dashboard serves the agents turned on only
-            <div className="banner">
-              Nenhum agente ligado: crie ou ligue um em <a href="/settings">Configurações</a>.
-            </div>
-          ) : (
-            <div className="banner">Carregando agentes…</div>
-          )}
-        </main>
-        <Footer />
-      </div>
+      <AppShell page="dashboard" title="Painel" theme={theme} onThemeToggle={toggleTheme}>
+        {error ? (
+          <Alert tone="error" title="Não foi possível carregar os agentes">
+            {error}
+          </Alert>
+        ) : loaded && agents.length === 0 ? (
+          // the dashboard serves the agents turned on only
+          <EmptyState
+            icon="bot"
+            title="Nenhum agente ligado"
+            action={
+              <a className="btn btn-primary" href={settingsHref("agentes")}>
+                <Icon name="settings" />
+                Ir para Agentes
+              </a>
+            }
+          >
+            O painel mostra os agentes ativos. Crie um agente ou ative um existente nas
+            configurações.
+          </EmptyState>
+        ) : (
+          <DashboardSkeleton label="Carregando agentes…" />
+        )}
+      </AppShell>
     );
   }
   // Each agent gets a dashboard of its own, its state starting over.
@@ -483,105 +493,209 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const interactive = controls?.enabled === true;
   const ticket = useMemo(() => ({ levels, onLevel: setLevel }), [levels, setLevel]);
 
+  // the query of the panel, kept for the way back from the settings
+  // biome-ignore lint/correctness/useExhaustiveDependencies: kept as the agent, the pair or the timeframe change the URL
+  useEffect(() => {
+    rememberDashboard(window.location.search, sessionStore());
+  }, [agent, pair, askedTimeframe]);
+
+  // The lists under the chart, a tab each: the ones of the strategy only.
+  const hasDecisions = snapshot?.llm?.decisions === true;
+  const hasEquity = (snapshot?.equity_values.length ?? 0) > 0;
+  const [tab, setTab] = useState<DashboardTab>(loadDashboardTab);
+  const shownTab: DashboardTab =
+    (tab === "decisions" && !hasDecisions) || (tab === "equity" && !hasEquity) ? "orders" : tab;
+  const chooseTab = (next: DashboardTab) => {
+    setTab(next);
+    saveDashboardTab(next);
+  };
+  const tabs: TabItem<DashboardTab>[] = [
+    { id: "orders", label: "Ordens", icon: "list", count: snapshot?.orders.length ?? 0 },
+    ...(hasDecisions
+      ? [
+          {
+            id: "decisions" as const,
+            label: "Decisões do LLM",
+            icon: "sparkles" as const,
+            count: decisions.length,
+          },
+        ]
+      : []),
+    ...(hasEquity ? [{ id: "equity" as const, label: "Patrimônio", icon: "trend" as const }] : []),
+  ];
+  const panel = (id: DashboardTab) => ({
+    role: "tabpanel",
+    id: tabIds("lists", id).panel,
+    "aria-labelledby": tabIds("lists", id).tab,
+    hidden: shownTab !== id,
+    className: "tab-panel",
+  });
+
   return (
-    <div className="app">
-      <Header
-        theme={theme}
-        onThemeToggle={onThemeToggle}
-        version={UI_VERSION}
-        connected={connected}
+    <AppShell
+      page="dashboard"
+      title="Painel"
+      theme={theme}
+      onThemeToggle={onThemeToggle}
+      connected={connected}
+    >
+      <AgentBar
+        agents={agents}
+        agent={agent}
+        onAgentChange={onAgentChange}
+        pairs={pairs}
+        pair={pair}
+        onPairChange={setPair}
+        llm={snapshot?.llm?.model}
+        timeframe={snapshot?.timeframe}
+        controls={controls}
+        onControlsChange={setControls}
       />
-      <main>
-        <AgentBar
-          agents={agents}
-          agent={agent}
-          onAgentChange={onAgentChange}
-          pairs={pairs}
-          pair={pair}
-          onPairChange={setPair}
-          llm={snapshot?.llm?.model}
-          controls={controls}
-          onControlsChange={setControls}
+      {error && (
+        <Alert tone="error" title="Não foi possível carregar os dados do agente">
+          {error}
+        </Alert>
+      )}
+      {!snapshot && !error && (
+        <DashboardSkeleton
+          label={pairs.length === 0 ? "Aguardando o primeiro candle…" : "Carregando…"}
+          waiting={pairs.length === 0}
         />
-        {error && <div className="banner error">{error}</div>}
-        {!snapshot && !error && (
-          <div className="banner">
-            {pairs.length === 0 ? "Aguardando o primeiro candle…" : "Carregando…"}
-          </div>
-        )}
-        {snapshot && chartSnapshot && stats && (
-          <div className={loading ? "content loading" : "content"}>
-            <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} since={since} />
-            <div className="trade-area">
-              <PriceChart
-                snapshot={chartSnapshot}
-                theme={theme}
-                layoutKey={agent ?? ""}
-                ticket={interactive ? ticket : undefined}
-                onMoveOrder={interactive ? handleMoveOrder : undefined}
-                position={pnl}
-                timeframe={shown}
-                timeframes={viewTimeframes(snapshot)}
-                onTimeframeChange={setAskedTimeframe}
-                timeframeNote={timeframeNote}
-                analysis={chartAnalysis(
-                  snapshot.pair,
-                  shownAnalysis?.pair === snapshot.pair
-                    ? shownAnalysis.analysis
-                    : snapshot.analysis,
-                )}
-                onAnalysisReset={
-                  shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
-                }
-              />
-              <ControlPanel
-                agent={agent}
-                pair={snapshot.pair}
-                asset={snapshot.asset}
-                quote={snapshot.quote}
-                lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
-                controls={controls ?? { enabled: false, status: "" }}
-                levels={levels}
-                onLevelsChange={setLevels}
-              />
-            </div>
-            {snapshot.equity_values.length > 0 && <EquityChart snapshot={snapshot} theme={theme} />}
-            {snapshot.llm?.decisions && (
-              <DecisionsPanel
-                key={`decisions-${snapshot.pair}`} // the first page of each pair
-                agent={agent}
-                pair={snapshot.pair}
-                model={snapshot.llm.model}
-                decisions={decisions}
-                error={decisionsError}
-                reanalysis={reanalysisState(controls)}
-                onShow={setShownDecision}
-              />
-            )}
-            <OrdersTable
-              key={`orders-${snapshot.pair}`} // the first page of each pair
+      )}
+      {snapshot && chartSnapshot && stats && (
+        <div className={loading ? "content loading" : "content"} aria-busy={loading}>
+          <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} since={since} />
+          <div className="workspace">
+            <PriceChart
+              snapshot={chartSnapshot}
+              theme={theme}
+              layoutKey={agent ?? ""}
+              ticket={interactive ? ticket : undefined}
+              onMoveOrder={interactive ? handleMoveOrder : undefined}
+              position={pnl}
+              timeframe={shown}
+              timeframes={viewTimeframes(snapshot)}
+              onTimeframeChange={setAskedTimeframe}
+              timeframeNote={timeframeNote}
+              analysis={chartAnalysis(
+                snapshot.pair,
+                shownAnalysis?.pair === snapshot.pair ? shownAnalysis.analysis : snapshot.analysis,
+              )}
+              onAnalysisReset={
+                shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
+              }
+            />
+            <ControlPanel
               agent={agent}
               pair={snapshot.pair}
+              asset={snapshot.asset}
               quote={snapshot.quote}
-              accountCurrency={snapshot.account_currency}
-              orders={snapshot.orders}
-              onCancel={interactive ? handleCancelOrder : undefined}
-              onShowDecision={snapshot.llm?.decisions ? setShownDecision : undefined}
+              lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
+              controls={controls}
+              levels={levels}
+              onLevelsChange={setLevels}
             />
-            {shownDecision && (
-              <DecisionDialog
-                agent={agent}
-                decisionId={shownDecision}
-                quote={snapshot.quote}
-                onClose={() => setShownDecision(null)}
-                onShowOnChart={(analysis) => setShownAnalysis({ pair: snapshot.pair, analysis })}
-              />
-            )}
           </div>
-        )}
-      </main>
-      <Footer />
-    </div>
+
+          <section className="card panel" aria-label="Ordens, decisões e patrimônio">
+            <Tabs
+              label="Listas do agente"
+              idPrefix="lists"
+              items={tabs}
+              value={shownTab}
+              onChange={chooseTab}
+            />
+            <div {...panel("orders")}>
+              <OrdersTable
+                key={`orders-${snapshot.pair}`} // the first page of each pair
+                agent={agent}
+                pair={snapshot.pair}
+                quote={snapshot.quote}
+                accountCurrency={snapshot.account_currency}
+                orders={snapshot.orders}
+                onCancel={interactive ? handleCancelOrder : undefined}
+                onShowDecision={hasDecisions ? setShownDecision : undefined}
+              />
+            </div>
+            {snapshot.llm?.decisions && (
+              <div {...panel("decisions")}>
+                <DecisionsPanel
+                  key={`decisions-${snapshot.pair}`} // the first page of each pair
+                  agent={agent}
+                  pair={snapshot.pair}
+                  model={snapshot.llm.model}
+                  decisions={decisions}
+                  error={decisionsError}
+                  reanalysis={reanalysisState(controls)}
+                  onShow={setShownDecision}
+                />
+              </div>
+            )}
+            {hasEquity && (
+              <div {...panel("equity")}>
+                {/* drawn once shown: a chart sizes itself on a visible box */}
+                {shownTab === "equity" && <EquityChart snapshot={snapshot} theme={theme} />}
+              </div>
+            )}
+          </section>
+
+          {shownDecision && (
+            <DecisionDialog
+              agent={agent}
+              decisionId={shownDecision}
+              quote={snapshot.quote}
+              onClose={() => setShownDecision(null)}
+              onShowOnChart={(analysis) => setShownAnalysis({ pair: snapshot.pair, analysis })}
+            />
+          )}
+        </div>
+      )}
+    </AppShell>
+  );
+}
+
+/** The lists under the chart, a tab each. */
+type DashboardTab = "orders" | "decisions" | "equity";
+
+const TAB_KEY = "xtrader.dashboard.tab";
+
+/** The tab of the lists shown last in this browser. */
+function loadDashboardTab(): DashboardTab {
+  try {
+    const saved = window.localStorage.getItem(TAB_KEY);
+    if (saved === "orders" || saved === "decisions" || saved === "equity") return saved;
+  } catch {
+    // no storage: the first tab
+  }
+  return "orders";
+}
+
+function saveDashboardTab(tab: DashboardTab) {
+  try {
+    window.localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // no storage: the first tab next time
+  }
+}
+
+/** The blocks of the panel while its data loads: the cards, the chart and the ticket. */
+function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?: boolean }) {
+  return (
+    <Loading label={label}>
+      {waiting && (
+        <Alert tone="info" title="Aguardando dados">
+          O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
+        </Alert>
+      )}
+      <div className="skeleton-stats">
+        <Skeleton height={112} />
+        <Skeleton height={112} />
+      </div>
+      <div className="workspace">
+        <Skeleton className="skeleton-chart" />
+        <Skeleton className="skeleton-ticket" />
+      </div>
+    </Loading>
   );
 }
 

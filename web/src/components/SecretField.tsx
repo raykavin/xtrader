@@ -40,7 +40,7 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
   };
 
   return (
-    <div className="secret-field">
+    <div className="secret-row">
       <div className="secret-head">
         <span className="secret-label">{label}</span>
         <span className={set ? "badge filled" : "badge"}>{set ? "definido" : "não definido"}</span>
@@ -48,7 +48,8 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
           <span className="secret-actions">
             <button
               type="button"
-              className="mini-btn"
+              className="btn btn-xs"
+              aria-label={`${set ? "Trocar" : "Definir"} ${label.toLowerCase()}`}
               disabled={disabled || busy}
               onClick={() => setEditing(true)}
             >
@@ -57,6 +58,7 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
             {set && (
               <ConfirmButton
                 label="Remover"
+                ariaLabel={`Remover ${label.toLowerCase()}`}
                 question={`Remover ${label.toLowerCase()}?`}
                 disabled={disabled || busy}
                 onConfirm={() => save("")}
@@ -66,10 +68,10 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
         )}
       </div>
       {editing && (
-        <form className="secret-form" onSubmit={submit}>
+        <form className="inline-form" onSubmit={submit}>
           <input
             type="password"
-            className="settings-input"
+            className="input"
             autoComplete="off"
             aria-label={label}
             placeholder={placeholder ?? "Novo valor"}
@@ -79,12 +81,16 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
             // biome-ignore lint/a11y/noAutofocus: opened by the user to type it
             autoFocus
           />
-          <button type="submit" className="button primary" disabled={busy || value.trim() === ""}>
+          <button
+            type="submit"
+            className="btn btn-sm btn-primary"
+            disabled={busy || value.trim() === ""}
+          >
             {busy ? "Salvando…" : "Salvar"}
           </button>
           <button
             type="button"
-            className="button"
+            className="btn btn-sm"
             disabled={busy}
             onClick={() => {
               setEditing(false);
@@ -97,7 +103,7 @@ export function SecretField({ label, set, onSave, disabled = false, placeholder 
         </form>
       )}
       {error && (
-        <p className="control-feedback error" role="alert">
+        <p className="msg msg-error" role="alert">
           {error}
         </p>
       )}
