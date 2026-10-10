@@ -2882,11 +2882,11 @@ fieldset.seg {
   font-weight: 600;
 }
 
-/* the change of the asset over the candles loaded, and their count */
+/* the change of the asset over the candles loaded, and their count, at the right */
 .hero-change {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 6px;
   padding-top: var(--sp-4);
   border-top: 1px solid var(--border);
