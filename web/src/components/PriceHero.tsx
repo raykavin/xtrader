@@ -15,10 +15,10 @@ interface Props {
 }
 
 /**
- * The quote of the pair shown, the first card of the panel: the pair, its
- * last price set large, how the asset moved over the candles loaded (buy &
- * hold) at its right, its closes as a line over the change and the count of
- * the candles, and the position held with its profit.
+ * The quote of the pair shown, the first card of the panel: the pair, how
+ * the asset moved over the candles loaded (buy & hold) and their count at its
+ * right, its last price set large, the position held with its profit, and the
+ * closes of the candles as a line along the foot of the card.
  */
 export function PriceHero({ snapshot, buyAndHold, pnl, theme }: Props) {
   const last = snapshot.candles[snapshot.candles.length - 1]?.close ?? 0;
@@ -47,20 +47,6 @@ export function PriceHero({ snapshot, buyAndHold, pnl, theme }: Props) {
               </span>
             </div>
           </div>
-          <Sparkline
-            className="hero-spark"
-            points={closes}
-            color={color}
-            width={112}
-            height={36}
-            dot
-          />
-        </div>
-        <div className="hero-price">
-          <span className="hero-value" title="Último preço, o fechamento do último candle">
-            {last > 0 ? formatPrice(last) : "—"}
-            <small>{snapshot.quote}</small>
-          </span>
           <span
             className="hero-change"
             title={`Buy & hold: a variação de ${snapshot.asset} do primeiro ao último dos ${count} candles carregados`}
@@ -72,6 +58,10 @@ export function PriceHero({ snapshot, buyAndHold, pnl, theme }: Props) {
             <span className="hero-candles">{count} candles</span>
           </span>
         </div>
+        <span className="hero-value" title="Último preço, o fechamento do último candle">
+          {last > 0 ? formatPrice(last) : "—"}
+          <small>{snapshot.quote}</small>
+        </span>
       </div>
 
       <dl className="hero-position">
@@ -97,6 +87,10 @@ export function PriceHero({ snapshot, buyAndHold, pnl, theme }: Props) {
           )}
         </dd>
       </dl>
+
+      <div className="hero-chart">
+        <Sparkline points={closes} color={color} width={400} height={80} />
+      </div>
     </section>
   );
 }

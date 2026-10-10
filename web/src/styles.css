@@ -2791,9 +2791,10 @@ fieldset.seg {
 
 /* the quote: the pair, its price set large, how it moved, the position held */
 .hero {
-  justify-content: space-between;
+  --hero-pad-y: 20px;
+  --hero-pad-x: 22px;
   gap: var(--sp-5);
-  padding: 20px 22px;
+  padding: var(--hero-pad-y) var(--hero-pad-x);
   overflow: hidden;
 }
 
@@ -2820,7 +2821,7 @@ fieldset.seg {
   gap: var(--sp-4);
 }
 
-/* the pair at the left, the line of its closes at the right */
+/* the pair at the left, its change and the candles it is over at the right */
 .hero-top {
   display: flex;
   align-items: flex-start;
@@ -2829,11 +2830,19 @@ fieldset.seg {
   min-width: 0;
 }
 
-.hero-spark {
-  flex: 0 1 112px;
-  min-width: 56px;
-  height: 36px;
-  margin-top: 2px;
+/* the closes along the foot of the card, from edge to edge, in the room left */
+.hero-chart {
+  flex: 1 1 64px;
+  min-height: 64px;
+  margin: calc(-1 * var(--sp-2)) calc(-1 * var(--hero-pad-x)) calc(-1 * var(--hero-pad-y));
+}
+
+.hero-chart svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .hero-id {
@@ -2882,21 +2891,12 @@ fieldset.seg {
   font-weight: 600;
 }
 
-/* the last price at the left, its change and the candles it is over at the right */
-.hero-price {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 10px 14px;
-}
-
 .hero-change {
   display: flex;
+  flex: none;
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
-  margin-left: auto;
 }
 
 .hero-candles {
@@ -4889,7 +4889,8 @@ fieldset.seg {
   }
 
   .hero {
-    padding: var(--sp-4);
+    --hero-pad-y: var(--sp-4);
+    --hero-pad-x: var(--sp-4);
   }
 
   .meter-card {
