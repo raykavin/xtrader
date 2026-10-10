@@ -25,9 +25,9 @@ const PAIR_SEGMENTS = 6;
 
 /**
  * The context of the panel, a bar atop it: the agent and the pair shown, then
- * the state of the agent at a glance: its bot, started and stopped there,
- * whether the ticket sends orders, and what the strategy trades on. A row on
- * a wide screen; wrapped on a narrow one.
+ * the state of the agent at a glance: its bot, started and stopped there, and
+ * what the strategy trades on (whether the ticket sends orders is on the
+ * ticket). A row on a wide screen; wrapped on a narrow one.
  */
 export function AgentBar({
   agents,
@@ -113,26 +113,6 @@ export function AgentBar({
           </div>
         )}
         <BotControl agent={agent} controls={controls} onControlsChange={onControlsChange} />
-        <div className="status-item">
-          <dt className="status-label">Boleta</dt>
-          <dd
-            className="status-value"
-            title={
-              controls?.enabled
-                ? "O painel de trading do agente está ligado: a boleta envia ordens"
-                : "O painel de trading do agente está desligado: a boleta não envia ordens"
-            }
-          >
-            {controls === null ? (
-              <span className="status-chip">…</span>
-            ) : (
-              <span className={controls.enabled ? "status-chip on" : "status-chip"}>
-                <i aria-hidden="true" />
-                {controls.enabled ? "Liberada" : "Bloqueada"}
-              </span>
-            )}
-          </dd>
-        </div>
         {(timeframe || llm) && (
           <div className="status-item">
             <dt className="status-label">Estratégia</dt>

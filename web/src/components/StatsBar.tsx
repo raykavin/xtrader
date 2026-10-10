@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Snapshot } from "../api/types";
 import { formatNumber, formatPercent, formatTime, signClass } from "../lib/format";
 import type { Stats } from "../lib/stats";
@@ -85,7 +86,11 @@ export function StatsBar({ stats, snapshot, theme, since }: Props) {
         <div key={kpi.label} className="kpi">
           <span className="kpi-label">{kpi.label}</span>
           <span className="kpi-line">
-            <span className={`kpi-value ${kpi.tone ?? ""}`}>
+            <span
+              className={`kpi-value ${kpi.tone ?? ""}`}
+              title={kpi.unit ? `${kpi.value} ${kpi.unit}` : kpi.value}
+              style={{ "--kpi-chars": kpi.value.length + (kpi.unit ? 2 : 0) } as CSSProperties}
+            >
               {kpi.value}
               {kpi.unit && <small>{kpi.unit}</small>}
             </span>

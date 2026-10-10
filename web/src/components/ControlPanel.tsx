@@ -14,7 +14,6 @@ import {
   type Side,
   type TicketLevels,
 } from "../lib/ticket";
-import { Icon } from "./Icon";
 import { SectionHead } from "./SectionHead";
 import { Switch } from "./Switch";
 
@@ -34,6 +33,10 @@ interface Props {
 }
 
 type Unit = "quote" | "percent" | "lot";
+
+/** Why the ticket is blocked, and where to unblock it, on its badge. */
+const blockedHint =
+  "o painel de trading está desligado neste agente. Ligue-o em Configurações › Agentes para enviar ordens.";
 type OrderType = "market" | "limit";
 type Confirm = { kind: "order" };
 type Feedback = { tone: "ok" | "warn" | "error"; text: string };
@@ -178,6 +181,8 @@ export function ControlPanel({
   // without the controls of the bot, the ticket shows, locked
   const enabled = controls?.enabled === true;
   const locked = busy || !enabled;
+  // known off: the ticket sends no order until the trade panel of the agent is on
+  const blocked = controls !== null && !enabled;
   const parsedAmount = Number(amount);
   const validAmount =
     Number.isFinite(parsedAmount) &&
@@ -306,7 +311,23 @@ export function ControlPanel({
 
   return (
     <section className={`card ticket ${side} ${enabled ? "" : "locked"}`} aria-label="Boleta">
-      <SectionHead eyebrow="Operar" title="Boleta" tag={pair} />
+      <SectionHead
+        eyebrow="Operar"
+        title="Boleta"
+        tag={pair}
+        inline={
+          blocked && (
+            <a
+              className="badge badge-blocked"
+              href={settingsHref("agentes")}
+              title={blockedHint}
+              aria-label={`Boleta bloqueada: ${blockedHint}`}
+            >
+              Bloqueada
+            </a>
+          )
+        }
+      />
 
       <div className="ticket-quote">
         <span className="field-label">Último preço</span>
@@ -315,16 +336,6 @@ export function ControlPanel({
           <small>{quote}</small>
         </span>
       </div>
-
-      {controls !== null && !enabled && (
-        <p className="ticket-locked">
-          <Icon name="info" size={14} />
-          <span>
-            Boleta bloqueada: o painel de trading está desligado neste agente. Ligue-o em{" "}
-            <a href={settingsHref("agentes")}>Configurações › Agentes</a> para enviar ordens.
-          </span>
-        </p>
-      )}
 
       <fieldset className="seg ticket-sides" aria-label="Lado da ordem">
         <button

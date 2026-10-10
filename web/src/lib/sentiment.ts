@@ -10,6 +10,15 @@ export const SENTIMENT_MAX = 100;
 /** The tone of a band of the sentiment, for its color. */
 export type SentimentTone = "bear-strong" | "bear" | "neutral" | "bull" | "bull-strong";
 
+/** The bands of the sentiment, from the most bearish, see sentimentBand. */
+export const SENTIMENT_BANDS: readonly { label: string; tone: SentimentTone }[] = [
+  { label: "Muito baixista", tone: "bear-strong" },
+  { label: "Baixista", tone: "bear" },
+  { label: "Neutro", tone: "neutral" },
+  { label: "Altista", tone: "bull" },
+  { label: "Muito altista", tone: "bull-strong" },
+];
+
 /** The newest reading of the sentiment, its decision, and the reading before it, if any. */
 export interface SentimentReading {
   value: number;
@@ -65,13 +74,19 @@ export function formatSentiment(value: number): string {
 }
 
 /**
- * The change from the previous reading, whole and signed, eg: +8; null without
- * one or for a change under 1.
+ * The change from the previous reading, whole, eg: 8, or -6; null without one
+ * or for a change under 1.
  */
-export function sentimentChange(reading: SentimentReading): string | null {
+export function sentimentDelta(reading: SentimentReading): number | null {
   if (reading.previous === undefined) return null;
   const change = Math.round(reading.value) - Math.round(reading.previous);
-  if (change === 0) return null;
+  return change === 0 ? null : change;
+}
+
+/** The change from the previous reading as shown, signed, eg: +8, or −6; see sentimentDelta. */
+export function sentimentChange(reading: SentimentReading): string | null {
+  const change = sentimentDelta(reading);
+  if (change === null) return null;
   return change > 0 ? `+${change}` : `−${Math.abs(change)}`;
 }
 

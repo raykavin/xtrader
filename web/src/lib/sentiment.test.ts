@@ -4,8 +4,10 @@ import {
   formatSentiment,
   latestSentiment,
   needleAngle,
+  SENTIMENT_BANDS,
   sentimentBand,
   sentimentChange,
+  sentimentDelta,
 } from "./sentiment";
 
 function decision(id: string, sentiment?: number, outcome = "applied"): Decision {
@@ -70,6 +72,21 @@ describe("sentimentBand", () => {
   });
 });
 
+describe("SENTIMENT_BANDS", () => {
+  it("lists the bands of sentimentBand, from the most bearish", () => {
+    expect(SENTIMENT_BANDS.map((band) => band.tone)).toEqual([
+      "bear-strong",
+      "bear",
+      "neutral",
+      "bull",
+      "bull-strong",
+    ]);
+    for (const value of [5, 30, 50, 70, 95]) {
+      expect(SENTIMENT_BANDS).toContainEqual(sentimentBand(value));
+    }
+  });
+});
+
 describe("formatSentiment and sentimentChange", () => {
   it("shows whole values and signed changes", () => {
     expect(formatSentiment(62.4)).toBe("62");
@@ -79,6 +96,9 @@ describe("formatSentiment and sentimentChange", () => {
     expect(sentimentChange({ ...reading, previous: 70 })).toBe("−6");
     expect(sentimentChange({ ...reading, previous: 64.2 })).toBeNull();
     expect(sentimentChange({ ...reading, previous: undefined })).toBeNull();
+    expect(sentimentDelta(reading)).toBe(12);
+    expect(sentimentDelta({ ...reading, previous: 70 })).toBe(-6);
+    expect(sentimentDelta({ ...reading, previous: 64.2 })).toBeNull();
   });
 });
 
