@@ -776,8 +776,16 @@ export interface AgentSettingsResponse {
   agents: AgentSettings[];
 }
 /**
+ * AgentRenameRequest is the payload of POST /api/settings/agents/{name}/rename:
+ * the new name of the agent, disabled and stopped, see store.RenameAgent.
+ */
+export interface AgentRenameRequest {
+  name: string;
+}
+/**
  * AgentSettingsRequest is the payload of PATCH /api/settings/agents/{name}:
- * the changes, of the fields set, the name and the kind never changing.
+ * the changes, of the fields set, the kind never changing and the name only by
+ * AgentRenameRequest.
  * Params, when set, replace them all, the ones of the language model included
  * ({} removes them); Account and LLM change the fields they set. DefaultPrompt
  * selects the prompt embedded in the agent, PromptID one of the database; a

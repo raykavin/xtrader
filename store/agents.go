@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"gorm.io/gorm/clause"
+
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/config"
 	"github.com/raykavin/xtrader/ui"
@@ -822,6 +824,59 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 		}
 		return s.conn(ctx).Delete(&agent).Error
 	})
+}
+
+// formerNameRow is a name an agent had before it was renamed, see RenameAgent.
+type formerNameRow struct {
+	AgentID int64
+	Name    string
+}
+
+func (formerNameRow) TableName() string { return "agent_former_names" }
+
+// RenameAgent renames the agent of id to name, keeping all it has: its ID, its
+// account (its comment and magic number at the broker), its language model,
+// its orders, its decisions and its journal; its former name is kept (see
+// agent_former_names), so the seeds don't bring it back. A name taken by
+// another agent is ErrConflict, one out of the rules ErrInvalid. An agent
+// enabled isn't renamed (ErrConflict): disabled, it is stopped, and its files
+// named after it, eg: its outbox, can be renamed with it, see Manager.
+func (s *Store) RenameAgent(ctx context.Context, id int64, name string) (Agent, error) {
+	name = strings.TrimSpace(name)
+	if !agentNameRegexp.MatchString(name) {
+		return Agent{}, fmt.Errorf("%w: agent name %q: letters, digits, '.', '_' and '-', 64 at most, "+
+			"starting with a letter or a digit", ErrInvalid, name)
+	}
+	err := s.Transaction(ctx, func(ctx context.Context) error {
+		var agent Agent
+		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&agent, id).Error; err != nil {
+			return notFound(err, fmt.Sprintf("agent %d", id))
+		}
+		switch {
+		case agent.Name == name:
+			return nil
+		case agent.Enabled:
+			return fmt.Errorf("%w: the agent %s is enabled: disable it first", ErrConflict, agent.Name)
+		}
+		var taken int64
+		if err := s.conn(ctx).Model(&Agent{}).Where("name = ? AND id <> ?", name, id).Count(&taken).Error; err != nil {
+			return err
+		}
+		if taken > 0 {
+			return fmt.Errorf("%w: an agent is named %s", ErrConflict, name)
+		}
+		err := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&formerNameRow{AgentID: id, Name: agent.Name}).Error
+		if err != nil {
+			return err
+		}
+		err = s.conn(ctx).Model(&Agent{}).Where("id = ?", id).Update("name", name).Error
+		return notFound(err, "agent "+name)
+	})
+	if err != nil {
+		return Agent{}, err
+	}
+	return s.Agent(ctx, id)
 }
 
 // SetAgentPrompt selects the prompt of the LLM agent of id, the default one

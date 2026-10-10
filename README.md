@@ -226,7 +226,8 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 - **Reconexão:** quando os eventos em tempo real caem (rede, agente reiniciando) e voltam, o painel recarrega o snapshot do ativo, as decisões e o estado do bot, porque o que aconteceu durante a queda (ordens, posição, candles) não chega pelos eventos. Um navegador que não acompanha os eventos (256 na fila dele, por exemplo numa rede lenta) perde os seguintes: o agente encerra os eventos dele, e o painel reconecta e recarrega da mesma forma, em vez de ficar desatualizado. Se a conexão é recusada, o painel confere a sessão: sem sessão (expirada ou encerrada), vai ao login; com ela, ou sem resposta do painel, tenta de novo a cada 5 s.
 - **Bot:** iniciar e parar o bot de cada agente no estado do topo do painel, ao lado do agente e do par.
 - **Configurações, por seção (na navegação do topo):**
-  - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, excluir, ligar e desligar, reiniciar e definir os segredos.
+  - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, renomear, excluir, ligar e desligar, reiniciar e definir os segredos.
+  - **Renomear** (botão no card do agente): só com o agente desativado e parado. Muda apenas o nome: o agente mantém o ID, a conta (comentário e número mágico na corretora, então as posições continuam dele), o modelo, os segredos, as ordens, as decisões, os resultados e a fila de registros ainda não enviados (o arquivo `data/outbox/<nome>-<id>.db` é renomeado junto; se a troca falhar, nada muda). O nome antigo fica em `agent_former_names` (migração 20), para os seeds não recriarem o agente com ele, e fica livre para outro agente. No Telegram, o agente é selecionado de novo pelo nome novo (`/agent`).
   - **Resultados** (botão no card do agente): os resultados por período e a redefinição deles. Veja [Redefinir os resultados](#redefinir-os-resultados).
   - **Prompts:** editor com histórico de versões.
   - **Telegram:** liga e desliga o bot, token e IDs autorizados.
@@ -241,6 +242,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - agentes, contas MT5 e configuração dos modelos;
   - Telegram;
   - ordens, decisões com anexos, marcações (`decision_drawings`, desde a migração 18), sentimento (`decision_sentiments`, desde a migração 19) e journal;
+  - nomes anteriores dos agentes renomeados (`agent_former_names`, desde a migração 20);
   - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.

@@ -3,9 +3,9 @@
 SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 
 -- The agents of a new database, both off: each inserted once, when no agent
--- ever had its name (one deleted in the dashboard included), so the seeds, run
--- again on every migration, never overwrite an edit nor bring back an agent
--- deleted. Their secrets never go here: set the API key of the LLM, the token
+-- ever had its name (one deleted in the dashboard, or renamed since, see
+-- agent_former_names, included), so the seeds, run again on every migration,
+-- never overwrite an edit nor bring back an agent deleted or renamed. Their secrets never go here: set the API key of the LLM, the token
 -- of the bridge (MT5_BRIDGE_TOKEN of services/mt5/.env) and the one of the MCP
 -- server of the terminal on the page of the settings of the dashboard, then
 -- turn the agent on. The terminal of MT5 is the service mt5 of the compose:
@@ -25,6 +25,7 @@ WITH agent AS (
              "leverage": "400"}'::jsonb,
            (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
     WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'llm')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'llm')
     RETURNING id
 ), account AS (
     INSERT INTO agent_accounts (agent_id, exchange, bridge_url)
@@ -50,6 +51,7 @@ WITH agent AS (
              "stop-value": "1", "take-profit-value": "2", "max-distance": "0.5"}'::jsonb,
            (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
     WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'matrend-btc')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'matrend-btc')
     RETURNING id
 )
 INSERT INTO agent_accounts (agent_id, exchange, bridge_url)
@@ -73,6 +75,7 @@ WITH agent AS (
              "leverage": "400"}'::jsonb,
            (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
     WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'llm-smc')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'llm-smc')
     RETURNING id
 ), account AS (
     INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { deleteAgent, restartAgent, updateAgentSettings } from "../api/client";
+import { deleteAgent, renameAgent, restartAgent, updateAgentSettings } from "../api/client";
 import type { AgentSettings, AgentSettingsRequest, PromptInfo } from "../api/types";
 import {
   type AgentGroup,
@@ -17,6 +17,7 @@ import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
+import { RenameAgentDialog } from "./RenameAgentDialog";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
@@ -171,6 +172,7 @@ function AgentCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const state = agentState(agent);
   const status = promptStatusLabel(agent.prompt_status);
   const summary = agentSummary(agent);
@@ -225,6 +227,11 @@ function AgentCard({
   const channelsTitle = paper
     ? "No modo paper, o painel de controle fica ativo em todos os canais"
     : undefined;
+  const renameTitle = agent.enabled
+    ? "Desative o agente antes de renomeá-lo"
+    : stopping
+      ? "O agente ainda está parando: aguarde para renomeá-lo"
+      : "Muda só o nome; a conta, as ordens e as decisões continuam dele";
   const deleteTitle = agent.enabled
     ? "Desative o agente antes de excluí-lo"
     : stopping
@@ -392,6 +399,17 @@ function AgentCard({
             <Icon name="restart" size={14} />
             Reiniciar
           </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-label={`Renomear ${agent.name}`}
+            title={renameTitle}
+            disabled={busy || agent.enabled || stopping}
+            onClick={() => setRenaming(true)}
+          >
+            <Icon name="rename" size={14} />
+            Renomear
+          </button>
           <span className="agent-actions-end">
             <ConfirmButton
               label="Excluir"
@@ -411,6 +429,16 @@ function AgentCard({
         </p>
       )}
       {results && <AgentResultsDialog agent={agent} onClose={() => setResults(false)} />}
+      {renaming && (
+        <RenameAgentDialog
+          name={agent.name}
+          onConfirm={async (name) => {
+            await renameAgent(agent.name, name);
+            onDeleted(); // listed again under its new name
+          }}
+          onClose={() => setRenaming(false)}
+        />
+      )}
     </article>
   );
 }

@@ -6,6 +6,7 @@ import type {
   AgentPeriod,
   AgentPeriodRequest,
   AgentPeriodsResponse,
+  AgentRenameRequest,
   AgentSettings,
   AgentSettingsRequest,
   AgentSettingsResponse,
@@ -301,6 +302,15 @@ export function updateAgentSettings(
 /** Deletes an agent disabled and stopped: its orders and its decisions are kept. */
 export function deleteAgent(name: string): Promise<void> {
   return sendJSON<void>("DELETE", `/settings/agents/${encodeURIComponent(name)}`);
+}
+
+/**
+ * Renames an agent disabled and stopped: its ID, its account, its orders and
+ * its decisions stay its own, its outbox renamed with it.
+ */
+export function renameAgent(name: string, newName: string): Promise<AgentSettings> {
+  const request: AgentRenameRequest = { name: newName };
+  return postJSON<AgentSettings>(`/settings/agents/${encodeURIComponent(name)}/rename`, request);
 }
 
 /** Restarts an agent, eg: to apply the settings waiting for it. */
