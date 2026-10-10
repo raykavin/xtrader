@@ -81,7 +81,7 @@ export function agentNote(agent: AgentSettings): string {
   const restarts = agent.restarts ?? 0;
   if (restarts === 0) return exit;
   const times = restarts === 1 ? "1 vez" : `${restarts} vezes`;
-  return exit ? `${exit} · reiniciado ${times}` : `Reiniciado ${times}`;
+  return exit ? `${exit}. Reiniciado ${times}` : `Reiniciado ${times}`;
 }
 
 /** How long ago, as the note of the outbox tells it: "12 min", "3 h", "2 dias". */
@@ -130,7 +130,7 @@ export function outboxNote(agent: AgentSettings, now = Date.now()): string {
       `Outbox: ${records} no arquivo do agente e reenviado${outbox.held === 1 ? "" : "s"} de tempos em tempos (veja o log do agente)`,
     );
   }
-  return notes.join(" · ");
+  return notes.join(". ");
 }
 
 /** The agents of a kind, a group of the page: the LLM ones, or the ones of a strategy. */

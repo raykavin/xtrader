@@ -1,15 +1,6 @@
-import type { CSSProperties } from "react";
 import type { Snapshot } from "../api/types";
-import {
-  formatNumber,
-  formatPercent,
-  formatPrice,
-  formatProfit,
-  formatQuantity,
-  formatTime,
-  signClass,
-} from "../lib/format";
-import type { PositionPnL, Stats } from "../lib/stats";
+import { formatNumber, formatPercent, formatTime, signClass } from "../lib/format";
+import type { Stats } from "../lib/stats";
 import { palettes, type Theme } from "../lib/theme";
 import { Sparkline } from "./Sparkline";
 
@@ -17,13 +8,11 @@ interface Props {
   stats: Stats;
   snapshot: Snapshot;
   theme: Theme;
-  /** The open position and its profit, null when flat, see positionPnL. */
-  pnl?: PositionPnL | null;
   /** The start of the accounting period of the agent the trades count from, see AgentPeriod. */
   since?: number;
 }
 
-interface Tile {
+interface Readout {
   label: string;
   value: string;
   unit?: string;
@@ -31,18 +20,22 @@ interface Tile {
   hint?: string;
 }
 
-export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
+/**
+ * The results of the strategy as a row of readouts, a label over each value:
+ * the first one answers whether it paid off, the trend of the equity beside
+ * it; the open position is in the head of the panel.
+ */
+export function StatsBar({ stats, snapshot, theme, since }: Props) {
   const hasEquity = snapshot.equity_values.length > 0;
   const palette = palettes[theme];
 
-  // The hero answers the one question a backtest is run for: did it pay off?
-  // Without a paper wallet there is no equity, so buy & hold takes its place.
-  const hero: Tile = hasEquity
+  // Without a paper wallet there is no equity, so buy & hold comes first.
+  const first: Readout = hasEquity
     ? {
         label: "Retorno da estratégia",
         value: formatPercent(stats.returnPct),
         tone: signClass(stats.returnPct),
-        hint: `${formatNumber(stats.initialEquity)} → ${formatNumber(stats.finalEquity)} ${snapshot.quote}`,
+        hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}`,
       }
     : {
         label: "Buy & hold",
@@ -51,18 +44,7 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
         hint: `${snapshot.asset} em ${snapshot.candles.length} candles`,
       };
 
-  // The open position, next to the hero: what the bot holds now.
-  const position: Tile = {
-    label: "P&L aberto",
-    value: pnl ? formatProfit(pnl.profit) : "—",
-    unit: pnl ? pnl.currency : undefined,
-    tone: pnl ? signClass(pnl.profit) : "",
-    hint: pnl
-      ? `${pnl.side === "BUY" ? "Compra" : "Venda"} ${formatQuantity(pnl.quantity)} a ${formatPrice(pnl.entry)}`
-      : "sem posição aberta",
-  };
-
-  const tiles: Tile[] = [
+  const readouts: Readout[] = [
     ...(hasEquity
       ? [
           {
@@ -82,8 +64,8 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
       label: "Operações",
       value: String(stats.trades),
       hint:
-        `${stats.wins} ganhas · ${stats.losses} perdidas` +
-        (since !== undefined ? ` · desde ${formatTime(since)} UTC` : ""),
+        `${stats.wins} ganhas e ${stats.losses} perdidas` +
+        (since !== undefined ? ` desde ${formatTime(since)} UTC` : ""),
     },
     {
       label: "Taxa de acerto",
@@ -95,7 +77,7 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
       value: formatNumber(stats.totalProfit),
       unit: stats.profitCurrency,
       tone: signClass(stats.totalProfit),
-      hint: stats.trades ? `média de ${formatPercent(stats.avgReturn)} por operação` : undefined,
+      hint: stats.trades ? `Média de ${formatPercent(stats.avgReturn)} por operação` : undefined,
     },
     {
       label: "Fator de lucro",
@@ -109,55 +91,34 @@ export function StatsBar({ stats, snapshot, theme, pnl = null, since }: Props) {
   ];
 
   return (
-    <section className="stats" aria-label="Desempenho">
-      <div className="stat-heroes">
-        <div className="stat-hero">
-          <div className="stat">
-            <span className="stat-label">{hero.label}</span>
-            <span className={`stat-value ${hero.tone ?? ""}`}>{hero.value}</span>
-            {hero.hint && <span className="stat-hint">{hero.hint}</span>}
-          </div>
+    <section className="readouts" aria-label="Desempenho">
+      <div className="readout readout-first">
+        <span className="readout-label">{first.label}</span>
+        <span className="readout-line">
+          <span className={`readout-value ${first.tone ?? ""}`}>{first.value}</span>
           {hasEquity && (
             <Sparkline
-              className="sparkline"
+              className="readout-spark"
               points={snapshot.equity_values}
-              color={stats.returnPct < 0 ? palette.down : palette.accent}
+              color={stats.returnPct < 0 ? palette.down : palette.up}
+              width={96}
+              height={28}
+              area={false}
             />
           )}
-        </div>
-        <div className={pnl ? "stat-hero" : "stat-hero idle"}>
-          <div className="stat">
-            <span className="stat-label">{position.label}</span>
-            <span className={`stat-value ${position.tone ?? ""}`}>
-              {position.value}
-              {position.unit && <span className="unit">{position.unit}</span>}
-            </span>
-            {position.hint && <span className="stat-hint">{position.hint}</span>}
-          </div>
-          {pnl && (
-            <span className={`side-chip ${pnl.side === "BUY" ? "buy" : "sell"}`}>
-              {pnl.side === "BUY" ? "Comprado" : "Vendido"}
-            </span>
-          )}
-        </div>
+        </span>
+        {first.hint && <span className="readout-hint">{first.hint}</span>}
       </div>
-      <div className="stat-strip" style={{ "--cols": stripColumns(tiles.length) } as CSSProperties}>
-        {tiles.map((tile) => (
-          <div key={tile.label} className="stat">
-            <span className="stat-label">{tile.label}</span>
-            <span className={`stat-value ${tile.tone ?? ""}`}>
-              {tile.value}
-              {tile.unit && <span className="unit">{tile.unit}</span>}
-            </span>
-            {tile.hint && <span className="stat-hint">{tile.hint}</span>}
-          </div>
-        ))}
-      </div>
+      {readouts.map((readout) => (
+        <div key={readout.label} className="readout">
+          <span className="readout-label">{readout.label}</span>
+          <span className={`readout-value ${readout.tone ?? ""}`}>
+            {readout.value}
+            {readout.unit && <small>{readout.unit}</small>}
+          </span>
+          {readout.hint && <span className="readout-hint">{readout.hint}</span>}
+        </div>
+      ))}
     </section>
   );
-}
-
-/** The columns of the strip: a row of up to 4 cards, else 2 rows as tall as the heroes. */
-function stripColumns(count: number): number {
-  return count > 4 ? Math.ceil(count / 2) : Math.max(count, 1);
 }

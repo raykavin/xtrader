@@ -15,7 +15,7 @@ interface Props {
 type Feedback = { tone: "ok" | "error"; text: string };
 
 /**
- * The bot of the agent, at the end of the bar atop the panel: whether it
+ * The bot of the agent, an item of the state atop the panel: whether it
  * runs, and its start, or its stop confirmed in place, whatever the trade
  * panel, which gates the orders only. Without a bot to control, eg: of a
  * backtest, only that it is off.
@@ -74,9 +74,9 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
     });
 
   return (
-    <div className="bot-control">
-      <div className="bot-control-row">
-        <span className="bot-control-label">Bot</span>
+    <div className="status-item bot-control">
+      <dt className="status-label">Bot</dt>
+      <dd className="status-value">
         <span className={`status-chip ${!enabled ? "" : running ? "running" : "stopped"}`}>
           <StatusIcon mark={!enabled ? undefined : running ? "play" : "stop"} />
           {controls === null ? "…" : enabled ? botStatusLabel(controls.status) : "desativado"}
@@ -124,12 +124,12 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
             Iniciar bot
           </button>
         )}
-      </div>
-      {feedback && (
-        <p className={`msg msg-${feedback.tone}`} role="status">
-          {feedback.text}
-        </p>
-      )}
+        {feedback && (
+          <span className={`msg msg-${feedback.tone} status-note`} role="status">
+            {feedback.text}
+          </span>
+        )}
+      </dd>
     </div>
   );
 }

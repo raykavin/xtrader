@@ -70,8 +70,8 @@ export function OrdersTable({
     <div className="panel-body">
       <div className="panel-toolbar">
         <p className="panel-summary">
-          {orders.length === 1 ? "1 ordem" : `${orders.length} ordens`} em{" "}
-          <span className="mono">{pair}</span> · resultados em {profitCurrency}
+          {orders.length === 1 ? "1 ordem" : `${orders.length} ordens`} em <strong>{pair}</strong>,
+          com os resultados em {profitCurrency}
         </p>
         <a className="btn btn-sm" href={ordersCSVUrl(agent, pair)} download>
           <Icon name="download" size={14} />

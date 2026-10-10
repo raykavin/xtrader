@@ -225,7 +225,7 @@ function AgentCard({
     : stopping
       ? "O agente ainda está parando: aguarde para excluí-lo"
       : "Exclui o agente; as ordens e as decisões dele são mantidas";
-  const footnote = [agentNote(agent), outboxNote(agent)].filter(Boolean).join(" · ");
+  const notes = [agentNote(agent), outboxNote(agent)].filter(Boolean);
 
   return (
     <article className={`card agent-card ${state.tone}`} aria-label={`Agente ${agent.name}`}>
@@ -346,7 +346,11 @@ function AgentCard({
       </div>
 
       <footer className="agent-card-foot">
-        {footnote && <p className="agent-note">{footnote}</p>}
+        {notes.map((note) => (
+          <p key={note} className="agent-note">
+            {note}
+          </p>
+        ))}
         <div className="agent-actions">
           <button
             type="button"

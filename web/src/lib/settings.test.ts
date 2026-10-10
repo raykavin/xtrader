@@ -111,13 +111,13 @@ describe("agents", () => {
       "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia).",
     );
     expect(agentNote(agent({ running: true, restarts: 1, last_exit: "signal: killed" }))).toBe(
-      "Última saída: signal: killed · reiniciado 1 vez",
+      "Última saída: signal: killed. Reiniciado 1 vez",
     );
     expect(
       agentNote(
         agent({ running: true, restarting: true, restarts: 3, last_exit: "exit status 2" }),
       ),
-    ).toBe("Última saída: exit status 2 · reiniciado 3 vezes");
+    ).toBe("Última saída: exit status 2. Reiniciado 3 vezes");
     expect(agentNote(agent({ running: true, restarts: 2 }))).toBe("Reiniciado 2 vezes");
   });
 
@@ -138,7 +138,7 @@ describe("agents", () => {
         now,
       ),
     ).toBe(
-      "Outbox: 2 registros ainda não gravados no banco, o mais antigo há 3 h (o envio está falhando: veja o log do controller) · Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente)",
+      "Outbox: 2 registros ainda não gravados no banco, o mais antigo há 3 h (o envio está falhando: veja o log do controller). Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente)",
     );
     expect(outboxNote(agent({ outbox: { pending: 0, set_apart: 4 } }), now)).toBe(
       "Outbox: 4 registros recusados para sempre, separados no arquivo do agente (veja o log do agente)",
@@ -150,7 +150,7 @@ describe("agents", () => {
       "Outbox: 1 registro que falhou seguidamente, separado no arquivo do agente e reenviado de tempos em tempos (veja o log do agente)",
     );
     expect(outboxNote(agent({ outbox: { pending: 0, set_apart: 1, held: 2 } }), now)).toBe(
-      "Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente) · Outbox: 2 registros que falharam seguidamente, separados no arquivo do agente e reenviados de tempos em tempos (veja o log do agente)",
+      "Outbox: 1 registro recusado para sempre, separado no arquivo do agente (veja o log do agente). Outbox: 2 registros que falharam seguidamente, separados no arquivo do agente e reenviados de tempos em tempos (veja o log do agente)",
     );
   });
 

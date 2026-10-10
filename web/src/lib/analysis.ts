@@ -317,12 +317,14 @@ export function decisionAnalysis(decision: Decision): Analysis {
 
 /**
  * The caption of an analysis on the chart, eg: Análise do LLM 30m 08/10/2026
- * 14:30 · 5 marcações (1 oferta, 2 demanda): the timeframe of its candles,
- * whatever the one of the chart.
+ * 14:30: 5 marcações (1 oferta, 2 demanda); compra limite aplicada: the
+ * timeframe of its candles, whatever the one of the chart.
  */
 export function analysisCaption(analysis: Analysis): string {
-  const head = ["Análise do LLM", analysis.timeframe, formatTime(analysis.decided_at)];
-  const parts = [head.filter(Boolean).join(" ")];
+  const head = ["Análise do LLM", analysis.timeframe, formatTime(analysis.decided_at)]
+    .filter(Boolean)
+    .join(" ");
+  const parts: string[] = [];
   const drawings = uniqueDrawings(analysis.drawings);
   if (drawings.length > 0) {
     const supply = drawings.filter((d) => d.kind === DrawingSupply).length;
@@ -335,9 +337,10 @@ export function analysisCaption(analysis: Analysis): string {
     );
   }
   if (analysis.intent) {
-    parts.push(`${intentLabel(analysis.intent)} ${intentOutcome(analysis.intent.outcome)}`);
+    const intent = `${intentLabel(analysis.intent)} ${intentOutcome(analysis.intent.outcome)}`;
+    parts.push(intent.charAt(0).toLowerCase() + intent.slice(1));
   }
-  return parts.join(" · ");
+  return parts.length > 0 ? `${head}: ${parts.join("; ")}` : head;
 }
 
 const entryTypes = ["LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT"];

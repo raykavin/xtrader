@@ -230,6 +230,11 @@ code {
   font-weight: 600;
 }
 
+/* figures in a line of text: as wide as each other, in the face of the text */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
 .muted {
   color: var(--text-2);
 }
@@ -335,10 +340,8 @@ code {
 .nav-heading {
   padding: 0 10px 6px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .nav-link {
@@ -398,7 +401,6 @@ code {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -419,7 +421,6 @@ code {
 
 .version {
   color: var(--text-3);
-  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -1019,10 +1020,8 @@ code {
   padding: 0 0 var(--sp-2);
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .switch-list {
@@ -1210,7 +1209,6 @@ code {
 .select-hint {
   margin-left: var(--sp-3);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: 400;
 }
@@ -1245,6 +1243,12 @@ code {
 
 .dot.off {
   background: var(--neg);
+}
+
+/* not in use, eg: the ticket locked */
+.dot.idle {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
 }
 
 /* a switch: its track, its knob and its label */
@@ -1324,7 +1328,6 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
 }
 
 /* a card of a header, a body and a footer, each padded */
@@ -1358,10 +1361,10 @@ code {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .card-body {
@@ -1380,10 +1383,8 @@ code {
   gap: 6px;
   margin: 0;
   color: var(--text-2);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 /* the tabs: a bar, underlined in the accent, scrolled sideways when they
@@ -1446,7 +1447,6 @@ code {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -1482,9 +1482,9 @@ code {
   font-size: var(--fs-sm);
 }
 
-.panel-summary .mono {
+.panel-summary strong {
   color: var(--text);
-  font-size: 12px;
+  font-weight: 600;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1551,14 +1551,13 @@ code {
 }
 
 .tag-mono {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .tag-live {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .tag-list {
@@ -1831,14 +1830,8 @@ code {
   }
 }
 
-.skeleton-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-3);
-}
-
-.skeleton-stats > * {
-  flex: 1 1 420px;
+.skeleton-readouts {
+  height: 64px;
 }
 
 .skeleton-chart,
@@ -1973,7 +1966,7 @@ code {
 .note-mark {
   display: inline-flex;
   margin-left: 6px;
-  color: var(--accent-text);
+  color: var(--text-2);
   vertical-align: -2px;
   cursor: help;
 }
@@ -1989,7 +1982,6 @@ code {
 
 .paginator-range {
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
 }
@@ -2011,7 +2003,6 @@ code {
   border-radius: 7px;
   background: var(--surface);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -2108,7 +2099,6 @@ code {
 
 .dialog-subtitle {
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   font-weight: 400;
 }
@@ -2200,7 +2190,7 @@ code {
 
 .kv-list li {
   display: grid;
-  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr);
+  grid-template-columns: minmax(140px, 36%) minmax(0, 1fr);
   gap: var(--sp-3);
   padding: var(--sp-2) 0;
   border-bottom: 1px dashed var(--border);
@@ -2246,7 +2236,6 @@ code {
 
 .decision-confidence {
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: var(--fs-sm);
 }
 
@@ -2311,17 +2300,16 @@ code {
   transition: opacity 0.2s;
 }
 
-/* the agent and the pair, what the strategy trades on, and its bot */
-.context-bar {
+/* the head of the panel: the agent and the pair, then the state of the
+   agent as a list of items, a label over each value; no box around it, a
+   rule under it */
+.status-head {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: var(--sp-3) var(--sp-5);
-  padding: 14px var(--sp-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  gap: var(--sp-4) var(--sp-8);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
 }
 
 .context-selects {
@@ -2331,198 +2319,143 @@ code {
   min-width: 0;
 }
 
-.context-meta {
+.status-list {
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-  min-height: var(--h);
-}
-
-.meta-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
-.meta-chip-label {
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-}
-
-.meta-chip-text {
-  min-width: 0;
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  text-overflow: ellipsis;
-}
-
-.meta-chip.accent {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
-.meta-chip.warn {
-  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.bot-control {
-  display: flex;
-  flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
-  max-width: 440px;
-  margin-left: auto;
+  gap: var(--sp-3) var(--sp-6);
+  min-width: 0;
+  margin: 0;
 }
 
-.bot-control-row {
+.status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.status-label {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.status-value {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
   gap: var(--sp-2);
   min-height: var(--h);
+  margin: 0;
+  font-size: var(--fs-base);
 }
 
-.bot-control-label {
+.status-value.warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.status-note {
+  flex-basis: 100%;
+  max-width: 440px;
+}
+
+.status-model {
   color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: 500;
 }
 
-.bot-control .msg {
-  text-align: right;
-}
-
-/* the cards of the results: the hero ones, then the strip, side by side
-   when they fit; the container of their queries (never an ancestor of the
-   chart, whose fullscreen is fixed to the window) */
-.stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-3);
-  container-type: inline-size;
-}
-
-.stat-heroes,
-.stat-strip {
-  display: grid;
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--border);
-  box-shadow: var(--shadow-sm);
-}
-
-.stat-heroes {
-  flex: 5 1 420px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-width: 0;
-}
-
-.stat-strip {
-  flex: 7 1 520px;
-  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
-  min-width: 0;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.stat-strip .stat {
-  padding: 14px var(--sp-4);
-  background: var(--surface);
-}
-
-.stat-hero {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  min-height: 112px;
-  padding: var(--sp-4) 18px;
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.stat-label {
-  overflow: hidden;
+/* the open position, the one figure of the head set large */
+.position-size {
   color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.stat-value {
+.position-pnl {
   font-size: var(--fs-xl);
   font-weight: 600;
-  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.position-pnl small {
+  margin-left: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* the results of the strategy: a row of readouts, a label over each value,
+   divided by rules, the first one with the trend of the equity */
+.readouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3) 0;
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.readout {
+  display: flex;
+  flex: 1 1 150px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 var(--sp-5);
+  border-left: 1px solid var(--border);
+}
+
+.readout:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.readout-first {
+  flex: 1.4 1 220px;
+}
+
+.readout-label {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readout-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.readout-value {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.25;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.stat-value .unit {
+.readout-value small {
   margin-left: 4px;
   color: var(--text-2);
   font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.02em;
 }
 
-.stat-hint {
+.readout-hint {
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.stat-hero .stat {
-  position: relative;
-  z-index: 1;
-}
-
-.stat-hero .stat-value {
-  font-size: var(--fs-2xl);
-  letter-spacing: -0.02em;
-}
-
-.stat-hero.idle .stat-value {
-  color: var(--text-3);
-}
-
-.stat-hero .side-chip {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-}
-
-.stat-hero .sparkline {
-  position: absolute;
-  inset: auto 0 0 0;
-  width: 100%;
-  height: 56px;
-  opacity: 0.85;
-  pointer-events: none;
+.readout-spark {
+  flex: none;
+  width: 96px;
+  height: 28px;
 }
 
 /* the chart and the ticket side by side: the row as tall as the taller,
@@ -2566,7 +2499,6 @@ code {
   border-radius: var(--radius-xs);
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -2605,8 +2537,8 @@ code {
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeframe:hover:not(:disabled) {
@@ -2665,7 +2597,6 @@ code {
   border-radius: var(--radius-xs);
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 11.5px;
   white-space: nowrap;
 }
@@ -2678,7 +2609,6 @@ code {
 
 .legend-chip.note {
   background: transparent;
-  font-family: var(--font-sans);
   font-style: italic;
 }
 
@@ -2692,8 +2622,8 @@ code {
   max-width: 100%;
   padding: 3px 4px 3px 10px;
   border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: var(--surface-2);
+  color: var(--text-2);
   font-size: 12px;
 }
 
@@ -2815,7 +2745,6 @@ code {
   border-radius: var(--radius-xs);
   background: var(--surface-2);
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -3040,7 +2969,6 @@ code {
   outline: none;
   background: transparent;
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
   cursor: pointer;
 }
@@ -3061,8 +2989,8 @@ code {
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-2);
-  font-family: var(--font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .chips button:hover:not(:disabled) {
@@ -3295,9 +3223,9 @@ code {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text);
-  font-family: var(--font-mono);
   font-size: 11px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .filter-note {
@@ -3323,15 +3251,11 @@ code {
 }
 
 .agent-card.on {
-  box-shadow:
-    inset 3px 0 0 var(--pos),
-    var(--shadow-sm);
+  box-shadow: inset 3px 0 0 var(--pos);
 }
 
 .agent-card.warn {
-  box-shadow:
-    inset 3px 0 0 var(--warn),
-    var(--shadow-sm);
+  box-shadow: inset 3px 0 0 var(--warn);
 }
 
 .agent-card-head {
@@ -3553,7 +3477,6 @@ code {
 
 .results-window {
   margin: 0;
-  font-family: var(--font-mono);
   font-size: var(--fs-sm);
 }
 
@@ -3766,21 +3689,6 @@ code {
 /* ------------------------------------------------------------------ */
 /* Responsive                                                          */
 /* ------------------------------------------------------------------ */
-/* the cards of the results by their own width, whatever the sidebar */
-@container (max-width: 640px) {
-  .stat-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .stat-hero .stat-value {
-    font-size: 22px;
-  }
-
-  .stat-value {
-    font-size: var(--fs-lg);
-  }
-}
-
 /* the chart over the ticket where the content is narrower than ~860px:
    a phone, a tablet in portrait (the rail beside it) */
 @media (max-width: 975px) {
@@ -3795,12 +3703,6 @@ code {
 
   .skeleton-ticket {
     display: none;
-  }
-}
-
-@container (max-width: 380px) {
-  .stat-heroes {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -3865,19 +3767,6 @@ code {
 
   .context-selects {
     grid-template-columns: minmax(180px, 240px) minmax(140px, 180px);
-  }
-
-  .bot-control {
-    margin-left: 0;
-    align-items: flex-start;
-  }
-
-  .bot-control-row {
-    justify-content: flex-start;
-  }
-
-  .bot-control .msg {
-    text-align: left;
   }
 
   .settings-columns {
@@ -3968,8 +3857,9 @@ code {
     width: 100%;
   }
 
-  .context-bar {
-    padding: var(--sp-3);
+  .status-head {
+    gap: var(--sp-3);
+    padding-bottom: var(--sp-3);
   }
 
   .context-selects {
@@ -3977,23 +3867,41 @@ code {
     width: 100%;
   }
 
-  .context-meta {
+  /* the state two by two, from the top; the bot, with its action, and the
+     position, with its figure, on a row of their own */
+  .status-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: var(--sp-3) var(--sp-4);
+    width: 100%;
+  }
+
+  .status-item.bot-control,
+  .status-item:has(.position-pnl) {
+    grid-column: 1 / -1;
+  }
+
+  .status-value {
     min-height: 0;
   }
 
-  .bot-control {
-    width: 100%;
-    max-width: none;
-    margin-left: 0;
-    align-items: flex-start;
+  /* the readouts two by two, the first one, with its trend, on a row of its own */
+  .readouts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-3) var(--sp-4);
+    padding-bottom: var(--sp-3);
   }
 
-  .bot-control-row {
-    justify-content: flex-start;
+  .readout,
+  .readout:first-child {
+    padding: 0;
+    border-left: 0;
   }
 
-  .bot-control .msg {
-    text-align: left;
+  .readout-first {
+    grid-column: 1 / -1;
   }
 
   .chart-head {
