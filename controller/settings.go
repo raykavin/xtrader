@@ -45,6 +45,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Patch("/settings/agents/{name}", s.handleAgent)
 	r.Delete("/settings/agents/{name}", s.handleDeleteAgent)
 	r.Post("/settings/agents/{name}/restart", s.handleRestart)
+	r.Post("/settings/agents/{name}/rename", s.handleRename)
 	r.Get("/settings/agents/{name}/periods", s.handlePeriods)
 	r.Post("/settings/agents/{name}/periods", s.handleStartPeriod)
 	r.Get("/prompts", s.handlePrompts)
@@ -271,6 +272,51 @@ func (s *settings) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("ui: %v", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRename renames an agent disabled and stopped, see store.RenameAgent,
+// and its outbox with it, the records it holds not sent yet kept: its ID, its
+// account, its orders, its decisions and its journal stay its own. The
+// selections of the agent by its old name, eg: in Telegram, are made again.
+func (s *settings) handleRename(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	a, err := s.store.AgentByName(ctx, chi.URLParam(r, "name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	var request ui.AgentRenameRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	switch {
+	case a.Enabled:
+		writeJSONError(w, http.StatusConflict, "the agent "+a.Name+" is enabled: disable it first")
+		return
+	case s.manager.State(a.Name).Running:
+		writeJSONError(w, http.StatusConflict, "the agent "+a.Name+" is still stopping: try again in a moment")
+		return
+	}
+	undo := func() {}
+	var renamed store.Agent
+	err = s.store.Transaction(ctx, func(ctx context.Context) error {
+		var err error
+		if renamed, err = s.store.RenameAgent(ctx, a.ID, request.Name); err != nil || renamed.Name == a.Name {
+			return err
+		}
+		undo, err = s.manager.RenameOutbox(a.ID, a.Name, renamed.Name)
+		return err
+	})
+	if err != nil {
+		undo()
+		s.fail(w, err)
+		return
+	}
+	log.Infof("ui: the agent %s renamed %s by %s", a.Name, renamed.Name, userOf(ctx))
+	if err := s.manager.Reconcile(ctx); err != nil {
+		log.Errorf("ui: %v", err)
+	}
+	writeJSON(w, s.agentSettings(renamed))
 }
 
 // handleRestart restarts an agent with its settings of the database.

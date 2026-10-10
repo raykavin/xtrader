@@ -118,4 +118,14 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
 	require.Len(t, agents, 2)
+
+	// nor one renamed under its old name
+	renamed, err := s.RenameAgent(ctx, smc.ID, "llm-liquidez-smc")
+	require.NoError(t, err)
+	pgtest.MigrateSeeded(t, dsn, "..")
+	_, err = s.AgentByName(ctx, "llm-smc")
+	require.ErrorIs(t, err, ErrNotFound, "not seeded again")
+	agents, err = s.Agents(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"llm", renamed.Name}, names(agents))
 }
