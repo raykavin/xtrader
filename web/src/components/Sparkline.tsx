@@ -10,6 +10,8 @@ interface Props {
   className?: string;
   /** Whether the area under the line is filled, fading out. */
   area?: boolean;
+  /** Whether its last point is marked with a dot. */
+  dot?: boolean;
 }
 
 /** Downsamples to at most `max` points, keeping the first and last. */
@@ -32,6 +34,7 @@ export function Sparkline({
   height = 64,
   className,
   area: filled = true,
+  dot = false,
 }: Props) {
   const id = useId();
   const data = sample(points, 160);
@@ -55,6 +58,7 @@ export function Sparkline({
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`)
     .join(" ");
   const area = `${line} L${width} ${height} L0 ${height} Z`;
+  const last = coords[coords.length - 1];
 
   return (
     <svg
@@ -82,6 +86,16 @@ export function Sparkline({
         strokeWidth="1.5"
         vectorEffect="non-scaling-stroke"
       />
+      {/* a round cap of a stroke of no length, kept round whatever the scale of the box */}
+      {dot && last && (
+        <path
+          d={`M${last[0].toFixed(1)} ${last[1].toFixed(1)}h0`}
+          stroke={color}
+          strokeWidth="5"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
     </svg>
   );
 }

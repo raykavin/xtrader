@@ -575,7 +575,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       {snapshot && chartSnapshot && stats && (
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
           <div className="overview">
-            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} pnl={pnl} />
+            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} pnl={pnl} theme={theme} />
             <SentimentMeter
               available={hasDecisions}
               reading={sentiment}

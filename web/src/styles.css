@@ -2820,6 +2820,22 @@ fieldset.seg {
   gap: var(--sp-4);
 }
 
+/* the pair at the left, the line of its closes at the right */
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.hero-spark {
+  flex: 0 1 112px;
+  min-width: 56px;
+  height: 36px;
+  margin-top: 2px;
+}
+
 .hero-id {
   display: flex;
   align-items: center;
@@ -2866,11 +2882,30 @@ fieldset.seg {
   font-weight: 600;
 }
 
+/* the last price at the left, its change and the candles it is over at the right */
 .hero-price {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: 10px 14px;
+}
+
+.hero-change {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.hero-candles {
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .hero-value {
@@ -2892,14 +2927,13 @@ fieldset.seg {
   letter-spacing: 0;
 }
 
+/* the change of the asset: its figure only, on a soft block of its tone */
 .change-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 7px;
   background: var(--surface-3);
   font-family: var(--font-mono);
   font-size: 13px;
@@ -2908,22 +2942,11 @@ fieldset.seg {
 }
 
 .change-chip.pos {
-  border-color: color-mix(in srgb, var(--pos) 30%, transparent);
   background: var(--pos-soft);
 }
 
 .change-chip.neg {
-  border-color: color-mix(in srgb, var(--neg) 30%, transparent);
   background: var(--neg-soft);
-}
-
-.change-chip small {
-  color: var(--text-2);
-  font-family: var(--font-sans);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .hero-position {
