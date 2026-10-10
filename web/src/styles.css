@@ -2821,15 +2821,6 @@ fieldset.seg {
   gap: var(--sp-4);
 }
 
-/* the pair at the left, its change and the candles it is over at the right */
-.hero-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  min-width: 0;
-}
-
 /* the closes along the foot of the card, from edge to edge, in the room left */
 .hero-chart {
   flex: 1 1 64px;
@@ -2891,12 +2882,14 @@ fieldset.seg {
   font-weight: 600;
 }
 
+/* the change of the asset over the candles loaded, and their count */
 .hero-change {
   display: flex;
-  flex: none;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 6px;
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
 }
 
 .hero-candles {
@@ -2949,33 +2942,7 @@ fieldset.seg {
   background: var(--neg-soft);
 }
 
-.hero-position {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin: 0;
-  padding-top: var(--sp-4);
-  border-top: 1px solid var(--border);
-}
-
-.hero-position dd {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2) var(--sp-3);
-  min-height: 30px;
-  margin: 0;
-}
-
-.hero-position-line {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.hero-flat {
+.position-flat {
   color: var(--text-2);
 }
 
@@ -3076,7 +3043,7 @@ fieldset.seg {
   white-space: normal;
 }
 
-/* the figure whole first, the trend beside it in the room left */
+/* the figure whole first, its course beside it in the room left */
 .kpi-line > .kpi-value {
   flex: 0 1 auto;
   min-width: 0;
@@ -3087,6 +3054,71 @@ fieldset.seg {
   min-width: 0;
   max-width: 96px;
   height: 30px;
+}
+
+/* a narrow card (a phone): the course under the figure, the width of the card */
+@container (max-width: 160px) {
+  .kpi-line {
+    flex-wrap: wrap;
+  }
+
+  .kpi-spark {
+    flex-basis: 100%;
+    max-width: none;
+    height: 26px;
+  }
+}
+
+/* the position held, under the net profit: its side, its size and entry and
+   its profit on a line; its size and entry under them in a narrow card */
+.kpi-position {
+  display: grid;
+  grid-template-areas: "side size pnl";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px var(--sp-2);
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-sm);
+}
+
+.kpi-position .side-chip {
+  grid-area: side;
+  justify-self: start;
+}
+
+.kpi-position .position-size {
+  grid-area: size;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-position .position-pnl {
+  grid-area: pnl;
+  font-size: var(--fs-md);
+}
+
+.kpi-position .position-flat {
+  grid-column: 1 / -1;
+}
+
+@container (max-width: 250px) {
+  .kpi-position {
+    grid-template-areas:
+      "side pnl"
+      "size size";
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .kpi-position .position-pnl {
+    justify-self: end;
+  }
+
+  .kpi-position .position-size {
+    font-size: var(--fs-xs);
+  }
 }
 
 /* the sentiment of the market as the language model reads it: a gauge from
