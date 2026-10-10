@@ -1612,9 +1612,21 @@ code {
 
 .section-heading {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: flex-start;
   gap: 7px;
+  min-width: 0;
+}
+
+/* the title and the controls on its line, eg: the timeframes of the chart,
+   wrapped only where they don't fit */
+.section-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -3272,15 +3284,6 @@ fieldset.seg {
   background: var(--accent-ink);
 }
 
-.chart-sub {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2) var(--sp-3);
-  padding: 0 var(--sp-5) 12px;
-}
-
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -3313,18 +3316,11 @@ fieldset.seg {
   border-radius: 50%;
 }
 
-.legend-chip.note {
-  border-color: transparent;
-  background: transparent;
-  font-style: italic;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
 /* the analysis of the language model drawn: which one, and the way back to
    the last one when one of the list is shown */
 .analysis-chip {
   display: inline-flex;
+  flex: 1 1 240px;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -3341,9 +3337,13 @@ fieldset.seg {
   color: var(--accent-text);
 }
 
+/* on the line of the title: cut to it, whole in its title */
 .analysis-chip-text {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .analysis-chip .btn {
@@ -4767,7 +4767,14 @@ fieldset.seg {
     flex: 1 0 auto;
   }
 
-  .chart-sub,
+  .analysis-chip {
+    flex-basis: 100%;
+  }
+
+  .analysis-chip-text {
+    white-space: normal;
+  }
+
   .chart-notes {
     padding-right: var(--sp-4);
     padding-left: var(--sp-4);
