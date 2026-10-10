@@ -464,8 +464,11 @@ type BalanceResponse struct {
 // RequestedBy, the channel of a reanalysis it answers, and RequestNote, the
 // note the trader sent with it, if any), the model, the prompt and its
 // latency, the position held then, what the model answered
-// with its justification (Reason), its levels, its drawings (see Drawing:
-// absent for a strategy that draws none), its notes and its attachments, and
+// with its justification (Reason), its reading of the market (Sentiment, from
+// 0, extremely bearish, to 100, extremely bullish, 50 neutral: absent from the
+// decisions without one, eg: failed, skipped or taken before it was asked
+// for), its levels, its drawings (see Drawing: absent for a strategy that
+// draws none), its notes and its attachments, and
 // what came of it (Outcome: applied; ignored, its confidence under the
 // minimum; refused, breaking the rules of the context; failed, no answer;
 // skipped, an analysis that didn't ask the model, eg: no entry to open while
@@ -487,6 +490,7 @@ type Decision struct {
 	Position    string               `json:"position,omitempty"`
 	Action      string               `json:"action,omitempty"`
 	Confidence  float64              `json:"confidence"`
+	Sentiment   *float64             `json:"sentiment,omitempty"`
 	Reason      string               `json:"reason,omitempty"`
 	Entry       *float64             `json:"entry,omitempty"`
 	StopLoss    *float64             `json:"stop_loss,omitempty"`

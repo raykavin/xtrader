@@ -143,6 +143,12 @@ type Decision struct {
 	TakeProfit *float64 `json:"take_profit"`
 	Reason     string   `json:"reason"`
 
+	// Sentiment is the reading of the market of the symbol by the model, from
+	// 0 (extremely bearish) to 100 (extremely bullish), 50 neutral, whatever the
+	// action: shown on the dashboard, it doesn't trade. Nil when the answer has
+	// none, or one out of the range, left out with a note.
+	Sentiment *float64 `json:"sentiment"`
+
 	// Levels are the supports and resistances the analysis relies on, drawn
 	// on the chart: what the model saw. They don't trade.
 	Levels []Level `json:"levels"`
@@ -166,6 +172,12 @@ const (
 	LevelResistance = "resistance"
 )
 
+// The range of Decision.Sentiment.
+const (
+	minSentiment = 0
+	maxSentiment = 100
+)
+
 // maxLevels caps the levels of a decision kept.
 const maxLevels = 8
 
@@ -176,8 +188,10 @@ type Level struct {
 }
 
 // decisionFields are the fields of a Decision, all of them required by the
-// schema; levels may be missing from the answer of a provider without it.
-var decisionFields = []string{"reason", "action", "confidence", "entry", "stop_loss", "take_profit", "levels"}
+// schema; levels and sentiment may be missing from the answer of a provider
+// without them, as they only inform.
+var decisionFields = []string{"reason", "action", "confidence", "sentiment", "entry", "stop_loss", "take_profit",
+	"levels"}
 
 // decisionShape is the shape of the decision a context asks for, the one of
 // its schema (see schemaOf): the actions of the pending orders and the
@@ -212,7 +226,8 @@ func (s decisionShape) actions() []Action {
 
 // ParseDecision decodes the JSON of a decision as the schema describes it:
 // every field present and no other, a known action, a confidence from 0 to 1,
-// the prices null or positive, and a reason. Its errors wrap
+// the prices null or positive, and a reason; a sentiment out of its range is
+// left out with a note, the decision kept. Its errors wrap
 // ErrInvalidResponse. It reads the decision of a prompt without pending
 // orders nor drawings, see parseDecision.
 func ParseDecision(data []byte) (Decision, error) {
@@ -239,7 +254,7 @@ func parseDecision(data []byte, shape decisionShape) (Decision, error) {
 	for _, name := range known {
 		raw, ok := fields[name]
 		switch {
-		case !ok && (name == "levels" || name == "drawings"):
+		case !ok && (name == "levels" || name == "drawings" || name == "sentiment"):
 		case !ok:
 			return Decision{}, invalidResponse("missing field %q", name)
 		case string(raw) == "null" && (name == "action" || name == "confidence" || name == "reason"):
@@ -307,6 +322,12 @@ func parseDecisionFields(data []byte, shape decisionShape) (Decision, error) {
 		}
 	}
 	d.Levels = cleanLevels(d.Levels)
+	if v := d.Sentiment; v != nil && (math.IsNaN(*v) || *v < minSentiment || *v > maxSentiment) {
+		// it only informs: a wrong one is dropped rather than the decision refused
+		d.Notes = append(d.Notes, Note{Kind: "text",
+			Text: fmt.Sprintf("sentiment left out: %v out of [%d, %d]", *v, minSentiment, maxSentiment)})
+		d.Sentiment = nil
+	}
 	return d, nil
 }
 

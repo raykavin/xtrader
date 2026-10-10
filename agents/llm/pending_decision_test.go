@@ -210,6 +210,7 @@ func TestSchemaOf(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(schema, &parsed), "%+v", shape)
 		require.Len(t, parsed.Required, len(parsed.Properties), "every property required")
+		require.Contains(t, parsed.Required, "sentiment", "the reading of the market asked for in every shape")
 		require.False(t, parsed.Extra)
 		require.Less(t, strings.Index(string(schema), `"reason"`), strings.Index(string(schema), `"action"`),
 			"the reason first")

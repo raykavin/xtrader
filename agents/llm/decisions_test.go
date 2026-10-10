@@ -63,12 +63,14 @@ func TestTrader_KeepsDecisions(t *testing.T) {
 	var heard []ui.Decision
 	r.trader.ListenDecisions(func(d ui.Decision) { heard = append(heard, d) })
 
-	// WAIT: no order, kept all the same
+	// WAIT: no order, kept all the same, with the sentiment of the model
 	wait := decide(ActionWait, 0.4, nil, nil, nil)
 	wait.decision.Levels = []Level{{Kind: LevelSupport, Price: 98}}
+	wait.decision.Sentiment = ptr(35)
 	r.step(100, wait)
 	d := r.lastDecision()
 	require.Equal(t, "WAIT", d.Action)
+	require.Equal(t, ptr(35), d.Sentiment)
 	require.Equal(t, "test", d.Reason)
 	require.Equal(t, OutcomeApplied, d.Outcome)
 	require.Equal(t, TriggerCandle, d.Trigger)
@@ -148,6 +150,7 @@ func TestTrader_KeepsDecisions(t *testing.T) {
 	require.Equal(t, OutcomeFailed, d.Outcome)
 	require.Empty(t, d.Action)
 	require.Empty(t, d.Reason)
+	require.Nil(t, d.Sentiment, "no reading without an answer")
 	require.Contains(t, d.Error, "unavailable")
 
 	all, err := r.trader.Decisions("", 100)
@@ -314,7 +317,7 @@ func TestJournalDecisions(t *testing.T) {
 			StopLoss: ptr(98), TakeProfit: ptr(104), Reason: "the support held",
 			Levels: []Level{{Kind: LevelSupport, Price: 98}}}, ""),
 		journalLine(t, at.Add(15*time.Minute), candle.Add(15*time.Minute), "LONG",
-			&Decision{Action: ActionHold, Confidence: 0.7, Reason: "the trend holds"}, ""),
+			&Decision{Action: ActionHold, Confidence: 0.7, Sentiment: ptr(68), Reason: "the trend holds"}, ""),
 		journalLine(t, at.Add(30*time.Minute), candle.Add(30*time.Minute), "LONG",
 			&Decision{Action: ActionExit, Confidence: 0.75, Reason: "the resistance"}, ""),
 		journalLine(t, at.Add(45*time.Minute), candle.Add(45*time.Minute), "", nil, "openai: HTTP 500"),
@@ -341,6 +344,8 @@ func TestJournalDecisions(t *testing.T) {
 	require.Equal(t, "openai gpt-test", long.Model)
 	require.Equal(t, decisionID(at, testPair), long.ID, "the ID of its time")
 	require.Empty(t, hold.OrderIDs)
+	require.Equal(t, ptr(68), hold.Sentiment, "the sentiment of the journal read back")
+	require.Nil(t, long.Sentiment, "none in a line written before it was asked for")
 	require.Equal(t, []int64{4}, exit.OrderIDs, "the close of the long")
 	require.Equal(t, "LONG", exit.Position)
 	require.Equal(t, OutcomeFailed, failed.Outcome)

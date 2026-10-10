@@ -18,6 +18,7 @@ import {
   noteKindLabel,
 } from "../lib/decisions";
 import { formatNumber, formatPrice, formatTime } from "../lib/format";
+import { formatSentiment, sentimentBand } from "../lib/sentiment";
 import { promptLabel } from "../lib/settings";
 import { DialogHeader } from "./Dialog";
 import { Icon } from "./Icon";
@@ -140,6 +141,17 @@ function DecisionDetails({
         {decision.action && (
           <span className="decision-confidence">
             confiança {formatConfidence(decision.confidence)}
+          </span>
+        )}
+        {decision.sentiment !== undefined && (
+          <span
+            className="decision-confidence"
+            title="A leitura do mercado pelo modelo, de 0 (muito baixista) a 100 (muito altista); não opera"
+          >
+            sentimento {formatSentiment(decision.sentiment)}{" "}
+            <span className={`meter-band ${sentimentBand(decision.sentiment).tone}`}>
+              {sentimentBand(decision.sentiment).label}
+            </span>
           </span>
         )}
         <span className={`badge outcome ${decision.outcome}`}>

@@ -2180,6 +2180,7 @@ fieldset.seg {
 }
 
 .skeleton-hero,
+.skeleton-meter,
 .skeleton-kpis {
   height: 196px;
 }
@@ -2751,10 +2752,10 @@ fieldset.seg {
   max-width: 440px;
 }
 
-/* the quote and the results side by side */
+/* the quote, the sentiment and the results side by side */
 .overview {
   display: grid;
-  grid-template-columns: minmax(320px, 5fr) minmax(0, 8fr);
+  grid-template-columns: minmax(300px, 4fr) minmax(240px, 3fr) minmax(0, 6fr);
   gap: var(--sp-4);
   align-items: stretch;
 }
@@ -3009,10 +3010,214 @@ fieldset.seg {
   line-height: 1.4;
 }
 
+/* the name of a result whole, on two lines in a narrow card */
+.kpi > .kpi-label {
+  overflow: visible;
+  white-space: normal;
+}
+
+/* the figure whole, the trend beside it taking the room left */
+.kpi-line > .kpi-value {
+  flex: none;
+}
+
 .kpi-spark {
   flex: 0 1 96px;
-  min-width: 48px;
+  min-width: 32px;
   height: 28px;
+}
+
+/* the sentiment of the market as the language model reads it: a gauge from
+   very bearish to very bullish, its value and band under it; greyed out,
+   without a needle, for an agent without a language model */
+.meter-card {
+  gap: var(--sp-3);
+  padding: 18px var(--sp-5);
+}
+
+.meter-time {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.meter-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  text-align: center;
+}
+
+.gauge {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  overflow: visible;
+}
+
+.gauge-track,
+.gauge-fill {
+  fill: none;
+  stroke-width: 13;
+  stroke-linecap: round;
+}
+
+.gauge-track {
+  stroke: var(--surface-3);
+}
+
+.gauge-fill {
+  transition: stroke-dasharray 0.6s ease;
+}
+
+.gauge-stop-bear {
+  stop-color: var(--neg);
+}
+
+.gauge-stop-neutral {
+  stop-color: var(--warn);
+}
+
+.gauge-stop-bull {
+  stop-color: var(--pos);
+}
+
+.gauge-tick {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.gauge-end {
+  fill: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.gauge-needle {
+  --tone: var(--warn);
+  transform-box: view-box;
+  transform-origin: 100px 100px;
+  transition: transform 0.6s ease;
+}
+
+.gauge-needle line {
+  stroke: var(--tone);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.gauge-needle circle {
+  fill: var(--surface);
+  stroke: var(--tone);
+  stroke-width: 3;
+}
+
+.meter-value {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.meter-value small {
+  margin-left: 2px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.meter-band {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.meter-change {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+
+.meter-value.bear-strong,
+.meter-band.bear-strong,
+.meter-value.bear,
+.meter-band.bear {
+  color: var(--neg);
+}
+
+.meter-value.neutral,
+.meter-band.neutral {
+  color: var(--warn);
+}
+
+.meter-value.bull,
+.meter-band.bull,
+.meter-value.bull-strong,
+.meter-band.bull-strong {
+  color: var(--pos);
+}
+
+.gauge-needle.bear-strong,
+.gauge-needle.bear {
+  --tone: var(--neg);
+}
+
+.gauge-needle.bull,
+.gauge-needle.bull-strong {
+  --tone: var(--pos);
+}
+
+.meter-note {
+  max-width: 30ch;
+  margin: var(--sp-1) 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.meter-scale {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+/* without a language model: the gauge greyed out, its text muted */
+.meter-card.off .gauge {
+  opacity: 0.45;
+}
+
+.meter-card.off .section-name {
+  color: var(--text-2);
+}
+
+.meter-card.off .eyebrow::before {
+  background: var(--text-3);
+}
+
+.skeleton-meter,
+.meter-skeleton {
+  min-height: 150px;
+}
+
+.meter-skeleton {
+  flex: 1;
 }
 
 /* the chart and its decision at the left, the ticket at the right: the row
@@ -4345,25 +4550,13 @@ fieldset.seg {
     padding-bottom: var(--sp-3);
   }
 
+  /* the quote and the sentiment on a row, the results under them */
   .overview {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
 
-  /* the quote in a row: the pair and its price, then the position */
-  .hero {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-
-  .hero-quote {
-    flex: 1 1 360px;
-  }
-
-  .hero-position {
-    flex: 1 1 260px;
-    padding-top: 0;
-    border-top: 0;
+  .overview > .kpis {
+    grid-column: 1 / -1;
   }
 
   .kpis,
@@ -4530,14 +4723,16 @@ fieldset.seg {
     min-height: 0;
   }
 
+  .overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .hero {
     padding: var(--sp-4);
   }
 
-  .hero-position {
-    flex-basis: 100%;
-    padding-top: var(--sp-3);
-    border-top: 1px solid var(--border);
+  .meter-card {
+    padding: var(--sp-4);
   }
 
   .kpis,
