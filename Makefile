@@ -1,4 +1,4 @@
-.PHONY: generate generate-check lint test test-short bridge-test entrypoint-test release ui-install ui-build ui-dev ui-check ui-bundle
+.PHONY: generate generate-check lint test test-short bridge-test entrypoint-test docker-rebuild release ui-install ui-build ui-dev ui-check ui-bundle
 
 generate:
 	go generate ./...
@@ -30,6 +30,11 @@ bridge-test:
 # others), without Docker or Wine.
 entrypoint-test:
 	bash deploy/docker/images/mt5/entrypoint_test.sh
+
+# Rebuilds the images of the compose, asking which ones, then whether to
+# recreate the containers of the project installed (see deploy/docker/rebuild.sh).
+docker-rebuild:
+	bash deploy/docker/rebuild.sh
 
 release:
 	goreleaser build --snapshot

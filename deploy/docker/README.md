@@ -17,6 +17,7 @@ Os agentes de uma mesma conta dividem o mesmo `mt5`, separados pelo magic number
 deploy/docker/                      → vira /var/containers/xtrader no servidor
 ├── docker-compose.yml
 ├── build.sh                        # constrói as imagens (a partir do repositório)
+├── rebuild.sh                      # pergunta quais imagens reconstruir e se recria o compose
 ├── install.sh                      # instala em /var/containers/xtrader
 ├── images/                         # Dockerfiles, usados só pelo build.sh
 │   ├── controller/                 # controller, migrator, agentes, painel e sql/
@@ -55,6 +56,15 @@ deploy/docker/build.sh              # as duas; ou: build.sh controller | build.s
 ```
 
 As tags vêm do `docker-compose.yml` (`xtrader-controller:1.1.0`, também usada pelo `migrator`, e `xtrader-mt5:1.0.0`); o `postgres` usa a imagem oficial `postgres:18.6-trixie`. Para uma nova versão, troque a tag lá e rode o `build.sh` de novo.
+
+Para atualizar um servidor já instalado, o `rebuild.sh` (ou `make docker-rebuild`) faz as duas etapas, perguntando antes de cada uma:
+
+```bash
+deploy/docker/rebuild.sh            # ou: rebuild.sh /outro/diretorio; --dry-run só mostra os comandos
+```
+
+1. Mostra o branch e o commit do repositório (e avisa quando há alterações não commitadas, que também entram nas imagens) e pergunta quais imagens reconstruir: `1` controller (também a do migrator), `2` mt5, `3` as duas ou `0` nenhuma; aceita mais de uma, ex.: `1 2`.
+2. Pergunta se recria o compose instalado com `docker compose up -d --force-recreate` (padrão: não). Isso recria todos os serviços: os agentes param e voltam, o terminal do MT5 reinicia e o `migrator` aplica as migrações novas. Prefira fazê-lo sem posição aberta. Com Enter ou `n`, nada é recriado, e o comando para aplicar depois é mostrado.
 
 ## 2. Instalar em `/var/containers/xtrader`
 

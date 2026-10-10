@@ -335,6 +335,7 @@ A stack tem quatro serviços:
 
 ```bash
 deploy/docker/build.sh                          # imagens xtrader-controller e xtrader-mt5
+# depois, para atualizar: make docker-rebuild    # pergunta quais imagens e se recria o compose
 sudo deploy/docker/install.sh                   # instala em /var/containers/xtrader e gera a senha do banco e a chave dos segredos
 sudo nano /var/containers/xtrader/services/mt5/.env         # conta MT5: MT5_LOGIN, MT5_SERVER, MT5_PASSWORD
 sudo nano /var/containers/xtrader/services/controller/.env  # primeiro usuário do painel (XTRADER_BOOTSTRAP_*)
@@ -582,6 +583,7 @@ Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, n
 | `make generate` / `make generate-check`                            | gera e confere `web/src/api/types.ts` a partir de `ui/dto.go` (tygo)                   |
 | `make ui-install`, `make ui-dev`, `make ui-check`, `make ui-build` | dependências, servidor de desenvolvimento, lint + typecheck + testes e build do painel |
 | `deploy/docker/build.sh [controller\|mt5]`                         | imagens da stack                                                                       |
+| `make docker-rebuild` (`deploy/docker/rebuild.sh [--dry-run]`)     | pergunta quais imagens reconstruir e se recria o compose instalado (`up -d --force-recreate`) |
 
 **Testes com banco:** sem `XTRADER_TEST_DATABASE_URL`, os testes de banco são pulados. Com ela, cada teste cria um banco próprio, com migrações e seeds reais, e o apaga no fim. O usuário precisa poder criar bancos:
 
