@@ -153,6 +153,32 @@ describe("computeStats", () => {
     expect(s.buyAndHold).toBeCloseTo(0.5);
   });
 
+  it("follows the results trade by trade, by their close, up to the ones of all", () => {
+    const s = computeStats(
+      snapshot({
+        orders: [
+          order({ id: 1, profit: 0.2, profit_value: 20, updated_at: 30 }),
+          order({ id: 2, profit: 0.1, profit_value: 10, updated_at: 10 }),
+          order({ id: 3, profit: -0.05, profit_value: -5, updated_at: 20 }),
+          order({ id: 4, created_at: 5 }), // an entry, no trade
+        ],
+      }),
+    );
+    const values = (points: { value: number }[]) => points.map((p) => p.value);
+    expect(values(s.curves.profit)).toEqual([0, 10, 5, 25]);
+    expect(s.curves.profit.map((p) => p.time)).toEqual([10, 10, 20, 30]);
+    expect(values(s.curves.winRate)).toEqual([1, 0.5, 2 / 3]);
+    // infinite before the first loss: from it only
+    expect(values(s.curves.profitFactor)).toEqual([2, 6]);
+    expect(s.curves.profit.at(-1)?.value).toBe(s.totalProfit);
+    expect(s.curves.winRate.at(-1)?.value).toBe(s.winRate);
+    expect(s.curves.profitFactor.at(-1)?.value).toBe(s.profitFactor);
+  });
+
+  it("has no curves without trades", () => {
+    expect(computeStats(snapshot()).curves).toEqual({ profit: [], winRate: [], profitFactor: [] });
+  });
+
   it("falls back to the equity curve when the API has no drawdown", () => {
     const s = computeStats(
       snapshot({

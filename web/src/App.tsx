@@ -575,14 +575,14 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       {snapshot && chartSnapshot && stats && (
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
           <div className="overview">
-            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} pnl={pnl} theme={theme} />
+            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} theme={theme} />
             <SentimentMeter
               available={hasDecisions}
               reading={sentiment}
               loaded={decisionsLoaded}
               error={decisionsError}
             />
-            <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} />
+            <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} pnl={pnl} />
           </div>
           <div className="workspace">
             <div className="workspace-main">

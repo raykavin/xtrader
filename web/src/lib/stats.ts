@@ -30,6 +30,19 @@ export interface Stats {
   maxDrawdown: number;
   /** Buy-and-hold return of the asset over the same candles (fraction). */
   buyAndHold: number;
+  /** The course of the results over the trades, see ResultCurves. */
+  curves: ResultCurves;
+}
+
+/**
+ * The results after each trade closed, by its close, the last point of each
+ * the result of all of them: the net profit, from 0 before the first; the win
+ * rate; and the profit factor, once there is a loss (infinite before it).
+ */
+export interface ResultCurves {
+  profit: Point[];
+  winRate: Point[];
+  profitFactor: Point[];
 }
 
 export function isClosedTrade(order: Order): boolean {
@@ -88,8 +101,10 @@ export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stat
   const profitCurrency = booked
     ? (closed[0]?.account_currency ?? snapshot.account_currency ?? snapshot.quote)
     : snapshot.quote;
-  const wins = closed.filter((o) => value(o) > 0 || (value(o) === 0 && o.profit > 0));
-  const losses = closed.filter((o) => value(o) < 0 || (value(o) === 0 && o.profit < 0));
+  const won = (o: Order) => value(o) > 0 || (value(o) === 0 && o.profit > 0);
+  const lost = (o: Order) => value(o) < 0 || (value(o) === 0 && o.profit < 0);
+  const wins = closed.filter(won);
+  const losses = closed.filter(lost);
   const grossProfit = wins.reduce((sum, o) => sum + value(o), 0);
   const grossLoss = Math.abs(losses.reduce((sum, o) => sum + value(o), 0));
   const totalProfit = closed.reduce((sum, o) => sum + value(o), 0);
@@ -129,7 +144,39 @@ export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stat
     returnPct,
     maxDrawdown: drawdown,
     buyAndHold,
+    curves: resultCurves(closed, value, won, lost),
   };
+}
+
+/** The curves of the results of the trades closed, valued and told won or lost as by computeStats. */
+function resultCurves(
+  closed: Order[],
+  value: (o: Order) => number,
+  won: (o: Order) => boolean,
+  lost: (o: Order) => boolean,
+): ResultCurves {
+  const trades = [...closed].sort((a, b) => closedAt(a) - closedAt(b));
+  const curves: ResultCurves = { profit: [], winRate: [], profitFactor: [] };
+  const first = trades[0];
+  if (first) curves.profit.push({ time: closedAt(first), value: 0 });
+  let total = 0;
+  let wins = 0;
+  let gains = 0;
+  let losses = 0;
+  for (const [index, trade] of trades.entries()) {
+    const time = closedAt(trade);
+    total += value(trade);
+    if (won(trade)) {
+      wins++;
+      gains += value(trade);
+    } else if (lost(trade)) {
+      losses -= value(trade);
+    }
+    curves.profit.push({ time, value: total });
+    curves.winRate.push({ time, value: wins / (index + 1) });
+    if (losses > 0) curves.profitFactor.push({ time, value: gains / losses });
+  }
+  return curves;
 }
 
 /** Appends a point when its time is newer, or replaces the last one when equal. */
