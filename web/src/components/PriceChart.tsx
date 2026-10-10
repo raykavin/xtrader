@@ -8,6 +8,7 @@ import {
   type HistogramData,
   HistogramSeries,
   type IChartApi,
+  type IPaneApi,
   type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
@@ -31,6 +32,12 @@ import type {
 } from "../api/types";
 import { AnalysisPrimitive } from "../chart/analysisDrawings";
 import { type DraggableLine, LineDragger } from "../chart/dragLines";
+import {
+  type LegendItem,
+  type LegendStyle,
+  PaneLegendPrimitive,
+  withAlpha,
+} from "../chart/paneLegend";
 import { type TradeLine, TradeLinesPrimitive } from "../chart/tradeLines";
 import {
   analysisCaption,
@@ -116,6 +123,7 @@ interface ChartState {
   dragger: LineDragger;
   metrics: Map<string, MetricSeries>;
   paneByIndicator: Map<string, number>;
+  legends: WeakMap<IPaneApi<Time>, PaneLegendPrimitive>; // the legend of each pane, see paneLegends
   pair: string;
   timeframe: string;
   drawn: Candle[]; // the candles drawn, see candleUpdates
@@ -124,6 +132,49 @@ interface ChartState {
 }
 
 const t = (unix: number) => unix as UTCTimestamp;
+
+/** The look of the legends of the panes in palette. */
+function legendStyle(palette: Palette): LegendStyle {
+  return {
+    fontFamily: palette.fontFamily,
+    text: palette.text,
+    background: withAlpha(palette.background, 0.82),
+  };
+}
+
+/** The label of a metric of an indicator, eg: EMA 20, or MACD signal. */
+function metricLabel(indicator: Indicator, metric: Metric): string {
+  return metric.name ? `${indicator.name} ${metric.name}` : indicator.name;
+}
+
+/**
+ * The legends of the panes of the chart: in each one, the indicators drawn
+ * in it, the ones over the candles in the first, each other one in its own.
+ */
+function paneLegends(state: ChartState, indicators: Indicator[], palette: Palette) {
+  const items = new Map<number, LegendItem[]>();
+  for (const indicator of indicators) {
+    const pane = indicator.overlay ? 0 : state.paneByIndicator.get(indicator.name);
+    if (pane === undefined) continue;
+    const list = items.get(pane) ?? [];
+    for (const metric of indicator.metrics) {
+      list.push({
+        label: metricLabel(indicator, metric),
+        color: seriesColor(metric.color, palette.accent),
+      });
+    }
+    items.set(pane, list);
+  }
+  for (const [index, pane] of state.chart.panes().entries()) {
+    let legend = state.legends.get(pane);
+    if (!legend) {
+      legend = new PaneLegendPrimitive(legendStyle(palette));
+      pane.attachPrimitive(legend);
+      state.legends.set(pane, legend);
+    }
+    legend.setItems(items.get(index) ?? []);
+  }
+}
 
 // The heights of the panes, resized by the user, are kept in the browser by
 // layout and pair: the page reloaded shows them as they were left.
@@ -461,6 +512,7 @@ export function PriceChart({
       dragger,
       metrics: new Map(),
       paneByIndicator: new Map(),
+      legends: new WeakMap(),
       pair: "",
       timeframe: "",
       drawn: [],
@@ -627,6 +679,7 @@ export function PriceChart({
     state.volume.setData(candles.map((c) => toVolume(c, palette)));
     state.markers.setMarkers(buildMarkers(orders, candles, palette));
     state.tradeLines.setLines(buildTradeLines(orders, candles, palette));
+    for (const pane of state.chart.panes()) state.legends.get(pane)?.setStyle(legendStyle(palette));
   }, [theme]);
 
   // Data changes: drawn again whole, the chart fit to them, on another pair,
@@ -721,6 +774,7 @@ export function PriceChart({
       }
       state.paneCount = panes.length;
     }
+    paneLegends(state, snapshot.indicators, palette);
 
     state.markers.setMarkers(buildMarkers(snapshot.orders, snapshot.candles, palette));
     state.tradeLines.setLines(buildTradeLines(snapshot.orders, snapshot.candles, palette));
@@ -802,8 +856,7 @@ export function PriceChart({
   const legend = snapshot.indicators.flatMap((indicator) =>
     indicator.metrics.map((metric, index) => ({
       key: metricKey(indicator, metric, index),
-      color: seriesColor(metric.color, palettes[theme].accent),
-      label: metric.name ? `${indicator.name} ${metric.name}` : indicator.name,
+      label: metricLabel(indicator, metric),
     })),
   );
   const shownLabel = timeframeLabel(timeframe || execution);
@@ -819,71 +872,59 @@ export function PriceChart({
         eyebrow="Gráfico de preço"
         title={snapshot.pair}
         tag={shownLabel || undefined}
-        aside={
-          timeframes.length > 0 && (
-            <fieldset className="seg timeframes">
-              <legend>Timeframe do gráfico</legend>
-              {timeframes.map((view) => {
-                const label = timeframeLabel(view.timeframe);
-                const title = !view.available
-                  ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
-                  : view.execution
-                    ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
-                    : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
-                return (
-                  <button
-                    key={view.timeframe}
-                    type="button"
-                    className={
-                      view.execution ? "seg-item timeframe execution" : "seg-item timeframe"
-                    }
-                    aria-pressed={view.timeframe === timeframe}
-                    aria-label={view.execution ? `${label} (execução)` : label}
-                    disabled={!view.available || !onTimeframeChange}
-                    title={title}
-                    onClick={() => onTimeframeChange?.(view.timeframe)}
-                  >
-                    {label}
+        inline={
+          <>
+            {timeframes.length > 0 && (
+              <fieldset className="seg timeframes">
+                <legend>Timeframe do gráfico</legend>
+                {timeframes.map((view) => {
+                  const label = timeframeLabel(view.timeframe);
+                  const title = !view.available
+                    ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
+                    : view.execution
+                      ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
+                      : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
+                  return (
+                    <button
+                      key={view.timeframe}
+                      type="button"
+                      className={
+                        view.execution ? "seg-item timeframe execution" : "seg-item timeframe"
+                      }
+                      aria-pressed={view.timeframe === timeframe}
+                      aria-label={view.execution ? `${label} (execução)` : label}
+                      disabled={!view.available || !onTimeframeChange}
+                      title={title}
+                      onClick={() => onTimeframeChange?.(view.timeframe)}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </fieldset>
+            )}
+            {analysis && (
+              <span className="analysis-chip" title={analysisCaption(analysis)}>
+                <Icon name="sparkles" size={13} />
+                <span className="analysis-chip-text">{analysisCaption(analysis)}</span>
+                {onAnalysisReset && (
+                  <button type="button" className="btn btn-xs" onClick={onAnalysisReset}>
+                    Voltar à análise atual
                   </button>
-                );
-              })}
-            </fieldset>
-          )
+                )}
+              </span>
+            )}
+          </>
         }
       />
 
-      {(legend.length > 0 || analysis || otherView) && (
-        <div className="chart-sub">
-          {legend.length > 0 && (
-            <ul className="legend" aria-label="Indicadores">
-              {legend.map((item) => (
-                <li key={item.key} className="legend-chip">
-                  <i style={{ background: item.color }} aria-hidden="true" />
-                  {item.label}
-                </li>
-              ))}
-              {otherView && (
-                <li
-                  className="legend-chip note"
-                  title="Os indicadores da estratégia são calculados nos candles do timeframe de execução"
-                >
-                  calculados no {timeframeLabel(execution)}
-                </li>
-              )}
-            </ul>
-          )}
-          {analysis && (
-            <span className="analysis-chip" title="Marcações da análise do LLM no gráfico">
-              <Icon name="sparkles" size={13} />
-              <span className="analysis-chip-text">{analysisCaption(analysis)}</span>
-              {onAnalysisReset && (
-                <button type="button" className="btn btn-xs" onClick={onAnalysisReset}>
-                  Voltar à análise atual
-                </button>
-              )}
-            </span>
-          )}
-        </div>
+      {/* the legends are drawn in the panes of the chart, see paneLegends: listed here for the screen readers */}
+      {legend.length > 0 && (
+        <ul className="sr-only" aria-label="Indicadores">
+          {legend.map((item) => (
+            <li key={item.key}>{item.label}</li>
+          ))}
+        </ul>
       )}
 
       {(moveError || timeframeNote || (otherView && !timeframeNote)) && (
@@ -895,8 +936,8 @@ export function PriceChart({
           )}
           {otherView && !timeframeNote && (
             <p className="msg">
-              Visualização em {timeframeLabel(timeframe)}: ordens e análise do{" "}
-              {timeframeLabel(execution)} alinhadas aos candles.
+              Visualização em {timeframeLabel(timeframe)}: ordens, análise e indicadores do{" "}
+              {timeframeLabel(execution)} alinhados aos candles.
             </p>
           )}
           {timeframeNote && (

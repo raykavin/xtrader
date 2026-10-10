@@ -10,25 +10,47 @@ interface Props {
   tag?: ReactNode;
   /** Below the title, eg: when the decision was taken. */
   subtitle?: ReactNode;
-  /** At the right of the head, eg: the timeframes of the chart. */
+  /** On the line of the title, after it, eg: the timeframes of the chart. */
+  inline?: ReactNode;
+  /** At the right of the head, eg: the verdict of a decision. */
   aside?: ReactNode;
   className?: string;
 }
 
 /**
  * The head of a card of the panel, the same in all of them: the eyebrow
- * marked in the accent, the title and its tag, a line under it, and the
- * controls of the card at its right.
+ * marked in the accent, the title and its tag, the controls on its line (eg:
+ * the timeframes of the chart), a line under it, and the controls of the card
+ * at its right.
  */
-export function SectionHead({ id, eyebrow, title, tag, subtitle, aside, className = "" }: Props) {
+export function SectionHead({
+  id,
+  eyebrow,
+  title,
+  tag,
+  subtitle,
+  inline,
+  aside,
+  className = "",
+}: Props) {
   return (
     <header className={`section-head ${className}`.trim()}>
       <div className="section-heading">
         <span className="eyebrow">{eyebrow}</span>
-        <h2 id={id} className="section-name">
-          {title}
-          {tag && <span className="section-tag">{tag}</span>}
-        </h2>
+        {inline ? (
+          <div className="section-line">
+            <h2 id={id} className="section-name">
+              {title}
+              {tag && <span className="section-tag">{tag}</span>}
+            </h2>
+            {inline}
+          </div>
+        ) : (
+          <h2 id={id} className="section-name">
+            {title}
+            {tag && <span className="section-tag">{tag}</span>}
+          </h2>
+        )}
         {subtitle && <p className="section-sub">{subtitle}</p>}
       </div>
       {aside && <div className="section-aside">{aside}</div>}
