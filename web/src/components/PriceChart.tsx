@@ -1,4 +1,6 @@
 import {
+  type AreaData,
+  AreaSeries,
   type CandlestickData,
   CandlestickSeries,
   ColorType,
@@ -115,6 +117,7 @@ interface MetricSeries {
 interface ChartState {
   chart: IChartApi;
   candles: ISeriesApi<"Candlestick">;
+  line: ISeriesApi<"Area">; // the closes, shown in the line chart, see applyChartType
   volume: ISeriesApi<"Histogram">;
   markers: ISeriesMarkersPluginApi<Time>;
   tradeLines: TradeLinesPrimitive;
@@ -199,6 +202,61 @@ function savePaneFactors(key: string, factors: number[]) {
   } catch {
     // no storage (private mode, quota): the default heights next time
   }
+}
+
+/**
+ * How the price is drawn: as candles, or as a line of the closes over an area
+ * fading downwards. Kept in the browser: the page reloaded shows it as left.
+ */
+type ChartType = "candles" | "line";
+
+const CHART_TYPE_KEY = "xtrader.chart.type";
+
+function loadChartType(): ChartType {
+  try {
+    return window.localStorage.getItem(CHART_TYPE_KEY) === "line" ? "line" : "candles";
+  } catch {
+    return "candles";
+  }
+}
+
+function saveChartType(type: ChartType) {
+  try {
+    window.localStorage.setItem(CHART_TYPE_KEY, type);
+  } catch {
+    // no storage (private mode, quota): the candles next time
+  }
+}
+
+const CLEAR = "rgba(0, 0, 0, 0)";
+
+/**
+ * The price drawn as type: in the line chart, the line of the closes shown
+ * and the candles kept but clear, the orders, the markers, the lines dragged
+ * and the analysis on them as on the candles, and the price scale the one of
+ * the candles: switching moves nothing.
+ */
+function applyChartType(state: ChartState, type: ChartType, palette: Palette) {
+  const line = type === "line";
+  state.candles.applyOptions({
+    upColor: line ? CLEAR : palette.up,
+    downColor: line ? CLEAR : palette.down,
+    wickUpColor: line ? CLEAR : palette.up,
+    wickDownColor: line ? CLEAR : palette.down,
+    priceLineVisible: !line,
+    lastValueVisible: !line,
+  });
+  state.line.applyOptions({
+    visible: line,
+    lineColor: palette.price,
+    topColor: withAlpha(palette.price, 0.28),
+    bottomColor: withAlpha(palette.price, 0.02),
+    priceLineColor: palette.price,
+  });
+}
+
+function toClose(c: Candle): AreaData<Time> {
+  return { time: t(c.time), value: c.close };
 }
 
 function toCandle(c: Candle): CandlestickData<Time> {
@@ -443,6 +501,7 @@ export function PriceChart({
   const cardRef = useRef<HTMLElement>(null);
   const stateRef = useRef<ChartState | null>(null);
   const [fullscreen, setFullscreen] = useState<Fullscreen>(null);
+  const [chartType, setChartType] = useState<ChartType>(loadChartType);
   const lastClose = useRef(0);
   lastClose.current = snapshot.candles[snapshot.candles.length - 1]?.close ?? 0;
   const ownPnL = useMemo(() => positionPnL(snapshot), [snapshot]);
@@ -465,6 +524,14 @@ export function PriceChart({
     const palette = palettes[theme];
     const chart = createChart(container, chartOptions(palette));
 
+    // the line chart under the candles: the orders and the analysis on them over it
+    const line = chart.addSeries(AreaSeries, {
+      priceFormat,
+      lineWidth: 2,
+      priceLineStyle: LineStyle.Dotted,
+      crosshairMarkerRadius: 4,
+      visible: false,
+    });
     const candles = chart.addSeries(CandlestickSeries, {
       priceFormat,
       upColor: palette.up,
@@ -504,6 +571,7 @@ export function PriceChart({
     stateRef.current = {
       chart,
       candles,
+      line,
       volume,
       markers,
       tradeLines,
@@ -670,12 +738,6 @@ export function PriceChart({
     const palette = palettes[theme];
     const { candles, orders } = snapshotRef.current;
     state.chart.applyOptions(themeOptions(palette));
-    state.candles.applyOptions({
-      upColor: palette.up,
-      downColor: palette.down,
-      wickUpColor: palette.up,
-      wickDownColor: palette.down,
-    });
     state.volume.setData(candles.map((c) => toVolume(c, palette)));
     state.markers.setMarkers(buildMarkers(orders, candles, palette));
     state.tradeLines.setLines(buildTradeLines(orders, candles, palette));
@@ -700,6 +762,7 @@ export function PriceChart({
 
     if (!updates) {
       state.candles.setData(snapshot.candles.map(toCandle));
+      state.line.setData(snapshot.candles.map(toClose));
       state.volume.setData(snapshot.candles.map((c) => toVolume(c, palette)));
     } else {
       // from the last candle drawn: the one in progress changes until its
@@ -709,6 +772,7 @@ export function PriceChart({
         const c = snapshot.candles[index];
         if (!c) continue;
         state.candles.update(toCandle(c), historical);
+        state.line.update(toClose(c), historical);
         state.volume.update(toVolume(c, palette), historical);
       }
     }
@@ -845,6 +909,18 @@ export function PriceChart({
     }
   };
 
+  // The price as candles or as a line, in the colors of the theme.
+  useEffect(() => {
+    const state = stateRef.current;
+    if (state) applyChartType(state, chartType, palettes[theme]);
+  }, [chartType, theme]);
+
+  const toggleChartType = () => {
+    const next = chartType === "line" ? "candles" : "line";
+    setChartType(next);
+    saveChartType(next);
+  };
+
   // The last candle at the right edge, the price scales fit to the data.
   const goLive = () => {
     const state = stateRef.current;
@@ -957,13 +1033,23 @@ export function PriceChart({
         <button
           type="button"
           className="btn btn-icon chart-overlay-btn"
-          style={{ right: scaleWidth + 8 + 32 + 6 }}
+          style={{ right: scaleWidth + 8 + 2 * (32 + 6) }}
           title={fullscreen ? "Sair da tela cheia (Esc)" : "Gráfico em tela cheia"}
           aria-label={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
           aria-pressed={fullscreen !== null}
           onClick={toggleFullscreen}
         >
           <Icon name={fullscreen ? "shrink" : "expand"} size={15} />
+        </button>
+        <button
+          type="button"
+          className="btn btn-icon chart-overlay-btn"
+          style={{ right: scaleWidth + 8 + 32 + 6 }}
+          title={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
+          aria-label={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
+          onClick={toggleChartType}
+        >
+          <Icon name={chartType === "line" ? "candles" : "area"} size={15} />
         </button>
         <button
           type="button"

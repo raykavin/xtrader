@@ -32,6 +32,8 @@ export interface Palette {
   volumeUp: string;
   volumeDown: string;
   accent: string;
+  /** The line of the price in the line chart, and the area under it. */
+  price: string;
   equity: string;
   asset: string;
   crosshair: string;
@@ -53,6 +55,7 @@ export const palettes: Record<Theme, Palette> = {
     volumeUp: "rgba(16, 185, 129, 0.26)",
     volumeDown: "rgba(239, 68, 68, 0.26)",
     accent: "#f68b1f",
+    price: "#3aa0dc",
     equity: "#3aa0dc",
     asset: "#a78bfa",
     crosshair: "rgba(141, 160, 181, 0.6)",
@@ -69,6 +72,7 @@ export const palettes: Record<Theme, Palette> = {
     volumeUp: "rgba(5, 150, 105, 0.24)",
     volumeDown: "rgba(220, 38, 38, 0.22)",
     accent: "#e5780b",
+    price: "#1f7fbf",
     equity: "#1f7fbf",
     asset: "#7c3aed",
     crosshair: "rgba(74, 90, 112, 0.55)",

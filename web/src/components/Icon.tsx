@@ -107,6 +107,19 @@ const paths = {
   list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
   trend: <path d="M23 6l-9.5 9.5-5-5L1 18M17 6h6v6" />,
   chart: <path d="M3 3v18h18M8 8v7M13 5v9M18 9v6" />,
+  candles: (
+    <>
+      <path d="M3 3v16a2 2 0 0 0 2 2h16M9 5v4M9 15v2M17 3v2M17 13v3" />
+      <rect x="7" y="9" width="4" height="6" rx="1" />
+      <rect x="15" y="5" width="4" height="8" rx="1" />
+    </>
+  ),
+  area: (
+    <>
+      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+      <path d="M7 11.2a.5.5 0 0 1 .15-.35l2-2a.5.5 0 0 1 .7 0l3.3 3.3a.5.5 0 0 0 .7 0l4.3-4.3a.5.5 0 0 1 .85.35V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1z" />
+    </>
+  ),
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />
