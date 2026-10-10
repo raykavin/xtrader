@@ -548,6 +548,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         onPairChange={setPair}
         llm={snapshot?.llm?.model}
         timeframe={snapshot?.timeframe}
+        pnl={snapshot ? pnl : undefined}
         controls={controls}
         onControlsChange={setControls}
       />
@@ -564,7 +565,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       )}
       {snapshot && chartSnapshot && stats && (
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
-          <StatsBar stats={stats} snapshot={snapshot} theme={theme} pnl={pnl} since={since} />
+          <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} />
           <div className="workspace">
             <PriceChart
               snapshot={chartSnapshot}
@@ -687,10 +688,7 @@ function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?
           O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
         </Alert>
       )}
-      <div className="skeleton-stats">
-        <Skeleton height={112} />
-        <Skeleton height={112} />
-      </div>
+      <Skeleton className="skeleton-readouts" />
       <div className="workspace">
         <Skeleton className="skeleton-chart" />
         <Skeleton className="skeleton-ticket" />

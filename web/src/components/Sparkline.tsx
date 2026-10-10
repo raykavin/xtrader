@@ -8,6 +8,8 @@ interface Props {
   width?: number;
   height?: number;
   className?: string;
+  /** Whether the area under the line is filled, fading out. */
+  area?: boolean;
 }
 
 /** Downsamples to at most `max` points, keeping the first and last. */
@@ -23,7 +25,14 @@ function sample(points: Point[], max: number): Point[] {
 }
 
 /** Tiny inline SVG line chart used as the signature of the hero stat. */
-export function Sparkline({ points, color, width = 320, height = 64, className }: Props) {
+export function Sparkline({
+  points,
+  color,
+  width = 320,
+  height = 64,
+  className,
+  area: filled = true,
+}: Props) {
   const id = useId();
   const data = sample(points, 160);
   if (data.length < 2) return null;
@@ -55,13 +64,17 @@ export function Sparkline({ points, color, width = 320, height = 64, className }
       aria-hidden="true"
       focusable="false"
     >
-      <defs>
-        <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#${id}-fill)`} />
+      {filled && (
+        <>
+          <defs>
+            <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+              <stop offset="100%" stopColor={color} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={area} fill={`url(#${id}-fill)`} />
+        </>
+      )}
       <path
         d={line}
         fill="none"

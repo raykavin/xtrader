@@ -30,27 +30,27 @@ const intros: Record<SettingsTab, SectionIntro> = {
   agentes: {
     title: "Agentes",
     description:
-      "Os agentes do controller: o estado de cada um, os canais de controle, o prompt e os segredos. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt valem na hora; as demais alterações, quando ele for reiniciado.",
+      "Ligue, configure e reinicie cada agente. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt mudam na hora; o resto vale depois de reiniciar.",
   },
   prompts: {
     title: "Prompts",
     description: (
       <>
-        Os prompts dos agentes LLM. O cabeçalho do prompt (<code># Indicators:</code>,{" "}
-        <code># Take profit:</code>) define os indicadores e o take profit do agente; uma edição
-        vale a partir da próxima análise de cada agente que o usa.
+        As instruções dos agentes LLM. As linhas do cabeçalho (<code># Indicators:</code>,{" "}
+        <code># Take profit:</code> e outras) configuram o agente; uma edição vale a partir da
+        próxima análise.
       </>
     ),
   },
   telegram: {
     title: "Telegram",
     description:
-      "O bot do controller e os usuários que ele atende: só eles alcançam os agentes e os prompts pelo Telegram.",
+      "O bot do Telegram e quem ele atende: só os IDs autorizados controlam os agentes e os prompts por lá.",
   },
   usuarios: {
     title: "Usuários",
     description:
-      "Quem entra no painel. As senhas ficam guardadas como hash bcrypt; um usuário desativado, excluído ou com senha nova tem as sessões encerradas.",
+      "Quem pode entrar no painel. Desativar, excluir ou trocar a senha de um usuário encerra as sessões dele.",
   },
 };
 

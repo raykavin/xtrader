@@ -261,12 +261,12 @@ describe("analysis on the chart", () => {
           intent: { action: "SELL_STOP", side: "SELL", order_type: "stop", outcome: "ignored" },
         }),
       ),
-    ).toBe("Análise do LLM 30m 21/09/2026 15:45 · 1 marcação · Venda stop ignorada");
+    ).toBe("Análise do LLM 30m 21/09/2026 15:45: 1 marcação; venda stop ignorada");
     expect(
       analysisCaption(
         analysis({ drawings: [supply, { ...supply, id: "s2", low: 104, high: 105 }, demand] }),
       ),
-    ).toBe("Análise do LLM 30m 21/09/2026 15:45 · 3 marcações (2 oferta, 1 demanda)");
+    ).toBe("Análise do LLM 30m 21/09/2026 15:45: 3 marcações (2 oferta, 1 demanda)");
   });
 
   it("draws the zones of supply and demand by their kind and state, whatever their bias", () => {
@@ -494,7 +494,7 @@ describe("the decisions of the pending orders", () => {
         low: 98.4,
         high: 98.9,
       }),
-    ).toBe("98,4 – 98,9 · desde 21/09/2026 14:13 até 21/09/2026 15:13");
+    ).toBe("98,4 – 98,9, desde 21/09/2026 14:13 até 21/09/2026 15:13");
   });
 
   it("takes the analysis of an event of the pair, the snapshot kept when it is the same", () => {

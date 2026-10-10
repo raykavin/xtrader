@@ -162,13 +162,11 @@ function DecisionDetails({
         <dt>{isSkipped(decision) ? "Analisada em" : "Decidida em"}</dt>
         <dd className="mono">{formatTime(decision.decided_at)} UTC</dd>
         <dt>Ativo</dt>
-        <dd className="mono">
-          {decision.pair} · timeframe {decision.timeframe}
-        </dd>
+        <dd>{decision.pair}</dd>
+        <dt>Timeframe</dt>
+        <dd>{decision.timeframe}</dd>
         <dt>Candle</dt>
-        <dd className="mono">
-          {formatTime(decision.candle)} · {decision.timeframe}
-        </dd>
+        <dd className="mono">{formatTime(decision.candle)} UTC</dd>
         <dt>Origem</dt>
         <dd>{decisionTriggerLabel(decision)}</dd>
         <dt>Modelo</dt>
@@ -247,12 +245,16 @@ function DecisionDetails({
             {drawings.map((drawing) => (
               <li key={drawing.id}>
                 <span>
-                  {drawingKindLabel(drawing.kind)} · {drawing.label}{" "}
+                  {drawingKindLabel(drawing.kind)}: {drawing.label}{" "}
                   <small>
-                    {drawing.timeframe} · {biasLabel(drawing.bias)}
+                    ({drawing.timeframe},{" "}
+                    {drawing.bias === "neutral"
+                      ? "viés neutro"
+                      : `viés de ${biasLabel(drawing.bias)}`}
+                    )
                   </small>
                 </span>
-                <span className="mono">{drawingPlace(drawing)}</span>
+                <span className="tabular">{drawingPlace(drawing)}</span>
               </li>
             ))}
           </ul>

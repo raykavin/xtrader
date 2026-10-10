@@ -117,11 +117,11 @@ export function EquityChart({ snapshot, theme }: Props) {
         <ul className="legend" aria-label="Séries">
           <li className="legend-chip">
             <i style={{ background: palettes[theme].equity }} aria-hidden="true" />
-            Patrimônio ({snapshot.quote}) · escala à direita
+            Patrimônio em {snapshot.quote}, na escala da direita
           </li>
           <li className="legend-chip">
             <i style={{ background: palettes[theme].asset }} aria-hidden="true" />
-            Posição em {snapshot.asset} · escala à esquerda
+            Posição em {snapshot.asset}, na escala da esquerda
           </li>
         </ul>
       </div>

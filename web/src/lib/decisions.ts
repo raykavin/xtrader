@@ -98,9 +98,9 @@ export function drawingPlace(drawing: Drawing): string {
     drawing.kind === "zone" || isSupplyDemand(drawing)
       ? `${formatChartPrice(drawing.low ?? 0)} – ${formatChartPrice(drawing.high ?? 0)}`
       : formatChartPrice(drawing.price ?? 0);
-  const state = drawing.state ? ` · ${zoneStateLabel(drawing.state)}` : "";
+  const state = drawing.state ? `, ${zoneStateLabel(drawing.state)}` : "";
   const end = drawing.to != null ? ` até ${formatTime(drawing.to)}` : "";
-  return `${price}${state} · desde ${formatTime(drawing.from)}${end}`;
+  return `${price}${state}, desde ${formatTime(drawing.from)}${end}`;
 }
 
 /** Whether the analysis didn't ask the model, see decisionReason. */

@@ -72,8 +72,8 @@ export function ReanalysisDialog({ pair, onConfirm, onClose }: Props) {
       <form className="dialog-form" onSubmit={submit}>
         <div className="dialog-body">
           <p className="dialog-lead">
-            Pede ao modelo uma nova análise de <span className="mono">{pair}</span> agora, fora do
-            intervalo de consultas.
+            Pede ao modelo uma nova análise de <strong>{pair}</strong> agora, fora do intervalo de
+            consultas.
           </p>
           <div className="field">
             <label className="field-label" htmlFor="reanalysis-note">

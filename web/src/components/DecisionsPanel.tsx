@@ -72,7 +72,7 @@ export function DecisionsPanel({
       <div className="panel-toolbar">
         <p className="panel-summary">
           {decisions.length === 1 ? "1 decisão" : `${decisions.length} decisões`} em{" "}
-          <span className="mono">{pair}</span> · modelo <span className="mono">{model}</span>
+          <strong>{pair}</strong> do modelo <strong>{model}</strong>
         </p>
         <button
           type="button"

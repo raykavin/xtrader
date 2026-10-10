@@ -26,7 +26,7 @@ function windowLabel(result: PeriodResult, current: boolean): string {
       ? "Desde o início: os resultados nunca foram redefinidos"
       : `Até ${formatTime(result.until)} UTC, antes da primeira redefinição`;
   }
-  const by = period.created_by ? ` · por ${period.created_by}` : "";
+  const by = period.created_by ? `, por ${period.created_by}` : "";
   if (current || period.ended_at === undefined) {
     return `Desde ${formatTime(period.started_at)} UTC${by}`;
   }
@@ -61,8 +61,8 @@ function ResultTable({ result }: { result: PeriodResult }) {
         <tbody>
           {result.pairs.map(({ pair, stats }) => (
             <tr key={pair}>
-              <td className="mono">{pair}</td>
-              <td className="num mono" title={`${stats.wins} ganhas · ${stats.losses} perdidas`}>
+              <td className="strong">{pair}</td>
+              <td className="num mono" title={`${stats.wins} ganhas e ${stats.losses} perdidas`}>
                 {stats.trades}
               </td>
               <td className="num mono">{formatPercent(stats.winRate).replace("+", "")}</td>
@@ -77,7 +77,7 @@ function ResultTable({ result }: { result: PeriodResult }) {
           <tfoot>
             <tr>
               <th scope="row">Total</th>
-              <td className="num mono" title={`${result.wins} ganhas · ${result.losses} perdidas`}>
+              <td className="num mono" title={`${result.wins} ganhas e ${result.losses} perdidas`}>
                 {result.trades}
               </td>
               <td className="num mono">
