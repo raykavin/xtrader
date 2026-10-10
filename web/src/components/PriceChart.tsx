@@ -859,7 +859,8 @@ export function PriceChart({
       label: metricLabel(indicator, metric),
     })),
   );
-  const shownLabel = timeframeLabel(timeframe || execution);
+  // the timeframe shown beside the pair only without the selector, which marks it
+  const shownLabel = timeframes.length > 0 ? "" : timeframeLabel(timeframe || execution);
 
   return (
     <section
