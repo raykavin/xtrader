@@ -540,8 +540,11 @@ export interface BalanceResponse {
  * RequestedBy, the channel of a reanalysis it answers, and RequestNote, the
  * note the trader sent with it, if any), the model, the prompt and its
  * latency, the position held then, what the model answered
- * with its justification (Reason), its levels, its drawings (see Drawing:
- * absent for a strategy that draws none), its notes and its attachments, and
+ * with its justification (Reason), its reading of the market (Sentiment, from
+ * 0, extremely bearish, to 100, extremely bullish, 50 neutral: absent from the
+ * decisions without one, eg: failed, skipped or taken before it was asked
+ * for), its levels, its drawings (see Drawing: absent for a strategy that
+ * draws none), its notes and its attachments, and
  * what came of it (Outcome: applied; ignored, its confidence under the
  * minimum; refused, breaking the rules of the context; failed, no answer;
  * skipped, an analysis that didn't ask the model, eg: no entry to open while
@@ -564,6 +567,7 @@ export interface Decision {
   position?: string;
   action?: string;
   confidence: number /* float64 */;
+  sentiment?: number /* float64 */;
   reason?: string;
   entry?: number /* float64 */;
   stop_loss?: number /* float64 */;

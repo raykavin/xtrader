@@ -31,7 +31,8 @@ Determine:
 - the entry price;
 - the stop loss;
 - the take profit, none when rules.no_take_profit is true;
-- the confidence of your analysis, from 0 to 1.
+- the confidence of your analysis, from 0 to 1;
+- the sentiment of the market of the symbol, from 0 to 100.
 
 Actions:
 - WAIT: no position is held and there is no clear opportunity.
@@ -60,6 +61,7 @@ Rules:
 - Follow the strategy below for every decision; the rules above prevail over it.
 - When the setup is not clear enough, answer WAIT, or HOLD with a position.
 - Write the reason in rules.reason_language, in one or two short sentences naming the evidence of the context behind the decision.
+- Give in sentiment your reading of the market of the symbol now, whatever the action: 0 extremely bearish, 25 bearish, 50 neutral, 75 bullish, 100 extremely bullish, weighing what the context shows (trend, structure, momentum, the higher timeframes, the correlated markets, the calendar). It is shown to the trader and doesn't trade: it changes neither the action nor the rules, and it is not your confidence.
 - List in levels the supports and resistances your analysis relies on (the ones of the strategy, the nearest to the price first, 8 at most), whatever the action, or none: they are drawn on the chart for the trader to see what you saw.
 - Your answer must follow the schema strictly.
 
@@ -558,6 +560,10 @@ var decisionSchema = json.RawMessage(`{
 			"type": "number",
 			"description": "Confidence of the analysis, from 0 to 1."
 		},
+		"sentiment": {
+			"type": "number",
+			"description": "Reading of the market of the symbol now, whatever the action, from 0 (extremely bearish) to 100 (extremely bullish), 50 neutral. Shown to the trader, it doesn't trade."
+		},
 		"entry": {
 			"type": ["number", "null"],
 			"description": "Entry price of ENTER_LONG and ENTER_SHORT, the current price. Null for the other actions."
@@ -584,7 +590,7 @@ var decisionSchema = json.RawMessage(`{
 			}
 		}
 	},
-	"required": ["reason", "action", "confidence", "entry", "stop_loss", "take_profit", "levels"],
+	"required": ["reason", "action", "confidence", "sentiment", "entry", "stop_loss", "take_profit", "levels"],
 	"additionalProperties": false
 }`)
 
@@ -695,6 +701,10 @@ func extendedSchema(shape decisionShape) json.RawMessage {
 			"type": "number",
 			"description": "Confidence of the analysis, from 0 to 1."
 		},
+		"sentiment": {
+			"type": "number",
+			"description": "Reading of the market of the symbol now, whatever the action, from 0 (extremely bearish) to 100 (extremely bullish), 50 neutral. Shown to the trader, it doesn't trade."
+		},
 		"entry": {
 			"type": ["number", "null"],
 			"description": %s
@@ -708,7 +718,7 @@ func extendedSchema(shape decisionShape) json.RawMessage {
 			"description": %s
 		}%s
 	},
-	"required": ["reason", "action", "confidence", "entry", "stop_loss", "take_profit"%s],
+	"required": ["reason", "action", "confidence", "sentiment", "entry", "stop_loss", "take_profit"%s],
 	"additionalProperties": false
 }`, strings.Join(actions, ", "), quote(entry), quote(stop), quote(profit), extra, required))
 }

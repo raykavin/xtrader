@@ -84,6 +84,39 @@ func TestParseDecision(t *testing.T) {
 		require.Len(t, d.Levels, maxLevels)
 	})
 
+	t.Run("sentiment", func(t *testing.T) {
+		wait := func(sentiment string) string {
+			return `{"action": "WAIT", "confidence": 0.5, "entry": null, "stop_loss": null, "take_profit": null,
+				"reason": "ok"` + sentiment + `}`
+		}
+		d, err := ParseDecision([]byte(wait(`, "sentiment": 72.5`)))
+		require.NoError(t, err)
+		require.Equal(t, ptr(72.5), d.Sentiment)
+		for _, edge := range []float64{minSentiment, maxSentiment} {
+			d, err = ParseDecision([]byte(wait(fmt.Sprintf(`, "sentiment": %v`, edge))))
+			require.NoError(t, err)
+			require.Equal(t, ptr(edge), d.Sentiment, "its ends included")
+		}
+
+		for _, absent := range []string{"", `, "sentiment": null`} {
+			d, err = ParseDecision([]byte(wait(absent)))
+			require.NoError(t, err, "missing or null: none, the decision kept")
+			require.Nil(t, d.Sentiment)
+			require.Empty(t, d.Notes)
+		}
+
+		for _, out := range []string{"-1", "100.5", "0.72e3"} {
+			d, err = ParseDecision([]byte(wait(`, "sentiment": ` + out)))
+			require.NoError(t, err, "out of its range: left out, the decision kept")
+			require.Nil(t, d.Sentiment, out)
+			require.Len(t, d.Notes, 1)
+			require.Contains(t, d.Notes[0].Text, "sentiment left out")
+		}
+
+		_, err = ParseDecision([]byte(wait(`, "sentiment": "bullish"`)))
+		require.ErrorIs(t, err, ErrInvalidResponse, "not a number: the answer isn't the schema")
+	})
+
 	t.Run("every action", func(t *testing.T) {
 		for _, action := range Actions {
 			d, err := ParseDecision([]byte(`{"action": "` + string(action) + `", "confidence": 1, "entry": null,
@@ -148,8 +181,8 @@ func TestParseDecision(t *testing.T) {
 		{"null reason", with("reason", `null`), `"reason" is null`},
 	}
 	for _, field := range decisionFields {
-		if field == "levels" {
-			continue // optional: see "levels"
+		if field == "levels" || field == "sentiment" {
+			continue // optional: see "levels" and "sentiment"
 		}
 		tests = append(tests, struct{ name, data, want string }{"missing " + field, with(field, ""),
 			`missing field "` + field + `"`})

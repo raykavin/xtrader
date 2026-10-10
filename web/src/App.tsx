@@ -29,6 +29,7 @@ import { LastDecision } from "./components/LastDecision";
 import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
 import { PriceHero } from "./components/PriceHero";
+import { SentimentMeter } from "./components/SentimentMeter";
 import { Alert, EmptyState, Loading, Skeleton } from "./components/States";
 import { StatsBar } from "./components/StatsBar";
 import { type TabItem, Tabs, tabIds } from "./components/Tabs";
@@ -42,6 +43,7 @@ import {
 } from "./lib/decisions";
 import { rememberDashboard, sessionStore, settingsHref } from "./lib/nav";
 import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
+import { latestSentiment } from "./lib/sentiment";
 import {
   applyCandleEvent,
   applyOrderEvent,
@@ -482,6 +484,8 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     [snapshot, since],
   );
   const pnl = useMemo(() => (snapshot ? positionPnL(snapshot) : null), [snapshot]);
+  // the reading of the market of the newest decision of the pair with one
+  const sentiment = useMemo(() => latestSentiment(decisions), [decisions]);
   // the snapshot drawn on the chart: on the timeframe shown, its candles, none
   // while they load (never the ones of another timeframe)
   const chartSnapshot = useMemo(() => {
@@ -572,6 +576,12 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
           <div className="overview">
             <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} pnl={pnl} />
+            <SentimentMeter
+              available={hasDecisions}
+              reading={sentiment}
+              loaded={decisionsLoaded}
+              error={decisionsError}
+            />
             <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} />
           </div>
           <div className="workspace">
@@ -713,6 +723,7 @@ function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?
       )}
       <div className="overview">
         <Skeleton className="skeleton-hero" />
+        <Skeleton className="skeleton-meter" />
         <Skeleton className="skeleton-kpis" />
       </div>
       <div className="workspace">

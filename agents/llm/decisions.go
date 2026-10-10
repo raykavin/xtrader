@@ -369,6 +369,7 @@ func JournalDecisions(data []byte, orders func(pair string) []model.Order) []ui.
 		case entry.Decision != nil:
 			d.Action, d.Confidence, d.Reason = string(entry.Decision.Action), entry.Decision.Confidence,
 				entry.Decision.Reason
+			d.Sentiment = entry.Decision.Sentiment
 			d.Entry, d.StopLoss, d.TakeProfit = entry.Decision.Entry, entry.Decision.StopLoss, entry.Decision.TakeProfit
 			d.Levels, d.Notes = uiLevels(entry.Decision.Levels), uiNotes(entry.Decision.Notes)
 			d.Outcome = OutcomeApplied
@@ -689,6 +690,7 @@ func (t *Trader) decisionRecord(st *promptState, input Input, trigger, requested
 	}
 	if d.Action != "" {
 		record.Action, record.Confidence, record.Reason = string(d.Action), d.Confidence, d.Reason
+		record.Sentiment = d.Sentiment
 		record.Entry, record.StopLoss, record.TakeProfit = d.Entry, d.StopLoss, d.TakeProfit
 		record.Levels, record.Notes = uiLevels(d.Levels), uiNotes(d.Notes)
 		record.Drawings = uiDrawings(d.Drawings)
@@ -700,7 +702,7 @@ func (t *Trader) decisionRecord(st *promptState, input Input, trigger, requested
 	default:
 		record.Outcome, record.Error = OutcomeFailed, err.Error()
 		record.Action, record.Confidence, record.Reason = "", 0, ""
-		record.Drawings = nil
+		record.Sentiment, record.Drawings = nil, nil
 	}
 	return record
 }

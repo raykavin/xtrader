@@ -81,6 +81,15 @@ type drawingsRow struct {
 
 func (drawingsRow) TableName() string { return "decision_drawings" }
 
+// sentimentRow is the sentiment of a decision, see ui.Decision.
+type sentimentRow struct {
+	AgentID    int64
+	DecisionID string
+	Sentiment  float64
+}
+
+func (sentimentRow) TableName() string { return "decision_sentiments" }
+
 // decisionColumns are the columns a decision rewrites: all but its keys.
 var decisionColumns = []string{"pair", "timeframe", "candle_at", "decided_at", "trigger", "requested_by",
 	"request_note", "model", "prompt_id", "prompt_name", "prompt_version", "latency_ms", "price", "position",
@@ -157,8 +166,27 @@ func (s *Store) SaveDecision(ctx context.Context, id int64, d ui.Decision, attac
 		if _, _, err := s.saveDecisionParts(ctx, id, d, attachments); err != nil {
 			return err
 		}
-		return s.saveDrawings(ctx, id, d, overwrite)
+		if err := s.saveDrawings(ctx, id, d, overwrite); err != nil {
+			return err
+		}
+		return s.saveSentiment(ctx, id, d, overwrite)
 	})
+}
+
+// saveSentiment keeps the sentiment of the decision d of the agent of id, if
+// any: in place of the one kept when overwrite, else only when missing, as the
+// decision.
+func (s *Store) saveSentiment(ctx context.Context, id int64, d ui.Decision, overwrite bool) error {
+	if d.Sentiment == nil {
+		return nil
+	}
+	keys := []clause.Column{{Name: "agent_id"}, {Name: "decision_id"}}
+	conflict := clause.OnConflict{Columns: keys, DoNothing: true}
+	if overwrite {
+		conflict = clause.OnConflict{Columns: keys, DoUpdates: clause.AssignmentColumns([]string{"sentiment"})}
+	}
+	return s.conn(ctx).Clauses(conflict).Create(&sentimentRow{AgentID: id, DecisionID: d.ID,
+		Sentiment: *d.Sentiment}).Error
 }
 
 // saveDrawings keeps the drawings of the decision d of the agent of id, if any:
@@ -270,8 +298,8 @@ func (s *Store) Decision(ctx context.Context, id int64, decisionID string) (ui.D
 	return decisions[0], nil
 }
 
-// decisions returns the decisions of rows with their orders and the
-// description of their attachments.
+// decisions returns the decisions of rows with their orders, the description
+// of their attachments, their drawings and their sentiment.
 func (s *Store) decisions(ctx context.Context, id int64, rows []decisionRow) ([]ui.Decision, error) {
 	decisions := make([]ui.Decision, 0, len(rows))
 	if len(rows) == 0 {
@@ -305,6 +333,14 @@ func (s *Store) decisions(ctx context.Context, id int64, rows []decisionRow) ([]
 	for _, row := range drawn {
 		drawings[row.DecisionID] = row.Drawings
 	}
+	var read []sentimentRow
+	if err := s.conn(ctx).Where("agent_id = ? AND decision_id IN ?", id, ids).Find(&read).Error; err != nil {
+		return nil, err
+	}
+	sentiments := make(map[string]float64, len(read))
+	for _, row := range read {
+		sentiments[row.DecisionID] = row.Sentiment
+	}
 	orders := make(map[string][]int64)
 	for _, link := range links {
 		orders[link.DecisionID] = append(orders[link.DecisionID], link.OrderID)
@@ -324,6 +360,9 @@ func (s *Store) decisions(ctx context.Context, id int64, rows []decisionRow) ([]
 		}
 		if list := drawings[row.ID]; len(list) > 0 {
 			d.Drawings = list
+		}
+		if sentiment, ok := sentiments[row.ID]; ok {
+			d.Sentiment = &sentiment
 		}
 		decisions = append(decisions, d)
 	}
