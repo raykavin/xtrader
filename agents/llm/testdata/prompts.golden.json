@@ -489,7 +489,7 @@
     "daily_currency": "",
     "refused": "",
     "header_lines": 8,
-    "text_sha256": "f04265a761f62a1863acd80f02eb8bef4b8fb2f91780ca04caa115d2e50e3fcf",
+    "text_sha256": "42cfa253a395cd00ed0f2bc09e217c95840c1bcfe43dd2c55800f22198e37104",
     "pending_orders": [
       "limit"
     ],
@@ -561,7 +561,7 @@
     "daily_currency": "",
     "refused": "",
     "header_lines": 6,
-    "text_sha256": "9fcf186f50db5b021eeb561d0458ddfea715bcb79b8af40cecf8df8355ca650b"
+    "text_sha256": "bf31fd7f4ac634b0988990928727155f6ded53de5502fd67bdb82788b5d17d46"
   },
   "trendconfluence": {
     "indicators": [

@@ -60,7 +60,7 @@ Rules:
 - Do not change the risk management rules.
 - Follow the strategy below for every decision; the rules above prevail over it.
 - When the setup is not clear enough, answer WAIT, or HOLD with a position.
-- Write the reason in rules.reason_language, in one or two short sentences naming the evidence of the context behind the decision.
+- Write the reason in rules.reason_language, in two or three short sentences: the scenario you read and the evidence of the context behind the decision, the main evidence against it, and what invalidates an entry, or, for a WAIT, what is missing and what would change it.
 - Give in sentiment your reading of the market of the symbol now, whatever the action: 0 extremely bearish, 25 bearish, 50 neutral, 75 bullish, 100 extremely bullish, weighing what the context shows (trend, structure, momentum, the higher timeframes, the correlated markets, the calendar). It is shown to the trader and doesn't trade: it changes neither the action nor the rules, and it is not your confidence.
 - List in levels the supports and resistances your analysis relies on (the ones of the strategy, the nearest to the price first, 8 at most), whatever the action, or none: they are drawn on the chart for the trader to see what you saw.
 - Your answer must follow the schema strictly.
@@ -549,7 +549,7 @@ var decisionSchema = json.RawMessage(`{
 	"properties": {
 		"reason": {
 			"type": "string",
-			"description": "Evidence of the context behind the decision, in one or two short sentences, in rules.reason_language."
+			"description": "The scenario and the evidence of the context behind the decision, the main evidence against it, and what invalidates an entry or what a WAIT waits for, in two or three short sentences, in rules.reason_language."
 		},
 		"action": {
 			"type": "string",
@@ -690,7 +690,7 @@ func extendedSchema(shape decisionShape) json.RawMessage {
 	"properties": {
 		"reason": {
 			"type": "string",
-			"description": "Evidence of the context behind the decision, in one or two short sentences, in rules.reason_language."
+			"description": "The scenario and the evidence of the context behind the decision, the main evidence against it, and what invalidates an entry or what a WAIT waits for, in two or three short sentences, in rules.reason_language."
 		},
 		"action": {
 			"type": "string",
