@@ -25,8 +25,10 @@ import { DecisionDialog } from "./components/DecisionDialog";
 import { DecisionsPanel } from "./components/DecisionsPanel";
 import { EquityChart } from "./components/EquityChart";
 import { Icon } from "./components/Icon";
+import { LastDecision } from "./components/LastDecision";
 import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
+import { PriceHero } from "./components/PriceHero";
 import { Alert, EmptyState, Loading, Skeleton } from "./components/States";
 import { StatsBar } from "./components/StatsBar";
 import { type TabItem, Tabs, tabIds } from "./components/Tabs";
@@ -202,6 +204,8 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const [levels, setLevels] = useState<TicketLevels>(noLevels);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [decisionsError, setDecisionsError] = useState<string | null>(null);
+  // whether the decisions shown are the ones of the pair, read once
+  const [decisionsLoaded, setDecisionsLoaded] = useState(false);
   const [shownDecision, setShownDecision] = useState<string | null>(null);
   // the analysis of a decision of the list shown on the chart of its pair, in
   // place of the last one, until the trader goes back to it
@@ -389,6 +393,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       decisionsFor.current = run.key;
       setDecisions([]);
       setDecisionsError(null);
+      setDecisionsLoaded(false);
     }
     if (!pair || !run.load) return;
     const controller = new AbortController();
@@ -396,6 +401,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       .then((list) => {
         setDecisions(list);
         setDecisionsError(null);
+        setDecisionsLoaded(true);
       })
       .catch((e) => {
         if (!controller.signal.aborted)
@@ -548,7 +554,6 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         onPairChange={setPair}
         llm={snapshot?.llm?.model}
         timeframe={snapshot?.timeframe}
-        pnl={snapshot ? pnl : undefined}
         controls={controls}
         onControlsChange={setControls}
       />
@@ -565,27 +570,42 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       )}
       {snapshot && chartSnapshot && stats && (
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
-          <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} />
+          <div className="overview">
+            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} pnl={pnl} />
+            <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} />
+          </div>
           <div className="workspace">
-            <PriceChart
-              snapshot={chartSnapshot}
-              theme={theme}
-              layoutKey={agent ?? ""}
-              ticket={interactive ? ticket : undefined}
-              onMoveOrder={interactive ? handleMoveOrder : undefined}
-              position={pnl}
-              timeframe={shown}
-              timeframes={viewTimeframes(snapshot)}
-              onTimeframeChange={setAskedTimeframe}
-              timeframeNote={timeframeNote}
-              analysis={chartAnalysis(
-                snapshot.pair,
-                shownAnalysis?.pair === snapshot.pair ? shownAnalysis.analysis : snapshot.analysis,
+            <div className="workspace-main">
+              <PriceChart
+                snapshot={chartSnapshot}
+                theme={theme}
+                layoutKey={agent ?? ""}
+                ticket={interactive ? ticket : undefined}
+                onMoveOrder={interactive ? handleMoveOrder : undefined}
+                position={pnl}
+                timeframe={shown}
+                timeframes={viewTimeframes(snapshot)}
+                onTimeframeChange={setAskedTimeframe}
+                timeframeNote={timeframeNote}
+                analysis={chartAnalysis(
+                  snapshot.pair,
+                  shownAnalysis?.pair === snapshot.pair
+                    ? shownAnalysis.analysis
+                    : snapshot.analysis,
+                )}
+                onAnalysisReset={
+                  shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
+                }
+              />
+              {hasDecisions && (
+                <LastDecision
+                  decision={decisions[0]}
+                  loaded={decisionsLoaded}
+                  error={decisionsError}
+                  onShow={setShownDecision}
+                />
               )}
-              onAnalysisReset={
-                shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
-              }
-            />
+            </div>
             <ControlPanel
               agent={agent}
               pair={snapshot.pair}
@@ -598,14 +618,17 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
             />
           </div>
 
-          <section className="card panel" aria-label="Ordens, decisões e patrimônio">
-            <Tabs
-              label="Listas do agente"
-              idPrefix="lists"
-              items={tabs}
-              value={shownTab}
-              onChange={chooseTab}
-            />
+          <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
+            <div className="lists-head">
+              <span className="eyebrow">Atividade do agente</span>
+              <Tabs
+                label="Listas do agente"
+                idPrefix="lists"
+                items={tabs}
+                value={shownTab}
+                onChange={chooseTab}
+              />
+            </div>
             <div {...panel("orders")}>
               <OrdersTable
                 key={`orders-${snapshot.pair}`} // the first page of each pair
@@ -679,7 +702,7 @@ function saveDashboardTab(tab: DashboardTab) {
   }
 }
 
-/** The blocks of the panel while its data loads: the cards, the chart and the ticket. */
+/** The blocks of the panel while its data loads: the quote, the results, the chart and the ticket. */
 function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?: boolean }) {
   return (
     <Loading label={label}>
@@ -688,7 +711,10 @@ function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?
           O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
         </Alert>
       )}
-      <Skeleton className="skeleton-readouts" />
+      <div className="overview">
+        <Skeleton className="skeleton-hero" />
+        <Skeleton className="skeleton-kpis" />
+      </div>
       <div className="workspace">
         <Skeleton className="skeleton-chart" />
         <Skeleton className="skeleton-ticket" />

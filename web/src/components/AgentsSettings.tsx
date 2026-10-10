@@ -92,7 +92,12 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
 
   return (
     <div className="settings-section">
-      <PageHeader title={intro.title} description={intro.description} actions={create} />
+      <PageHeader
+        eyebrow="Configurações"
+        title={intro.title}
+        description={intro.description}
+        actions={create}
+      />
       {!shown ? (
         <div className="card">
           <EmptyState icon="bot" title="Nenhum agente cadastrado" action={create}>

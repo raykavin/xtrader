@@ -1,5 +1,5 @@
 import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { fetchSessionInfo, UI_VERSION } from "../api/client";
+import { fetchSessionInfo } from "../api/client";
 import { dashboardHref, sessionStore, settingsHref } from "../lib/nav";
 import type { SettingsTab } from "../lib/settings";
 import type { Theme } from "../lib/theme";
@@ -21,7 +21,7 @@ interface Props {
   /** On the settings: shows another section without loading the page again. */
   onSection?: (tab: SettingsTab) => void;
   hints?: Partial<Record<SettingsTab, NavHint>>;
-  /** The title of the page in its top bar. */
+  /** The title of the page, read by the screen readers. */
   title: string;
   theme: Theme;
   onThemeToggle: () => void;
@@ -37,12 +37,13 @@ const sections: { tab: SettingsTab; label: string; icon: IconName }[] = [
   { tab: "usuarios", label: "Usuários", icon: "users" },
 ];
 
-/** The width the sidebar shows from: below it, the navigation is a drawer. */
+/** The width the bar holds the navigation from: below it, the navigation is a drawer. */
 const DRAWER_BELOW = "(max-width: 767px)";
 
 /**
- * The frame of the pages: the navigation in a sidebar (a rail of icons on a
- * tablet, a drawer on a phone), the top bar, the page and its foot.
+ * The frame of the pages: the bar atop them, with the brand, the navigation
+ * as a segmented control (a drawer on a phone) and the actions of the
+ * session; then the page and its foot.
  */
 export function AppShell({
   page,
@@ -71,7 +72,7 @@ export function AppShell({
 
   // The drawer, a modal dialog: Esc and the backdrop close it, the focus
   // kept inside while open; closed once the window is wide enough for the
-  // sidebar.
+  // navigation in the bar.
   useEffect(() => {
     const element = drawer.current;
     if (!element) return;
@@ -88,30 +89,36 @@ export function AppShell({
     return () => query.removeEventListener("change", changed);
   }, []);
 
-  const nav = (where: "sidebar" | "drawer") => (
-    <Navigation
-      page={page}
-      section={section}
-      hints={hints}
-      onNavigate={(tab, event) => {
-        setMenuOpen(false);
-        if (tab && onSection) {
-          event.preventDefault();
-          onSection(tab);
-        }
-      }}
-      where={where}
-    />
-  );
+  const navigate = (tab: SettingsTab | null, event: MouseEvent) => {
+    setMenuOpen(false);
+    if (tab && onSection) {
+      event.preventDefault();
+      onSection(tab);
+    }
+  };
 
   return (
     <div className="shell">
       <a className="skip-link" href="#main">
         Pular para o conteúdo
       </a>
-      <aside className="sidebar" aria-label="Navegação principal">
-        {nav("sidebar")}
-      </aside>
+      <Header
+        theme={theme}
+        onThemeToggle={onThemeToggle}
+        connected={connected}
+        user={user}
+        onMenu={() => setMenuOpen(true)}
+        menuOpen={menuOpen}
+        nav={
+          <Navigation
+            page={page}
+            section={section}
+            hints={hints}
+            onNavigate={navigate}
+            where="bar"
+          />
+        }
+      />
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: Esc closes the dialog natively */}
       <dialog
         ref={drawer}
@@ -134,29 +141,25 @@ export function AppShell({
             <Icon name="close" />
           </button>
         </div>
-        {nav("drawer")}
+        <Navigation
+          page={page}
+          section={section}
+          hints={hints}
+          onNavigate={navigate}
+          where="drawer"
+        />
       </dialog>
 
-      <div className="shell-main">
-        <Header
-          title={title}
-          theme={theme}
-          onThemeToggle={onThemeToggle}
-          connected={connected}
-          user={user}
-          onMenu={() => setMenuOpen(true)}
-          menuOpen={menuOpen}
-        />
-        <main id="main" className="page" tabIndex={-1}>
-          {children}
-        </main>
-        <Footer />
-      </div>
+      <main id="main" className="page" tabIndex={-1}>
+        <h1 className="sr-only">{title}</h1>
+        {children}
+      </main>
+      <Footer />
     </div>
   );
 }
 
-/** The links of the navigation, the page shown marked. */
+/** The links of the navigation, the page shown marked: a segmented bar, or the list of the drawer. */
 function Navigation({
   page,
   section,
@@ -169,63 +172,57 @@ function Navigation({
   hints?: Props["hints"];
   /** A link followed: with the section of the settings it shows, if any. */
   onNavigate: (tab: SettingsTab | null, event: MouseEvent) => void;
-  where: "sidebar" | "drawer";
+  where: "bar" | "drawer";
 }) {
-  return (
-    <div className="nav">
-      {where === "sidebar" && (
-        <a
-          className="sidebar-brand"
-          href={dashboardHref(sessionStore())}
-          aria-label="XTrader: painel"
-        >
-          <Logo size={24} />
-        </a>
-      )}
-      <nav className="nav-groups" aria-label={where === "drawer" ? undefined : "Páginas"}>
-        <div className="nav-group">
-          <span className="nav-heading">Operação</span>
-          <a
-            className="nav-link"
-            href={dashboardHref(sessionStore())}
-            aria-current={page === "dashboard" ? "page" : undefined}
-            title="Painel"
-            onClick={(e) => onNavigate(null, e)}
-          >
-            <Icon name="dashboard" size={18} className="nav-icon" />
-            <span className="nav-label">Painel</span>
-          </a>
-        </div>
-        <div className="nav-group">
-          <span className="nav-heading">Configurações</span>
-          {sections.map(({ tab, label, icon }) => {
-            const hint = hints?.[tab];
-            return (
-              <a
-                key={tab}
-                className="nav-link"
-                href={settingsHref(tab)}
-                aria-current={page === "settings" && section === tab ? "page" : undefined}
-                title={label}
-                onClick={(e) => onNavigate(tab, e)}
-              >
-                <Icon name={icon} size={18} className="nav-icon" />
-                <span className="nav-label">{label}</span>
-                {hint && (
-                  <span className={hint.tone ? `nav-hint ${hint.tone}` : "nav-hint"}>
-                    {hint.text}
-                  </span>
-                )}
-              </a>
-            );
-          })}
-        </div>
+  const dashboard = (
+    <a
+      className="nav-link"
+      href={dashboardHref(sessionStore())}
+      aria-current={page === "dashboard" ? "page" : undefined}
+      onClick={(e) => onNavigate(null, e)}
+    >
+      <Icon name="dashboard" size={where === "bar" ? 15 : 18} className="nav-icon" />
+      <span className="nav-label">Painel</span>
+    </a>
+  );
+  const links = sections.map(({ tab, label, icon }) => {
+    const hint = hints?.[tab];
+    return (
+      <a
+        key={tab}
+        className="nav-link"
+        href={settingsHref(tab)}
+        aria-current={page === "settings" && section === tab ? "page" : undefined}
+        onClick={(e) => onNavigate(tab, e)}
+      >
+        <Icon name={icon} size={where === "bar" ? 15 : 18} className="nav-icon" />
+        <span className="nav-label">{label}</span>
+        {hint && (
+          <span className={hint.tone ? `nav-hint ${hint.tone}` : "nav-hint"}>{hint.text}</span>
+        )}
+      </a>
+    );
+  });
+
+  if (where === "bar") {
+    return (
+      <nav className="appnav" aria-label="Páginas">
+        {dashboard}
+        <span className="appnav-divider" aria-hidden="true" />
+        {links}
       </nav>
-      <div className="nav-foot">
-        <span className="version" title="Versão do painel">
-          {/^\d/.test(UI_VERSION) ? `v${UI_VERSION}` : UI_VERSION}
-        </span>
+    );
+  }
+  return (
+    <nav className="nav-groups">
+      <div className="nav-group">
+        <span className="nav-heading">Operação</span>
+        {dashboard}
       </div>
-    </div>
+      <div className="nav-group">
+        <span className="nav-heading">Configurações</span>
+        {links}
+      </div>
+    </nav>
   );
 }

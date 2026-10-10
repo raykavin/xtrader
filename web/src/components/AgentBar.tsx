@@ -1,7 +1,5 @@
 import type { AgentStatus, ControlsResponse } from "../api/types";
 import { agentLabel } from "../lib/agents";
-import { formatPrice, formatProfit, formatQuantity, signClass } from "../lib/format";
-import type { PositionPnL } from "../lib/stats";
 import { timeframeLabel } from "../lib/timeframes";
 import { BotControl } from "./BotControl";
 import { Select } from "./Select";
@@ -17,18 +15,19 @@ interface Props {
   llm?: string;
   /** The timeframe the strategy trades on, once known. */
   timeframe?: string;
-  /** The open position of the pair and its profit, null when flat, undefined while unknown. */
-  pnl?: PositionPnL | null;
   /** The controls of the bot of the agent, null while unknown. */
   controls: ControlsResponse | null;
   onControlsChange: (controls: ControlsResponse) => void;
 }
 
+/** The pairs shown as segments, side by side; more than these go in a list. */
+const PAIR_SEGMENTS = 6;
+
 /**
- * The head of the panel: the agent and the pair shown, then the state of the
- * agent at a glance: its bot, started and stopped there, the position held
- * and its profit, whether the ticket sends orders, and what the strategy
- * trades on. A row on a wide screen; wrapped on a narrow one.
+ * The context of the panel, a bar atop it: the agent and the pair shown, then
+ * the state of the agent at a glance: its bot, started and stopped there,
+ * whether the ticket sends orders, and what the strategy trades on. A row on
+ * a wide screen; wrapped on a narrow one.
  */
 export function AgentBar({
   agents,
@@ -39,16 +38,15 @@ export function AgentBar({
   onPairChange,
   llm,
   timeframe,
-  pnl,
   controls,
   onControlsChange,
 }: Props) {
   const online = agents.filter((a) => a.online).length;
   const current = agents.find((a) => a.name === agent);
   return (
-    <section className="status-head" aria-label="Agente e estado">
-      <div className="context-selects">
-        <div className="field">
+    <section className="context-bar" aria-label="Agente e estado">
+      <div className="context-pick">
+        <div className="field context-agent">
           <span className="field-label" aria-hidden="true">
             Agente
           </span>
@@ -66,17 +64,39 @@ export function AgentBar({
             }))}
           />
         </div>
-        <div className="field">
+        <div className="field context-pair">
           <span className="field-label" aria-hidden="true">
             Par
           </span>
-          <Select
-            caption="Par"
-            value={pair}
-            onChange={onPairChange}
-            placeholder="aguardando dados…"
-            options={pairs.map((p) => ({ value: p, label: p }))}
-          />
+          {pairs.length > 1 && pairs.length <= PAIR_SEGMENTS ? (
+            <fieldset className="seg seg-fill">
+              <legend>Par</legend>
+              {pairs.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="seg-item"
+                  aria-pressed={p === pair}
+                  onClick={() => p !== pair && onPairChange(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </fieldset>
+          ) : pairs.length === 1 ? (
+            <span className="context-static" title="O único par deste agente">
+              <span className="sr-only">Par: </span>
+              {pairs[0]}
+            </span>
+          ) : (
+            <Select
+              caption="Par"
+              value={pair}
+              onChange={onPairChange}
+              placeholder="aguardando dados…"
+              options={pairs.map((p) => ({ value: p, label: p }))}
+            />
+          )}
         </div>
       </div>
 
@@ -84,35 +104,15 @@ export function AgentBar({
         {current && !current.online && (
           <div className="status-item">
             <dt className="status-label">Agente</dt>
-            <dd className="status-value warn" title="A API do agente não responde">
-              Offline
+            <dd className="status-value">
+              <span className="status-chip warn" title="A API do agente não responde">
+                <i aria-hidden="true" />
+                Offline
+              </span>
             </dd>
           </div>
         )}
         <BotControl agent={agent} controls={controls} onControlsChange={onControlsChange} />
-        <div className="status-item">
-          <dt className="status-label">Posição</dt>
-          <dd className="status-value">
-            {pnl === undefined ? (
-              "…"
-            ) : pnl === null ? (
-              <span className="muted">Sem posição</span>
-            ) : (
-              <>
-                <span className={`side-chip ${pnl.side === "BUY" ? "buy" : "sell"}`}>
-                  {pnl.side === "BUY" ? "Comprado" : "Vendido"}
-                </span>
-                <span className="position-size">
-                  {formatQuantity(pnl.quantity)} a {formatPrice(pnl.entry)}
-                </span>
-                <strong className={`position-pnl ${signClass(pnl.profit)}`}>
-                  {formatProfit(pnl.profit)}
-                  <small>{pnl.currency}</small>
-                </strong>
-              </>
-            )}
-          </dd>
-        </div>
         <div className="status-item">
           <dt className="status-label">Boleta</dt>
           <dd
@@ -124,12 +124,12 @@ export function AgentBar({
             }
           >
             {controls === null ? (
-              "…"
+              <span className="status-chip">…</span>
             ) : (
-              <>
-                <i className={controls.enabled ? "dot on" : "dot idle"} aria-hidden="true" />
+              <span className={controls.enabled ? "status-chip on" : "status-chip"}>
+                <i aria-hidden="true" />
                 {controls.enabled ? "Liberada" : "Bloqueada"}
-              </>
+              </span>
             )}
           </dd>
         </div>
@@ -140,13 +140,8 @@ export function AgentBar({
               className="status-value"
               title="O timeframe de execução muda nas configurações do agente, com reinício"
             >
-              {timeframe && `Executa em ${timeframeLabel(timeframe)}`}
-              {llm && (
-                <span className="status-model">
-                  {timeframe ? "com " : ""}
-                  {llm}
-                </span>
-              )}
+              {timeframe && <span className="tag">Executa em {timeframeLabel(timeframe)}</span>}
+              {llm && <span className="tag tag-model">{llm}</span>}
             </dd>
           </div>
         )}
