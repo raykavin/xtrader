@@ -15,6 +15,7 @@ import {
   type TicketLevels,
 } from "../lib/ticket";
 import { Icon } from "./Icon";
+import { SectionHead } from "./SectionHead";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -305,10 +306,7 @@ export function ControlPanel({
 
   return (
     <section className={`card ticket ${side} ${enabled ? "" : "locked"}`} aria-label="Boleta">
-      <header className="ticket-head">
-        <h2 className="ticket-title">Boleta</h2>
-        <span className="ticket-pair">{pair}</span>
-      </header>
+      <SectionHead eyebrow="Operar" title="Boleta" tag={pair} />
 
       <div className="ticket-quote">
         <span className="field-label">Último preço</span>
@@ -328,10 +326,10 @@ export function ControlPanel({
         </p>
       )}
 
-      <fieldset className="ticket-sides" aria-label="Lado da ordem">
+      <fieldset className="seg ticket-sides" aria-label="Lado da ordem">
         <button
           type="button"
-          className={`ticket-side buy ${side === "buy" ? "active" : ""}`}
+          className="seg-item ticket-side buy"
           aria-pressed={side === "buy"}
           disabled={locked}
           onClick={() => changeSide("buy")}
@@ -340,7 +338,7 @@ export function ControlPanel({
         </button>
         <button
           type="button"
-          className={`ticket-side sell ${side === "sell" ? "active" : ""}`}
+          className="seg-item ticket-side sell"
           aria-pressed={side === "sell"}
           disabled={locked}
           onClick={() => changeSide("sell")}
@@ -349,12 +347,12 @@ export function ControlPanel({
         </button>
       </fieldset>
 
-      <fieldset className="segmented" aria-label="Tipo da ordem">
+      <fieldset className="seg seg-fill ticket-types" aria-label="Tipo da ordem">
         {(["market", "limit"] as const).map((kind) => (
           <button
             key={kind}
             type="button"
-            className={type === kind ? "active" : ""}
+            className="seg-item"
             aria-pressed={type === kind}
             disabled={locked}
             onClick={() => changeType(kind)}

@@ -87,7 +87,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
               <span className="confirm-question">Parar o bot?</span>
               <button
                 type="button"
-                className="btn btn-sm btn-danger"
+                className="btn btn-xs btn-danger"
                 disabled={busy}
                 onClick={handleStop}
               >
@@ -95,7 +95,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
               </button>
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-xs"
                 disabled={busy}
                 onClick={() => setConfirming(false)}
               >
@@ -105,7 +105,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
           ) : (
             <button
               type="button"
-              className="btn btn-sm btn-danger-outline"
+              className="btn btn-xs btn-danger-outline"
               disabled={busy}
               onClick={() => setConfirming(true)}
             >
@@ -116,7 +116,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
         ) : (
           <button
             type="button"
-            className="btn btn-sm btn-success"
+            className="btn btn-xs btn-success"
             disabled={busy}
             onClick={handleStart}
           >

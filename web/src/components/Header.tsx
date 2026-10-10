@@ -1,29 +1,30 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { logout } from "../api/client";
+import { dashboardHref, sessionStore } from "../lib/nav";
 import type { Theme } from "../lib/theme";
 import { Icon } from "./Icon";
 import { LogoMark } from "./Logo";
 
 interface Props {
-  /** The title of the page, eg: Painel, or the section of the settings. */
-  title: string;
   theme: Theme;
   onThemeToggle: () => void;
   /** Whether the updates of the agent are live: none without an agent. */
   connected?: boolean;
   /** The user of the session, once known. */
   user?: string;
-  /** Opens the navigation, on a screen too narrow for the sidebar. */
+  /** Opens the navigation, on a screen too narrow for it in the bar. */
   onMenu: () => void;
   /** Whether the navigation is open, of the menu button. */
   menuOpen: boolean;
+  /** The navigation of the pages, in the middle of the bar. */
+  nav: ReactNode;
 }
 
 /**
- * The bar atop the pages: the menu on a narrow screen, the title of the
- * page, whether the updates are live, the theme, the user and the logout.
+ * The bar atop the pages: the brand, the navigation (behind the menu on a
+ * phone), whether the updates are live, the theme, the user and the logout.
  */
-export function Header({ title, theme, onThemeToggle, connected, user, onMenu, menuOpen }: Props) {
+export function Header({ theme, onThemeToggle, connected, user, onMenu, menuOpen, nav }: Props) {
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,68 +41,77 @@ export function Header({ title, theme, onThemeToggle, connected, user, onMenu, m
   };
 
   return (
-    <header className="topbar">
-      <button
-        type="button"
-        className="btn btn-ghost btn-icon topbar-menu"
-        onClick={onMenu}
-        aria-label="Abrir menu"
-        aria-expanded={menuOpen}
-        aria-controls="nav-drawer"
-      >
-        <Icon name="menu" size={18} />
-      </button>
-      <span className="topbar-mark" aria-hidden="true">
-        <LogoMark size={20} />
-      </span>
-      <h1 className="topbar-title">{title}</h1>
+    <header className="appbar">
+      <div className="appbar-inner">
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon appbar-menu"
+          onClick={onMenu}
+          aria-label="Abrir menu"
+          aria-expanded={menuOpen}
+          aria-controls="nav-drawer"
+        >
+          <Icon name="menu" size={18} />
+        </button>
+        <a className="brand" href={dashboardHref(sessionStore())} title="Ir para o painel">
+          <span className="brand-mark" aria-hidden="true">
+            <LogoMark size={22} />
+          </span>
+          <span className="brand-text">
+            <span className="brand-name">XTrader</span>
+            <span className="brand-sub">Trading automatizado</span>
+          </span>
+        </a>
 
-      <div className="topbar-actions">
-        {error && (
-          <span className="topbar-error" role="alert" title={error}>
-            Não foi possível sair
-          </span>
-        )}
-        {connected !== undefined && (
-          <span
-            className={connected ? "live on" : "live off"}
-            role="status"
-            title={
-              connected ? "Atualizações em tempo real conectadas" : "Sem conexão: reconectando…"
-            }
-          >
-            <i aria-hidden="true" />
-            <span className="live-label">{connected ? "Ao vivo" : "Reconectando…"}</span>
-          </span>
-        )}
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon"
-          onClick={onThemeToggle}
-          title={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
-          aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
-        >
-          <Icon name={theme === "dark" ? "sun" : "moon"} />
-        </button>
-        <span className="topbar-divider" aria-hidden="true" />
-        {user && (
-          <span className="user" title={`Sessão de ${user}`}>
-            <span className="user-avatar" aria-hidden="true">
-              {user.slice(0, 1).toUpperCase()}
+        <div className="appbar-nav">{nav}</div>
+
+        <div className="appbar-actions">
+          {error && (
+            <span className="appbar-error" role="alert" title={error}>
+              Não foi possível sair
             </span>
-            <span className="user-name">{user}</span>
-          </span>
-        )}
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon"
-          onClick={leave}
-          disabled={leaving}
-          title={leaving ? "Saindo…" : "Sair"}
-          aria-label="Sair"
-        >
-          <Icon name="logout" />
-        </button>
+          )}
+          {connected !== undefined && (
+            <span
+              className={connected ? "live on" : "live off"}
+              role="status"
+              title={
+                connected ? "Atualizações em tempo real conectadas" : "Sem conexão: reconectando…"
+              }
+            >
+              <i aria-hidden="true" />
+              <span className="live-label">{connected ? "Ao vivo" : "Reconectando…"}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            onClick={onThemeToggle}
+            title={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+            aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+          >
+            <Icon name={theme === "dark" ? "sun" : "moon"} />
+          </button>
+          <span className="appbar-divider" aria-hidden="true" />
+          {user && (
+            <span className="user" title={`Sessão de ${user}`}>
+              <span className="user-avatar" aria-hidden="true">
+                {user.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="user-name">{user}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            onClick={leave}
+            disabled={leaving}
+            title={leaving ? "Saindo…" : "Sair"}
+            aria-label="Sair"
+          >
+            <Icon name="logout" />
+          </button>
+        </div>
       </div>
     </header>
   );

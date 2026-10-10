@@ -243,7 +243,7 @@ function Panel({
 function SectionLoading({ intro, cards = false }: { intro: SectionIntro; cards?: boolean }) {
   return (
     <>
-      <PageHeader title={intro.title} description={intro.description} />
+      <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
       <Loading label={`Carregando ${intro.title.toLowerCase()}…`}>
         {cards ? (
           <div className="agent-grid">

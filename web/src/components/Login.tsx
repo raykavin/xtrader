@@ -3,6 +3,7 @@ import { APIError, fetchSession, login } from "../api/client";
 import { LOGIN_CLOSED, loginError, nextPage } from "../lib/auth";
 import { loadTheme } from "../lib/theme";
 import { Footer } from "./Footer";
+import { Icon } from "./Icon";
 import { LogoMark } from "./Logo";
 import { Alert } from "./States";
 
@@ -199,7 +200,7 @@ export function Login() {
 
       <section className="login-card" aria-labelledby="login-title">
         <span className="login-mark" role="img" aria-label="XTrader">
-          <LogoMark size={60} />
+          <LogoMark size={40} />
         </span>
         <h1 id="login-title" className="login-title">
           Trader Cockpit
@@ -212,31 +213,37 @@ export function Login() {
           <label className="field-label" htmlFor="login-username">
             Usuário
           </label>
-          <input
-            id="login-username"
-            className="input input-lg"
-            name="username"
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            ref={user}
-            value={username}
-            disabled={disabled}
-            onChange={(e) => setUsername(e.target.value)}
-          />
+          <span className="input-icon">
+            <Icon name="user" />
+            <input
+              id="login-username"
+              className="input input-lg"
+              name="username"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              ref={user}
+              value={username}
+              disabled={disabled}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </span>
           <label className="field-label" htmlFor="login-password">
             Senha
           </label>
-          <input
-            id="login-password"
-            className="input input-lg"
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            disabled={disabled}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+          <span className="input-icon">
+            <Icon name="key" />
+            <input
+              id="login-password"
+              className="input input-lg"
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              disabled={disabled}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </span>
           {error && (
             <Alert tone="error" className="login-error">
               {error}

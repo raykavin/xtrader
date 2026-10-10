@@ -75,7 +75,7 @@ export function UsersSettings({ intro, users, current, onChange }: Props) {
 
   return (
     <div className="settings-section">
-      <PageHeader title={intro.title} description={intro.description} />
+      <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
       {error && (
         <Alert tone="error" title="A alteração não foi feita">
           {error}
@@ -83,10 +83,13 @@ export function UsersSettings({ intro, users, current, onChange }: Props) {
       )}
       <section className="card card-flush" aria-labelledby="users-title">
         <header className="card-header">
-          <h3 id="users-title" className="card-title">
-            Usuários do painel
-            <span className="card-count">{users.length}</span>
-          </h3>
+          <div className="card-heading">
+            <span className="eyebrow">Acesso</span>
+            <h3 id="users-title" className="card-title">
+              Usuários do painel
+              <span className="card-count">{users.length}</span>
+            </h3>
+          </div>
         </header>
         <div className="table-wrap">
           <table className="table table-responsive">

@@ -27,8 +27,8 @@ export function tabIds(idPrefix: string, id: string) {
 }
 
 /**
- * A bar of tabs, the arrows, Home and End moving between them: the panels
- * are the parent's, see tabIds.
+ * A bar of tabs, a segmented control, the arrows, Home and End moving between
+ * them: the panels are the parent's, see tabIds.
  */
 export function Tabs<T extends string>({
   label,
@@ -67,7 +67,7 @@ export function Tabs<T extends string>({
 
   return (
     <div className="tabs-bar">
-      <div className="tabs" role="tablist" aria-label={label}>
+      <div className="seg tabs" role="tablist" aria-label={label}>
         {items.map((item) => {
           const ids = tabIds(idPrefix, item.id);
           const selected = item.id === value;
@@ -77,7 +77,7 @@ export function Tabs<T extends string>({
               type="button"
               role="tab"
               id={ids.tab}
-              className="tab"
+              className="seg-item tab"
               aria-selected={selected}
               aria-controls={ids.panel}
               tabIndex={selected ? 0 : -1}

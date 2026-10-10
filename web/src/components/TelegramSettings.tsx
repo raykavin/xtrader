@@ -54,7 +54,7 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
 
   return (
     <div className="settings-section">
-      <PageHeader title={intro.title} description={intro.description} />
+      <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
       {error && (
         <Alert tone="error" title="A alteração não foi feita">
           {error}
@@ -63,9 +63,12 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
       <div className="settings-columns">
         <section className="card card-flush" aria-labelledby="telegram-bot-title">
           <header className="card-header">
-            <h3 id="telegram-bot-title" className="card-title">
-              Bot
-            </h3>
+            <div className="card-heading">
+              <span className="eyebrow">Telegram</span>
+              <h3 id="telegram-bot-title" className="card-title">
+                Bot
+              </h3>
+            </div>
             <span className={`status-chip ${telegram.running ? "on" : "off"}`}>
               <StatusIcon mark={telegram.running ? "play" : "stop"} />
               {telegram.running ? "Executando" : "Parado"}
@@ -97,10 +100,13 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
 
         <section className="card card-flush" aria-labelledby="telegram-users-title">
           <header className="card-header">
-            <h3 id="telegram-users-title" className="card-title">
-              Usuários autorizados
-              <span className="card-count">{telegram.users.length}</span>
-            </h3>
+            <div className="card-heading">
+              <span className="eyebrow">Acesso</span>
+              <h3 id="telegram-users-title" className="card-title">
+                Usuários autorizados
+                <span className="card-count">{telegram.users.length}</span>
+              </h3>
+            </div>
           </header>
           {telegram.users.length === 0 ? (
             <EmptyState compact icon="users" title="Nenhum usuário autorizado">

@@ -52,6 +52,7 @@ import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
 import { candleUpdates, timeframeLabel } from "../lib/timeframes";
 import { Icon } from "./Icon";
+import { SectionHead } from "./SectionHead";
 
 interface Props {
   snapshot: Snapshot;
@@ -813,39 +814,43 @@ export function PriceChart({
       className={fullscreen ? "card chart-card chart-fullscreen" : "card chart-card"}
       aria-label={`Gráfico de ${snapshot.pair}`}
     >
-      <header className="chart-head">
-        <div className="chart-title">
-          <h2>{snapshot.pair}</h2>
-          {shownLabel && <span className="chart-tf">{shownLabel}</span>}
-        </div>
-        {timeframes.length > 0 && (
-          <fieldset className="timeframes">
-            <legend>Timeframe do gráfico</legend>
-            {timeframes.map((view) => {
-              const label = timeframeLabel(view.timeframe);
-              const title = !view.available
-                ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
-                : view.execution
-                  ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
-                  : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
-              return (
-                <button
-                  key={view.timeframe}
-                  type="button"
-                  className={view.execution ? "timeframe execution" : "timeframe"}
-                  aria-pressed={view.timeframe === timeframe}
-                  aria-label={view.execution ? `${label} (execução)` : label}
-                  disabled={!view.available || !onTimeframeChange}
-                  title={title}
-                  onClick={() => onTimeframeChange?.(view.timeframe)}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </fieldset>
-        )}
-      </header>
+      <SectionHead
+        className="chart-head"
+        eyebrow="Gráfico de preço"
+        title={snapshot.pair}
+        tag={shownLabel || undefined}
+        aside={
+          timeframes.length > 0 && (
+            <fieldset className="seg timeframes">
+              <legend>Timeframe do gráfico</legend>
+              {timeframes.map((view) => {
+                const label = timeframeLabel(view.timeframe);
+                const title = !view.available
+                  ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
+                  : view.execution
+                    ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
+                    : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
+                return (
+                  <button
+                    key={view.timeframe}
+                    type="button"
+                    className={
+                      view.execution ? "seg-item timeframe execution" : "seg-item timeframe"
+                    }
+                    aria-pressed={view.timeframe === timeframe}
+                    aria-label={view.execution ? `${label} (execução)` : label}
+                    disabled={!view.available || !onTimeframeChange}
+                    title={title}
+                    onClick={() => onTimeframeChange?.(view.timeframe)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </fieldset>
+          )
+        }
+      />
 
       {(legend.length > 0 || analysis || otherView) && (
         <div className="chart-sub">

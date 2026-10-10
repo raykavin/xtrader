@@ -12,7 +12,7 @@ interface Props {
   since?: number;
 }
 
-interface Readout {
+interface Kpi {
   label: string;
   value: string;
   unit?: string;
@@ -21,42 +21,29 @@ interface Readout {
 }
 
 /**
- * The results of the strategy as a row of readouts, a label over each value:
- * the first one answers whether it paid off, the trend of the equity beside
- * it; the open position is in the head of the panel.
+ * The results of the strategy as a grid of cards, a label over each value:
+ * with a paper wallet, the return first, the trend of the equity in its
+ * card, and the drawdown; then the trades. The buy & hold of the asset is in
+ * the card of the quote.
  */
 export function StatsBar({ stats, snapshot, theme, since }: Props) {
   const hasEquity = snapshot.equity_values.length > 0;
   const palette = palettes[theme];
 
-  // Without a paper wallet there is no equity, so buy & hold comes first.
-  const first: Readout = hasEquity
-    ? {
-        label: "Retorno da estratégia",
-        value: formatPercent(stats.returnPct),
-        tone: signClass(stats.returnPct),
-        hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}`,
-      }
-    : {
-        label: "Buy & hold",
-        value: formatPercent(stats.buyAndHold),
-        tone: signClass(stats.buyAndHold),
-        hint: `${snapshot.asset} em ${snapshot.candles.length} candles`,
-      };
-
-  const readouts: Readout[] = [
+  const kpis: Kpi[] = [
     ...(hasEquity
       ? [
           {
-            label: "Buy & hold",
-            value: formatPercent(stats.buyAndHold),
-            tone: signClass(stats.buyAndHold),
-            hint: `${snapshot.asset} no período`,
+            label: "Retorno da estratégia",
+            value: formatPercent(stats.returnPct),
+            tone: signClass(stats.returnPct),
+            hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}`,
           },
           {
             label: "Drawdown máximo",
             value: formatPercent(-stats.maxDrawdown),
             tone: stats.maxDrawdown > 0 ? "neg" : "",
+            hint: "Maior queda do patrimônio",
           },
         ]
       : []),
@@ -71,6 +58,7 @@ export function StatsBar({ stats, snapshot, theme, since }: Props) {
       label: "Taxa de acerto",
       value: stats.trades ? formatPercent(stats.winRate).replace("+", "") : "—",
       tone: stats.trades ? (stats.winRate >= 0.5 ? "pos" : "neg") : "",
+      hint: stats.trades ? "Operações com lucro" : "Sem operações fechadas",
     },
     {
       label: "Lucro líquido",
@@ -87,36 +75,31 @@ export function StatsBar({ stats, snapshot, theme, since }: Props) {
           : "∞"
         : "—",
       tone: stats.trades ? (stats.profitFactor >= 1 ? "pos" : "neg") : "",
+      hint: stats.trades ? "Ganhos ÷ perdas" : undefined,
     },
   ];
 
   return (
-    <section className="readouts" aria-label="Desempenho">
-      <div className="readout readout-first">
-        <span className="readout-label">{first.label}</span>
-        <span className="readout-line">
-          <span className={`readout-value ${first.tone ?? ""}`}>{first.value}</span>
-          {hasEquity && (
-            <Sparkline
-              className="readout-spark"
-              points={snapshot.equity_values}
-              color={stats.returnPct < 0 ? palette.down : palette.up}
-              width={96}
-              height={28}
-              area={false}
-            />
-          )}
-        </span>
-        {first.hint && <span className="readout-hint">{first.hint}</span>}
-      </div>
-      {readouts.map((readout) => (
-        <div key={readout.label} className="readout">
-          <span className="readout-label">{readout.label}</span>
-          <span className={`readout-value ${readout.tone ?? ""}`}>
-            {readout.value}
-            {readout.unit && <small>{readout.unit}</small>}
+    <section className={`kpis kpis-${kpis.length}`} aria-label="Desempenho da estratégia">
+      {kpis.map((kpi, index) => (
+        <div key={kpi.label} className="kpi">
+          <span className="kpi-label">{kpi.label}</span>
+          <span className="kpi-line">
+            <span className={`kpi-value ${kpi.tone ?? ""}`}>
+              {kpi.value}
+              {kpi.unit && <small>{kpi.unit}</small>}
+            </span>
+            {hasEquity && index === 0 && (
+              <Sparkline
+                className="kpi-spark"
+                points={snapshot.equity_values}
+                color={stats.returnPct < 0 ? palette.down : palette.up}
+                width={96}
+                height={28}
+              />
+            )}
           </span>
-          {readout.hint && <span className="readout-hint">{readout.hint}</span>}
+          {kpi.hint && <span className="kpi-hint">{kpi.hint}</span>}
         </div>
       ))}
     </section>
