@@ -162,6 +162,6 @@ func TestSeeds_ConcurrentPopulatesSerialized(t *testing.T) {
 		_ = s.Close()
 		require.EqualValues(t, 44, prompts, "each prompt seeded once")
 		require.Equal(t, prompts, versions)
-		require.EqualValues(t, 5, agents, "each agent seeded once")
+		require.EqualValues(t, 6, agents, "each agent seeded once")
 	}
 }

@@ -270,7 +270,8 @@ type Intent struct {
 }
 
 // Analysis is what the chart draws of the last analysis of the language model
-// of the strategy on a pair, see AnalysisSource: its Pair, the decision it
+// of the strategy on a pair, or of the levels of a strategy of rules (Source,
+// eg: Fimathe), see AnalysisSource: its Pair, the decision it
 // comes from (DecisionID, its Timeframe, the one of the strategy whatever the
 // timeframe the chart shows, the open time of the candle of its context,
 // when it was decided, its Action and its Outcome), its Drawings, and its
@@ -279,7 +280,10 @@ type Intent struct {
 // replaces the one before, whatever its outcome; one that didn't (a request
 // failed, or skipped) leaves it.
 type Analysis struct {
-	Pair       string    `json:"pair"`
+	Pair string `json:"pair"`
+	// Source names what drew it, eg: Fimathe for the levels of a strategy of
+	// rules; empty for the language model.
+	Source     string    `json:"source,omitempty"`
 	DecisionID string    `json:"decision_id"`
 	Timeframe  string    `json:"timeframe"`
 	Candle     int64     `json:"candle"`
@@ -291,7 +295,8 @@ type Analysis struct {
 }
 
 // AnalysisSource is a strategy drawing on the chart the last analysis of its
-// language model on each pair, see Analysis: ChartAnalysis returns it, false
+// language model on each pair, or the levels of its rules, see Analysis:
+// ChartAnalysis returns it, false
 // when there is none yet. Called from the handlers of the chart holding its
 // lock, it must be safe for concurrent use, and must not block.
 type AnalysisSource interface {

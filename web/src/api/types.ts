@@ -328,7 +328,8 @@ export interface Intent {
 }
 /**
  * Analysis is what the chart draws of the last analysis of the language model
- * of the strategy on a pair, see AnalysisSource: its Pair, the decision it
+ * of the strategy on a pair, or of the levels of a strategy of rules (Source,
+ * eg: Fimathe), see AnalysisSource: its Pair, the decision it
  * comes from (DecisionID, its Timeframe, the one of the strategy whatever the
  * timeframe the chart shows, the open time of the candle of its context,
  * when it was decided, its Action and its Outcome), its Drawings, and its
@@ -339,6 +340,11 @@ export interface Intent {
  */
 export interface Analysis {
   pair: string;
+  /**
+   * Source names what drew it, eg: Fimathe for the levels of a strategy of
+   * rules; empty for the language model.
+   */
+  source?: string;
   decision_id: string;
   timeframe: string;
   candle: number /* int64 */;
@@ -350,7 +356,8 @@ export interface Analysis {
 }
 /**
  * AnalysisSource is a strategy drawing on the chart the last analysis of its
- * language model on each pair, see Analysis: ChartAnalysis returns it, false
+ * language model on each pair, or the levels of its rules, see Analysis:
+ * ChartAnalysis returns it, false
  * when there is none yet. Called from the handlers of the chart holding its
  * lock, it must be safe for concurrent use, and must not block.
  */
