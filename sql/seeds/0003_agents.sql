@@ -2,7 +2,7 @@
 -- 0002_prompts.sql): the same key in every seed file.
 SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 
--- The agents of a new database, both off: each inserted once, when no agent
+-- The agents of a new database, all of them off: each inserted once, when no agent
 -- ever had its name (one deleted in the dashboard, or renamed since, see
 -- agent_former_names, included), so the seeds, run again on every migration,
 -- never overwrite an edit nor bring back an agent deleted or renamed. Their secrets never go here: set the API key of the LLM, the token
@@ -88,3 +88,42 @@ SELECT agent.id, 'openai', 'gpt-5', 'low',
        '{"llm-setup": "free", "llm-candles": "60", "llm-higher-timeframes": "4h",
          "llm-correlated": "BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm", "calendar-importance": "high"}'::jsonb
 FROM agent;
+
+-- fibonacci-btc and fibonacci-xau: the strategy fibonacci (agents/trendagent),
+-- the pullbacks of the impulses to their Fibonacci retracements, without LLM,
+-- on BTCUSDm and on XAUUSDm, an agent each, on 15m: the impulses between swings
+-- of 5 candles, 3 ATR long at least, entered on the close of a candle rejecting
+-- the zone from 50% to 61.8%, the stop loss 0.25 ATR beyond 78.6% and the take
+-- profit at the extreme of the impulse, operated from Telegram. Their comments
+-- of their own give them magic numbers of their own on the account.
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'fibonacci-btc', 'trend', FALSE, 'live', 'localhost:5571', TRUE, TRUE, FALSE, TRUE,
+           '{"strategy": "fibonacci", "pair": "BTCUSDm", "timeframe": "15m", "lot": "0.01", "leverage": "20",
+             "fib-swing": "pivot", "fib-pivot": "5", "fib-min-impulse-atr": "3", "fib-entry-low": "0.5",
+             "fib-entry-high": "0.618", "fib-trigger": "close", "fib-stop-level": "0.786",
+             "fib-stop-buffer-atr": "0.25", "fib-target": "extreme"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'fibonacci-btc')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'fibonacci-btc')
+    RETURNING id
+)
+INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+SELECT id, 'mt5', 'http://mt5:18812', 'nb:fibonacci-btc' FROM agent;
+
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'fibonacci-xau', 'trend', FALSE, 'live', 'localhost:5572', TRUE, TRUE, FALSE, TRUE,
+           '{"strategy": "fibonacci", "pair": "XAUUSDm", "timeframe": "15m", "lot": "0.01", "leverage": "20",
+             "fib-swing": "pivot", "fib-pivot": "5", "fib-min-impulse-atr": "3", "fib-entry-low": "0.5",
+             "fib-entry-high": "0.618", "fib-trigger": "close", "fib-stop-level": "0.786",
+             "fib-stop-buffer-atr": "0.25", "fib-target": "extreme"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'fibonacci-xau')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'fibonacci-xau')
+    RETURNING id
+)
+INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+SELECT id, 'mt5', 'http://mt5:18812', 'nb:fibonacci-xau' FROM agent;
