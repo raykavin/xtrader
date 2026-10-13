@@ -40,8 +40,9 @@ const (
 )
 
 // Config are the settings of an agent, the answer of GET /config: its Params
-// are its other flags by name, only the ones set. The secrets are the ones of
-// the agent, never of another.
+// are its other flags by name, only the ones set. Reanalysis allows the
+// reanalysis of an LLM agent, apart from its channels. The secrets are the
+// ones of the agent, never of another.
 type Config struct {
 	ID              int64             `json:"id"`
 	Name            string            `json:"name"`
@@ -50,6 +51,7 @@ type Config struct {
 	APIAddress      string            `json:"api_address"`
 	TradePanel      bool              `json:"trade_panel"`
 	TelegramControl bool              `json:"telegram_control"`
+	Reanalysis      bool              `json:"reanalysis"`
 	Params          map[string]string `json:"params"`
 	Account         *Account          `json:"account,omitempty"`
 	LLM             *LLM              `json:"llm,omitempty"`
@@ -96,13 +98,15 @@ type Prompt struct {
 }
 
 // Runtime is what an agent applies while it runs, the answer of GET
-// /runtime: the channels of its control panel, and the prompt of an LLM agent,
-// nil for its default one. Version changes with any of them: GET
-// /runtime?wait=25s with If-None-Match: <version> waits for a change.
+// /runtime: the channels of its control panel, and of an LLM agent the switch
+// of its reanalysis and its prompt, nil for its default one. Version changes
+// with any of them: GET /runtime?wait=25s with If-None-Match: <version> waits
+// for a change.
 type Runtime struct {
 	Version         int64      `json:"version"`
 	TradePanel      bool       `json:"trade_panel"`
 	TelegramControl bool       `json:"telegram_control"`
+	Reanalysis      bool       `json:"reanalysis"`
 	Prompt          *PromptRef `json:"prompt,omitempty"`
 }
 

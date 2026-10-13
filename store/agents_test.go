@@ -39,6 +39,23 @@ func llmAgent(t *testing.T, s *Store, name string) Agent {
 	return agent
 }
 
+// llmAgentOfBefore creates an LLM agent named name with its language model as
+// the store wrote it on a schema of before, for the tests of the migrations:
+// the store of now reads and writes the tables of the last one, eg:
+// agent_reanalysis, which a schema of before doesn't have yet.
+func llmAgentOfBefore(t *testing.T, s *Store, name string) Agent {
+	t.Helper()
+	var count int64
+	require.NoError(t, s.db.Table("agents").Count(&count).Error)
+	var agent Agent
+	require.NoError(t, s.db.Raw("INSERT INTO agents (name, kind, enabled, mode, api_address, trade_panel) "+
+		"VALUES (?, 'llm', TRUE, 'live', ?, TRUE) RETURNING id, name, kind", name,
+		fmt.Sprintf("localhost:%d", 5580+count)).Scan(&agent).Error)
+	require.NoError(t, s.db.Exec("INSERT INTO agent_llm_settings (agent_id, provider, model) VALUES (?, 'openai', "+
+		"'gpt-5')", agent.ID).Error)
+	return agent
+}
+
 // names returns the names of agents.
 func names(agents []Agent) []string {
 	list := make([]string, 0, len(agents))

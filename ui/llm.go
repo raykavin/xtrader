@@ -243,14 +243,20 @@ func (c *Chart) handleDecisionAttachment(w http.ResponseWriter, r *http.Request)
 }
 
 // handleReanalyze asks the language model of the strategy again, now rather
-// than at the next close, from a channel where the control panel is enabled.
+// than at the next close, from a channel the bot is started and stopped from
+// (the web dashboard whatever its trade panel, Telegram with its controls on),
+// its reanalysis allowed (see SetReanalysis): 403 forbidden.
 func (c *Chart) handleReanalyze(w http.ResponseWriter, r *http.Request) {
-	if _, ok := c.requireController(w, r); !ok {
+	if _, ok := c.requireBotController(w, r); !ok {
 		return
 	}
 	reanalyzer := c.reanalyzer()
 	if reanalyzer == nil {
 		writeJSONError(w, http.StatusNotFound, "the strategy doesn't use a language model")
+		return
+	}
+	if !c.reanalysisAllowed() {
+		writeJSONError(w, http.StatusForbidden, "the reanalysis is disabled in the settings of the agent")
 		return
 	}
 

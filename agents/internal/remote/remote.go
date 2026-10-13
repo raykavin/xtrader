@@ -119,6 +119,9 @@ func (a *Agent) Args() []string {
 	if cfg.TelegramControl {
 		add("telegram-control", "true")
 	}
+	if cfg.Reanalysis && cfg.Kind == "llm" { // a flag of the LLM agent only
+		add("reanalysis", "true")
+	}
 	if acc := cfg.Account; acc != nil {
 		if acc.BridgeURL != "" {
 			add("mt5-bridge", acc.BridgeURL)

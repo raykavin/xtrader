@@ -14,8 +14,6 @@ import { SectionHead } from "./SectionHead";
 import { Skeleton } from "./States";
 
 interface Props {
-  /** Whether the agent reads the sentiment: an LLM one, its decisions kept. */
-  available: boolean;
   /** The newest reading of the pair, null without any. */
   reading: SentimentReading | null;
   /** Whether the decisions of the pair were read: until then, a block stands for the reading. */
@@ -30,20 +28,16 @@ const BAND_GAP = 1.6;
  * The sentiment of the market of the pair as the language model reads it,
  * the one of its newest decision with one: on a gauge from very bearish to
  * very bullish, an arc of its bands with the current one lit, its value and
- * its band inside it, and the reading before it to compare. Off for an agent
- * without a language model; it informs only: it doesn't trade.
+ * its band inside it, and the reading before it to compare. Of an LLM agent
+ * only, its decisions kept; it informs only: it doesn't trade.
  */
-export function SentimentMeter({ available, reading, loaded, error }: Props) {
+export function SentimentMeter({ reading, loaded, error }: Props) {
   const band = reading ? sentimentBand(reading.value) : null;
   const previous = reading?.previous !== undefined ? sentimentBand(reading.previous) : null;
   const delta = reading ? sentimentDelta(reading) : null;
-  const state = !available ? "is-off" : reading ? "is-on" : "is-empty";
+  const state = reading ? "is-on" : "is-empty";
   return (
-    <section
-      className={`card meter-card ${state}`}
-      aria-labelledby="sentiment-title"
-      aria-disabled={!available || undefined}
-    >
+    <section className={`card meter-card ${state}`} aria-labelledby="sentiment-title">
       <SectionHead
         id="sentiment-title"
         eyebrow="Análise do LLM"
@@ -61,7 +55,7 @@ export function SentimentMeter({ available, reading, loaded, error }: Props) {
         }
       />
 
-      {available && !loaded && !reading ? (
+      {!loaded && !reading ? (
         <Skeleton className="meter-skeleton" />
       ) : (
         <div className="meter-body">
@@ -105,11 +99,7 @@ export function SentimentMeter({ available, reading, loaded, error }: Props) {
 
           {!reading && (
             <p className="meter-note">
-              {!available
-                ? "Disponível só em agentes LLM: esta estratégia não usa um modelo de linguagem."
-                : error
-                  ? error
-                  : "Sem leitura ainda: aparece na próxima análise do modelo."}
+              {error || "Sem leitura ainda: aparece na próxima análise do modelo."}
             </p>
           )}
 

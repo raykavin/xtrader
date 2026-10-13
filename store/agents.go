@@ -53,10 +53,10 @@ var llmParamPrefixes = []string{"llm-", "calendar-", "news-"}
 // params, which would override them on the command line of the agent (see
 // remote.Agent.Args), as cmd/migrator leaves them out.
 var columnFlags = map[string]bool{"mode": true, "exchange": true, "api": true, "trade-panel": true,
-	"telegram-control": true, "mt5-bridge": true, "mt5-token": true, "mt5-magic": true, "mt5-comment": true,
-	"mt5-live": true, "llm-provider": true, "llm-model": true, "llm-base-url": true, "llm-reasoning": true,
-	"llm-max-tokens": true, "prompt-path": true, "calendar-mcp": true, "db": true, "llm-decisions": true,
-	"llm-journal": true}
+	"telegram-control": true, "reanalysis": true, "mt5-bridge": true, "mt5-token": true, "mt5-magic": true,
+	"mt5-comment": true, "mt5-live": true, "llm-provider": true, "llm-model": true, "llm-base-url": true,
+	"llm-reasoning": true, "llm-max-tokens": true, "prompt-path": true, "calendar-mcp": true, "db": true,
+	"llm-decisions": true, "llm-journal": true}
 
 // ColumnFlag reports whether the flag name of an agent is one of its fields,
 // of its account or of its language model, or of a file the database
@@ -90,13 +90,16 @@ type AgentSecretValues struct {
 
 // AgentUpdate is a change of an agent, of the fields set: its name and its
 // kind never change, the name naming its outbox and its routes on the
-// dashboard. Params, when not nil, replace the params of the agent and of its
+// dashboard. Reanalysis switches the reanalysis of an LLM agent (see
+// AgentReanalysis): on refused for another kind, off nothing for it.
+// Params, when not nil, replace the params of the agent and of its
 // language model, merged (see Agent.AllParams). Account and LLM change its
 // account and its language model, created when it has none.
 type AgentUpdate struct {
 	Enabled         *bool
 	TradePanel      *bool
 	TelegramControl *bool
+	Reanalysis      *bool
 	Mode            *string
 	APIAddress      *string
 	Launched        *bool
@@ -147,6 +150,7 @@ type agentChange struct {
 	agent        Agent
 	columns      map[string]interface{} // of agents
 	account, llm map[string]interface{} // of agent_accounts and agent_llm_settings
+	reanalysis   *AgentReanalysis       // of agent_reanalysis, of an LLM agent
 }
 
 // apply returns the change of the agent a the update makes.
@@ -164,6 +168,15 @@ func (u AgentUpdate) apply(a Agent) agentChange {
 	flag("telegram_control", &agent.TelegramControl, u.TelegramControl)
 	flag("launched", &agent.Launched, u.Launched)
 	flag("restart", &agent.Restart, u.Restart)
+	if agent.Kind != "llm" {
+		agent.Reanalysis = nil // of an LLM agent only, a row of another kind never written so
+	}
+	if u.Reanalysis != nil {
+		agent.Reanalysis = &AgentReanalysis{AgentID: agent.ID, Allowed: *u.Reanalysis}
+		if agent.Kind == "llm" {
+			c.reanalysis = agent.Reanalysis
+		}
+	}
 	if u.Mode != nil {
 		agent.Mode = strings.TrimSpace(*u.Mode)
 		c.columns["mode"] = agent.Mode
@@ -266,6 +279,12 @@ func (a Agent) AllParams() Params {
 	return params
 }
 
+// ReanalysisAllowed reports whether the language model of the agent a may be
+// asked again between its closes, see AgentReanalysis: of an LLM agent only.
+func (a Agent) ReanalysisAllowed() bool {
+	return a.Kind == "llm" && a.Reanalysis != nil && a.Reanalysis.Allowed
+}
+
 // trades reports whether the agent a trades its account on MT5: enabled in
 // live mode, the paper mode reading the market data only (see
 // exchange.WithMT5DataOnly), whether the controller launches it or it runs
@@ -332,6 +351,10 @@ func normalized(a Agent) Agent {
 		llm.MaxTokens, llm.CalendarURL = nonZero(llm.MaxTokens), optional(llm.CalendarURL)
 		a.LLM = &llm
 	}
+	if a.Reanalysis != nil {
+		reanalysis := *a.Reanalysis
+		a.Reanalysis = &reanalysis
+	}
 	return a
 }
 
@@ -386,6 +409,9 @@ func checkAgent(a Agent) error {
 	case a.Kind == "llm" && a.Launched && a.LLM == nil:
 		return fmt.Errorf("%w: agent %s: an LLM agent needs its language model", ErrInvalid, a.Name)
 	}
+	if err := checkReanalysis(a); err != nil {
+		return err
+	}
 	if err := checkAccount(a.Name, a.Account); err != nil {
 		return err
 	}
@@ -393,6 +419,17 @@ func checkAgent(a Agent) error {
 		return err
 	}
 	return checkParams(a)
+}
+
+// checkReanalysis checks the switch of the reanalysis of the agent a, see
+// AgentReanalysis: on for an LLM agent only, the language model of another
+// kind there is none to ask.
+func checkReanalysis(a Agent) error {
+	if a.Reanalysis != nil && a.Reanalysis.Allowed && a.Kind != "llm" {
+		return fmt.Errorf("%w: agent %s: the reanalysis asks the language model of an LLM agent again, an agent "+
+			"of kind %s has none", ErrInvalid, a.Name, a.Kind)
+	}
+	return nil
 }
 
 // checkAccount checks the account of the agent name, if any: the URL of its
@@ -536,21 +573,23 @@ func oneLine(text string) bool {
 // order of the dashboard.
 func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 	var agents []Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Order("position, name").Find(&agents).Error
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Order("position, name").
+		Find(&agents).Error
 	return agents, err
 }
 
 // Agent returns the agent of id.
 func (s *Store) Agent(ctx context.Context, id int64) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").First(&agent, id).Error
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").First(&agent, id).Error
 	return agent, notFound(err, fmt.Sprintf("agent %d", id))
 }
 
 // AgentByName returns the agent of name.
 func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Where("name = ?", name).First(&agent).Error
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Where("name = ?", name).
+		First(&agent).Error
 	return agent, notFound(err, "agent "+name)
 }
 
@@ -560,7 +599,8 @@ func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 // (ErrConflict otherwise, see checkBookFree), its params given merged or apart
 // (see Agent.AllParams), its prompt one of the database, not deleted, nor
 // meanwhile (see sharePrompt). An agent without a position, 0, goes after the
-// others on the dashboard.
+// others on the dashboard. An LLM agent gets the switch of its reanalysis, off
+// without its Reanalysis (see AgentReanalysis), one of another kind none.
 func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecrets) (Agent, error) {
 	agent = normalized(agent)
 	agent.ID = 0
@@ -576,7 +616,11 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 	}
 	whole := agent
 	account, llm := agent.Account, agent.LLM
-	agent.Account, agent.LLM = nil, nil
+	var reanalysis *AgentReanalysis
+	if agent.Kind == "llm" {
+		reanalysis = &AgentReanalysis{Allowed: agent.Reanalysis != nil && agent.Reanalysis.Allowed}
+	}
+	agent.Account, agent.LLM, agent.Reanalysis = nil, nil, nil
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		if err := s.checkAddressFree(ctx, 0, agent.APIAddress); err != nil {
 			return err
@@ -622,6 +666,12 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 			}
 			if err := s.conn(ctx).Create(llm).Error; err != nil {
 				return notFound(err, "the language model of the agent "+agent.Name)
+			}
+		}
+		if reanalysis != nil {
+			reanalysis.AgentID = agent.ID
+			if err := s.conn(ctx).Create(reanalysis).Error; err != nil {
+				return notFound(err, "the reanalysis of the agent "+agent.Name)
 			}
 		}
 		return nil
@@ -732,19 +782,24 @@ func (s *Store) sealInto(column *[]byte, place string, secret Secret) error {
 }
 
 // UpdateAgent changes the agent of id, see AgentUpdate: a change of more than
-// its switches (Enabled, TradePanel, TelegramControl) is checked with the
-// whole agent, as CreateAgent checks a new one, and a new address with the
-// ones of the others; the switches alone always apply, eg: to disable it, but
-// for enabling an agent trading the positions of another one, as a change of
-// what it trades (ErrConflict, see checkBookFree).
+// its switches (Enabled, TradePanel, TelegramControl, Reanalysis) is checked
+// with the whole agent, as CreateAgent checks a new one, and a new address
+// with the ones of the others; the switches alone always apply, eg: to disable
+// it, but for enabling an agent trading the positions of another one, as a
+// change of what it trades (ErrConflict, see checkBookFree), and for the
+// reanalysis of an agent of another kind than llm (ErrInvalid).
 func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (Agent, error) {
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
-		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("LLM").First(&agent, id).Error
+		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("LLM").Preload("Reanalysis").
+			First(&agent, id).Error
 		if err != nil {
 			return notFound(err, fmt.Sprintf("agent %d", id))
 		}
 		change := update.apply(agent)
+		if err := checkReanalysis(change.agent); err != nil {
+			return err
+		}
 		if !update.switchesOnly() {
 			if err := checkAgent(change.agent); err != nil {
 				return err
@@ -768,12 +823,19 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (
 	return s.Agent(ctx, id)
 }
 
-// saveChange writes the change c of the agent a, its account and its language
-// model created when it had none.
+// saveChange writes the change c of the agent a, its account, its language
+// model and the switch of its reanalysis created when it had none.
 func (s *Store) saveChange(ctx context.Context, a Agent, c agentChange) error {
 	if len(c.columns) > 0 {
 		if err := s.conn(ctx).Model(&Agent{}).Where("id = ?", a.ID).Updates(c.columns).Error; err != nil {
 			return notFound(err, "agent "+a.Name)
+		}
+	}
+	if c.reanalysis != nil {
+		err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"allowed"})}).Create(c.reanalysis).Error
+		if err != nil {
+			return notFound(err, "the reanalysis of the agent "+a.Name)
 		}
 	}
 	switch {

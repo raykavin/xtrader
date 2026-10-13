@@ -10,6 +10,7 @@ import {
   agentSummary,
   outboxNote,
   promptStatusLabel,
+  reanalysisHint,
   tradePanelHint,
 } from "../lib/settings";
 import { AgentForm } from "./AgentForm";
@@ -293,6 +294,15 @@ function AgentCard({
             title={channelsTitle}
             onChange={(telegram_control) => change({ telegram_control })}
           />
+          {llm && (
+            <Switch
+              label="Permitir reanálise"
+              checked={agent.reanalysis}
+              disabled={busy}
+              title={reanalysisHint}
+              onChange={(reanalysis) => change({ reanalysis })}
+            />
+          )}
         </div>
       </div>
 

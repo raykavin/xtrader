@@ -2788,6 +2788,12 @@ fieldset.seg {
   align-items: stretch;
 }
 
+/* the quote and the results alone, of an agent without a language model: the
+   columns of their row on the dashboard */
+.overview.no-meter {
+  grid-template-columns: minmax(300px, 4fr) minmax(0, 6fr);
+}
+
 /* the quote: the pair, its price set large, how it moved, the position held */
 .hero {
   --hero-pad-y: 20px;
@@ -3416,20 +3422,6 @@ fieldset.seg {
   font-size: var(--fs-sm);
   line-height: 1.5;
   text-align: center;
-}
-
-/* without a language model: the gauge and its names greyed out, the text muted */
-.meter-card.is-off .meter-dial {
-  opacity: 0.45;
-  filter: grayscale(1);
-}
-
-.meter-card.is-off .section-name {
-  color: var(--text-2);
-}
-
-.meter-card.is-off .eyebrow::before {
-  background: var(--text-3);
 }
 
 .skeleton-meter,
@@ -4813,6 +4805,10 @@ fieldset.seg {
     grid-column: 1 / -1;
   }
 
+  .overview.no-meter {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .skeleton-ticket {
     display: none;
   }
@@ -4957,6 +4953,7 @@ fieldset.seg {
   }
 
   .overview,
+  .overview.no-meter,
   .dash-row,
   .dash-row.overview,
   .dash-row[data-wrap]:not(.overview),

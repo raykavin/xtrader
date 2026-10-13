@@ -308,12 +308,15 @@ type PairsResponse struct {
 	Pairs []string `json:"pairs"`
 }
 
-// AgentStatus is an agent of the dashboard, a bot serving its API at Address.
-// Online tells whether the API answers. Period is its accounting period, the
-// cards of the dashboard counting the trades closed since its start: absent
-// before the first reset of its results, all of them counted.
+// AgentStatus is an agent of the dashboard, a bot serving its API at Address,
+// of the Kind of its settings (llm, trend, momentum, breakout or intraday):
+// the dashboard lays out the cards of an LLM agent as it loads. Online tells
+// whether the API answers. Period is its accounting period, the cards of the
+// dashboard counting the trades closed since its start: absent before the
+// first reset of its results, all of them counted.
 type AgentStatus struct {
 	Name    string       `json:"name"`
+	Kind    string       `json:"kind"`
 	Address string       `json:"address"`
 	Online  bool         `json:"online"`
 	Period  *AgentPeriod `json:"period,omitempty"`
@@ -383,12 +386,13 @@ type NotificationEvent struct {
 
 // ControlsResponse reports, on the channel of the request, the web dashboard or
 // Telegram, whether the bot control panel is enabled, Enabled: the manual
-// orders, their moves and cancels, and the reanalysis, which the trade panel
-// or the Telegram controls turn on; and whether the bot may be started and
-// stopped there, BotControl, with the controller status ("running" or
-// "stopped"): on the web dashboard whatever its trade panel, on Telegram with
-// its controls on. It is also the payload of the SSE "controls" event, as the
-// web dashboard sees it, sent when the bot is started or stopped.
+// orders, their moves and cancels, which the trade panel or the Telegram
+// controls turn on; and whether the bot may be started and stopped there,
+// BotControl, with the controller status ("running" or "stopped"): on the web
+// dashboard whatever its trade panel, on Telegram with its controls on. It is
+// also the payload of the SSE "controls" event, as the web dashboard sees it,
+// sent when the bot is started or stopped, and when its reanalysis is
+// switched.
 type ControlsResponse struct {
 	Enabled bool   `json:"enabled"`
 	Status  string `json:"status"`
@@ -398,9 +402,17 @@ type ControlsResponse struct {
 	BotControl bool `json:"bot_control,omitempty"`
 
 	// Reanalysis tells that the language model of the strategy may be asked
-	// again on the channel, see Reanalyzer: the control panel is enabled on
-	// it, and the strategy is one of a language model.
+	// again on the channel, see Reanalyzer: the strategy is one of a language
+	// model, its reanalysis allowed (see Chart.SetReanalysis), and the bot
+	// started and stopped from the channel (BotControl), the web dashboard
+	// whatever its trade panel.
 	Reanalysis bool `json:"reanalysis,omitempty"`
+
+	// ReanalysisDisabled tells that the strategy is one of a language model
+	// whose reanalysis is forbidden, see Chart.SetReanalysis: switched off in
+	// the settings of the agent, "Permitir reanálise", the bot started and
+	// stopped from the channel.
+	ReanalysisDisabled bool `json:"reanalysis_disabled,omitempty"`
 }
 
 // ControlOrderRequest is the payload of POST /api/controls/order. Amount is
@@ -594,7 +606,10 @@ type ErrorResponse struct {
 // flags of its settings that no field holds, by name, the ones of its
 // language model included, eg: {"pair": "XAUUSDm", "llm-min-stop-atr": "1"}.
 // Model names its language model, eg: openai gpt-5, and LLM holds it, for an
-// LLM agent only.
+// LLM agent only. Reanalysis tells that the language model of an LLM agent
+// may be asked again between its closes, "Permitir reanálise": from the
+// dashboard, whatever its trade panel, and from Telegram, its controls on
+// there; false for the other kinds.
 type AgentSettings struct {
 	Name            string                `json:"name"`
 	Kind            string                `json:"kind"`
@@ -605,6 +620,7 @@ type AgentSettings struct {
 	Restart         bool                  `json:"restart"`
 	TradePanel      bool                  `json:"trade_panel"`
 	TelegramControl bool                  `json:"telegram_control"`
+	Reanalysis      bool                  `json:"reanalysis"`
 	Running         bool                  `json:"running"`
 	RestartPending  bool                  `json:"restart_pending"`
 	Restarts        int                   `json:"restarts,omitempty"`
@@ -696,7 +712,8 @@ type AgentRenameRequest struct {
 
 // AgentSettingsRequest is the payload of PATCH /api/settings/agents/{name}:
 // the changes, of the fields set, the kind never changing and the name only by
-// AgentRenameRequest.
+// AgentRenameRequest. Reanalysis switches the one of an LLM agent, see
+// AgentSettings: on refused for another kind.
 // Params, when set, replace them all, the ones of the language model included
 // ({} removes them); Account and LLM change the fields they set. DefaultPrompt
 // selects the prompt embedded in the agent, PromptID one of the database; a
@@ -707,6 +724,7 @@ type AgentSettingsRequest struct {
 	Enabled         *bool                `json:"enabled,omitempty"`
 	TradePanel      *bool                `json:"trade_panel,omitempty"`
 	TelegramControl *bool                `json:"telegram_control,omitempty"`
+	Reanalysis      *bool                `json:"reanalysis,omitempty"`
 	Mode            *string              `json:"mode,omitempty"`
 	APIAddress      *string              `json:"api_address,omitempty"`
 	Launched        *bool                `json:"launched,omitempty"`
@@ -786,8 +804,9 @@ type AgentLLMRequest struct {
 // other agent. Launched and Restart are true when absent. Params are the
 // flags of its settings that no field holds, see AgentSettings. LLM is the
 // language model of an agent of kind llm, required, and PromptID its prompt,
-// the one embedded in the agent when absent. The secrets are written, never
-// returned. An agent created enabled is launched at once.
+// the one embedded in the agent when absent; Reanalysis allows its
+// reanalysis, see AgentSettings, refused for another kind. The secrets are
+// written, never returned. An agent created enabled is launched at once.
 type AgentCreateRequest struct {
 	Name            string               `json:"name"`
 	Kind            string               `json:"kind"`
@@ -798,6 +817,7 @@ type AgentCreateRequest struct {
 	Restart         *bool                `json:"restart,omitempty"`
 	TradePanel      bool                 `json:"trade_panel,omitempty"`
 	TelegramControl bool                 `json:"telegram_control,omitempty"`
+	Reanalysis      bool                 `json:"reanalysis,omitempty"`
 	Params          map[string]string    `json:"params,omitempty"`
 	Account         AgentAccountSettings `json:"account"`
 	LLM             *AgentLLMSettings    `json:"llm,omitempty"`

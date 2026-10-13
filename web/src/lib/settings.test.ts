@@ -43,6 +43,7 @@ const agent = (fields: Partial<AgentSettings>): AgentSettings => ({
   restart: true,
   trade_panel: false,
   telegram_control: false,
+  reanalysis: false,
   running: false,
   restart_pending: false,
   params: {},
@@ -417,6 +418,7 @@ describe("the fields of an agent", () => {
     for (const key of [
       "mode",
       "api",
+      "reanalysis",
       "mt5-comment",
       "mt5-token",
       "llm-model",
@@ -471,6 +473,7 @@ describe("the form of an agent", () => {
     },
     model: "openai gpt-5",
     prompt_id: 3,
+    reanalysis: true,
   });
   /** A new agent of the form, taken. */
   const newAgent = (fields: Partial<AgentFormValues> = {}): AgentFormValues => ({
@@ -493,6 +496,7 @@ describe("the form of an agent", () => {
       restart: true,
       tradePanel: false,
       telegramControl: false,
+      reanalysis: false,
       bridgeURL: "",
       magic: "",
       comment: "",
@@ -529,6 +533,7 @@ describe("the form of an agent", () => {
       calendarURL: "http://mt5:22346/mcp",
       promptID: "3",
       llmAPIKey: "",
+      reanalysis: true,
     });
     expect(values.params).toEqual([
       { id: 0, key: "llm-min-stop-atr", value: "1" },
@@ -613,6 +618,7 @@ describe("the form of an agent", () => {
         comment: " ",
         model: "gpt-5",
         llmAPIKey: "left out",
+        reanalysis: true, // of an LLM agent only: left out
         params: [
           { id: 0, key: " pair ", value: " XAUUSDm " },
           { id: 1, key: "", value: "" },
@@ -651,6 +657,7 @@ describe("the form of an agent", () => {
         promptID: "3",
         llmAPIKey: " key ",
         calendarToken: " ",
+        reanalysis: true,
       }),
     );
     expect(JSON.parse(JSON.stringify(llm))).toStrictEqual({
@@ -680,7 +687,10 @@ describe("the form of an agent", () => {
       },
       prompt_id: 3,
       llm_api_key: "key",
+      reanalysis: true,
     });
+    const off = agentCreateRequest(newAgent({ kind: "llm", model: "gpt-5" }));
+    expect(off.reanalysis, "off unless switched on").toBe(false);
   });
 
   it("changes the fields changed only", () => {

@@ -38,7 +38,11 @@ export function agentKindLabel(kind: string): string {
 
 /** What the trade panel of an agent turns on in the dashboard: its bot starts and stops without it. */
 export const tradePanelHint =
-  "Ordens pela boleta e pelo gráfico e a reanálise no painel; iniciar e parar o bot não dependem dele";
+  "Ordens pela boleta e pelo gráfico; iniciar e parar o bot e a reanálise do LLM não dependem dele";
+
+/** What the reanalysis of an LLM agent allows, apart from its trade panel. */
+export const reanalysisHint =
+  "Pedir uma nova análise ao LLM entre os fechamentos, pelo painel e pelo Telegram (com o controle via Telegram ligado); independe do painel de trading";
 
 /** The kinds of the agents, of the binaries the controller launches, in its order. */
 export const agentKinds = Object.keys(kinds);
@@ -272,6 +276,7 @@ const reservedParams = new Set([
   "api",
   "trade-panel",
   "telegram-control",
+  "reanalysis",
   "mt5-bridge",
   "mt5-token",
   "mt5-magic",
@@ -474,8 +479,8 @@ export interface ParamRow {
 /**
  * The form of an agent as typed: its numbers as text, "" for none, and the
  * prompt of an LLM agent by ID, "" for the default one embedded in it. The
- * switches of its channels, its prompt and its secrets are the ones of a new
- * agent: the page changes them apart.
+ * switches of its channels and of its reanalysis, its prompt and its secrets
+ * are the ones of a new agent: the page changes them apart.
  */
 export interface AgentFormValues {
   name: string;
@@ -487,6 +492,8 @@ export interface AgentFormValues {
   restart: boolean;
   tradePanel: boolean;
   telegramControl: boolean;
+  /** Whether the LLM of an LLM agent may be asked again (Permitir reanálise), off for a new one. */
+  reanalysis: boolean;
   bridgeURL: string;
   magic: string;
   comment: string;
@@ -531,6 +538,7 @@ export function agentFormValues(agent?: AgentSettings): AgentFormValues {
     restart: agent?.restart ?? true,
     tradePanel: agent?.trade_panel ?? false,
     telegramControl: agent?.telegram_control ?? false,
+    reanalysis: agent?.reanalysis ?? false,
     bridgeURL: account?.bridge_url ?? "",
     magic: account?.magic ? String(account.magic) : "",
     comment: account?.comment ?? "",
@@ -623,8 +631,8 @@ function filled(text: string): string | undefined {
 
 /**
  * The request creating the agent of the form, taken (see agentFormErrors):
- * its optional fields left blank left out, and its language model, its prompt
- * and their secrets for an LLM agent only.
+ * its optional fields left blank left out, and its language model, its prompt,
+ * their secrets and its reanalysis for an LLM agent only.
  */
 export function agentCreateRequest(values: AgentFormValues): AgentCreateRequest {
   const request: AgentCreateRequest = {
@@ -658,6 +666,7 @@ export function agentCreateRequest(values: AgentFormValues): AgentCreateRequest 
     request.prompt_id = values.promptID ? Number(values.promptID) : undefined;
     request.llm_api_key = filled(values.llmAPIKey);
     request.calendar_token = filled(values.calendarToken);
+    request.reanalysis = values.reanalysis;
   }
   return request;
 }

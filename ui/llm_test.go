@@ -199,23 +199,26 @@ func TestLLM_Attachments(t *testing.T) {
 	}
 }
 
-// The reanalysis follows the controls of each channel, for a strategy of a
-// language model only.
+// The reanalysis follows its own switch, from the channels the bot is started
+// and stopped from, the web dashboard whatever its trade panel, for a strategy
+// of a language model only.
 func TestLLM_Reanalyze(t *testing.T) {
 	c, llm := newLLMChart(t)
 	controller := &fakeController{status: order.StatusRunning}
 	c.SetOrderController(controller, ChannelTelegram)
+	c.SetReanalysis(true)
 	srv := newTestServer(t, c)
 
 	_, body := send(t, http.MethodGet, srv.URL+"/api/controls", "", ChannelTelegram)
 	require.JSONEq(t, `{"enabled":true,"status":"running","bot_control":true,"reanalysis":true}`, body)
 	_, body = send(t, http.MethodGet, srv.URL+"/api/controls", "", "")
-	require.JSONEq(t, `{"enabled":false,"status":"running","bot_control":true}`, body,
-		"the trade panel disabled: no reanalysis, the bot started and stopped")
+	require.JSONEq(t, `{"enabled":false,"status":"running","bot_control":true,"reanalysis":true}`, body,
+		"the trade panel disabled: no orders, but the reanalysis, and the bot started and stopped")
 
-	resp, _ := send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, ChannelWeb)
-	require.Equal(t, http.StatusNotFound, resp.StatusCode, "not from the web without its controls")
-	require.Empty(t, llm.reanalyzed)
+	resp, body := send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, ChannelWeb)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "from the web without its trade panel: %s", body)
+	require.Equal(t, []string{"BTCUSDm web"}, llm.reanalyzed)
+	llm.reanalyzed = nil
 
 	resp, body = send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"btcusdm"}`, ChannelTelegram)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -247,17 +250,120 @@ func TestLLM_Reanalyze(t *testing.T) {
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 	require.Contains(t, body, "rate limited")
 
-	// a strategy of another kind: no reanalysis, whatever the controls
+	// a strategy of another kind: no reanalysis, whatever the controls and
+	// the switch
 	plain := newTestChart(t, WithStrategyIndicators(fakeStrategy{}))
 	plain.OnCandle(candleAt("BTCUSDm", time.Date(2026, 9, 27, 13, 0, 0, 0, time.UTC), 84000))
 	plain.SetOrderController(controller)
+	plain.SetReanalysis(true)
 	plainSrv := newTestServer(t, plain)
-	_, body = send(t, http.MethodGet, plainSrv.URL+"/api/controls", "", ChannelTelegram)
-	require.JSONEq(t, `{"enabled":true,"status":"running","bot_control":true}`, body)
-	resp, body = send(t, http.MethodPost, plainSrv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`,
-		ChannelTelegram)
-	require.Equal(t, http.StatusNotFound, resp.StatusCode)
-	require.Contains(t, body, "doesn't use a language model")
+	for _, channel := range []Channel{ChannelWeb, ChannelTelegram} {
+		_, body = send(t, http.MethodGet, plainSrv.URL+"/api/controls", "", channel)
+		require.JSONEq(t, `{"enabled":true,"status":"running","bot_control":true}`, body, channel)
+		resp, body = send(t, http.MethodPost, plainSrv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, channel)
+		require.Equal(t, http.StatusNotFound, resp.StatusCode, channel)
+		require.Contains(t, body, "doesn't use a language model", channel)
+	}
+}
+
+// The reanalysis is switched apart from the trade panel, each combination of
+// the two, from the web dashboard and from Telegram, its controls on there or
+// off: a reanalysis forbidden is refused (403) from any channel, the model
+// never asked, and the orders follow the channels only.
+func TestLLM_ReanalysisApartFromTheTradePanel(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		panel, telegram   bool // the channels of the control panel
+		reanalysis        bool
+		web, fromTelegram int  // the status of a reanalysis from each channel
+		askedWeb, askedTg bool // whether the model was asked from each channel
+	}{
+		{"panel on, reanalysis on", true, true, true, http.StatusOK, http.StatusOK, true, true},
+		{"panel off, reanalysis on", false, true, true, http.StatusOK, http.StatusOK, true, true},
+		{"panel on, reanalysis off", true, true, false, http.StatusForbidden, http.StatusForbidden, false, false},
+		{"panel off, reanalysis off", false, true, false, http.StatusForbidden, http.StatusForbidden, false, false},
+		{"Telegram off, reanalysis on", false, false, true, http.StatusOK, http.StatusNotFound, true, false},
+		{"Telegram off, reanalysis off", true, false, false, http.StatusForbidden, http.StatusNotFound, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, llm := newLLMChart(t)
+			// as the agent of the controller: the trade panel and the Telegram
+			// controls of its settings, and the switch of its reanalysis
+			c.SetOrderController(&fakeController{status: order.StatusRunning}, ChannelWeb)
+			var channels []Channel
+			if tc.panel {
+				channels = append(channels, ChannelWeb)
+			}
+			if tc.telegram {
+				channels = append(channels, ChannelTelegram)
+			}
+			c.SetChannels(channels...)
+			c.SetReanalysis(tc.reanalysis)
+			srv := newTestServer(t, c)
+
+			for _, channel := range []Channel{ChannelWeb, ChannelTelegram} {
+				_, body := send(t, http.MethodGet, srv.URL+"/api/controls", "", channel)
+				controls := decodeControls(t, body)
+				controlled := channel == ChannelWeb || tc.telegram // started and stopped from it
+				require.Equal(t, controlled, controls.BotControl, channel)
+				require.Equal(t, controlled && tc.reanalysis, controls.Reanalysis, channel)
+				require.Equal(t, controlled && !tc.reanalysis, controls.ReanalysisDisabled, channel)
+				require.Equal(t, channel == ChannelWeb && tc.panel || channel == ChannelTelegram && tc.telegram,
+					controls.Enabled, "%s: the orders follow the channels only", channel)
+			}
+
+			resp, body := send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`,
+				ChannelWeb)
+			require.Equal(t, tc.web, resp.StatusCode, body)
+			resp, telBody := send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`,
+				ChannelTelegram)
+			require.Equal(t, tc.fromTelegram, resp.StatusCode, telBody)
+			for status, answer := range map[int]string{tc.web: body, tc.fromTelegram: telBody} {
+				if status == http.StatusForbidden {
+					require.Contains(t, answer, "the reanalysis is disabled in the settings of the agent")
+				}
+			}
+			var want []string
+			if tc.askedWeb {
+				want = append(want, "BTCUSDm web")
+			}
+			if tc.askedTg {
+				want = append(want, "BTCUSDm telegram")
+			}
+			require.Equal(t, want, llm.reanalyzed, "the model asked only when allowed")
+		})
+	}
+}
+
+// The reanalysis is switched while the bot runs, the dashboards told at once,
+// and nothing told without a change.
+func TestLLM_ReanalysisSwitchedWhileRunning(t *testing.T) {
+	c, llm := newLLMChart(t)
+	c.SetOrderController(&fakeController{status: order.StatusRunning}, ChannelWeb)
+	c.SetChannels() // the trade panel off
+	srv := newTestServer(t, c)
+	events := c.events.subscribe()
+	defer c.events.unsubscribe(events)
+
+	resp, _ := send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, ChannelWeb)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode, "forbidden until allowed")
+
+	c.SetReanalysis(true)
+	event := nextEvent(t, events)
+	require.Equal(t, "controls", event.name)
+	require.JSONEq(t, `{"enabled":false,"status":"running","bot_control":true,"reanalysis":true}`,
+		string(event.data))
+	resp, _ = send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, ChannelWeb)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	c.SetReanalysis(true) // no change, nothing told
+	c.SetReanalysis(false)
+	event = nextEvent(t, events)
+	require.JSONEq(t, `{"enabled":false,"status":"running","bot_control":true,"reanalysis_disabled":true}`,
+		string(event.data))
+	resp, _ = send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, ChannelWeb)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Equal(t, []string{"BTCUSDm web"}, llm.reanalyzed)
 }
 
 // The decisions kept by the strategy reach the dashboards on the event stream.

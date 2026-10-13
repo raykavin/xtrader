@@ -105,7 +105,7 @@ func migrateTo(t *testing.T, dsn, root string, seededAgents bool) {
 	require.NoError(t, db.Raw("SELECT COALESCE(MAX(id), 0) FROM agents").Scan(&last).Error)
 	require.NoError(t, m.Populate(ctx))
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
-		for _, table := range []string{"agent_llm_settings", "agent_accounts"} {
+		for _, table := range []string{"agent_reanalysis", "agent_llm_settings", "agent_accounts"} {
 			if err := tx.Exec("DELETE FROM "+table+" WHERE agent_id > ?", last).Error; err != nil {
 				return err
 			}

@@ -223,7 +223,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			unserved[a.Name] = fmt.Errorf("the address of its API: %w: change it in its settings", err)
 			continue
 		}
-		served = append(served, Agent{Name: a.Name, Address: address})
+		served = append(served, Agent{Name: a.Name, Address: address, Kind: a.Kind})
 		relayed = append(relayed, a.Name)
 		if doc, ok := runtimeOf(ctx, m.store, a); ok {
 			m.runtimes.set(a.ID, doc)
@@ -440,7 +440,7 @@ func (m *Manager) launchedAs(current store.Agent) store.Agent {
 		return current
 	}
 	a := withSecretsOf(l.agent, current)
-	a.TradePanel, a.TelegramControl = current.TradePanel, current.TelegramControl
+	a.TradePanel, a.TelegramControl, a.Reanalysis = current.TradePanel, current.TelegramControl, current.Reanalysis
 	if a.LLM != nil && current.LLM != nil {
 		model := *a.LLM
 		model.PromptID, model.PromptStatus = current.LLM.PromptID, current.LLM.PromptStatus
@@ -609,11 +609,13 @@ func (m *Manager) State(name string) AgentState {
 	return state
 }
 
-// runtimeOf returns the runtime of the agent a: its channels, and the prompt
-// of an LLM agent. false when its prompt can't be read: the agent keeps the
-// runtime it has rather than switching to its default prompt.
+// runtimeOf returns the runtime of the agent a: its channels, and of an LLM
+// agent the switch of its reanalysis and its prompt. false when its prompt
+// can't be read: the agent keeps the runtime it has rather than switching to
+// its default prompt.
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
-	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl}
+	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl,
+		Reanalysis: a.ReanalysisAllowed()}
 	if a.LLM != nil && a.LLM.PromptID != nil {
 		prompt, err := s.Prompt(ctx, *a.LLM.PromptID)
 		if err != nil {

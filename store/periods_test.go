@@ -161,7 +161,7 @@ func TestMigration16_TheDepositsInCents(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	ctx := context.Background()
-	llmAgent(t, s, "llm")
+	llmAgentOfBefore(t, s, "llm")
 	first, err := s.StartPeriod(ctx, "llm", 1000.005, "BRL", "admin")
 	require.NoError(t, err)
 	second, err := s.StartPeriod(ctx, "llm", 0.1+0.2, "BRL", "admin")

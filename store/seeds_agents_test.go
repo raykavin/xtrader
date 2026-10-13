@@ -37,6 +37,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.True(t, llm.Restart)
 	require.True(t, llm.TradePanel)
 	require.True(t, llm.TelegramControl)
+	require.True(t, llm.ReanalysisAllowed(), "its reanalysis allowed")
 	require.Equal(t, Params{"pair": "BTCUSDm;XAUUSDm", "timeframe": "30m", "lot": "BTCUSDm=0.01;XAUUSDm=0.02",
 		"leverage": "400"}, llm.Params)
 	require.NotNil(t, llm.Account)
@@ -69,6 +70,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Equal(t, "localhost:5570", matrend.APIAddress)
 	require.False(t, matrend.TradePanel)
 	require.True(t, matrend.TelegramControl)
+	require.Nil(t, matrend.Reanalysis, "no reanalysis without a language model")
 	require.Equal(t, Params{"strategy": "matrend", "pair": "BTCUSDm", "timeframe": "5m", "lot": "0.01",
 		"leverage": "20", "stop-value": "1", "take-profit-value": "2", "max-distance": "0.5"}, matrend.Params)
 	require.Equal(t, "http://mt5:18812", matrend.Account.BridgeURL)
@@ -84,6 +86,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.False(t, smc.Enabled, "off until its secrets and its risk are set")
 	require.Equal(t, "localhost:5581", smc.APIAddress)
 	require.True(t, smc.TradePanel)
+	require.True(t, smc.ReanalysisAllowed())
 	require.Equal(t, llm.Params, smc.Params, "the pairs, the lots and the timeframe of llm")
 	require.Equal(t, "http://mt5:18812", smc.Account.BridgeURL)
 	require.Equal(t, "nb:llm-smc", *smc.Account.Comment)
@@ -132,6 +135,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Equal(t, "localhost:5573", fimathe.APIAddress)
 	require.False(t, fimathe.TradePanel)
 	require.True(t, fimathe.TelegramControl)
+	require.Nil(t, fimathe.Reanalysis)
 	require.Equal(t, Params{"strategy": "fimathe", "pair": "XAUUSDm;BTCUSDm", "timeframe": "15m", "lot": "0.01",
 		"leverage": "20", "fimathe-analysis-timeframe": "1h", "fimathe-mapping": "week", "fimathe-mark": "auto",
 		"fimathe-trail": "surf", "fimathe-trail-step": "0.5", "fimathe-max-risk-pct": "3"}, fimathe.Params)
