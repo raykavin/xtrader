@@ -3451,7 +3451,8 @@ fieldset.seg {
    at the bottom */
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 344px;
+  /* the chart and the ticket; the chart of the width the user set, its own, see DashboardCards */
+  grid-template-columns: var(--workspace-columns, minmax(0, 1fr) 344px);
   gap: var(--sp-4);
   align-items: stretch;
 }
@@ -5505,4 +5506,81 @@ fieldset.seg {
   > .layout-card-body
   > .chart-card {
   flex: 0 0 auto;
+}
+
+/* the chart of the width the user set, alone in an area of a single column:
+   its width, never above the area; on a screen whose areas are stacked, the
+   width of the screen */
+@media (min-width: 1024px) {
+  .dashboard-cards[data-chart-width] .workspace-single > * > [data-card="chart"],
+  .dashboard-cards[data-chart-width]
+    .workspace-single
+    > *
+    > [data-card="chart"]
+    > .layout-card-body
+    > .chart-card,
+  .dashboard-cards[data-chart-width] .dashboard-bottom > [data-card="chart"],
+  .dashboard-cards[data-chart-width]
+    .dashboard-bottom
+    > [data-card="chart"]
+    > .layout-card-body
+    > .chart-card {
+    align-self: flex-start;
+    width: min(var(--chart-width), 100%);
+  }
+}
+
+/* the bar on the right edge of the chart sizing its width, and their corner
+   sizing both, while customizing; none where the areas are stacked */
+.chart-resize-width {
+  position: absolute;
+  top: 48px;
+  right: -7px;
+  bottom: 48px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-resize-width .chart-resize-grip {
+  width: 4px;
+  height: 36px;
+}
+
+.chart-resize-width:hover .chart-resize-grip,
+.chart-resize-width:focus-visible .chart-resize-grip {
+  background: var(--accent);
+}
+
+.chart-resize-width:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chart-resize-corner {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  z-index: 4;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+@media (max-width: 1023px) {
+  .chart-resize-width,
+  .chart-resize-corner {
+    display: none;
+  }
 }

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   type CardId,
   CHART_MAX_HEIGHT,
+  CHART_MAX_WIDTH,
   CHART_MIN_HEIGHT,
+  CHART_MIN_WIDTH,
   clearLayout,
   defaultLayout,
   hasSavedLayout,
@@ -13,6 +15,7 @@ import {
   normalizeLayout,
   saveLayout,
   setChartHeight,
+  setChartWidth,
   setHidden,
   stepCard,
 } from "./layout";
@@ -167,10 +170,21 @@ describe("setHidden and setChartHeight", () => {
     expect(setChartHeight(setChartHeight(defaultLayout(), 640), null).chartHeight).toBeNull();
   });
 
+  it("bounds the width of the chart, null for the responsive one", () => {
+    expect(setChartWidth(defaultLayout(), 10).chartWidth).toBe(CHART_MIN_WIDTH);
+    expect(setChartWidth(defaultLayout(), 1e9).chartWidth).toBe(CHART_MAX_WIDTH);
+    expect(setChartWidth(defaultLayout(), 900.4).chartWidth).toBe(900);
+    expect(setChartWidth(setChartWidth(defaultLayout(), 900), null).chartWidth).toBeNull();
+    expect(normalizeLayout({ zones: {}, chartWidth: "900" }).chartWidth).toBeNull();
+    expect(normalizeLayout({ zones: {}, chartWidth: 900 }).chartWidth).toBe(900);
+    expect(normalizeLayout({ zones: {} }).chartWidth).toBeNull(); // a layout saved before the width
+  });
+
   it("tells the default layout apart", () => {
     expect(isDefaultLayout(defaultLayout())).toBe(true);
     expect(isDefaultLayout(setHidden(defaultLayout(), "quote", true))).toBe(false);
     expect(isDefaultLayout(setChartHeight(defaultLayout(), 500))).toBe(false);
+    expect(isDefaultLayout(setChartWidth(defaultLayout(), 900))).toBe(false);
     expect(isDefaultLayout(moveCard(defaultLayout(), "chart", "main", 2))).toBe(false);
   });
 });
@@ -181,9 +195,12 @@ describe("the layout in storage", () => {
     expect(loadLayout(storage)).toEqual(defaultLayout());
     expect(hasSavedLayout(storage)).toBe(false);
 
-    const layout = setChartHeight(
-      setHidden(moveCard(defaultLayout(), "ticket", "overview", 0), "sentiment", true),
-      700,
+    const layout = setChartWidth(
+      setChartHeight(
+        setHidden(moveCard(defaultLayout(), "ticket", "overview", 0), "sentiment", true),
+        700,
+      ),
+      880,
     );
     saveLayout(layout, storage);
     expect(hasSavedLayout(storage)).toBe(true);

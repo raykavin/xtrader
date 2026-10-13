@@ -31,6 +31,7 @@ function changesOf(): string[] {
     changes.push(`Ocultos: ${layout.hidden.map((card) => CARD_LABELS[card]).join(", ")}`);
   }
   if (layout.chartHeight !== null) changes.push(`Altura do gráfico: ${layout.chartHeight} px`);
+  if (layout.chartWidth !== null) changes.push(`Largura do gráfico: ${layout.chartWidth} px`);
   return changes;
 }
 
