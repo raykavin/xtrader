@@ -283,6 +283,56 @@ func (e *historyExchange) OrderSince(_ string, _ int64, since time.Time) (model.
 	return e.order, nil
 }
 
+// A leg reported by the exchange without its pair, side, price or size, eg:
+// of a pending entry canceled before its fill, keeps the ones stored: the
+// controller refuses an order without a side.
+func TestControllerUpdateOrdersKeepsWhatTheExchangeLeavesOut(t *testing.T) {
+	memory, err := storage.FromMemory()
+	require.NoError(t, err)
+	exchange := &historyExchange{Exchange: &mocks.Exchange{}}
+	controller := NewController(context.Background(), exchange, memory, NewOrderFeed())
+
+	created := time.Now().Add(-time.Minute)
+	group, stop := int64(7), 4240.0
+	stored := model.Order{ExchangeID: 12, Pair: "XAUUSDm", Side: model.SideTypeSell, Type: model.OrderTypeStopLoss,
+		Status: model.OrderStatusTypeNew, Price: 4240, Quantity: 2, Stop: &stop, GroupID: &group,
+		CreatedAt: created, UpdatedAt: created}
+	require.NoError(t, memory.CreateOrder(&stored))
+	controller.loadPendingOrders()
+
+	canceledAt := time.Now()
+	exchange.order = model.Order{ExchangeID: 12, Status: model.OrderStatusTypeCanceled, UpdatedAt: canceledAt}
+	controller.UpdateOrders()
+
+	orders, err := memory.Orders()
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	leg := *orders[0]
+	require.Equal(t, model.OrderStatusTypeCanceled, leg.Status)
+	require.Equal(t, "XAUUSDm", leg.Pair)
+	require.Equal(t, model.SideTypeSell, leg.Side)
+	require.Equal(t, model.OrderTypeStopLoss, leg.Type)
+	require.Equal(t, 4240.0, leg.Price)
+	require.Equal(t, 2.0, leg.Quantity)
+	require.Equal(t, &stop, leg.Stop)
+	require.Equal(t, &group, leg.GroupID)
+	require.WithinDuration(t, canceledAt, leg.UpdatedAt, time.Millisecond, "the time of the exchange")
+
+	// what the exchange tells wins, eg: the price and the size of a fill
+	filled := model.Order{ExchangeID: 13, Pair: "XAUUSDm", Side: model.SideTypeBuy, Type: model.OrderTypeLimit,
+		Status: model.OrderStatusTypeNew, Price: 4250, Quantity: 2, CreatedAt: created, UpdatedAt: created}
+	require.NoError(t, memory.CreateOrder(&filled))
+	controller.loadPendingOrders()
+	exchange.order = model.Order{ExchangeID: 13, Pair: "XAUUSDm", Side: model.SideTypeBuy, Type: model.OrderTypeLimit,
+		Status: model.OrderStatusTypeFilled, Price: 4249.5, Quantity: 1, UpdatedAt: time.Now()}
+	controller.UpdateOrders()
+	orders, err = memory.Orders(storage.WithStatus(model.OrderStatusTypeFilled))
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	require.Equal(t, 4249.5, orders[0].Price)
+	require.Equal(t, 1.0, orders[0].Quantity)
+}
+
 func TestControllerUpdateOrdersSinceCreation(t *testing.T) {
 	memory, err := storage.FromMemory()
 	require.NoError(t, err)

@@ -1321,11 +1321,26 @@ func (c *Controller) hand(queue *feedQueue) {
 
 // keepStored gives an order reported by the exchange the storage id of the
 // stored one, and the fields the exchange does not report, eg: for the orders
-// of a previous run rebuilt from a history.
+// of a previous run rebuilt from a history, or the legs of a pending entry
+// canceled before its fill, reported without side, price or size: an order
+// never changes its pair or its side, and keeps its price and its size unless
+// the exchange tells them.
 func keepStored(excOrder *model.Order, stored model.Order) {
 	excOrder.ID = stored.ID
 	if excOrder.CreatedAt.IsZero() {
 		excOrder.CreatedAt = stored.CreatedAt
+	}
+	if excOrder.Pair == "" {
+		excOrder.Pair = stored.Pair
+	}
+	if excOrder.Side == "" {
+		excOrder.Side = stored.Side
+	}
+	if excOrder.Price == 0 {
+		excOrder.Price = stored.Price
+	}
+	if excOrder.Quantity == 0 {
+		excOrder.Quantity = stored.Quantity
 	}
 	if excOrder.Type == "" {
 		excOrder.Type = stored.Type
