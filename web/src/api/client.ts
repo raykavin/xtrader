@@ -50,7 +50,6 @@ declare global {
 }
 
 export const API_BASE = window.__XTRADER__?.api ?? "/api";
-export const UI_VERSION = window.__XTRADER__?.version ?? "dev";
 
 /** The page of the login, back to the page of now once logged in. */
 export function loginPath(): string {

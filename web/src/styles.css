@@ -810,12 +810,13 @@ code {
   gap: var(--sp-2);
 }
 
-/* the foot of the pages: who made the dashboard, and its version */
+/* the foot of the pages: the copyright at the start, the logo of who made
+   the dashboard at the end */
 .footer {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--sp-3);
+  justify-content: space-between;
+  gap: var(--sp-3) var(--sp-5);
   width: calc(100% - 2 * var(--page-pad));
   max-width: calc(var(--page-max) - 2 * var(--page-pad));
   margin: 0 auto;
@@ -835,12 +836,9 @@ code {
   opacity: 0.5;
 }
 
-.footer-version {
-  padding-left: var(--sp-3);
-  border-left: 1px solid var(--border);
+.footer-copyright {
   color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* the logo: two candles crossed as the X, then the word */
@@ -4740,7 +4738,7 @@ fieldset.seg {
   width: 100%;
   max-width: none;
   border-top: 0;
-  padding-bottom: var(--sp-4);
+  padding: var(--sp-5) var(--page-pad) var(--sp-4);
 }
 
 /* ------------------------------------------------------------------ */
@@ -5233,12 +5231,9 @@ fieldset.seg {
 
   .footer {
     flex-direction: column;
-    gap: var(--sp-2);
-  }
-
-  .footer-version {
-    padding-left: 0;
-    border-left: 0;
+    justify-content: center;
+    gap: var(--sp-3);
+    text-align: center;
   }
 }
 
