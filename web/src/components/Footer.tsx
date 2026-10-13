@@ -1,18 +1,17 @@
-import { UI_VERSION } from "../api/client";
 import echos from "../assets/echos.png";
 
 interface Props {
   className?: string;
 }
 
-/** The foot of the pages: who made the dashboard, and its version, small. */
+/** The foot of the pages: the copyright, then the logo of who made the dashboard. */
 export function Footer({ className = "" }: Props) {
   return (
     <footer className={`footer ${className}`.trim()}>
-      <img className="footer-logo" src={echos} alt="ECHOS - Soluções em Softwares Web" />
-      <span className="footer-version" title="Versão do painel">
-        {/^\d/.test(UI_VERSION) ? `v${UI_VERSION}` : UI_VERSION}
+      <span className="footer-copyright">
+        © 2026 ECHOS Tecnologia. Todos os direitos reservados.
       </span>
+      <img className="footer-logo" src={echos} alt="ECHOS - Soluções em Softwares Web" />
     </footer>
   );
 }
