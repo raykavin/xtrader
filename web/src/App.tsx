@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelOrder,
   fetchAgents,
@@ -21,6 +21,7 @@ import type {
 import { AgentBar } from "./components/AgentBar";
 import { AppShell } from "./components/AppShell";
 import { ControlPanel } from "./components/ControlPanel";
+import { DashboardCards, useDashboardLayout } from "./components/DashboardCards";
 import { DecisionDialog } from "./components/DecisionDialog";
 import { DecisionsPanel } from "./components/DecisionsPanel";
 import { EquityChart } from "./components/EquityChart";
@@ -41,6 +42,7 @@ import {
   linkOrders,
   reanalysisState,
 } from "./lib/decisions";
+import type { CardId } from "./lib/layout";
 import { rememberDashboard, sessionStore, settingsHref } from "./lib/nav";
 import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
 import { latestSentiment } from "./lib/sentiment";
@@ -513,6 +515,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const hasDecisions = snapshot?.llm?.decisions === true;
   const hasEquity = (snapshot?.equity_values.length ?? 0) > 0;
   const [tab, setTab] = useState<DashboardTab>(loadDashboardTab);
+  // the layout of the cards, as arranged in this browser, and whether it is being customized
+  const { layout, update: setLayout, reset: resetLayout } = useDashboardLayout();
+  const [customizing, setCustomizing] = useState(false);
   const shownTab: DashboardTab =
     (tab === "decisions" && !hasDecisions) || (tab === "equity" && !hasEquity) ? "orders" : tab;
   const chooseTab = (next: DashboardTab) => {
@@ -548,6 +553,24 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       theme={theme}
       onThemeToggle={onThemeToggle}
       connected={connected}
+      actions={
+        snapshot && (
+          <button
+            type="button"
+            className={customizing ? "btn btn-icon btn-primary" : "btn btn-ghost btn-icon"}
+            aria-pressed={customizing}
+            aria-label="Personalizar o layout do painel"
+            title={
+              customizing
+                ? "Concluir a personalização do layout"
+                : "Personalizar o layout: mover, ocultar e redimensionar os cards"
+            }
+            onClick={() => setCustomizing(!customizing)}
+          >
+            <Icon name="layout" />
+          </button>
+        )
+      }
     >
       <AgentBar
         agents={agents}
@@ -574,104 +597,128 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       )}
       {snapshot && chartSnapshot && stats && (
         <div className={loading ? "content loading" : "content"} aria-busy={loading}>
-          <div className="overview">
-            <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} theme={theme} />
-            <SentimentMeter
-              available={hasDecisions}
-              reading={sentiment}
-              loaded={decisionsLoaded}
-              error={decisionsError}
-            />
-            <StatsBar stats={stats} snapshot={snapshot} theme={theme} since={since} pnl={pnl} />
-          </div>
-          <div className="workspace">
-            <div className="workspace-main">
-              <PriceChart
-                snapshot={chartSnapshot}
-                theme={theme}
-                layoutKey={agent ?? ""}
-                ticket={interactive ? ticket : undefined}
-                onMoveOrder={interactive ? handleMoveOrder : undefined}
-                position={pnl}
-                timeframe={shown}
-                timeframes={viewTimeframes(snapshot)}
-                onTimeframeChange={setAskedTimeframe}
-                timeframeNote={timeframeNote}
-                analysis={chartAnalysis(
-                  snapshot.pair,
-                  shownAnalysis?.pair === snapshot.pair
-                    ? shownAnalysis.analysis
-                    : snapshot.analysis,
-                )}
-                onAnalysisReset={
-                  shownAnalysis?.pair === snapshot.pair ? () => setShownAnalysis(null) : undefined
-                }
-              />
-              {hasDecisions && (
-                <LastDecision
-                  decision={decisions[0]}
-                  loaded={decisionsLoaded}
-                  error={decisionsError}
-                  onShow={setShownDecision}
-                />
-              )}
-            </div>
-            <ControlPanel
-              agent={agent}
-              pair={snapshot.pair}
-              asset={snapshot.asset}
-              quote={snapshot.quote}
-              lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
-              controls={controls}
-              levels={levels}
-              onLevelsChange={setLevels}
-            />
-          </div>
-
-          <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
-            <div className="lists-head">
-              <span className="eyebrow">Atividade do agente</span>
-              <Tabs
-                label="Listas do agente"
-                idPrefix="lists"
-                items={tabs}
-                value={shownTab}
-                onChange={chooseTab}
-              />
-            </div>
-            <div {...panel("orders")}>
-              <OrdersTable
-                key={`orders-${snapshot.pair}`} // the first page of each pair
-                agent={agent}
-                pair={snapshot.pair}
-                quote={snapshot.quote}
-                accountCurrency={snapshot.account_currency}
-                orders={snapshot.orders}
-                onCancel={interactive ? handleCancelOrder : undefined}
-                onShowDecision={hasDecisions ? setShownDecision : undefined}
-              />
-            </div>
-            {snapshot.llm?.decisions && (
-              <div {...panel("decisions")}>
-                <DecisionsPanel
-                  key={`decisions-${snapshot.pair}`} // the first page of each pair
-                  agent={agent}
-                  pair={snapshot.pair}
-                  model={snapshot.llm.model}
-                  decisions={decisions}
-                  error={decisionsError}
-                  reanalysis={reanalysisState(controls)}
-                  onShow={setShownDecision}
-                />
-              </div>
-            )}
-            {hasEquity && (
-              <div {...panel("equity")}>
-                {/* drawn once shown: a chart sizes itself on a visible box */}
-                {shownTab === "equity" && <EquityChart snapshot={snapshot} theme={theme} />}
-              </div>
-            )}
-          </section>
+          <DashboardCards
+            layout={layout}
+            onLayout={setLayout}
+            editing={customizing}
+            onEditingChange={setCustomizing}
+            onReset={resetLayout}
+            cards={
+              {
+                quote: (
+                  <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} theme={theme} />
+                ),
+                sentiment: (
+                  <SentimentMeter
+                    available={hasDecisions}
+                    reading={sentiment}
+                    loaded={decisionsLoaded}
+                    error={decisionsError}
+                  />
+                ),
+                results: (
+                  <StatsBar
+                    stats={stats}
+                    snapshot={snapshot}
+                    theme={theme}
+                    since={since}
+                    pnl={pnl}
+                  />
+                ),
+                chart: (
+                  <PriceChart
+                    snapshot={chartSnapshot}
+                    theme={theme}
+                    layoutKey={agent ?? ""}
+                    ticket={interactive ? ticket : undefined}
+                    onMoveOrder={interactive ? handleMoveOrder : undefined}
+                    position={pnl}
+                    timeframe={shown}
+                    timeframes={viewTimeframes(snapshot)}
+                    onTimeframeChange={setAskedTimeframe}
+                    timeframeNote={timeframeNote}
+                    analysis={chartAnalysis(
+                      snapshot.pair,
+                      shownAnalysis?.pair === snapshot.pair
+                        ? shownAnalysis.analysis
+                        : snapshot.analysis,
+                    )}
+                    onAnalysisReset={
+                      shownAnalysis?.pair === snapshot.pair
+                        ? () => setShownAnalysis(null)
+                        : undefined
+                    }
+                  />
+                ),
+                decision: hasDecisions ? (
+                  <LastDecision
+                    decision={decisions[0]}
+                    loaded={decisionsLoaded}
+                    error={decisionsError}
+                    onShow={setShownDecision}
+                  />
+                ) : undefined,
+                ticket: (
+                  <ControlPanel
+                    agent={agent}
+                    pair={snapshot.pair}
+                    asset={snapshot.asset}
+                    quote={snapshot.quote}
+                    lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
+                    controls={controls}
+                    levels={levels}
+                    onLevelsChange={setLevels}
+                  />
+                ),
+                activity: (
+                  <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
+                    <div className="lists-head">
+                      <span className="eyebrow">Atividade do agente</span>
+                      <Tabs
+                        label="Listas do agente"
+                        idPrefix="lists"
+                        items={tabs}
+                        value={shownTab}
+                        onChange={chooseTab}
+                      />
+                    </div>
+                    <div {...panel("orders")}>
+                      <OrdersTable
+                        key={`orders-${snapshot.pair}`} // the first page of each pair
+                        agent={agent}
+                        pair={snapshot.pair}
+                        quote={snapshot.quote}
+                        accountCurrency={snapshot.account_currency}
+                        orders={snapshot.orders}
+                        onCancel={interactive ? handleCancelOrder : undefined}
+                        onShowDecision={hasDecisions ? setShownDecision : undefined}
+                      />
+                    </div>
+                    {snapshot.llm?.decisions && (
+                      <div {...panel("decisions")}>
+                        <DecisionsPanel
+                          key={`decisions-${snapshot.pair}`} // the first page of each pair
+                          agent={agent}
+                          pair={snapshot.pair}
+                          model={snapshot.llm.model}
+                          decisions={decisions}
+                          error={decisionsError}
+                          reanalysis={reanalysisState(controls)}
+                          onShow={setShownDecision}
+                        />
+                      </div>
+                    )}
+                    {hasEquity && (
+                      <div {...panel("equity")}>
+                        {/* drawn once shown: a chart sizes itself on a visible box */}
+                        {shownTab === "equity" && <EquityChart snapshot={snapshot} theme={theme} />}
+                      </div>
+                    )}
+                  </section>
+                ),
+              } satisfies Partial<Record<CardId, ReactNode>>
+            }
+          />
 
           {shownDecision && (
             <DecisionDialog

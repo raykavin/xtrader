@@ -25,6 +25,8 @@ interface Props {
   title: string;
   theme: Theme;
   onThemeToggle: () => void;
+  /** The actions of the page, in the bar before the theme, eg: the layout of the dashboard. */
+  actions?: ReactNode;
   /** Whether the updates of the agent shown are live. */
   connected?: boolean;
   children: ReactNode;
@@ -35,6 +37,7 @@ const sections: { tab: SettingsTab; label: string; icon: IconName }[] = [
   { tab: "prompts", label: "Prompts", icon: "prompt" },
   { tab: "telegram", label: "Telegram", icon: "send" },
   { tab: "usuarios", label: "Usuários", icon: "users" },
+  { tab: "layout", label: "Layout", icon: "layout" },
 ];
 
 /** The width the bar holds the navigation from: below it, the navigation is a drawer. */
@@ -54,6 +57,7 @@ export function AppShell({
   theme,
   onThemeToggle,
   connected,
+  actions,
   children,
 }: Props) {
   const drawer = useRef<HTMLDialogElement>(null);
@@ -106,6 +110,7 @@ export function AppShell({
         theme={theme}
         onThemeToggle={onThemeToggle}
         connected={connected}
+        actions={actions}
         user={user}
         onMenu={() => setMenuOpen(true)}
         menuOpen={menuOpen}

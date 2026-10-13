@@ -11,6 +11,7 @@ import { type SettingsTab, settingsTabFromHash } from "../lib/settings";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
+import { LayoutSettings } from "./LayoutSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
 import { Alert, Loading, Skeleton } from "./States";
@@ -51,6 +52,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
     title: "Usuários",
     description:
       "Quem pode entrar no painel. Desativar, excluir ou trocar a senha de um usuário encerra as sessões dele.",
+  },
+  layout: {
+    title: "Layout",
+    description:
+      "A disposição dos cards do painel neste navegador: a ordem, os ocultos e a altura do gráfico.",
   },
 };
 
@@ -217,6 +223,9 @@ export function SettingsPage() {
             onChange={loadUsers}
           />
         )}
+      </Panel>
+      <Panel tab="layout" shown={tab}>
+        <LayoutSettings intro={intros.layout} />
       </Panel>
     </AppShell>
   );

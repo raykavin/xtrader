@@ -185,7 +185,7 @@ export function agentSummary(agent: AgentSettings): { label: string; value: stri
 }
 
 /** The tabs of the page of the settings, by the hash of their URL, eg: #prompts. */
-export const settingsTabs = ["agentes", "prompts", "telegram", "usuarios"] as const;
+export const settingsTabs = ["agentes", "prompts", "telegram", "usuarios", "layout"] as const;
 
 export type SettingsTab = (typeof settingsTabs)[number];
 
