@@ -6,17 +6,21 @@ import {
   CHART_MIN_HEIGHT,
   CHART_MIN_WIDTH,
   clearLayout,
+  type DashboardLayout,
   defaultLayout,
   hasSavedLayout,
+  isDefaultArrangement,
   isDefaultLayout,
   LAYOUT_KEY,
   loadLayout,
   moveCard,
   normalizeLayout,
+  type Row,
   saveLayout,
   setChartHeight,
   setChartWidth,
   setHidden,
+  shownRows,
   stepCard,
 } from "./layout";
 
@@ -48,118 +52,330 @@ const brokenStorage = new Proxy({} as Storage, {
 
 const all = () => true;
 
+/** The default layout with rows instead of its own. */
+const withRows = (rows: Row[]): DashboardLayout => ({ ...defaultLayout(), rows });
+
 describe("normalizeLayout", () => {
   it("keeps a valid layout as it is", () => {
-    const layout = moveCard(defaultLayout(), "activity", "overview", 0);
-    expect(normalizeLayout({ version: 1, ...layout })).toEqual(layout);
+    const layout = setChartWidth(
+      moveCard(defaultLayout(), "ticket", { kind: "row", index: 0 }),
+      900,
+    );
+    expect(normalizeLayout({ version: 2, ...layout })).toEqual(layout);
+    expect(normalizeLayout(layout)).toEqual(layout);
   });
 
   it("takes the default for anything else than a layout", () => {
-    for (const raw of [null, undefined, 3, "x", [], { zones: 1 }, { version: 2, zones: {} }]) {
+    for (const raw of [
+      null,
+      undefined,
+      3,
+      "x",
+      [],
+      { rows: 1 },
+      { rows: [] },
+      { rows: [[], [[]], "chart"] },
+      { version: 3, rows: [[["chart"]]] },
+      { version: 2, zones: { overview: ["chart"] } },
+      { zones: [] },
+    ]) {
       expect(normalizeLayout(raw)).toEqual(defaultLayout());
     }
   });
 
-  it("leaves the unknown and repeated cards out, and puts the missing ones back in their area", () => {
+  it("leaves out the unknown and repeated cards and the empty columns and rows, the missing cards in rows at the end", () => {
     const layout = normalizeLayout({
-      zones: { overview: ["chart", "nothing", 7, "chart"], main: ["quote"], side: "ticket" },
+      version: 2,
+      rows: [
+        [["chart", "nothing", 7, "chart"], [], ["quote"]],
+        [[]],
+        "ticket",
+        [["decision"], "activity"],
+      ],
       hidden: ["quote", "bogus", "quote"],
       chartHeight: 500,
     });
-    expect(layout.zones).toEqual({
-      overview: ["chart", "sentiment", "results"],
-      main: ["quote", "decision"],
-      side: ["ticket"],
-      bottom: ["activity"],
-    });
+    expect(layout.rows).toEqual([
+      [["chart"], ["quote"]],
+      [["decision"]],
+      [["sentiment"]],
+      [["results"]],
+      [["ticket"]],
+      [["activity"]],
+    ]);
     expect(layout.hidden).toEqual(["quote"]);
     expect(layout.chartHeight).toBe(500);
   });
 
-  it("keeps the height of the chart within its bounds", () => {
-    expect(normalizeLayout({ zones: {}, chartHeight: 10 }).chartHeight).toBe(CHART_MIN_HEIGHT);
-    expect(normalizeLayout({ zones: {}, chartHeight: 1e9 }).chartHeight).toBe(CHART_MAX_HEIGHT);
-    expect(normalizeLayout({ zones: {}, chartHeight: Number.NaN }).chartHeight).toBeNull();
-    expect(normalizeLayout({ zones: {}, chartHeight: "600" }).chartHeight).toBeNull();
-    expect(normalizeLayout({ zones: {}, chartHeight: 612.6 }).chartHeight).toBe(613);
+  it("reads a layout of the areas of before into rows", () => {
+    // the default one of version 1
+    expect(
+      normalizeLayout({
+        version: 1,
+        zones: {
+          overview: ["quote", "sentiment", "results"],
+          main: ["chart", "decision"],
+          side: ["ticket"],
+          bottom: ["activity"],
+        },
+        hidden: [],
+        chartHeight: null,
+      }),
+    ).toEqual(defaultLayout());
+    // the ticket in the overview, the side column empty, the activity at the top
+    const layout = normalizeLayout({
+      version: 1,
+      zones: {
+        overview: ["activity", "ticket"],
+        main: ["chart"],
+        side: [],
+        bottom: ["quote", "sentiment", "results", "decision"],
+      },
+      hidden: ["sentiment"],
+      chartHeight: 640,
+      chartWidth: 900,
+    });
+    expect(layout).toEqual({
+      rows: [
+        [["activity"], ["ticket"]],
+        [["chart"]],
+        [["quote", "sentiment", "results", "decision"]],
+      ],
+      hidden: ["sentiment"],
+      chartHeight: 640,
+      chartWidth: 900,
+    });
+  });
+
+  it("keeps the size of the chart within its bounds", () => {
+    const rows = [[["chart"]]];
+    expect(normalizeLayout({ rows, chartHeight: 10 }).chartHeight).toBe(CHART_MIN_HEIGHT);
+    expect(normalizeLayout({ rows, chartHeight: 1e9 }).chartHeight).toBe(CHART_MAX_HEIGHT);
+    expect(normalizeLayout({ rows, chartHeight: Number.NaN }).chartHeight).toBeNull();
+    expect(normalizeLayout({ rows, chartHeight: "600" }).chartHeight).toBeNull();
+    expect(normalizeLayout({ rows, chartHeight: 612.6 }).chartHeight).toBe(613);
+    expect(normalizeLayout({ rows, chartWidth: 10 }).chartWidth).toBe(CHART_MIN_WIDTH);
+    expect(normalizeLayout({ rows, chartWidth: 1e9 }).chartWidth).toBe(CHART_MAX_WIDTH);
+    expect(normalizeLayout({ rows, chartWidth: "900" }).chartWidth).toBeNull();
+    expect(normalizeLayout({ rows }).chartWidth).toBeNull();
   });
 });
 
 describe("moveCard", () => {
-  it("moves a card within its area, before the card at the index", () => {
-    const layout = moveCard(defaultLayout(), "results", "overview", 0);
-    expect(layout.zones.overview).toEqual(["results", "quote", "sentiment"]);
-    expect(moveCard(defaultLayout(), "quote", "overview", 3).zones.overview).toEqual([
-      "sentiment",
-      "results",
-      "quote",
+  it("puts a card in a column of its own beside another card's column", () => {
+    expect(
+      moveCard(defaultLayout(), "ticket", { kind: "beside", card: "quote", side: "before" }).rows,
+    ).toEqual([
+      [["ticket"], ["quote"], ["sentiment"], ["results"]],
+      [["chart", "decision"]],
+      [["activity"]],
     ]);
-    expect(moveCard(defaultLayout(), "quote", "overview", 2).zones.overview).toEqual([
-      "sentiment",
-      "quote",
-      "results",
+    // beside the decision, a column after the one of the chart and the decision
+    expect(
+      moveCard(defaultLayout(), "activity", { kind: "beside", card: "decision", side: "after" })
+        .rows,
+    ).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["chart", "decision"], ["activity"], ["ticket"]],
     ]);
   });
 
-  it("moves a card to another area", () => {
-    const layout = moveCard(defaultLayout(), "ticket", "overview", 1);
-    expect(layout.zones.overview).toEqual(["quote", "ticket", "sentiment", "results"]);
-    expect(layout.zones.side).toEqual([]);
-    expect(moveCard(layout, "ticket", "bottom", 99).zones.bottom).toEqual(["activity", "ticket"]);
+  it("stacks a card above or below another in its column", () => {
+    expect(
+      moveCard(defaultLayout(), "ticket", { kind: "stack", card: "chart", side: "before" }).rows,
+    ).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["ticket", "chart", "decision"]],
+      [["activity"]],
+    ]);
+    expect(
+      moveCard(defaultLayout(), "quote", { kind: "stack", card: "ticket", side: "after" }).rows,
+    ).toEqual([
+      [["sentiment"], ["results"]],
+      [
+        ["chart", "decision"],
+        ["ticket", "quote"],
+      ],
+      [["activity"]],
+    ]);
+  });
+
+  it("swaps two cards, wherever they are", () => {
+    expect(moveCard(defaultLayout(), "ticket", { kind: "swap", card: "results" }).rows).toEqual([
+      [["quote"], ["sentiment"], ["ticket"]],
+      [["chart", "decision"], ["results"]],
+      [["activity"]],
+    ]);
+    expect(moveCard(defaultLayout(), "chart", { kind: "swap", card: "activity" }).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["activity", "decision"], ["ticket"]],
+      [["chart"]],
+    ]);
+  });
+
+  it("puts a card in a row of its own", () => {
+    expect(moveCard(defaultLayout(), "chart", { kind: "row", index: 0 }).rows).toEqual([
+      [["chart"]],
+      [["quote"], ["sentiment"], ["results"]],
+      [["decision"], ["ticket"]],
+      [["activity"]],
+    ]);
+    expect(moveCard(defaultLayout(), "ticket", { kind: "row", index: 3 }).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["chart", "decision"]],
+      [["activity"]],
+      [["ticket"]],
+    ]);
+    // the row it leaves gone, the rows after it one up
+    expect(moveCard(defaultLayout(), "activity", { kind: "row", index: 3 }).rows).toEqual(
+      defaultLayout().rows,
+    );
+    const lone = moveCard(defaultLayout(), "activity", { kind: "row", index: 1 }).rows;
+    expect(lone).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["activity"]],
+      [["chart", "decision"], ["ticket"]],
+    ]);
+    expect(moveCard(withRows(lone), "activity", { kind: "row", index: 3 }).rows).toEqual(
+      defaultLayout().rows,
+    );
+  });
+
+  it("leaves no column nor row empty, nothing kept for the card moved", () => {
+    const layout = moveCard(
+      moveCard(defaultLayout(), "ticket", { kind: "stack", card: "decision", side: "after" }),
+      "activity",
+      { kind: "beside", card: "results", side: "after" },
+    );
+    expect(layout.rows).toEqual([
+      [["quote"], ["sentiment"], ["results"], ["activity"]],
+      [["chart", "decision", "ticket"]],
+    ]);
+  });
+
+  it("leaves the layout as it is for a card on itself or not there", () => {
+    const layout = defaultLayout();
+    expect(moveCard(layout, "chart", { kind: "swap", card: "chart" })).toBe(layout);
+    expect(moveCard(layout, "chart", { kind: "beside", card: "chart", side: "after" })).toBe(
+      layout,
+    );
+    expect(moveCard(withRows([[["chart"]]]), "ticket", { kind: "row", index: 0 }).rows).toEqual([
+      [["chart"]],
+    ]);
   });
 
   it("never changes the layout it is given", () => {
     const layout = defaultLayout();
-    moveCard(layout, "chart", "bottom", 0);
+    moveCard(layout, "chart", { kind: "row", index: 3 });
+    moveCard(layout, "ticket", { kind: "swap", card: "quote" });
     expect(layout).toEqual(defaultLayout());
   });
 });
 
 describe("stepCard", () => {
-  it("swaps a card with the one shown beside it", () => {
-    expect(stepCard(defaultLayout(), "sentiment", -1, all).zones.overview).toEqual([
-      "sentiment",
-      "quote",
-      "results",
+  it("moves a card up and down in its column", () => {
+    expect(stepCard(defaultLayout(), "decision", "up", all).rows[1]).toEqual([
+      ["decision", "chart"],
+      ["ticket"],
     ]);
-    expect(stepCard(defaultLayout(), "sentiment", 1, all).zones.overview).toEqual([
-      "quote",
-      "results",
-      "sentiment",
+    expect(stepCard(defaultLayout(), "chart", "down", all).rows[1]).toEqual([
+      ["decision", "chart"],
+      ["ticket"],
     ]);
   });
 
-  it("passes over the cards not shown", () => {
+  it("takes a card at the edge of its column out into a row of its own", () => {
+    expect(stepCard(defaultLayout(), "chart", "up", all).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["chart"]],
+      [["decision"], ["ticket"]],
+      [["activity"]],
+    ]);
+    expect(stepCard(defaultLayout(), "ticket", "down", all).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["chart", "decision"]],
+      [["ticket"]],
+      [["activity"]],
+    ]);
+  });
+
+  it("swaps the row of a card alone in it with the row beside", () => {
+    expect(stepCard(defaultLayout(), "activity", "up", all).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["activity"]],
+      [["chart", "decision"], ["ticket"]],
+    ]);
+    const top = withRows([[["activity"]], ...defaultLayout().rows.slice(0, 2)]);
+    expect(stepCard(top, "activity", "down", all).rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["activity"]],
+      [["chart", "decision"], ["ticket"]],
+    ]);
+  });
+
+  it("swaps the column of a card alone in it with the column beside", () => {
+    expect(stepCard(defaultLayout(), "ticket", "left", all).rows[1]).toEqual([
+      ["ticket"],
+      ["chart", "decision"],
+    ]);
+    expect(stepCard(defaultLayout(), "quote", "right", all).rows[0]).toEqual([
+      ["sentiment"],
+      ["quote"],
+      ["results"],
+    ]);
+  });
+
+  it("takes a card out of a column of several into a column of its own", () => {
+    expect(stepCard(defaultLayout(), "decision", "right", all).rows[1]).toEqual([
+      ["chart"],
+      ["decision"],
+      ["ticket"],
+    ]);
+    expect(stepCard(defaultLayout(), "chart", "left", all).rows[1]).toEqual([
+      ["chart"],
+      ["decision"],
+      ["ticket"],
+    ]);
+  });
+
+  it("passes over the hidden cards, and stops at the edges of the page", () => {
     const shown = (card: CardId) => card !== "sentiment";
-    expect(stepCard(defaultLayout(), "results", -1, shown).zones.overview).toEqual([
-      "results",
-      "quote",
-      "sentiment",
+    // the results swap with the quote, the column shown at their left
+    expect(stepCard(defaultLayout(), "results", "left", shown).rows[0]).toEqual([
+      ["results"],
+      ["sentiment"],
+      ["quote"],
     ]);
-  });
-
-  it("goes to the next area at the edge of its own, and stops at the edges of the page", () => {
-    const down = stepCard(defaultLayout(), "results", 1, all);
-    expect(down.zones.overview).toEqual(["quote", "sentiment"]);
-    expect(down.zones.main).toEqual(["results", "chart", "decision"]);
-    const up = stepCard(defaultLayout(), "chart", -1, all);
-    expect(up.zones.overview).toEqual(["quote", "sentiment", "results", "chart"]);
-    expect(stepCard(defaultLayout(), "quote", -1, all)).toEqual(defaultLayout());
-    expect(stepCard(defaultLayout(), "activity", 1, all)).toEqual(defaultLayout());
-  });
-
-  it("reaches an empty area", () => {
-    const empty = moveCard(defaultLayout(), "ticket", "main", 2);
-    const back = stepCard(empty, "ticket", 1, all);
-    expect(back.zones.side).toEqual(["ticket"]);
+    // the decision hidden, the chart alone in its column: its column swaps
+    const noDecision = (card: CardId) => card !== "decision";
+    expect(stepCard(defaultLayout(), "chart", "right", noDecision).rows[1]).toEqual([
+      ["ticket"],
+      ["chart", "decision"],
+    ]);
+    expect(stepCard(defaultLayout(), "quote", "left", all)).toEqual(defaultLayout());
+    expect(stepCard(defaultLayout(), "activity", "down", all)).toEqual(defaultLayout());
+    expect(stepCard(withRows([[["quote"]], [["chart"]]]), "quote", "up", all).rows).toEqual([
+      [["quote"]],
+      [["chart"]],
+    ]);
   });
 });
 
-describe("setHidden and setChartHeight", () => {
+describe("shownRows", () => {
+  it("leaves out the columns and the rows without a card shown, keeping their indexes", () => {
+    const shown = (card: CardId) => !["ticket", "quote", "sentiment", "results"].includes(card);
+    expect(shownRows(defaultLayout(), shown)).toEqual([
+      { index: 1, columns: [{ index: 0, cards: ["chart", "decision"] }] },
+      { index: 2, columns: [{ index: 0, cards: ["activity"] }] },
+    ]);
+  });
+});
+
+describe("setHidden and the size of the chart", () => {
   it("hides a card in its place, and shows it again there", () => {
     const hidden = setHidden(setHidden(defaultLayout(), "ticket", true), "quote", true);
     expect(hidden.hidden).toEqual(["quote", "ticket"]);
-    expect(hidden.zones).toEqual(defaultLayout().zones);
+    expect(hidden.rows).toEqual(defaultLayout().rows);
     expect(setHidden(hidden, "ticket", false).hidden).toEqual(["quote"]);
     expect(setHidden(hidden, "ticket", true).hidden).toEqual(["quote", "ticket"]);
   });
@@ -175,17 +391,17 @@ describe("setHidden and setChartHeight", () => {
     expect(setChartWidth(defaultLayout(), 1e9).chartWidth).toBe(CHART_MAX_WIDTH);
     expect(setChartWidth(defaultLayout(), 900.4).chartWidth).toBe(900);
     expect(setChartWidth(setChartWidth(defaultLayout(), 900), null).chartWidth).toBeNull();
-    expect(normalizeLayout({ zones: {}, chartWidth: "900" }).chartWidth).toBeNull();
-    expect(normalizeLayout({ zones: {}, chartWidth: 900 }).chartWidth).toBe(900);
-    expect(normalizeLayout({ zones: {} }).chartWidth).toBeNull(); // a layout saved before the width
   });
 
   it("tells the default layout apart", () => {
     expect(isDefaultLayout(defaultLayout())).toBe(true);
     expect(isDefaultLayout(setHidden(defaultLayout(), "quote", true))).toBe(false);
+    expect(isDefaultArrangement(setHidden(defaultLayout(), "quote", true))).toBe(true);
     expect(isDefaultLayout(setChartHeight(defaultLayout(), 500))).toBe(false);
     expect(isDefaultLayout(setChartWidth(defaultLayout(), 900))).toBe(false);
-    expect(isDefaultLayout(moveCard(defaultLayout(), "chart", "main", 2))).toBe(false);
+    const moved = moveCard(defaultLayout(), "chart", { kind: "row", index: 0 });
+    expect(isDefaultLayout(moved)).toBe(false);
+    expect(isDefaultArrangement(moved)).toBe(false);
   });
 });
 
@@ -197,19 +413,50 @@ describe("the layout in storage", () => {
 
     const layout = setChartWidth(
       setChartHeight(
-        setHidden(moveCard(defaultLayout(), "ticket", "overview", 0), "sentiment", true),
+        setHidden(
+          moveCard(defaultLayout(), "ticket", { kind: "row", index: 0 }),
+          "sentiment",
+          true,
+        ),
         700,
       ),
       880,
     );
     saveLayout(layout, storage);
     expect(hasSavedLayout(storage)).toBe(true);
+    expect(JSON.parse(storage.getItem(LAYOUT_KEY) ?? "{}").version).toBe(2);
     expect(loadLayout(storage)).toEqual(layout);
 
     clearLayout(storage);
     expect(hasSavedLayout(storage)).toBe(false);
     expect(loadLayout(storage)).toEqual(defaultLayout());
     expect(storage.getItem("xtrader.theme")).toBe("dark");
+  });
+
+  it("reads a layout saved before the rows", () => {
+    const storage = memoryStorage({
+      [LAYOUT_KEY]: JSON.stringify({
+        version: 1,
+        zones: {
+          overview: ["quote", "sentiment", "results"],
+          main: ["chart", "decision"],
+          side: [],
+          bottom: ["activity"],
+        },
+        hidden: ["ticket"],
+        chartHeight: null,
+        chartWidth: 1000,
+      }),
+    });
+    const layout = loadLayout(storage);
+    expect(layout.rows).toEqual([
+      [["quote"], ["sentiment"], ["results"]],
+      [["chart", "decision"]],
+      [["activity"]],
+      [["ticket"]],
+    ]);
+    expect(layout.hidden).toEqual(["ticket"]);
+    expect(layout.chartWidth).toBe(1000);
   });
 
   it("falls back to the default when what is saved can't be read", () => {

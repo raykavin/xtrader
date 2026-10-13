@@ -2,11 +2,10 @@ import { useEffect, useState } from "react";
 import {
   CARD_LABELS,
   clearLayout,
-  defaultLayout,
   hasSavedLayout,
+  isDefaultArrangement,
   LAYOUT_KEY,
   loadLayout,
-  ZONES,
 } from "../lib/layout";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
@@ -22,11 +21,8 @@ interface Props {
 function changesOf(): string[] {
   if (!hasSavedLayout()) return [];
   const layout = loadLayout();
-  const fallback = defaultLayout();
   const changes: string[] = [];
-  if (ZONES.some((zone) => layout.zones[zone].join() !== fallback.zones[zone].join())) {
-    changes.push("Cards em outra ordem ou em outra área");
-  }
+  if (!isDefaultArrangement(layout)) changes.push("Cards em outra posição, linha ou coluna");
   if (layout.hidden.length > 0) {
     changes.push(`Ocultos: ${layout.hidden.map((card) => CARD_LABELS[card]).join(", ")}`);
   }
