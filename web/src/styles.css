@@ -2784,7 +2784,11 @@ fieldset.seg {
 /* the quote, the sentiment and the results side by side */
 .overview {
   display: grid;
-  grid-template-columns: minmax(300px, 4fr) minmax(240px, 3fr) minmax(0, 6fr);
+  /* the quote, the sentiment and the results; other cards set their own, see DashboardCards */
+  grid-template-columns: var(
+      --overview-columns,
+      minmax(300px, 4fr) minmax(240px, 3fr) minmax(0, 6fr)
+    );
   gap: var(--sp-4);
   align-items: stretch;
 }
@@ -3452,11 +3456,27 @@ fieldset.seg {
   align-items: stretch;
 }
 
-.workspace-main {
+.workspace-main,
+.workspace-side,
+.dashboard-bottom {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
   min-width: 0;
+}
+
+/* the workspace without its side column, or without its main one: the other full width */
+.workspace.workspace-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* the cards of the dashboard in their frames, see DashboardCards: out of the
+   customization the frames draw no box, the cards laid out as if they
+   weren't there */
+.dashboard-cards,
+.layout-card,
+.layout-card-body {
+  display: contents;
 }
 
 .chart-card {
@@ -3465,7 +3485,8 @@ fieldset.seg {
   background: var(--surface);
 }
 
-.workspace-main > .chart-card {
+.workspace-main > [data-card="chart"],
+.workspace-main > [data-card="chart"] > .layout-card-body > .chart-card {
   flex: 1 1 auto;
 }
 
@@ -3770,12 +3791,8 @@ fieldset.seg {
 
 /* the ticket as tall as its content, kept in view as the page scrolls
    where the window is tall enough to hold it whole */
-.ticket:where(.workspace > *) {
-  align-self: start;
-}
-
 @media (min-width: 1200px) and (min-height: 880px) {
-  .ticket:where(.workspace > *) {
+  .workspace-side > [data-card="ticket"]:only-child > .layout-card-body > .ticket {
     position: sticky;
     top: calc(var(--appbar-h) + var(--sp-4));
   }
@@ -4748,7 +4765,8 @@ fieldset.seg {
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
 
-  .overview > .kpis {
+  .overview > [data-card="results"],
+  .overview > [data-card="results"] > .layout-card-body > .kpis {
     grid-column: 1 / -1;
   }
 
@@ -5208,4 +5226,283 @@ fieldset.seg {
   .kpis > .kpi:first-child:has(.kpi-spark) {
     grid-column: auto;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* The customization of the layout of the dashboard                     */
+/* ------------------------------------------------------------------ */
+.layout-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  padding: var(--sp-4) var(--sp-5);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.layout-bar-text {
+  display: grid;
+  flex: 1 1 320px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.layout-bar-text p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.layout-hidden {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.layout-hidden-label {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.layout-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* customizing, the frames show: the bar of each card above it */
+.dashboard-cards.is-editing .layout-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: calc(var(--radius) + 6px);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+.dashboard-cards.is-editing .layout-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dashboard-cards.is-editing .layout-card-body > * {
+  flex: 1 1 auto;
+}
+
+.layout-card-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* the handle of a card, the only part that drags it: the buttons, the fields
+   and the chart of the card keep their own gestures */
+.layout-grip {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.layout-grip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.layout-grip:focus-visible,
+.chart-resize:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.layout-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-card.is-dragging {
+  opacity: 0.45;
+}
+
+.dashboard-cards[data-dragging],
+.dashboard-cards[data-dragging] .layout-grip {
+  cursor: grabbing;
+}
+
+.dashboard-cards[data-dragging] * {
+  user-select: none;
+}
+
+/* where the card dragged lands: a bar on the side of the card it goes beside */
+.layout-card.drop-before::after,
+.layout-card.drop-after::after {
+  content: "";
+  position: absolute;
+  z-index: 5;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  pointer-events: none;
+}
+
+.layout-card.drop-y::after {
+  left: 0;
+  right: 0;
+  height: 4px;
+}
+
+.layout-card.drop-x::after {
+  top: 0;
+  bottom: 0;
+  width: 4px;
+}
+
+.layout-card.drop-before.drop-y::after {
+  top: -10px;
+}
+
+.layout-card.drop-after.drop-y::after {
+  bottom: -10px;
+}
+
+.layout-card.drop-before.drop-x::after {
+  left: -10px;
+}
+
+.layout-card.drop-after.drop-x::after {
+  right: -10px;
+}
+
+/* an area without cards while customizing: a place to drop one */
+.layout-drop {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  padding: var(--sp-4);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+.overview > .layout-drop {
+  grid-column: 1 / -1;
+}
+
+.layout-drop.is-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--accent-text);
+}
+
+.dashboard-cards.is-editing .is-target:not(.layout-drop) {
+  border-radius: var(--radius);
+  outline: 2px dashed var(--accent);
+  outline-offset: 6px;
+}
+
+.layout-drag-ghost {
+  position: fixed;
+  z-index: 2000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: var(--shadow-pop);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* the bar below the chart sizing its height */
+.chart-resize {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-resize-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.chart-resize:hover .chart-resize-grip,
+.chart-resize:focus-visible .chart-resize-grip {
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layout-drag-ghost {
+    transition: none;
+  }
+}
+
+/* the layout of the dashboard in the settings */
+.layout-settings-text {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.layout-settings-changes {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* the chart sized by the user: its height, never above the window */
+.dashboard-cards[data-chart-height] .chart-card:not(.chart-fullscreen) .price-chart {
+  flex: 0 0 auto;
+  height: min(var(--chart-height), 92dvh);
+  min-height: min(var(--chart-height), 92dvh);
+}
+
+.dashboard-cards[data-chart-height] .workspace-main > [data-card="chart"],
+.dashboard-cards[data-chart-height]
+  .workspace-main
+  > [data-card="chart"]
+  > .layout-card-body
+  > .chart-card {
+  flex: 0 0 auto;
 }

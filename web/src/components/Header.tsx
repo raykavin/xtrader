@@ -18,13 +18,24 @@ interface Props {
   menuOpen: boolean;
   /** The navigation of the pages, in the middle of the bar. */
   nav: ReactNode;
+  /** The actions of the page shown, before the theme, eg: the layout of the dashboard. */
+  actions?: ReactNode;
 }
 
 /**
  * The bar atop the pages: the brand, the navigation (behind the menu on a
  * phone), whether the updates are live, the theme, the user and the logout.
  */
-export function Header({ theme, onThemeToggle, connected, user, onMenu, menuOpen, nav }: Props) {
+export function Header({
+  theme,
+  onThemeToggle,
+  connected,
+  user,
+  onMenu,
+  menuOpen,
+  nav,
+  actions,
+}: Props) {
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +94,7 @@ export function Header({ theme, onThemeToggle, connected, user, onMenu, menuOpen
               <span className="live-label">{connected ? "Ao vivo" : "Reconectando…"}</span>
             </span>
           )}
+          {actions}
           <button
             type="button"
             className="btn btn-ghost btn-icon"
