@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  Fragment,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
@@ -7,9 +8,11 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   CARD_LABELS,
   CARDS,
@@ -22,19 +25,19 @@ import {
   chartWidthOf,
   clearLayout,
   type DashboardLayout,
+  type Direction,
   defaultLayout,
   isDefaultLayout,
   LAYOUT_KEY,
   loadLayout,
   moveCard,
+  type Placement,
   saveLayout,
   setChartHeight,
   setChartWidth,
   setHidden,
+  shownRows,
   stepCard,
-  ZONE_LABELS,
-  type ZoneId,
-  zoneOf,
 } from "../lib/layout";
 import { Icon } from "./Icon";
 
@@ -63,6 +66,20 @@ export function useDashboardLayout() {
   return { layout, update, reset };
 }
 
+/** Whether the media query matches, following it. */
+function useMedia(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches ?? true);
+  useEffect(() => {
+    const list = window.matchMedia?.(query);
+    if (!list) return;
+    const onChange = () => setMatches(list.matches);
+    onChange();
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
+}
+
 interface Props {
   layout: DashboardLayout;
   onLayout: (layout: DashboardLayout) => void;
@@ -75,16 +92,6 @@ interface Props {
   onReset: () => void;
 }
 
-/** Where a card dragged would go: before the card index of an area, eg: its end for none. */
-interface DropTarget {
-  zone: ZoneId;
-  index: number;
-  /** The card it lands beside, and on which of its sides along axis; none on an empty spot of the area. */
-  card?: CardId;
-  side?: "before" | "after";
-  axis?: "x" | "y";
-}
-
 /** A card being dragged, and where the pointer is. */
 interface Drag {
   card: CardId;
@@ -93,57 +100,68 @@ interface Drag {
   y: number;
 }
 
-/** The least width of the column beside the chart in the workspace: the side one, the main one. */
-const SIDE_MIN_WIDTH = 300;
-const MAIN_MIN_WIDTH = 360;
-
-/** The columns of the overview row for cards other than its own: the share and the least width of each. */
-const OVERVIEW_TRACKS: Record<CardId, string> = {
-  quote: "minmax(300px, 4fr)",
-  sentiment: "minmax(240px, 3fr)",
-  results: "minmax(0, 6fr)",
-  chart: "minmax(0, 8fr)",
-  decision: "minmax(260px, 4fr)",
-  ticket: "minmax(300px, 4fr)",
-  activity: "minmax(0, 8fr)",
+/**
+ * The column of each card in a row of several on a wide screen: its least
+ * width (never above an equal share of the row, so that a row of many cards
+ * never overflows), and its share of the rest, or its widest width.
+ */
+const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
+  quote: { min: 300, grow: 4 },
+  sentiment: { min: 240, grow: 3 },
+  results: { min: 280, grow: 6 },
+  chart: { min: CHART_MIN_WIDTH, grow: 8 },
+  decision: { min: 260, grow: 4 },
+  ticket: { min: 300, grow: 0, max: 344 },
+  activity: { min: 360, grow: 8 },
 };
 
 /**
- * The columns of the overview row holding cards: none for its own cards in
- * their order (the ones of the stylesheet), a column each for up to three,
- * else as many columns of 300 px at least as fit, the cards wrapping.
+ * The cards of about the same height, as tall as each other in a row of them
+ * alone, one per column, as the overview row of the default layout; next to a
+ * taller card (the chart, the ticket, the activity, or a column of several),
+ * each keeps the height of its content.
  */
-export function overviewColumns(cards: CardId[], chartWidth = false): string | undefined {
-  if (cards.join() === "quote,sentiment,results") return undefined;
-  if (cards.length > 3) return "repeat(auto-fit, minmax(300px, 1fr))";
-  return cards
-    .map((card) => (card === "chart" && chartWidth ? CHART_WIDTH_TRACK : OVERVIEW_TRACKS[card]))
-    .join(" ");
-}
+const EVEN: ReadonlySet<CardId> = new Set(["quote", "sentiment", "results", "decision"]);
 
 /** The column of the chart of the width the user set, see DashboardLayout.chartWidth. */
 const CHART_WIDTH_TRACK = "minmax(0, var(--chart-width))";
 
-/**
- * The columns of the workspace holding the chart of the width the user set
- * beside another column: the chart's column of that width, the other taking
- * the rest, at its least width; none for the ones of the stylesheet.
- */
-export function workspaceColumns(
-  chartZone: ZoneId,
-  withMain: boolean,
-  withSide: boolean,
-): string | undefined {
-  if (chartZone === "main" && withSide)
-    return `${CHART_WIDTH_TRACK} minmax(${SIDE_MIN_WIDTH}px, 1fr)`;
-  if (chartZone === "side" && withMain)
-    return `minmax(${MAIN_MIN_WIDTH}px, 1fr) ${CHART_WIDTH_TRACK}`;
-  return undefined;
+/** The least width of a column of cards in a row of count columns, in CSS pixels, at most an equal share of width. */
+function leastWidth(cards: CardId[], count: number, width: number, gap: number): number {
+  const share = (width - (count - 1) * gap) / count;
+  return Math.min(Math.max(0, ...cards.map((card) => TRACKS[card].min)), share);
 }
 
-/** The step of a move of the height of the chart by the keyboard, in CSS pixels, and with Shift or a page key. */
+/**
+ * The columns of a row on a wide screen, for its columns of cards: a column
+ * alone the whole row; else each at its least width at least, sharing the
+ * rest, but the chart of the width the user set (chartWidth), the others
+ * sharing what it leaves.
+ */
+export function rowColumns(columns: CardId[][], chartWidth = false): string {
+  const count = columns.length;
+  const share = `calc((100% - ${count - 1} * var(--sp-4)) / ${count})`;
+  return columns
+    .map((cards) => {
+      if (chartWidth && cards.includes("chart")) return CHART_WIDTH_TRACK;
+      if (count === 1) return "minmax(0, 1fr)";
+      const min = Math.max(...cards.map((card) => TRACKS[card].min));
+      const least = min > 0 ? `min(${min}px, ${share})` : "0";
+      const widest = cards.map((card) => TRACKS[card].max);
+      if (widest.every((max) => max !== undefined)) {
+        return `minmax(${least}, ${Math.max(...(widest as number[]))}px)`;
+      }
+      return `minmax(${least}, ${Math.max(...cards.map((card) => TRACKS[card].grow))}fr)`;
+    })
+    .join(" ");
+}
+
+/** The step of a move of the size of the chart by the keyboard, in CSS pixels, and with Shift or a page key. */
 const RESIZE_STEP = 20;
 const RESIZE_BIG_STEP = 100;
+
+/** How close to the widest the chart dragged alone in its row fills it again, the width of the responsive layout. */
+const FILL_SNAP = 12;
 
 /** The highest height of the chart the window takes, in CSS pixels. */
 function chartCeiling(): number {
@@ -153,14 +171,45 @@ function chartCeiling(): number {
   );
 }
 
+/** What a move of a card to target says, for the readers of the screen. */
+function describeMove(card: CardId, target: Placement): string {
+  const label = CARD_LABELS[card];
+  switch (target.kind) {
+    case "beside":
+      return `${label} ao lado ${target.side === "before" ? "esquerdo" : "direito"} de ${CARD_LABELS[target.card]}.`;
+    case "stack":
+      return `${label} ${target.side === "before" ? "acima" : "abaixo"} de ${CARD_LABELS[target.card]}.`;
+    case "swap":
+      return `${label} trocou de lugar com ${CARD_LABELS[target.card]}.`;
+    case "row":
+      return `${label} numa linha própria.`;
+  }
+}
+
 /**
- * The cards of the dashboard in the areas of the page, as the user arranged
- * them (see lib/layout.ts). Out of the customization they are drawn as they
- * are, nothing added to them. Customizing, each card gets a bar above it: its
- * handle, dragged with a mouse or a finger, or moved with the arrows of the
- * keyboard, and a button hiding it; the chart a bar below it sizing its height.
- * Only those bars drag, so the buttons, the fields and the chart within the
- * cards keep working.
+ * The element a card is drawn in, the same one wherever the card goes: the
+ * card is rendered into it once (a portal), and the element moved into the
+ * frame of its place, so that a card moved keeps its state, eg: the zoom of
+ * the chart, or what is typed in the ticket.
+ */
+function CardSlot({ host }: { host: HTMLElement }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const slot = ref.current;
+    if (slot && host.parentElement !== slot) slot.appendChild(host);
+  });
+  return <div ref={ref} className="layout-card-body" />;
+}
+
+/**
+ * The cards of the dashboard in rows of columns, as the user arranged them
+ * (see lib/layout.ts): any card in any row and column, beside the others or
+ * stacked with them, the rows and columns without a card shown left out.
+ * Out of the customization the cards are drawn as they are, nothing added to
+ * them. Customizing, each card gets a bar above it: its handle, dragged with a
+ * mouse or a finger, or moved with the arrows of the keyboard, and a button
+ * hiding it; the chart bars on its edges sizing it. Only those bars drag, so
+ * the buttons, the fields and the chart within the cards keep working.
  */
 export function DashboardCards({
   layout,
@@ -171,18 +220,32 @@ export function DashboardCards({
   onReset,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const hosts = useRef(new Map<CardId, HTMLElement>());
   const hintId = useId();
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [target, setTarget] = useState<DropTarget | null>(null);
+  const [target, setTarget] = useState<Placement | null>(null);
   const [focusCard, setFocusCard] = useState<CardId | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  // a drag of the width of the chart going on: its columns follow it before it is saved
+  // a drag of the width of the chart going on: its column follows it before it is saved
   const [sizingWidth, setSizingWidth] = useState(false);
+  const wide = useMedia("(min-width: 1200px)");
+  const unstacked = useMedia("(min-width: 1024px)");
 
   const available = (card: CardId) => cards[card] !== undefined && cards[card] !== null;
   const shown = (card: CardId) => available(card) && !layout.hidden.includes(card);
-  const zoneCards = (zone: ZoneId) => layout.zones[zone].filter(shown);
+  const rows = shownRows(layout, shown);
   const hidden = CARDS.filter((card) => available(card) && layout.hidden.includes(card));
+
+  /** The element card is drawn in, see CardSlot. */
+  const hostOf = (card: CardId) => {
+    let host = hosts.current.get(card);
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "layout-card-host";
+      hosts.current.set(card, host);
+    }
+    return host;
+  };
 
   // the handle of the card moved by the keyboard keeps the focus, wherever it went
   useEffect(() => {
@@ -199,37 +262,46 @@ export function DashboardCards({
     }
   }, [editing]);
 
-  /** Where the card dragged would land under the pointer at x, y; null over itself or out of the areas. */
-  const dropAt = useCallback(
-    (dragged: CardId, x: number, y: number): DropTarget | null => {
-      const root = rootRef.current;
-      if (!root) return null;
-      for (const element of document.elementsFromPoint(x, y)) {
-        if (!root.contains(element)) continue;
-        const cardElement = element.closest<HTMLElement>("[data-card]");
-        if (cardElement) {
-          const card = cardElement.dataset.card as CardId;
-          if (card === dragged) return null; // over its own place: it stays there
-          const zone = cardElement.dataset.zone as ZoneId;
-          const rect = cardElement.getBoundingClientRect();
-          const area = cardElement.parentElement?.getBoundingClientRect() ?? rect;
-          // beside the others of a row, or above and below them in a column
-          const axis = rect.width < area.width * 0.75 ? "x" : "y";
-          const before =
-            axis === "x" ? x < rect.left + rect.width / 2 : y < rect.top + rect.height / 2;
-          const index = layout.zones[zone].indexOf(card) + (before ? 0 : 1);
-          return { zone, index, card, side: before ? "before" : "after", axis };
-        }
-        const areaElement = element.closest<HTMLElement>("[data-zone-area]");
-        if (areaElement) {
-          const zone = areaElement.dataset.zoneArea as ZoneId;
-          return { zone, index: layout.zones[zone].length };
-        }
+  /**
+   * Where the card dragged would land under the pointer at x, y: on the left
+   * or the right edge of a card, a column of its own beside the card's column;
+   * on its top or bottom edge, above or below it in its column; in its middle,
+   * the card's place, a swap; on a band between the rows, a row of its own; on
+   * the empty part of a row, a column at its end. Null over itself or out of
+   * the cards.
+   */
+  const dropAt = useCallback((dragged: CardId, x: number, y: number): Placement | null => {
+    const root = rootRef.current;
+    if (!root) return null;
+    for (const element of document.elementsFromPoint(x, y)) {
+      if (!root.contains(element)) continue;
+      const gap = element.closest<HTMLElement>("[data-row-gap]");
+      if (gap) return { kind: "row", index: Number(gap.dataset.rowGap) };
+      const cardElement = element.closest<HTMLElement>("[data-card]");
+      if (cardElement) {
+        const card = cardElement.dataset.card as CardId;
+        if (card === dragged) return null; // over its own place: it stays there
+        const rect = cardElement.getBoundingClientRect();
+        const edgeX = Math.min(Math.max(rect.width * 0.25, 48), 160);
+        const edgeY = Math.min(Math.max(rect.height * 0.3, 32), 140);
+        if (x < rect.left + edgeX) return { kind: "beside", card, side: "before" };
+        if (x > rect.right - edgeX) return { kind: "beside", card, side: "after" };
+        if (y < rect.top + edgeY) return { kind: "stack", card, side: "before" };
+        if (y > rect.bottom - edgeY) return { kind: "stack", card, side: "after" };
+        return { kind: "swap", card };
       }
-      return null;
-    },
-    [layout],
-  );
+      const rowElement = element.closest<HTMLElement>("[data-row]");
+      if (rowElement) {
+        // beside the column at the left of the pointer, else before the first one
+        const columns = [...rowElement.querySelectorAll<HTMLElement>(":scope > [data-cards]")];
+        const left = columns.filter((column) => column.getBoundingClientRect().left < x).pop();
+        const anchor = (left ?? columns[0])?.dataset.cards?.split(",")[0] as CardId | undefined;
+        if (!anchor || anchor === dragged) return null;
+        return { kind: "beside", card: anchor, side: left ? "after" : "before" };
+      }
+    }
+    return null;
+  }, []);
 
   // the drag follows the pointer over the page, scrolling it near its edges
   useEffect(() => {
@@ -250,8 +322,11 @@ export function DashboardCards({
       const landing =
         event.type === "pointerup" ? dropAt(drag.card, event.clientX, event.clientY) : null;
       if (landing) {
-        onLayout(moveCard(layout, drag.card, landing.zone, landing.index));
-        setAnnouncement(`${CARD_LABELS[drag.card]} movido para a ${ZONE_LABELS[landing.zone]}.`);
+        const next = moveCard(layout, drag.card, landing);
+        if (next !== layout) {
+          onLayout(next);
+          setAnnouncement(describeMove(drag.card, landing));
+        }
       }
       setDrag(null);
       setTarget(null);
@@ -284,27 +359,27 @@ export function DashboardCards({
   };
 
   const keyMove = (card: CardId) => (event: KeyboardEvent<HTMLButtonElement>) => {
-    const delta =
-      event.key === "ArrowUp" || event.key === "ArrowLeft"
-        ? -1
-        : event.key === "ArrowDown" || event.key === "ArrowRight"
-          ? 1
-          : 0;
-    if (delta === 0) return;
+    const directions: Record<string, Direction> = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
+    const direction = directions[event.key];
+    if (!direction) return;
     event.preventDefault();
-    const next = stepCard(layout, card, delta, shown);
+    const next = stepCard(layout, card, direction, shown);
     if (next === layout) {
-      setAnnouncement(
-        `${CARD_LABELS[card]} já está ${delta < 0 ? "no início" : "no fim"} do painel.`,
-      );
+      setAnnouncement(`${CARD_LABELS[card]} já está na borda do painel.`);
       return;
     }
     onLayout(next);
-    const zone = zoneOf(next, card);
-    const position = next.zones[zone].filter(shown).indexOf(card) + 1;
-    const count = next.zones[zone].filter(shown).length;
+    const after = shownRows(next, shown);
+    const row = after.findIndex((r) => r.columns.some((column) => column.cards.includes(card)));
+    const columns = after[row]?.columns ?? [];
+    const column = columns.findIndex((c) => c.cards.includes(card));
     setAnnouncement(
-      `${CARD_LABELS[card]}: posição ${position} de ${count} na ${ZONE_LABELS[zone]}.`,
+      `${CARD_LABELS[card]}: linha ${row + 1} de ${after.length}, coluna ${column + 1} de ${columns.length}.`,
     );
     setFocusCard(card);
   };
@@ -314,26 +389,32 @@ export function DashboardCards({
     setAnnouncement(`${CARD_LABELS[card]} oculto. Ele volta pelo botão Mostrar, acima dos cards.`);
   };
 
+  // the width of the chart, set or being dragged
+  const chartWidth = sizingWidth || layout.chartWidth !== null;
+  const chartRow = rows.find((row) => row.columns.some((column) => column.cards.includes("chart")));
+  // the rows of three columns or more wrap below the wide screens, where the width isn't the user's
+  const widthApplies = unstacked && chartRow !== undefined && (wide || chartRow.columns.length < 3);
+
   /**
    * The card in its frame: out of the customization the frame draws no box
-   * (display: contents), the card laid out as if it weren't there; the same
-   * elements either way, so that the cards keep their state, eg: the zoom of
-   * the chart or what is typed in the ticket, as the customization starts and
-   * ends.
+   * (display: contents), the card laid out as if it weren't there. grow tells
+   * the card filling the rest of its column: the chart of the responsive
+   * height, or a card of a row of cards of about the same height, see EVEN.
    */
-  const renderCard = (card: CardId, zone: ZoneId) => {
-    const node = cards[card];
+  const renderCard = (card: CardId, grow: boolean) => {
     const label = CARD_LABELS[card];
-    const landing = editing && target?.card === card ? target : null;
+    const landing =
+      editing && target && target.kind !== "row" && target.card === card ? target : null;
     const className = [
       "layout-card",
       drag?.card === card && "is-dragging",
-      landing && `drop-${landing.side} drop-${landing.axis}`,
+      landing?.kind === "stack" && `drop-${landing.side} drop-y`,
+      landing?.kind === "swap" && "drop-swap",
     ]
       .filter(Boolean)
       .join(" ");
     return (
-      <div key={card} className={className} data-card={card} data-zone={zone}>
+      <div key={card} className={className} data-card={card} data-grow={grow ? "" : undefined}>
         {editing && (
           <div key="bar" className="layout-card-bar">
             <button
@@ -358,9 +439,7 @@ export function DashboardCards({
             </button>
           </div>
         )}
-        <div key="body" className="layout-card-body">
-          {node}
-        </div>
+        <CardSlot key="body" host={hostOf(card)} />
         {editing && card === "chart" && (
           <ChartSizer
             key="size"
@@ -368,42 +447,36 @@ export function DashboardCards({
             layout={layout}
             onLayout={onLayout}
             onAnnounce={setAnnouncement}
-            widthApplies={!(zone === "overview" && zoneCards("overview").length > 3)}
+            widthApplies={widthApplies}
             onSizingWidth={setSizingWidth}
           />
+        )}
+        {landing?.kind === "swap" && (
+          <span key="swap" className="layout-swap-label" aria-hidden="true">
+            Trocar de lugar
+          </span>
         )}
       </div>
     );
   };
 
-  /** The cards of an area, and customizing, a place to drop one when it holds none. */
-  const renderZone = (zone: ZoneId) => {
-    const list = zoneCards(zone);
-    if (list.length > 0 || !editing) return list.map((card) => renderCard(card, zone));
-    return (
+  /** A band between the rows while customizing, where a card dropped gets a row of its own before the row of index. */
+  const rowGap = (index: number) =>
+    editing && (
       <div
-        className={target?.zone === zone && !target.card ? "layout-drop is-target" : "layout-drop"}
+        key={`gap-${index}`}
+        className={
+          target?.kind === "row" && target.index === index
+            ? "layout-row-gap is-target"
+            : "layout-row-gap"
+        }
+        data-row-gap={index}
+        aria-hidden="true"
       >
-        Arraste um card para a {ZONE_LABELS[zone]}
+        {drag && <span>Soltar aqui: nova linha</span>}
       </div>
     );
-  };
 
-  const overview = zoneCards("overview");
-  const main = zoneCards("main");
-  const side = zoneCards("side");
-  const bottom = zoneCards("bottom");
-  // the width of the chart, set or being dragged, and the area of the chart
-  const chartWidth = sizingWidth || layout.chartWidth !== null;
-  const chartZone = zoneOf(layout, "chart");
-  const chartShown = shown("chart");
-  const columns = overviewColumns(overview, chartWidth && chartShown);
-  const workspaceStyle =
-    chartWidth && chartShown
-      ? workspaceColumns(chartZone, main.length > 0 || editing, side.length > 0 || editing)
-      : undefined;
-  const areaClass = (base: string, zone: ZoneId) =>
-    editing && target?.zone === zone && !target.card ? `${base} is-target` : base;
   const style = {
     ...(layout.chartHeight !== null && { "--chart-height": `${layout.chartHeight}px` }),
     ...(layout.chartWidth !== null && { "--chart-width": `${layout.chartWidth}px` }),
@@ -423,9 +496,11 @@ export function DashboardCards({
           <div className="layout-bar-text">
             <span className="eyebrow">Personalizando o layout</span>
             <p id={hintId}>
-              Arraste um card pela barra acima dele, ou use as setas do teclado com ela em foco.
-              Oculte um card no ✕ e ajuste o tamanho do gráfico pelas bordas dele: a barra de baixo
-              muda a altura, a da direita a largura, e o canto, as duas.
+              Arraste um card pela barra acima dele e solte na borda esquerda ou direita de outro
+              card para pô-lo ao lado, em cima ou embaixo para empilhar, no meio para trocar os dois
+              de lugar, ou numa faixa entre as linhas para criar uma linha. Com a barra em foco, as
+              setas do teclado também movem o card. Oculte um card no ✕; o gráfico muda de tamanho
+              pelas bordas: a de baixo muda a altura, a da direita a largura, e o canto, as duas.
             </p>
           </div>
           {hidden.length > 0 && (
@@ -468,47 +543,54 @@ export function DashboardCards({
         </section>
       )}
 
-      {(overview.length > 0 || editing) && (
-        <div
-          className={areaClass("overview", "overview")}
-          data-zone-area="overview"
-          style={columns ? ({ "--overview-columns": columns } as CSSProperties) : undefined}
-        >
-          {renderZone("overview")}
-        </div>
-      )}
-
-      {(main.length > 0 || side.length > 0 || editing) && (
-        <div
-          className={
-            !editing && (main.length === 0 || side.length === 0)
-              ? "workspace workspace-single"
-              : "workspace"
-          }
-          style={
-            workspaceStyle
-              ? ({ "--workspace-columns": workspaceStyle } as CSSProperties)
-              : undefined
-          }
-        >
-          {(main.length > 0 || editing) && (
-            <div className={areaClass("workspace-main", "main")} data-zone-area="main">
-              {renderZone("main")}
+      {rows.map((row) => {
+        const columns = row.columns.map((column) => column.cards);
+        const overview = columns.join("|") === "quote|sentiment|results";
+        const hasChart = columns.some((cards) => cards.includes("chart"));
+        const even = columns.every(
+          (cards) => cards.length === 1 && cards[0] !== undefined && EVEN.has(cards[0]),
+        );
+        return (
+          <Fragment key={`row-${columns[0]?.[0] ?? row.index}`}>
+            {rowGap(row.index)}
+            <div
+              className={overview ? "dash-row overview" : "dash-row"}
+              data-row={row.index}
+              data-wrap={columns.length >= 3 ? "" : undefined}
+              data-even={even ? "" : undefined}
+              style={
+                {
+                  "--row-columns": rowColumns(columns, chartWidth && hasChart),
+                } as CSSProperties
+              }
+            >
+              {row.columns.map((column) => {
+                const beside =
+                  editing && target?.kind === "beside" && column.cards.includes(target.card)
+                    ? target
+                    : null;
+                return (
+                  <div
+                    key={`column-${column.cards[0]}`}
+                    className={beside ? `dash-col drop-${beside.side} drop-x` : "dash-col"}
+                    data-cards={column.cards.join(",")}
+                  >
+                    {column.cards.map((card) =>
+                      renderCard(
+                        card,
+                        column.cards.includes("chart")
+                          ? card === "chart" && layout.chartHeight === null
+                          : even,
+                      ),
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
-          {(side.length > 0 || editing) && (
-            <div className={areaClass("workspace-side", "side")} data-zone-area="side">
-              {renderZone("side")}
-            </div>
-          )}
-        </div>
-      )}
-
-      {(bottom.length > 0 || editing) && (
-        <div className={areaClass("dashboard-bottom", "bottom")} data-zone-area="bottom">
-          {renderZone("bottom")}
-        </div>
-      )}
+          </Fragment>
+        );
+      })}
+      {rowGap(layout.rows.length)}
 
       {drag && (
         <div
@@ -523,6 +605,10 @@ export function DashboardCards({
       <p className="sr-only" aria-live="polite">
         {announcement}
       </p>
+      {/* the cards, rendered once into their elements, after the frames they are moved into */}
+      {CARDS.filter(shown).map((card) => (
+        <Fragment key={card}>{createPortal(cards[card], hostOf(card))}</Fragment>
+      ))}
     </div>
   );
 }
@@ -530,11 +616,13 @@ export function DashboardCards({
 /**
  * The bars sizing the chart, while customizing: below it, its height, from
  * 280 px to what the window holds; on its right edge, its width, from 360 px
- * to what its area holds (the other column of the workspace kept at its least
- * width); at their corner, both. Dragged, or the bars with the arrows of the
- * keyboard; back to the size of the responsive layout with their buttons.
- * While dragged the size is set on the page alone, saved once released. The
- * width shows only where it applies: on a screen whose areas aren't stacked.
+ * to what its row holds, the other columns of the row kept at their least
+ * width, and alone in its row, the whole row, where it fills the row again
+ * (the width of the responsive layout); at their corner, both. Dragged, or the
+ * bars with the arrows of the keyboard; back to the size of the responsive
+ * layout with their buttons. While dragged the size is set on the page alone,
+ * saved once released. The width shows only where it applies: on a screen
+ * whose rows aren't stacked.
  */
 function ChartSizer({
   root,
@@ -548,7 +636,7 @@ function ChartSizer({
   layout: DashboardLayout;
   onLayout: (layout: DashboardLayout) => void;
   onAnnounce: (message: string) => void;
-  /** Whether the area of the chart takes a width, eg: not the overview row wrapping more than three cards. */
+  /** Whether the row of the chart takes a width, eg: not on a screen whose rows are stacked. */
   widthApplies: boolean;
   /** Tells a drag of the width starting and ending, the columns following it meanwhile. */
   onSizingWidth: (sizing: boolean) => void;
@@ -566,27 +654,30 @@ function ChartSizer({
     return Math.round(chart?.getBoundingClientRect().height ?? CHART_MIN_HEIGHT);
   };
 
-  /** The width of the chart as drawn now: the one of its frame, its column. */
-  const drawnWidth = () => Math.round(frame()?.getBoundingClientRect().width ?? CHART_MIN_WIDTH);
+  /** The width of the chart as drawn now: the one of its column. */
+  const drawnWidth = () =>
+    Math.round(
+      frame()?.closest<HTMLElement>(".dash-col")?.getBoundingClientRect().width ?? CHART_MIN_WIDTH,
+    );
 
-  /** The widest the chart goes in its area: the area, but the least width of the other column. */
+  /**
+   * The widest the chart goes in its row, and whether it is alone in it: the
+   * row, but the least width of each other column and the gaps between them.
+   */
   const widthCeiling = () => {
-    const card = frame();
-    const area = card?.parentElement;
-    if (!card || !area) return CHART_MAX_WIDTH;
-    const zone = card.dataset.zone as ZoneId;
-    const workspace = area.parentElement;
-    if ((zone === "main" || zone === "side") && workspace?.classList.contains("workspace")) {
-      const other = workspace.querySelector(
-        zone === "main" ? ".workspace-side" : ".workspace-main",
-      );
-      if (other) {
-        const gap = Number.parseFloat(getComputedStyle(workspace).columnGap) || 16;
-        const least = zone === "main" ? SIDE_MIN_WIDTH : MAIN_MIN_WIDTH;
-        return Math.round(workspace.getBoundingClientRect().width - gap - least);
-      }
+    const column = frame()?.closest<HTMLElement>(".dash-col");
+    const row = column?.parentElement;
+    if (!column || !row) return { max: CHART_MAX_WIDTH, alone: false };
+    const columns = [...row.querySelectorAll<HTMLElement>(":scope > .dash-col")];
+    const gap = Number.parseFloat(getComputedStyle(row).columnGap) || 16;
+    const rowWidth = row.getBoundingClientRect().width;
+    let rest = 0;
+    for (const other of columns) {
+      if (other === column) continue;
+      const cards = (other.dataset.cards ?? "").split(",").filter(Boolean) as CardId[];
+      rest += leastWidth(cards, columns.length, rowWidth, gap) + gap;
     }
-    return Math.round(area.getBoundingClientRect().width);
+    return { max: Math.round(rowWidth - rest), alone: columns.length === 1 };
   };
 
   const bound = (value: number, min: number, max: number) =>
@@ -613,18 +704,25 @@ function ChartSizer({
     if (next.width !== undefined) {
       updated = setChartWidth(updated, next.width);
       said.push(
-        next.width === null ? "largura automática" : `largura ${chartWidthOf(next.width)} px`,
+        next.width === null
+          ? "largura automática, a linha inteira"
+          : `largura ${chartWidthOf(next.width)} px`,
       );
     }
     onLayout(updated);
     onAnnounce(`Gráfico: ${said.join(", ")}.`);
   };
 
+  /** The width to save for value: the responsive one for the chart alone in its row stretched to its end. */
+  const widthOf = (value: number, ceiling: { max: number; alone: boolean }) =>
+    ceiling.alone && value >= ceiling.max - FILL_SNAP ? null : value;
+
   /** A drag of the handle of event sizing the axes asked, captured by it until released. */
   const drag =
     (axes: { height?: boolean; width?: boolean }) => (event: PointerEvent<HTMLElement>) => {
       if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
       event.preventDefault();
+      event.stopPropagation();
       const handle = event.currentTarget;
       handle.setPointerCapture(event.pointerId);
       const fromHeight = drawnHeight();
@@ -632,7 +730,7 @@ function ChartSizer({
       const startX = event.clientX;
       const startY = event.clientY;
       const heightMax = chartCeiling();
-      const widthMax = widthCeiling();
+      const ceiling = widthCeiling();
       let nextHeight = fromHeight;
       let nextWidth = fromWidth;
       if (axes.width) {
@@ -646,7 +744,7 @@ function ChartSizer({
           apply("height", nextHeight);
         }
         if (axes.width) {
-          nextWidth = bound(fromWidth + moveEvent.clientX - startX, CHART_MIN_WIDTH, widthMax);
+          nextWidth = bound(fromWidth + moveEvent.clientX - startX, CHART_MIN_WIDTH, ceiling.max);
           setLiveWidth(nextWidth);
           apply("width", nextWidth);
         }
@@ -660,7 +758,7 @@ function ChartSizer({
         if (axes.width) onSizingWidth(false);
         commit({
           ...(axes.height && { height: nextHeight }),
-          ...(axes.width && { width: nextWidth }),
+          ...(axes.width && { width: widthOf(nextWidth, ceiling) }),
         });
       };
       handle.addEventListener("pointermove", move);
@@ -710,15 +808,16 @@ function ChartSizer({
   };
 
   const widthKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const ceiling = widthCeiling();
     const next = keyed(
       event,
       "ArrowLeft",
       "ArrowRight",
       layout.chartWidth ?? drawnWidth(),
       CHART_MIN_WIDTH,
-      widthCeiling(),
+      ceiling.max,
     );
-    if (next !== null) commit({ width: next });
+    if (next !== null) commit({ width: widthOf(next, ceiling) });
   };
 
   return (
