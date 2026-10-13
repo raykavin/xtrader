@@ -180,6 +180,12 @@ type RKTrendConfluenceConfig struct {
 	PositionFraction float64
 	Leverage         float64
 	PositionSize     map[string]float64
+
+	// MaxRiskPct, above 0, skips an entry losing more than that % of the
+	// balance available (the quote of the broker's Position) at its stop loss:
+	// the tightest of the stops in ATR, on the close and at the broker, or the
+	// one of StopValue. It needs one of them. 0 sets no limit.
+	MaxRiskPct float64
 }
 
 // DefaultRKTrendConfluenceConfig returns the defaults of the indicator, on the
@@ -271,6 +277,12 @@ func (c RKTrendConfluenceConfig) validate() error {
 		return errors.New("stop and trailing stop ATR multiples can't be negative")
 	case c.StopValue < 0 || c.TakeProfitValue < 0:
 		return errors.New("the fixed stop loss and take profit values can't be negative")
+	case c.MaxRiskPct < 0:
+		return errors.New("the max risk can't be negative")
+	case c.MaxRiskPct > 0 && c.StopValue == 0 && c.StopATR == 0 && c.TrailingATR == 0 && c.BrokerStopATR == 0 &&
+		c.BrokerTrailingATR == 0:
+		return errors.New("the max risk is what the position loses at its stop loss: it needs one (stop-atr, " +
+			"trailing-atr, broker-stop-atr, broker-trailing-atr or stop-value)")
 	case c.MinPositionValue <= 0:
 		return errors.New("min position value must be positive")
 	case c.PositionFraction <= 0 || c.PositionFraction > 1:
@@ -435,6 +447,7 @@ func NewRKTrendConfluence(cfg RKTrendConfluenceConfig) (*RKTrendConfluence, erro
 	s := &RKTrendConfluence{
 		cfg: cfg,
 		sizing: rkSizing{sizes: cfg.PositionSize, fraction: cfg.PositionFraction, leverage: cfg.Leverage,
+			maxRisk:  cfg.MaxRiskPct,
 			minValue: cfg.MinPositionValue},
 		trades:     make(map[string]*rkTrade),
 		protection: make(map[string]*rkProtection),
@@ -628,7 +641,7 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 	}
 
 	size, value, ok := s.sizing.position(df.Pair, quote, closePrice)
-	if !ok {
+	if !ok || s.sizing.risky(df.Pair, closePrice, s.entryStop(df, side, size), size, quote) {
 		return
 	}
 
@@ -684,6 +697,29 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 			extreme: closePrice, profit: rkLevelsOf(orders[1:]).profit}
 	}
 	return err
+}
+
+// entryStop returns the stop loss of an entry of side of size on the last
+// candle of df: the tightest of the stops on the close (StopATR, TrailingATR)
+// and of the one at the broker (BrokerStopATR, BrokerTrailingATR), or the one
+// of StopValue; 0 for none.
+func (s *RKTrendConfluence) entryStop(df *model.Dataframe, side model.SideType, size float64) float64 {
+	closePrice, atr, sign := df.Close.Last(0), df.Metadata["rk_atr"].Last(0), rkSign(side)
+	if s.cfg.StopValue > 0 {
+		return rkLossLevel(side, closePrice, size, s.cfg.StopValue)
+	}
+	stop := 0.0
+	if s.cfg.StopATR > 0 || s.cfg.TrailingATR > 0 {
+		if trade := s.newTrade(df, side); !math.IsInf(trade.stop, 0) && !isNa(trade.stop) {
+			stop = trade.stop
+		}
+	}
+	for _, distance := range []float64{s.cfg.BrokerStopATR, s.cfg.BrokerTrailingATR} {
+		if level := closePrice - sign*distance*atr; distance > 0 && !isNa(level) && (stop == 0 || sign*level > sign*stop) {
+			stop = level
+		}
+	}
+	return stop
 }
 
 // follows reports whether the strategy follows the position held on side of
@@ -858,6 +894,7 @@ type rkSizing struct {
 	sizes              map[string]float64
 	fraction, leverage float64
 	minValue           float64
+	maxRisk            float64 // % of the balance lost at the stop loss at most, 0 for no limit, see risky
 }
 
 // position returns the size, in the asset, and the value, in quote, of the
@@ -898,6 +935,24 @@ func (z rkSizing) open(broker service.Broker, side model.SideType, pair string, 
 		_, err = broker.CreateOrderMarketQuote(side, pair, value)
 	}
 	return err
+}
+
+// risky reports whether a position of size opened on pair at price, its stop
+// loss at stop, would lose more than maxRisk % of the balance quote (the free
+// one, in the quote of the pair) at it, logged as why the entry is skipped:
+// never without a limit (maxRisk 0), nor without a stop loss (stop 0).
+func (z rkSizing) risky(pair string, price, stop, size, quote float64) bool {
+	if z.maxRisk <= 0 || stop <= 0 || quote <= 0 {
+		return false
+	}
+	risk := math.Abs(price-stop) * size
+	if risk <= quote*z.maxRisk/100 {
+		return false
+	}
+	log.Infof("%s: an entry of %g at %f would lose %f at its stop loss %f, %.2f%% of the free balance of %f, "+
+		"above the max risk of %g%% (max-risk-pct): skipped", pair, size, price, risk, stop, risk/quote*100, quote,
+		z.maxRisk)
+	return true
 }
 
 // rkCheckSizes checks the PositionSize of a configuration.

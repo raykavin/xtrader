@@ -568,6 +568,36 @@ func TestMATrend_Backtest(t *testing.T) {
 	require.Positive(t, withoutCross, "entries without a cross of the EMAs on their candle")
 }
 
+func TestMATrend_MaxRisk(t *testing.T) {
+	// 100 bought at 100, the stop 1 ATR of 2 beyond the trend MA of 98, at 96:
+	// 400 lost at it, 4% of the balance
+	entry := func(position float64) []maCandle {
+		return []maCandle{
+			{close: 97, fast: 101, slow: 100, trend: 98},
+			{close: 100, fast: 101, slow: 100, trend: 98, position: position},
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		configure func(*MATrendConfig)
+		position  float64
+	}{
+		{"under the limit", func(c *MATrendConfig) { c.MaxRiskPct = 5 }, 100},
+		{"above the limit: skipped", func(c *MATrendConfig) { c.MaxRiskPct = 3 }, 0},
+		{"the fixed stop loss measured", func(c *MATrendConfig) { c.MaxRiskPct, c.StopValue = 1, 50 }, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMARunner(t, newMATrend(t, tc.configure), 0)
+			r.feed(entry(tc.position)...)
+		})
+	}
+
+	cfg := DefaultMATrendConfig()
+	cfg.MaxRiskPct = -1
+	_, err := NewMATrend(cfg)
+	require.ErrorContains(t, err, "max risk")
+}
+
 func TestMATrend_FixedStops(t *testing.T) {
 	// 100 bought at 100: a loss of 50 is 0.5 away and a profit of 100 is 1
 	// away, in place of the stop 1 ATR of 2 beyond the trend MA, 96

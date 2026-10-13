@@ -47,6 +47,11 @@ type BracketConfig struct {
 	PositionFraction float64
 	Leverage         float64
 	PositionSize     map[string]float64
+
+	// MaxRiskPct, above 0, skips an entry losing more than that % of the
+	// balance available (the quote of the broker's Position) at its stop
+	// loss. 0 sets no limit.
+	MaxRiskPct float64
 }
 
 // DefaultBracketConfig returns the defaults of BracketConfig.
@@ -79,6 +84,8 @@ func (c BracketConfig) validate() error {
 		return errors.New("max bars can't be negative")
 	case c.MinATRPct < 0:
 		return errors.New("min ATR % can't be negative")
+	case c.MaxRiskPct < 0:
+		return errors.New("the max risk can't be negative")
 	case c.MinPositionValue <= 0:
 		return errors.New("min position value must be positive")
 	case c.PositionFraction <= 0 || c.PositionFraction > 1:
@@ -116,6 +123,7 @@ func newBracket(name, timeframe string, cfg BracketConfig) *bracket {
 		timeframe: timeframe,
 		cfg:       cfg,
 		sizing: rkSizing{sizes: cfg.PositionSize, fraction: cfg.PositionFraction, leverage: cfg.Leverage,
+			maxRisk:  cfg.MaxRiskPct,
 			minValue: cfg.MinPositionValue},
 		trades: make(map[string]*scalpTrade),
 	}
@@ -207,6 +215,9 @@ func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model
 	}
 
 	stop, profit = b.fixed(entry, closePrice, size, stop, profit)
+	if b.sizing.risky(df.Pair, closePrice, stop, size, quote) {
+		return false
+	}
 	log.Infof("[%s] %s %s | %s | close %f | stop %f | take profit %f", b.name, df.Pair, b.timeframe, entry,
 		closePrice, stop, profit)
 
@@ -246,6 +257,9 @@ func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.
 	}
 
 	stop, profit = b.fixed(entry, limit, size, stop, profit)
+	if b.sizing.risky(df.Pair, limit, stop, size, quote) {
+		return nil, false
+	}
 	log.Infof("[%s] %s %s | %s LIMIT | limit %f | stop %f | take profit %f | close %f", b.name, df.Pair,
 		b.timeframe, entry, limit, stop, profit, df.Close.Last(0))
 

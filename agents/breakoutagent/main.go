@@ -26,6 +26,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"slices"
 
@@ -60,7 +61,7 @@ func agent() runner.Agent {
 			trail:      flag.String("fimathe-trail", fm.Trail, "fimathe: the stop loss moved by the subcycle: surf (to 0x0 at the first step, then one step behind each step passed), lock (to 0x0 at the first step only) or off"),
 			trailStep:  flag.Float64("fimathe-trail-step", fm.TrailStep, "fimathe: step of the subcycle moving the stop loss, a share of its height, eg: 0.5 or 1"),
 			subcycle:   flag.Int("fimathe-subcycle-pivot", fm.SubcyclePivot, "fimathe: candles on each side of the top and the bottom of the subcycle, on -timeframe"),
-			maxRisk:    flag.Float64("fimathe-max-risk-pct", fm.MaxRiskPct, "fimathe: skip an entry losing more than that % of the free balance at its stop loss (0: off)"),
+			maxRisk:    flag.Float64("fimathe-max-risk-pct", fm.MaxRiskPct, "fimathe: skip an entry losing more than that % of the free balance at its stop loss (0: off): the -max-risk-pct of fimathe, 3 by default, kept for the agents set with it"),
 		},
 	}
 	return runner.Agent{Name: "breakoutagent", Strategies: append([]runner.Strategy{
@@ -117,7 +118,12 @@ func (f flags) fimathe(in runner.Inputs) (strategy.Strategy, error) {
 	cfg.MinChannelATR, cfg.MaxChannelATR = *f.fm.minChannel, *f.fm.maxChannel
 	cfg.StopBufferATR, cfg.TargetLevels = *f.fm.stopBuffer, *f.fm.target
 	cfg.Trail, cfg.TrailStep, cfg.SubcyclePivot = *f.fm.trail, *f.fm.trailStep, *f.fm.subcycle
-	cfg.MaxRiskPct = *f.fm.maxRisk
+	if in.Set["fimathe-max-risk-pct"] {
+		if in.Set["max-risk-pct"] {
+			return nil, errors.New("-max-risk-pct and -fimathe-max-risk-pct are the same limit: set one of them")
+		}
+		cfg.MaxRiskPct = *f.fm.maxRisk
+	}
 	trader, err := strategies.NewFimathe(cfg)
 	if err != nil {
 		return nil, err

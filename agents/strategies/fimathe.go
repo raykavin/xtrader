@@ -101,11 +101,8 @@ type FimatheConfig struct {
 	TrailStep     float64
 	SubcyclePivot int
 
-	// MaxRiskPct, above 0, skips an entry losing more than that % of the
-	// balance at its stop loss ("No máximo 3% por operação").
-	MaxRiskPct float64
-
-	// The sizing, the direction and MaxBars, see BracketConfig. The stop loss
+	// The sizing, the direction, MaxBars and MaxRiskPct, see BracketConfig,
+	// MaxRiskPct 3 by default ("No máximo 3% por operação"). The stop loss
 	// and the take profit are the levels of the channel, technical: the ATR
 	// multiples and the fixed values of BracketConfig aren't used.
 	BracketConfig
@@ -113,8 +110,11 @@ type FimatheConfig struct {
 
 // DefaultFimatheConfig returns the defaults of Fimathe: the analysis on 1h,
 // the execution on 15m, a weekly mapping in UTC, the stop loss beyond the
-// neutral zone surfing the subcycle by 50%, no take profit.
+// neutral zone surfing the subcycle by 50%, no take profit, at most 3% of the
+// balance lost at the stop loss.
 func DefaultFimatheConfig() FimatheConfig {
+	exits := DefaultBracketConfig()
+	exits.MaxRiskPct = 3
 	return FimatheConfig{
 		Timeframe:         "15m",
 		AnalysisTimeframe: "1h",
@@ -134,9 +134,7 @@ func DefaultFimatheConfig() FimatheConfig {
 		TrailStep:     0.5,
 		SubcyclePivot: 3,
 
-		MaxRiskPct: 3,
-
-		BracketConfig: DefaultBracketConfig(),
+		BracketConfig: exits,
 	}
 }
 
@@ -181,8 +179,6 @@ func (c FimatheConfig) validate() error {
 	case c.Trail == FimatheSurf && c.TargetLevels > 0:
 		return errors.New("a stop loss surfing the subcycle sets no take profit (Ou será take ou será stop): " +
 			"target levels 0, or trail lock or off")
-	case c.MaxRiskPct < 0:
-		return errors.New("the max risk can't be negative")
 	case c.StopValue > 0 || c.TakeProfitValue > 0:
 		return errors.New("the stop loss and the take profit are technical, the levels of the channel: no fixed " +
 			"values")
@@ -695,24 +691,6 @@ func (s *Fimathe) enter(df *model.Dataframe, broker service.Broker, sc fimatheSc
 			"on the wrong side of it", df.Pair, s.cfg.Timeframe, closePrice, where, sc.line, stop, profit)
 		return false
 	}
-	if s.cfg.MaxRiskPct > 0 {
-		_, quote, err := broker.Position(df.Pair)
-		if err != nil {
-			log.Error(err)
-			return false
-		}
-		size, _, sized := s.bracket.sizing.position(df.Pair, quote, closePrice)
-		if !sized {
-			return false
-		}
-		if risk := math.Abs(closePrice-stop) * size; risk > quote*s.cfg.MaxRiskPct/100 {
-			log.Infof("[FIMATHE] %s %s | SKIP | the entry would lose %f at its stop loss %f, %.2f%% of the balance "+
-				"of %f, above the max of %g%%", df.Pair, s.cfg.Timeframe, risk, stop, risk/quote*100, quote,
-				s.cfg.MaxRiskPct)
-			return false
-		}
-	}
-
 	log.Infof("[FIMATHE] %s %s | %s | mapping of %s, trend %s on %s | close %f beyond %s (%f) of the reference "+
 		"channel %f-%f | stop %f beyond the neutral zone (%f) | take profit %f", df.Pair, s.cfg.Timeframe, sc.side,
 		sc.period.Format(time.DateOnly), map[float64]string{1: "up", -1: "down"}[sign], s.cfg.AnalysisTimeframe,

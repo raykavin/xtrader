@@ -304,6 +304,36 @@ func TestBracket_Sizing(t *testing.T) {
 	}
 }
 
+func TestBracket_MaxRisk(t *testing.T) {
+	// 100 bought at 100 with all the balance of 10000: 150 lost at the stop
+	// loss 1.5 away, 1.5% of the balance
+	tests := []struct {
+		name      string
+		configure func(*ZScoreReversionConfig)
+		position  float64
+	}{
+		{"no limit by default", nil, 100},
+		{"under the limit", func(c *ZScoreReversionConfig) { c.MaxRiskPct = 2 }, 100},
+		{"above the limit: skipped", func(c *ZScoreReversionConfig) { c.MaxRiskPct = 1 }, 0},
+		{"a lot risking less", func(c *ZScoreReversionConfig) {
+			c.MaxRiskPct, c.PositionSize = 1, map[string]float64{"BTCUSDT": 50} // 75 lost, 0.75%
+		}, 50},
+		{"the fixed stop loss measured", func(c *ZScoreReversionConfig) {
+			c.MaxRiskPct, c.StopValue = 1, 50 // 50 lost, 0.5%
+		}, 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, _ := newBracketRunner(t, tt.configure)
+			r.feed(zsLong[0], ivCandle{close: 100, meta: map[string]float64{"zs_z": -2.5}, position: tt.position})
+		})
+	}
+
+	cfg := DefaultBracketConfig()
+	cfg.MaxRiskPct = -1
+	require.ErrorContains(t, cfg.validate(), "max risk")
+}
+
 func TestBracket_Exits(t *testing.T) {
 	tests := []struct {
 		name      string

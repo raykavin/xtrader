@@ -134,6 +134,7 @@ func (f flags) trendConfluence(in runner.Inputs) (strategy.Strategy, error) {
 	cfg.PositionFraction = in.Fraction
 	cfg.Leverage = in.Leverage
 	cfg.PositionSize = in.Lots
+	cfg.MaxRiskPct = in.MaxRiskPct
 	return strategies.NewRKTrendConfluence(cfg)
 }
 
@@ -153,6 +154,7 @@ func (f flags) maTrend(in runner.Inputs) (strategy.Strategy, error) {
 	cfg.PositionFraction = in.Fraction
 	cfg.Leverage = in.Leverage
 	cfg.PositionSize = in.Lots
+	cfg.MaxRiskPct = in.MaxRiskPct
 	return strategies.NewMATrend(cfg)
 }
 

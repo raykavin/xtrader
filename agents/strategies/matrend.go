@@ -59,12 +59,15 @@ type MATrendConfig struct {
 	TakeProfitValue float64
 
 	// Direction, MinPositionValue, PositionFraction, Leverage and PositionSize
-	// work as in RKTrendConfluenceConfig.
+	// work as in RKTrendConfluenceConfig. MaxRiskPct, above 0, skips an entry
+	// losing more than that % of the balance available at its initial stop,
+	// beyond the trend MA or at its fixed value.
 	Direction        RKDirection
 	MinPositionValue float64
 	PositionFraction float64
 	Leverage         float64
 	PositionSize     map[string]float64
+	MaxRiskPct       float64
 }
 
 // DefaultMATrendConfig returns the defaults of MATrend, on the 1h timeframe.
@@ -114,6 +117,8 @@ func (c MATrendConfig) validate() error {
 		return errors.New("trailing stop ATR multiple must be positive: the ATR moves the stop")
 	case c.StopValue < 0 || c.TakeProfitValue < 0:
 		return errors.New("the fixed stop loss and take profit values can't be negative")
+	case c.MaxRiskPct < 0:
+		return errors.New("the max risk can't be negative")
 	case c.MinPositionValue <= 0:
 		return errors.New("min position value must be positive")
 	case c.PositionFraction <= 0 || c.PositionFraction > 1:
@@ -161,6 +166,7 @@ func NewMATrend(cfg MATrendConfig) (*MATrend, error) {
 	return &MATrend{
 		cfg: cfg,
 		sizing: rkSizing{sizes: cfg.PositionSize, fraction: cfg.PositionFraction, leverage: cfg.Leverage,
+			maxRisk:  cfg.MaxRiskPct,
 			minValue: cfg.MinPositionValue},
 		warmup:  max(cfg.TrendLen, recursive) + 1 + rkSeedFactor*recursive,
 		trades:  make(map[string]*rkTrade),
@@ -323,6 +329,9 @@ func (s *MATrend) OnCandle(df *model.Dataframe, broker service.Broker) {
 	trade := &rkTrade{side: entry, extreme: closePrice, stop: trendMA - rkSign(entry)*s.cfg.StopBufferATR*atr}
 	if s.cfg.StopValue > 0 {
 		trade.stop = rkLossLevel(entry, closePrice, size, s.cfg.StopValue)
+	}
+	if s.sizing.risky(df.Pair, closePrice, trade.stop, size, quote) {
+		return
 	}
 	if s.cfg.BrokerStop || s.cfg.StopValue > 0 || s.cfg.TakeProfitValue > 0 {
 		err = s.openProtected(df, broker, trade, size)
