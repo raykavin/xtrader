@@ -88,6 +88,51 @@ func TestAgent_Args(t *testing.T) {
 	assert.False(t, set["telegram-control"])
 }
 
+// The reanalysis of an LLM agent is a flag of its own, set when allowed; the
+// agents of the other kinds, whose binaries have no such flag, never get it.
+func TestAgent_ArgsReanalysis(t *testing.T) {
+	parse := func(cfg agentapi.Config, withFlag bool) (allowed, set bool) {
+		t.Helper()
+		flags := flag.NewFlagSet(cfg.Kind+"agent", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		for _, name := range []string{"mode", "api", "mt5-bridge", "mt5-magic", "mt5-comment", "llm-provider",
+			"llm-model", "llm-reasoning", "llm-max-tokens", "calendar-mcp", "llm-min-stop-atr", "llm-widen-stop"} {
+			flags.String(name, "", "")
+		}
+		for name := range cfg.Params {
+			if flags.Lookup(name) == nil {
+				flags.String(name, "", "")
+			}
+		}
+		flags.Bool("trade-panel", false, "")
+		flags.Bool("telegram-control", false, "")
+		reanalysis := new(bool)
+		if withFlag {
+			reanalysis = flags.Bool("reanalysis", false, "")
+		}
+		require.NoError(t, flags.Parse((&Agent{Config: cfg}).Args()))
+		flags.Visit(func(f *flag.Flag) { set = set || f.Name == "reanalysis" })
+		return *reanalysis, set
+	}
+
+	cfg := testConfig()
+	cfg.Reanalysis = true
+	allowed, set := parse(cfg, true)
+	assert.True(t, allowed)
+	assert.True(t, set)
+	assert.Contains(t, (&Agent{Config: cfg}).Args(), "-reanalysis=true")
+
+	cfg.Reanalysis = false
+	allowed, set = parse(cfg, true)
+	assert.False(t, allowed, "the default of the flag: forbidden")
+	assert.False(t, set)
+
+	trend := agentapi.Config{ID: 2, Name: "matrend", Kind: "trend", Mode: "live", APIAddress: "localhost:5570",
+		Reanalysis: true, Params: map[string]string{"strategy": "matrend"}}
+	_, set = parse(trend, false) // its binary without the flag: refused if given
+	assert.False(t, set)
+}
+
 func TestConnect(t *testing.T) {
 	f := newFakeController(t)
 	f.set(func(f *fakeController) { f.cfg = testConfig() })

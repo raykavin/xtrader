@@ -134,9 +134,10 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 	state := s.manager.State(a.Name)
 	settings := ui.AgentSettings{Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
 		Enabled: a.Enabled, Launched: a.Launched, Restart: a.Restart, TradePanel: a.TradePanel,
-		TelegramControl: a.TelegramControl, Running: state.Running, RestartPending: state.RestartPending,
-		Restarts: state.Restarts, Restarting: state.Restarting, Exited: state.Exited, LastExit: state.LastExit,
-		LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID), Params: a.AllParams()}
+		TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(), Running: state.Running,
+		RestartPending: state.RestartPending, Restarts: state.Restarts, Restarting: state.Restarting,
+		Exited: state.Exited, LastExit: state.LastExit, LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID),
+		Params: a.AllParams()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
@@ -168,7 +169,8 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	agent := store.Agent{Name: request.Name, Kind: request.Kind, Enabled: request.Enabled, Mode: request.Mode,
 		APIAddress: request.APIAddress, Launched: request.Launched == nil || *request.Launched,
 		Restart: request.Restart == nil || *request.Restart, TradePanel: request.TradePanel,
-		TelegramControl: request.TelegramControl, Params: request.Params,
+		TelegramControl: request.TelegramControl, Reanalysis: &store.AgentReanalysis{Allowed: request.Reanalysis},
+		Params: request.Params,
 		Account: &store.Account{BridgeURL: account.BridgeURL, Magic: account.Magic, Comment: account.Comment,
 			RealAllowed: account.RealAllowed}}
 	switch l := request.LLM; {
@@ -207,8 +209,9 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	update := store.AgentUpdate{Enabled: request.Enabled, TradePanel: request.TradePanel,
-		TelegramControl: request.TelegramControl, Mode: request.Mode, APIAddress: request.APIAddress,
-		Launched: request.Launched, Restart: request.Restart, Params: request.Params}
+		TelegramControl: request.TelegramControl, Reanalysis: request.Reanalysis, Mode: request.Mode,
+		APIAddress: request.APIAddress, Launched: request.Launched, Restart: request.Restart,
+		Params: request.Params}
 	if acc := request.Account; acc != nil {
 		update.Account = &store.AccountUpdate{BridgeURL: acc.BridgeURL, Magic: acc.Magic, Comment: acc.Comment,
 			RealAllowed: acc.RealAllowed}

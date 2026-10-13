@@ -2,8 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { AgentStatus } from "../api/types";
 import { agentLabel, pickAgent } from "./agents";
 
-const crossover: AgentStatus = { name: "crossover", address: "localhost:5555", online: false };
-const ninjaagent: AgentStatus = { name: "ninjaagent", address: "localhost:5556", online: true };
+const crossover: AgentStatus = {
+  name: "crossover",
+  kind: "trend",
+  address: "localhost:5555",
+  online: false,
+};
+const ninjaagent: AgentStatus = {
+  name: "ninjaagent",
+  kind: "llm",
+  address: "localhost:5556",
+  online: true,
+};
 const agents = [crossover, ninjaagent];
 
 describe("pickAgent", () => {

@@ -42,10 +42,12 @@ var (
 const probeTimeout = 2 * time.Second
 
 // Agent is a bot of the controller: Address is where its chart serves the API,
-// host:port or an http(s) URL, eg: localhost:5555.
+// host:port or an http(s) URL, eg: localhost:5555, and Kind the one of its
+// settings, eg: llm.
 type Agent struct {
 	Name    string `yaml:"name"`
 	Address string `yaml:"address"`
+	Kind    string `yaml:"kind"`
 }
 
 // agent is an Agent with the proxy to its API.
@@ -275,7 +277,7 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			statuses[i] = ui.AgentStatus{Name: a.Name, Address: a.Address, Online: d.online(ctx, a)}
+			statuses[i] = ui.AgentStatus{Name: a.Name, Kind: a.Kind, Address: a.Address, Online: d.online(ctx, a)}
 			if period, ok := periods[a.Name]; ok {
 				current := uiPeriod(period, nil)
 				statuses[i].Period = &current

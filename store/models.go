@@ -50,21 +50,35 @@ type PromptVersion struct {
 // Params are its other settings by the name of their flag, only the ones set.
 type Agent struct {
 	Model
-	Name            string       `json:"name"`
-	Kind            string       `json:"kind"`
-	Enabled         bool         `json:"enabled"`
-	Mode            string       `json:"mode"`
-	APIAddress      string       `gorm:"column:api_address" json:"api_address"`
-	Launched        bool         `json:"launched"`
-	Restart         bool         `json:"restart"`
-	TradePanel      bool         `json:"trade_panel"`
-	TelegramControl bool         `json:"telegram_control"`
-	Params          Params       `gorm:"type:jsonb" json:"params"`
-	Position        int          `json:"position"`
-	OrderIDNext     int64        `gorm:"column:order_id_next" json:"-"`
-	Account         *Account     `gorm:"foreignKey:AgentID" json:"account,omitempty"`
-	LLM             *LLMSettings `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
+	Name            string           `json:"name"`
+	Kind            string           `json:"kind"`
+	Enabled         bool             `json:"enabled"`
+	Mode            string           `json:"mode"`
+	APIAddress      string           `gorm:"column:api_address" json:"api_address"`
+	Launched        bool             `json:"launched"`
+	Restart         bool             `json:"restart"`
+	TradePanel      bool             `json:"trade_panel"`
+	TelegramControl bool             `json:"telegram_control"`
+	Reanalysis      *AgentReanalysis `gorm:"foreignKey:AgentID" json:"reanalysis,omitempty"`
+	Params          Params           `gorm:"type:jsonb" json:"params"`
+	Position        int              `json:"position"`
+	OrderIDNext     int64            `gorm:"column:order_id_next" json:"-"`
+	Account         *Account         `gorm:"foreignKey:AgentID" json:"account,omitempty"`
+	LLM             *LLMSettings     `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
 }
+
+// AgentReanalysis is the switch of the reanalysis of an LLM agent, "Permitir
+// reanálise" on the dashboard: whether its language model may be asked again
+// between its closes, from the dashboard or from Telegram (its controls on
+// there), whatever its trade panel. A table of its own, the one of the agents
+// not altered, a row for each LLM agent: an agent without one may not be
+// asked, as the ones of the other kinds, without a language model.
+type AgentReanalysis struct {
+	AgentID int64 `gorm:"primaryKey;autoIncrement:false" json:"-"`
+	Allowed bool  `json:"allowed"`
+}
+
+func (AgentReanalysis) TableName() string { return "agent_reanalysis" }
 
 // Account is the trading account of an agent: the terminal of MT5 through its
 // bridge, and what tells the orders of the agent apart there.

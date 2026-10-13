@@ -24,8 +24,8 @@ func TestMigration17_TheReasoningEffortsOfTheCurrentModels(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	ctx := context.Background()
-	kept := llmAgent(t, s, "kept")
-	newer := llmAgent(t, s, "newer")
+	kept := llmAgentOfBefore(t, s, "kept")
+	newer := llmAgentOfBefore(t, s, "newer")
 	setEffort := func(agent Agent, effort string) error {
 		return s.db.Exec("UPDATE agent_llm_settings SET reasoning_effort = ? WHERE agent_id = ?", effort,
 			agent.ID).Error

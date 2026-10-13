@@ -567,6 +567,7 @@ func TestTelegram_Reanalyze(t *testing.T) {
 	require.NoError(t, err)
 	chart.OnCandle(candleAt("BTCUSDm", testBase, 84000))
 	chart.SetOrderController(&fakeController{status: order.StatusRunning}, ui.ChannelTelegram)
+	chart.SetReanalysis(true)
 	srv := httptest.NewServer(chart.Handler())
 	t.Cleanup(srv.Close)
 	telegram, server := newTestTelegram(t, Agent{Name: "llm", Address: srv.URL})
@@ -598,6 +599,20 @@ func TestTelegram_Reanalyze(t *testing.T) {
 	llm.mu.Unlock()
 	telegram.handleReanalyze(command("/reanalyze BTCUSDm"))
 	assert.Equal(t, "[llm] openai gpt-test is rate limited for 20s: ask again later", server.last(t).Text)
+	llm.mu.Lock()
+	llm.refuse = nil
+	asked := len(llm.reanalyzed)
+	llm.mu.Unlock()
+
+	// its reanalysis switched off in its settings, its Telegram controls on
+	chart.SetReanalysis(false)
+	telegram.handleReanalyze(command("/reanalyze BTCUSDm"))
+	assert.Equal(t, "[llm] The reanalysis of the agent is off: turn on Permitir reanálise in its settings on the "+
+		"dashboard.", server.last(t).Text)
+	assert.Len(t, llm.reanalyzed, asked, "the model not asked")
+	chart.SetReanalysis(true)
+	telegram.handleReanalyze(command("/reanalyze BTCUSDm"))
+	assert.Len(t, llm.reanalyzed, asked+1, "asked again, switched on")
 
 	// a strategy of another kind, and an agent without the Telegram controls
 	plain, eth := newAgent(t, &fakeController{status: order.StatusRunning})
@@ -610,6 +625,7 @@ func TestTelegram_Reanalyze(t *testing.T) {
 	webOnly, err := ui.New(ui.WithStrategyIndicators(llm))
 	require.NoError(t, err)
 	webOnly.SetOrderController(&fakeController{status: order.StatusRunning}, ui.ChannelWeb)
+	webOnly.SetReanalysis(true) // allowed, from the channels the bot is controlled from only
 	web := httptest.NewServer(webOnly.Handler())
 	t.Cleanup(web.Close)
 	telegram, server = newTestTelegram(t, Agent{Name: "web", Address: web.URL})

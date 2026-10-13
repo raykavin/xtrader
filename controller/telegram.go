@@ -625,7 +625,12 @@ func (t *Telegram) handleReanalyze(m *tb.Message) {
 	if !ok {
 		return
 	}
-	if !controls.Reanalysis {
+	switch {
+	case controls.ReanalysisDisabled:
+		t.reply(m, a, "The reanalysis of the agent is off: turn on Permitir reanálise in its settings on the "+
+			"dashboard.")
+		return
+	case !controls.Reanalysis:
 		t.reply(m, a, "The agent doesn't trade with a language model: there is nothing to reanalyze.")
 		return
 	}

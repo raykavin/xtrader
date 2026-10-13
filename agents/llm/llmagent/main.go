@@ -129,8 +129,9 @@ func run() error {
 		csvFiles      = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe  = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
 		api           = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5564 (default: off)")
-		tradePanel    = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels, the reanalysis; the dashboard starts and stops the bot without it)")
+		tradePanel    = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot and asks the model again without it)")
 		telegramCtl   = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller")
+		reanalysis    = flag.Bool("reanalysis", false, "allow asking the language model again between the closes, from the web dashboard whatever -trade-panel and from Telegram with its controls on (launched by the controller: the switch Permitir reanálise of its settings, switched while it runs)")
 		quarantine    = flag.Bool("outbox-quarantine", false, "launched by the controller: an outbox that can't be read (data/outbox/<agent>-<id>.db, eg: written over in the middle) is moved aside to <file>.corrupt-<time>, kept for a look, and the agent starts with an empty one, its records never sent to the controller (default: the agent doesn't start, telling which file)")
 		currency      = flag.String("currency", "USD", "backtest: currency the symbols are quoted in, eg: GBP for EURGBPm")
 		mt5Bridge     = flag.String("mt5-bridge", exchange.MT5DefaultBaseURL, "mt5: address of the bridge (tools/mt5bridge) running with the terminal logged in the account")
@@ -326,7 +327,7 @@ func run() error {
 	}
 
 	settings := xtrader.Settings{Pairs: pairs}
-	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl}
+	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl, reanalysis: *reanalysis}
 	if agent != nil {
 		dash.key = agent.APIKey
 	}
@@ -489,14 +490,19 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 		return err
 	}
 
+	var apply func(agentapi.Runtime)
 	if chart != nil {
 		chart.SetOrderController(bot.Controller()) // its orders are simulated too: every channel
+		// the reanalysis asks the model all the same, its orders simulated or
+		// not: its switch of the settings, switched while the bot runs
+		chart.SetReanalysis(dash.reanalysis)
+		apply = func(runtime agentapi.Runtime) { chart.SetReanalysis(runtime.Reanalysis) }
 		go func() {
 			log.Fatal(dash.serve(chart))
 		}()
 	}
 	if agent != nil {
-		return agent.Serve(ctx, nil, runBot(bot, trader)) // the switches of the channels are the ones of the live mode
+		return agent.Serve(ctx, apply, runBot(bot, trader)) // the switches of the channels are the ones of the live mode
 	}
 	return bot.Run(ctx)
 }
@@ -575,11 +581,14 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 			}
 		}
 
-		// the channels of the settings, switched while the bot runs
+		// the channels and the reanalysis of the settings, switched while the
+		// bot runs
 		chart.SetOrderController(bot.Controller(), ui.ChannelWeb)
 		chart.SetChannels(dash.channels()...)
+		chart.SetReanalysis(dash.reanalysis)
 		apply = func(runtime agentapi.Runtime) {
 			chart.SetChannels(dashboard{tradePanel: runtime.TradePanel, telegram: runtime.TelegramControl}.channels()...)
+			chart.SetReanalysis(runtime.Reanalysis)
 		}
 		go func() {
 			log.Fatal(dash.serve(chart))
@@ -652,6 +661,7 @@ type dashboard struct {
 	addr       string // of the API, none when off
 	tradePanel bool   // control panel from the trade panel of the dashboard, in live mode
 	telegram   bool   // control panel from the Telegram of the controller, in live mode
+	reanalysis bool   // the model asked again between the closes, see ui.Chart.SetReanalysis
 	key        string // of the API, of the controller that launched the agent, none run on its own
 }
 

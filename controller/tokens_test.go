@@ -84,3 +84,26 @@ func TestRuntimes_AVersionPerChange(t *testing.T) {
 	other, _, _ := r.get(2)
 	assert.NotEqual(t, doc.Version, other.Version)
 }
+
+// The switch of the reanalysis is a change of the runtime of its own: the
+// agent waiting is woken with a new version, its channels the same.
+func TestRuntimes_TheReanalysisSwitched(t *testing.T) {
+	r := newRuntimes()
+	r.set(1, agentapi.Runtime{TelegramControl: true})
+	doc, changed, _ := r.get(1)
+	first := doc.Version
+
+	r.set(1, agentapi.Runtime{TelegramControl: true, Reanalysis: true})
+	<-changed
+	doc, changed, _ = r.get(1)
+	assert.Greater(t, doc.Version, first)
+	assert.True(t, doc.Reanalysis)
+	assert.True(t, doc.TelegramControl)
+
+	next := doc.Version
+	r.set(1, agentapi.Runtime{TelegramControl: true})
+	<-changed
+	doc, _, _ = r.get(1)
+	assert.Greater(t, doc.Version, next, "switched off: a change too")
+	assert.False(t, doc.Reanalysis)
+}

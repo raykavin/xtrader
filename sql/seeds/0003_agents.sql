@@ -16,7 +16,8 @@ SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 -- llm: the LLM strategy (ChatGPT) on BTCUSDm and XAUUSDm, the prompt
 -- trend_following on 30m with the trend of 4h required, without take profit,
 -- gpt-5 with a low reasoning effort, the lot and the correlated markets of
--- each pair, operated from the dashboard and from Telegram.
+-- each pair, operated from the dashboard and from Telegram, its reanalysis
+-- allowed.
 WITH agent AS (
     INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
                         params, position)
@@ -30,6 +31,9 @@ WITH agent AS (
 ), account AS (
     INSERT INTO agent_accounts (agent_id, exchange, bridge_url)
     SELECT id, 'mt5', 'http://mt5:18812' FROM agent
+), reanalysis AS (
+    INSERT INTO agent_reanalysis (agent_id, allowed)
+    SELECT id, TRUE FROM agent
 )
 INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
 SELECT agent.id, 'openai', 'gpt-5', 'low',
@@ -61,12 +65,13 @@ SELECT id, 'mt5', 'http://mt5:18812' FROM agent;
 -- ICT: the pending limit orders at the zones of the structure, the analysis
 -- drawn on the chart), on the pairs, the lots, the timeframe, the higher
 -- timeframe of the bias, the correlated markets and the model of the agent
--- llm, operated from the dashboard and from Telegram. Its comment of its own,
--- nb:llm-smc, gives it a magic number of its own: its orders and positions are
--- kept apart from the ones of llm on the same account. The rules of risk the
--- prompt measures with (llm-min-rr, llm-min-stop-atr, llm-max-spread-atr) and
--- the expiry of its pending orders (llm-pending-expiry) are left to the
--- operator, set in its parameters before it is turned on.
+-- llm, operated from the dashboard and from Telegram, its reanalysis allowed.
+-- Its comment of its own, nb:llm-smc, gives it a magic number of its own: its
+-- orders and positions are kept apart from the ones of llm on the same
+-- account. The rules of risk the prompt measures with (llm-min-rr,
+-- llm-min-stop-atr, llm-max-spread-atr) and the expiry of its pending orders
+-- (llm-pending-expiry) are left to the operator, set in its parameters before
+-- it is turned on.
 WITH agent AS (
     INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
                         params, position)
@@ -80,6 +85,9 @@ WITH agent AS (
 ), account AS (
     INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
     SELECT id, 'mt5', 'http://mt5:18812', 'nb:llm-smc' FROM agent
+), reanalysis AS (
+    INSERT INTO agent_reanalysis (agent_id, allowed)
+    SELECT id, TRUE FROM agent
 )
 INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
 SELECT agent.id, 'openai', 'gpt-5', 'low',

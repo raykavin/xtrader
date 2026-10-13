@@ -145,16 +145,18 @@ export function decisionTone(action: string | undefined): "buy" | "sell" | "" {
 }
 
 /**
- * How the reanalysis stands on the dashboard: enabled; disabled, the control
- * panel of the dashboard off, eg: an agent whose trade panel is off in the settings;
- * unavailable, the strategy can't be asked again.
+ * How the reanalysis stands on the dashboard: enabled; disabled, switched off
+ * in the settings of the agent (Permitir reanálise), whatever its trade panel;
+ * unavailable, the strategy can't be asked again; unknown, the controls of the
+ * agent not read yet.
  */
-export type ReanalysisState = "enabled" | "disabled" | "unavailable";
+export type ReanalysisState = "enabled" | "disabled" | "unavailable" | "unknown";
 
 /** The state of the reanalysis on the dashboard, from its controls. */
 export function reanalysisState(controls: ControlsResponse | null): ReanalysisState {
-  if (controls?.reanalysis) return "enabled";
-  return controls?.enabled ? "unavailable" : "disabled";
+  if (!controls) return "unknown";
+  if (controls.reanalysis) return "enabled";
+  return controls.reanalysis_disabled ? "disabled" : "unavailable";
 }
 
 /** The label of the button of the reanalysis in state, and its tooltip. */
@@ -166,8 +168,10 @@ export function reanalysisButton(state: ReanalysisState): { label: string; title
       return {
         label: "Reanalisar agora (DESATIVADO)",
         title:
-          "Controles do painel desativados: ative o painel de trading do agente em Configurações",
+          "Reanálise desativada: ligue “Permitir reanálise” nas configurações do agente; independe do painel de trading",
       };
+    case "unknown":
+      return { label: "Reanalisar agora", title: "Lendo os controles do agente…" };
     default:
       return {
         label: "Reanalisar agora (INDISPONÍVEL)",

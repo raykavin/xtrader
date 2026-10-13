@@ -13,6 +13,7 @@ import {
   llmProviders,
   maxComment,
   type ParamRow,
+  reanalysisHint,
   reasoningEfforts,
   tradePanelHint,
 } from "../lib/settings";
@@ -319,6 +320,14 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                     title={channelsTitle}
                     onChange={(telegramControl) => set("telegramControl", telegramControl)}
                   />
+                  {llm && (
+                    <Switch
+                      label="Permitir reanálise"
+                      checked={values.reanalysis}
+                      title={reanalysisHint}
+                      onChange={(reanalysis) => set("reanalysis", reanalysis)}
+                    />
+                  )}
                 </>
               )}
             </div>

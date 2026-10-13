@@ -543,12 +543,13 @@ func TestManager_StartedAgainWithTheSettingsOfItsLaunch(t *testing.T) {
 	cfg := configOf(tokens()[0])
 	assert.Equal(t, "paper", cfg.Mode)
 	assert.Equal(t, llm.APIAddress, cfg.APIAddress)
+	assert.False(t, cfg.Reanalysis)
 
 	// changed while it runs: live, another address, lot and token of the
 	// bridge, and its switches and its prompt, which apply while it runs
 	moved := "localhost:15601"
 	_, err := c.store.UpdateAgent(ctx, llm.ID, store.AgentUpdate{Mode: ptrTo("live"), APIAddress: &moved,
-		TradePanel: ptrTo(true), Params: store.Params{"pair": "XAUUSDm", "lot": "0.05"}})
+		TradePanel: ptrTo(true), Reanalysis: ptrTo(true), Params: store.Params{"pair": "XAUUSDm", "lot": "0.05"}})
 	require.NoError(t, err)
 	require.NoError(t, c.store.SetAgentSecrets(ctx, llm.ID, store.AgentSecrets{BridgeToken: secret("bridge-new")}))
 	prompt, err := c.store.CreatePrompt(ctx, "lifecycle", "a test", "# lifecycle\n\nFollow the trend.", "test")
@@ -569,6 +570,7 @@ func TestManager_StartedAgainWithTheSettingsOfItsLaunch(t *testing.T) {
 	require.NotNil(t, cfg.Account)
 	assert.Equal(t, "bridge-new", cfg.Account.BridgeToken, "a secret is no setting of trading: the one of now")
 	assert.True(t, cfg.TradePanel, "its switches apply while it runs")
+	assert.True(t, cfg.Reanalysis, "its reanalysis too")
 	require.NotNil(t, cfg.Prompt, "its prompt applies while it runs")
 	assert.Equal(t, prompt.ID, cfg.Prompt.ID)
 	assert.Equal(t, llm.APIAddress, served(), "the address it listens at")

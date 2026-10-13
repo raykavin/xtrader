@@ -67,6 +67,7 @@ type Chart struct {
 	decisions   DecisionSource // of the language model of the strategy, see DecisionSource
 	controller  OrderController
 	channels    map[Channel]bool // where the controller is operated from
+	reanalysis  bool             // whether the language model may be asked again, see SetReanalysis
 	lastUpdate  time.Time
 
 	events *broker

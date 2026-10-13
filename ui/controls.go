@@ -63,7 +63,8 @@ func channelOf(r *http.Request) Channel {
 // Telegram commands. Call it before Start, typically with bot.Controller().
 // Without a controller, or from another channel, the control endpoints report
 // disabled and the panel is hidden; but the web dashboard starts and stops the
-// bot of a controller whatever its channels, which gate its orders.
+// bot of a controller whatever its channels, which gate its orders, and asks
+// its language model again, its reanalysis allowed (see SetReanalysis).
 //
 // The channel is a header of the requests, which the API takes from its
 // controller only (see guard): an agent the controller launched wants the key
@@ -96,6 +97,30 @@ func (c *Chart) SetChannels(channels ...Channel) {
 	c.channels = enabled
 	c.mu.Unlock()
 	c.publishControls()
+}
+
+// SetReanalysis allows the language model of the strategy to be asked again
+// between the closes, see Reanalyzer, or forbids it, as it starts: from the
+// channels the bot is started and stopped from (see botControllerOf), the web
+// dashboard whatever its trade panel, Telegram with its controls on; eg: as
+// the controller switches it while the bot runs, apart from the channels. The
+// dashboards are told at once of a change. Forbidden until allowed.
+func (c *Chart) SetReanalysis(allowed bool) {
+	c.mu.Lock()
+	changed := c.reanalysis != allowed
+	c.reanalysis = allowed
+	c.mu.Unlock()
+	if changed {
+		c.publishControls()
+	}
+}
+
+// reanalysisAllowed reports whether the language model of the strategy may be
+// asked again, see SetReanalysis.
+func (c *Chart) reanalysisAllowed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reanalysis
 }
 
 // botControllerOf returns the controller whose bot the channel starts and
@@ -131,9 +156,13 @@ func (c *Chart) controlsResponse(channel Channel) ControlsResponse {
 	var response ControlsResponse
 	if bot := c.botControllerOf(channel); bot != nil {
 		response.BotControl, response.Status = true, string(bot.Status())
+		if c.reanalyzer() != nil {
+			allowed := c.reanalysisAllowed()
+			response.Reanalysis, response.ReanalysisDisabled = allowed, !allowed
+		}
 	}
 	if c.controllerOf(channel) != nil {
-		response.Enabled, response.Reanalysis = true, c.reanalyzer() != nil
+		response.Enabled = true
 	}
 	return response
 }

@@ -480,7 +480,10 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   }, [agent]);
 
   // the trades closed since the last reset of the results of the agent count
-  const since = agents.find((a) => a.name === agent)?.period?.started_at;
+  const agentStatus = agents.find((a) => a.name === agent);
+  const since = agentStatus?.period?.started_at;
+  // the kind of the agent, known before its snapshot: the blocks of its cards while it loads
+  const kind = agentStatus?.kind;
   const stats = useMemo(
     () => (snapshot ? computeStats(snapshot, { since }) : null),
     [snapshot, since],
@@ -511,7 +514,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     rememberDashboard(window.location.search, sessionStore());
   }, [agent, pair, askedTimeframe]);
 
-  // The lists under the chart, a tab each: the ones of the strategy only.
+  // The cards and the lists of the strategy only: the sentiment, the last
+  // decision and the decisions of an LLM agent, its decisions kept, none of
+  // another agent, which the layout keeps their place for (absent, not hidden).
   const hasDecisions = snapshot?.llm?.decisions === true;
   const hasEquity = (snapshot?.equity_values.length ?? 0) > 0;
   const [tab, setTab] = useState<DashboardTab>(loadDashboardTab);
@@ -593,6 +598,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         <DashboardSkeleton
           label={pairs.length === 0 ? "Aguardando o primeiro candle…" : "Carregando…"}
           waiting={pairs.length === 0}
+          meter={kind === "llm"}
         />
       )}
       {snapshot && chartSnapshot && stats && (
@@ -608,14 +614,13 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                 quote: (
                   <PriceHero snapshot={snapshot} buyAndHold={stats.buyAndHold} theme={theme} />
                 ),
-                sentiment: (
+                sentiment: hasDecisions ? (
                   <SentimentMeter
-                    available={hasDecisions}
                     reading={sentiment}
                     loaded={decisionsLoaded}
                     error={decisionsError}
                   />
-                ),
+                ) : undefined,
                 results: (
                   <StatsBar
                     stats={stats}
@@ -759,8 +764,19 @@ function saveDashboardTab(tab: DashboardTab) {
   }
 }
 
-/** The blocks of the panel while its data loads: the quote, the results, the chart and the ticket. */
-function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?: boolean }) {
+/**
+ * The blocks of the panel while its data loads: the quote, the sentiment of
+ * an LLM agent (meter), the results, the chart and the ticket.
+ */
+function DashboardSkeleton({
+  label,
+  waiting = false,
+  meter = true,
+}: {
+  label: string;
+  waiting?: boolean;
+  meter?: boolean;
+}) {
   return (
     <Loading label={label}>
       {waiting && (
@@ -768,9 +784,9 @@ function DashboardSkeleton({ label, waiting = false }: { label: string; waiting?
           O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
         </Alert>
       )}
-      <div className="overview">
+      <div className={meter ? "overview" : "overview no-meter"}>
         <Skeleton className="skeleton-hero" />
-        <Skeleton className="skeleton-meter" />
+        {meter && <Skeleton className="skeleton-meter" />}
         <Skeleton className="skeleton-kpis" />
       </div>
       <div className="workspace">

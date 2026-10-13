@@ -96,7 +96,8 @@ func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := agentapi.Config{ID: a.ID, Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
-		TradePanel: a.TradePanel, TelegramControl: a.TelegramControl, Params: a.Params}
+		TradePanel: a.TradePanel, TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(),
+		Params: a.Params}
 	if acc := a.Account; acc != nil {
 		cfg.Account = &agentapi.Account{BridgeURL: acc.BridgeURL, BridgeToken: secrets.BridgeToken, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

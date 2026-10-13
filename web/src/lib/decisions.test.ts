@@ -102,15 +102,34 @@ describe("labels", () => {
 
   it("tells the state of the reanalysis on its button", () => {
     expect(reanalysisState({ enabled: true, status: "running", reanalysis: true })).toBe("enabled");
-    expect(reanalysisState({ enabled: false, status: "" })).toBe("disabled");
-    expect(reanalysisState(null)).toBe("disabled");
+    expect(reanalysisState({ enabled: true, status: "running", reanalysis_disabled: true })).toBe(
+      "disabled",
+    );
+    expect(reanalysisState(null)).toBe("unknown");
     expect(reanalysisState({ enabled: true, status: "running" })).toBe("unavailable");
+    expect(reanalysisState({ enabled: false, status: "" })).toBe("unavailable");
     expect(reanalysisButton("enabled").label).toBe("Reanalisar agora");
     expect(reanalysisButton("disabled").label).toBe("Reanalisar agora (DESATIVADO)");
     expect(reanalysisButton("disabled").title).toContain(
-      "painel de trading do agente em Configurações",
+      "ligue “Permitir reanálise” nas configurações do agente",
     );
     expect(reanalysisButton("unavailable").label).toBe("Reanalisar agora (INDISPONÍVEL)");
+    expect(reanalysisButton("unknown").label).toBe("Reanalisar agora");
+  });
+
+  it("asks the model again whatever the trade panel, by the switch of the reanalysis", () => {
+    // the four combinations of the trade panel (enabled) and the reanalysis
+    const panel = (enabled: boolean, reanalysis: boolean) =>
+      reanalysisState({
+        enabled,
+        status: "running",
+        bot_control: true,
+        ...(reanalysis ? { reanalysis: true } : { reanalysis_disabled: true }),
+      });
+    expect(panel(true, true)).toBe("enabled");
+    expect(panel(false, true)).toBe("enabled");
+    expect(panel(true, false)).toBe("disabled");
+    expect(panel(false, false)).toBe("disabled");
   });
 
   it("colors the entries and the exits", () => {
