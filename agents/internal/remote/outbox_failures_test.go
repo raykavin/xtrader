@@ -750,14 +750,20 @@ func TestOutbox_NoRecordHeldWhileTheControllerFailsItsKind(t *testing.T) {
 }
 
 // R7: a record the controller fails for a while, the records of its kind
-// after it written, is never held before it failed for holdAfter: once the
-// controller writes it again, it is written, in order.
+// after it written, is never held before it failed for holdAfter, whatever
+// the proofs against it: once the controller writes it again, it is written,
+// in order. The controller fails it until it checked the records after it
+// poisonAfter+1 times, the outbox holding poisonAfter proofs against it then,
+// rather than for a time, which a busy machine (the whole suite under -race)
+// could spend before the first check; holdAfter long enough for them.
 func TestOutbox_ARecordFailingForAWhileIsNeverHeld(t *testing.T) {
+	hold := holdAfter
+	holdAfter = time.Minute
+	t.Cleanup(func() { holdAfter = hold }) // once the outbox stopped: the cleanups run last in first
 	f := newFakeController(t)
-	until := time.Now().Add(holdAfter * 3 / 4)
 	f.set(func(f *fakeController) {
 		f.outboxAnswer = func(request agentapi.OutboxRequest) (int, any) {
-			if time.Now().Before(until) {
+			if len(f.checks) <= poisonAfter { // f.mu held: the checks answered so far
 				return failingKey("b")(request)
 			}
 			return http.StatusOK, nil
@@ -774,7 +780,7 @@ func TestOutbox_ARecordFailingForAWhileIsNeverHeld(t *testing.T) {
 	assert.Empty(t, setApartKeys(t, o))
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	assert.NotEmpty(t, f.checks, "the records after it checked meanwhile")
+	assert.Greater(t, len(f.checks), poisonAfter, "the records after it checked meanwhile, a proof against it after each")
 }
 
 // R7: a record failing alone while the database of the controller fails now
