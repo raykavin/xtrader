@@ -126,4 +126,13 @@ func TestAgent_Fimathe(t *testing.T) {
 	in.StopValue = 1
 	_, err = a.Strategies[i].New(in)
 	require.ErrorContains(t, err, "technical")
+	in.StopValue = 0
+
+	// the max risk, by -max-risk-pct or -fimathe-max-risk-pct, not both
+	in.Set["max-risk-pct"], in.MaxRiskPct = true, -1
+	_, err = a.Strategies[i].New(in)
+	require.ErrorContains(t, err, "max risk", "-max-risk-pct applied")
+	in.Set["fimathe-max-risk-pct"] = true
+	_, err = a.Strategies[i].New(in)
+	require.ErrorContains(t, err, "the same limit")
 }

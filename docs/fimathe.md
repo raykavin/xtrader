@@ -34,7 +34,7 @@ Indicadores e robôs de terceiros (MQL5, blogs, um EA no GitHub) **não** foram 
 | Stop técnico, sem quantidade fixa de pontos; "dois níveis abaixo" de uma compra no canal; "abaixo da zona neutra" | Aula 3; resumo "Fimathe.pdf" | Stop além da zona neutra, com folga de `fimathe-stop-buffer-atr` ATR do tempo de execução. `stop-value`/`take-profit-value` são recusados |
 | Subciclo: "o canal anterior ao candlestick de entrada", "projetado a partir da linha de entrada"; "quando ele perde os primeiros 50% eu travo meu stop no 0x0"; "perdendo mais 50% desço meu stop mais um ponto" | Aula 3; resumo "Fimathe.pdf" | Subciclo: do último fundo ao último topo dos candles de execução antes da entrada. `fimathe-trail surf` (padrão): 0x0 no primeiro passo e um passo a mais a cada passo; `lock`: só o 0x0; `off`. Passo `fimathe-trail-step` (0.5; o exemplo resolvido usa 1) |
 | Alvo: "pegar os dois níveis anteriores e projetá-los … a partir da nossa entrada"; "Ou será take ou será stop" | Aula 3 | `fimathe-target-levels` (padrão 0; o documentado é 2) mede alturas do canal a partir da linha de entrada. Surfar o stop exclui o alvo |
-| "No máximo 3% por operação" | Resumo "Modo de aplicação" | `fimathe-max-risk-pct 3`: recusa a entrada que perde mais que isso do saldo livre (margem livre) no stop |
+| "No máximo 3% por operação" | Resumo "Modo de aplicação" | `max-risk-pct` (padrão 3 no `fimathe`; `fimathe-max-risk-pct` é o mesmo limite): recusa a entrada que perde mais que isso do saldo livre (margem livre) no stop |
 | Automação da **primeira entrada** da técnica | Página oficial (Robô Fimathe 2.0) | Uma entrada por mapeamento e por ativo |
 
 ## Decisões de implementação
@@ -98,7 +98,7 @@ O seletor de timeframe do gráfico continua só de visualização: os desenhos s
 | `fimathe-trail` | `surf` | `surf`, `lock` ou `off` |
 | `fimathe-trail-step` | `0.5` | Passo do subciclo (0.5 ou 1) |
 | `fimathe-subcycle-pivot` | `3` | Candles de cada lado do topo/fundo do subciclo |
-| `fimathe-max-risk-pct` | `3` | Perda máxima no stop, em % do saldo livre (0: desligado) |
+| `max-risk-pct` (ou `fimathe-max-risk-pct`) | `3` | Perda máxima no stop, em % do saldo livre (0: desligado); o parâmetro comum a todas as estratégias, com o padrão do Fimathe. Os dois nomes juntos são recusados |
 | `max-bars`, `direction`, `lot`, `position-fraction`, `leverage`, `min-position-value` | do runner | Tempo máximo da operação, lado, tamanho e controles de risco comuns a todas as estratégias |
 
 `stop-atr`, `take-profit-atr`, `trailing-atr` e `min-atr-pct` são recusados com `fimathe`. `stop-value` e `take-profit-value` também, porque o stop é técnico.

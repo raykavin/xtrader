@@ -973,6 +973,63 @@ func TestRKTrendConfluence_Sizing(t *testing.T) {
 	})
 }
 
+func TestRKTrendConfluence_MaxRisk(t *testing.T) {
+	// a long of all the balance of 10000 at 100, the ATR at 1
+	candle := func() *model.Dataframe {
+		df := signalCandle(model.SideTypeBuy)
+		df.High, df.Low = model.Series[float64]{100}, model.Series[float64]{100}
+		return df
+	}
+	for _, tc := range []struct {
+		name      string
+		configure func(*RKTrendConfluenceConfig)
+		opened    bool
+	}{
+		// the stop 2 ATR away: 200 lost, 2%
+		{"under the limit", func(c *RKTrendConfluenceConfig) { c.StopATR, c.MaxRiskPct = 2, 3 }, true},
+		{"above the limit: skipped", func(c *RKTrendConfluenceConfig) { c.StopATR, c.MaxRiskPct = 2, 1 }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newRKTrendConfluence(t, tc.configure)
+			broker := &sizingBroker{quote: 10000}
+			s.OnCandle(candle(), broker)
+			require.Equal(t, tc.opened, len(broker.values) > 0)
+		})
+	}
+
+	t.Run("the fixed stop loss measured, placed at the broker", func(t *testing.T) {
+		// 50 lost at the fixed stop loss, 0.5% of the balance
+		for maxRisk, want := range map[float64]float64{1: 100, 0.4: 0} {
+			wallet := exchange.NewPaperWallet(context.Background(), "USDT", exchange.WithPaperAsset("USDT", 10000))
+			wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Now(), Low: 100, High: 100, Close: 100,
+				Complete: true})
+			s := newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopValue, c.MaxRiskPct = 50, maxRisk })
+			s.OnCandle(candle(), wallet)
+			asset, _, err := wallet.Position("BTCUSDT")
+			require.NoError(t, err)
+			require.InDelta(t, want, asset, 1e-9, "max risk %g%%", maxRisk)
+		}
+	})
+
+	t.Run("the tightest of the stops", func(t *testing.T) {
+		s := newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopATR, c.BrokerStopATR = 3, 1.5 })
+		require.InDelta(t, 98.5, s.entryStop(candle(), model.SideTypeBuy, 100), 1e-9)
+		s = newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopATR, c.BrokerTrailingATR = 1, 2 })
+		require.InDelta(t, 99, s.entryStop(candle(), model.SideTypeBuy, 100), 1e-9)
+		require.InDelta(t, 101, s.entryStop(candle(), model.SideTypeSell, 100), 1e-9)
+	})
+
+	t.Run("a stop loss needed", func(t *testing.T) {
+		cfg := DefaultRKTrendConfluenceConfig()
+		cfg.MaxRiskPct = 2
+		_, err := NewRKTrendConfluence(cfg)
+		require.ErrorContains(t, err, "needs one")
+		cfg.MaxRiskPct = -1
+		_, err = NewRKTrendConfluence(cfg)
+		require.ErrorContains(t, err, "max risk")
+	})
+}
+
 func TestRKSizing(t *testing.T) {
 	lot := map[string]float64{"BTCUSDT": 0.5}
 	tests := []struct {

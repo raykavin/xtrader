@@ -177,6 +177,14 @@ func TestInputsBracket(t *testing.T) {
 	in.Bracket(&cfg, &timeframe)
 	require.Equal(t, "1h", timeframe)
 	require.Equal(t, 3.0, cfg.StopATR)
+
+	// -max-risk-pct unset: the strategy's, eg: the 3% of fimathe
+	cfg.MaxRiskPct, in.MaxRiskPct = 3, 1.5
+	in.Bracket(&cfg, &timeframe)
+	require.Equal(t, 3.0, cfg.MaxRiskPct)
+	in.Set["max-risk-pct"] = true
+	in.Bracket(&cfg, &timeframe)
+	require.Equal(t, 1.5, cfg.MaxRiskPct)
 }
 
 func TestSignals(t *testing.T) {

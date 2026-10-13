@@ -57,7 +57,8 @@ type Strategy struct {
 
 // Inputs are the inputs of the strategies shared by the agents: the flags set,
 // the timeframe (for the bracket strategies, only when set: each keeps its
-// own), the side of the positions, the stops, the targets and the sizing.
+// own), the side of the positions, the stops, the targets, the sizing and the
+// max risk of an entry.
 type Inputs struct {
 	Set                          map[string]bool
 	Timeframe                    string
@@ -68,6 +69,7 @@ type Inputs struct {
 	StopValue, TakeProfitValue   float64
 	MinValue, Fraction, Leverage float64
 	Lots                         map[string]float64
+	MaxRiskPct                   float64
 }
 
 // BracketInputs are the flags of Inputs.Bracket, the ones of the strategies
@@ -75,7 +77,8 @@ type Inputs struct {
 var BracketInputs = []string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct"}
 
 // Bracket sets the exits and the sizing of a bracket strategy from the inputs,
-// and its timeframe when -timeframe is set. Unset, each keeps its default.
+// its timeframe when -timeframe is set, and its max risk when -max-risk-pct is
+// set. Unset, each keeps its default.
 func (in Inputs) Bracket(cfg *strategies.BracketConfig, timeframe *string) {
 	if in.Set["timeframe"] {
 		*timeframe = in.Timeframe
@@ -97,6 +100,9 @@ func (in Inputs) Bracket(cfg *strategies.BracketConfig, timeframe *string) {
 	cfg.PositionFraction = in.Fraction
 	cfg.Leverage = in.Leverage
 	cfg.PositionSize = in.Lots
+	if in.Set["max-risk-pct"] {
+		cfg.MaxRiskPct = in.MaxRiskPct
+	}
 }
 
 // strategyInputs are the flags of Run that only some strategies take: set
@@ -249,6 +255,7 @@ func run(agent Agent) error {
 		fraction     = flag.Float64("position-fraction", 1, "share of the free balance each position commits (0-1]")
 		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01; the decimals with . (a decimal comma, eg: 1,5, is refused)")
 		leverage     = flag.Float64("leverage", 1, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
+		maxRisk      = flag.Float64("max-risk-pct", 0, "skip an entry losing more than that % of the free balance at its stop loss, in the quote of the pair (0: no limit; trendconfluence needs a stop: -stop-atr, -trailing-atr, -broker-stop-atr, -broker-trailing-atr or -stop-value)")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")
@@ -352,7 +359,7 @@ func run(agent Agent) error {
 	trader, err := chosen.New(Inputs{Set: set, Timeframe: *timeframe, Direction: side,
 		StopATR: *stopATR, TrailingATR: *trailingATR, TakeProfitATR: *takeProfit, MinATRPct: *minATRPct,
 		MaxBars: *maxBars, StopValue: *stopValue, TakeProfitValue: *profitValue, MinValue: *minValue,
-		Fraction: *fraction, Leverage: *leverage, Lots: lots})
+		Fraction: *fraction, Leverage: *leverage, Lots: lots, MaxRiskPct: *maxRisk})
 	if err != nil {
 		return err
 	}

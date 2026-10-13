@@ -356,6 +356,16 @@ func TestFibonacci_Limit(t *testing.T) {
 		})
 	}
 
+	t.Run("not placed losing more than the max risk at its stop loss", func(t *testing.T) {
+		// 10 at 101.82, the stop loss at 99.89: 19.3 lost, 0.19% of 10000
+		r, s := newFibRunner(t, func(c *FibonacciConfig) {
+			limit(c)
+			c.MaxRiskPct = 0.1
+		})
+		r.feed(fibUp...)
+		require.Empty(t, s.pending)
+	})
+
 	t.Run("not placed with the price already in the zone", func(t *testing.T) {
 		r, s := newFibRunner(t, func(c *FibonacciConfig) {
 			limit(c)
