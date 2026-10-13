@@ -84,3 +84,46 @@ func TestAgent_TrailingATR(t *testing.T) {
 	requireTrailingATR(t, a, []string{"donchianatr"}, "-trailing-atr is an input of -strategy donchianatr")
 	requireOwnFlags(t, a)
 }
+
+// fimathe takes its own flags, refused with the other strategies, and
+// -max-bars, but not the stop loss and the take profit in ATR nor the
+// trailing in ATR: its stop loss and its take profit are the levels of its
+// reference channel, its stop loss moved by its subcycle.
+func TestAgent_FimatheInputs(t *testing.T) {
+	a := testAgent()
+	for _, name := range fimatheInputs {
+		require.NoError(t, a.CheckInputs("fimathe", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("atrbreakout", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy fimathe")
+	}
+	for _, name := range []string{"max-bars", "timeframe", "lot", "direction"} {
+		require.NoError(t, a.CheckInputs("fimathe", map[string]bool{name: true}), name)
+	}
+	for _, name := range []string{"stop-atr", "take-profit-atr", "trailing-atr", "min-atr-pct", "buffer-atr"} {
+		require.ErrorContains(t, a.CheckInputs("fimathe", map[string]bool{name: true}), "-"+name+" is an input of",
+			name)
+	}
+}
+
+// The strategy fimathe is created from its defaults, on its own timeframe
+// unless -timeframe is set; a fixed stop loss is refused, the stop loss
+// technical.
+func TestAgent_Fimathe(t *testing.T) {
+	a := testAgent()
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "fimathe" })
+	require.GreaterOrEqual(t, i, 0)
+	in := runner.Inputs{Set: map[string]bool{}, Timeframe: "5m", Direction: strategies.RKDirectionBoth,
+		MinValue: 10, Fraction: 1, Leverage: 1}
+	trader, err := a.Strategies[i].New(in)
+	require.NoError(t, err)
+	require.Equal(t, "15m", trader.Timeframe())
+
+	in.Set["timeframe"] = true
+	trader, err = a.Strategies[i].New(in)
+	require.NoError(t, err)
+	require.Equal(t, "5m", trader.Timeframe())
+
+	in.StopValue = 1
+	_, err = a.Strategies[i].New(in)
+	require.ErrorContains(t, err, "technical")
+}

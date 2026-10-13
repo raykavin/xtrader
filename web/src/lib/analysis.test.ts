@@ -269,6 +269,29 @@ describe("analysis on the chart", () => {
     ).toBe("Análise do LLM 30m 21/09/2026 15:45: 3 marcações (2 oferta, 1 demanda)");
   });
 
+  it("names the strategy of rules that drew the levels, and its entry waiting for the break", () => {
+    expect(
+      analysisCaption(
+        analysis({
+          source: "Fimathe",
+          drawings: [
+            {
+              id: "c",
+              kind: "zone",
+              label: "Canal",
+              bias: "bullish",
+              timeframe: "1h",
+              from: 0,
+              low: 1,
+              high: 2,
+            },
+          ],
+          intent: { action: "ENTER_LONG", side: "BUY", order_type: "market", outcome: "waiting" },
+        }),
+      ),
+    ).toBe("Fimathe 30m 21/09/2026 15:45: 1 marcação; compra mercado aguardando rompimento");
+  });
+
   it("draws the zones of supply and demand by their kind and state, whatever their bias", () => {
     const broken = {
       ...demand,

@@ -25,7 +25,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 5)
+	require.Len(t, agents, 6)
 
 	llm, err := s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
@@ -123,6 +123,24 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		require.Equal(t, smc.Position+1+i, fib.Position, "in the order of the file")
 	}
 
+	// the strategy fimathe, without LLM, on both pairs, a magic number of its own
+	fimathe, err := s.AgentByName(ctx, "fimathe")
+	require.NoError(t, err)
+	require.Equal(t, "breakout", fimathe.Kind)
+	require.False(t, fimathe.Enabled, "off until turned on in the dashboard")
+	require.Equal(t, "live", fimathe.Mode)
+	require.Equal(t, "localhost:5573", fimathe.APIAddress)
+	require.False(t, fimathe.TradePanel)
+	require.True(t, fimathe.TelegramControl)
+	require.Equal(t, Params{"strategy": "fimathe", "pair": "XAUUSDm;BTCUSDm", "timeframe": "15m", "lot": "0.01",
+		"leverage": "20", "fimathe-analysis-timeframe": "1h", "fimathe-mapping": "week", "fimathe-mark": "auto",
+		"fimathe-trail": "surf", "fimathe-trail-step": "0.5", "fimathe-max-risk-pct": "3"}, fimathe.Params)
+	require.Equal(t, "http://mt5:18812", fimathe.Account.BridgeURL)
+	require.Equal(t, "nb:fimathe", *fimathe.Account.Comment)
+	require.Empty(t, fimathe.Account.BridgeToken)
+	require.Nil(t, fimathe.LLM)
+	require.Equal(t, smc.Position+3, fimathe.Position, "in the order of the file")
+
 	// run again on every migration: nothing doubled, an edit kept
 	params := llm.AllParams()
 	params["lot"] = "BTCUSDm=0.05;XAUUSDm=0.05"
@@ -131,7 +149,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 5)
+	require.Len(t, agents, 6)
 	llm, err = s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
 	require.Equal(t, "BTCUSDm=0.05;XAUUSDm=0.05", llm.Params["lot"], "the edit kept")
@@ -143,7 +161,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 4)
+	require.Len(t, agents, 5)
 
 	// nor one renamed under its old name
 	renamed, err := s.RenameAgent(ctx, smc.ID, "llm-liquidez-smc")
@@ -153,5 +171,5 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "not seeded again")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []string{"llm", renamed.Name, "fibonacci-btc", "fibonacci-xau"}, names(agents))
+	require.Equal(t, []string{"llm", renamed.Name, "fibonacci-btc", "fibonacci-xau", "fimathe"}, names(agents))
 }

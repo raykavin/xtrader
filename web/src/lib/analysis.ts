@@ -159,6 +159,7 @@ const intentOutcomes: Record<string, string> = {
   ignored: "ignorada",
   refused: "recusada",
   failed: "falhou",
+  waiting: "aguardando rompimento",
 };
 
 /** The entry of an intent, eg: Compra limit. */
@@ -317,11 +318,16 @@ export function decisionAnalysis(decision: Decision): Analysis {
 
 /**
  * The caption of an analysis on the chart, eg: Análise do LLM 30m 08/10/2026
- * 14:30: 5 marcações (1 oferta, 2 demanda); compra limite aplicada: the
- * timeframe of its candles, whatever the one of the chart.
+ * 14:30: 5 marcações (1 oferta, 2 demanda); compra limite aplicada, or
+ * Fimathe 15m … for the levels of a strategy of rules: the timeframe of its
+ * candles, whatever the one of the chart.
  */
 export function analysisCaption(analysis: Analysis): string {
-  const head = ["Análise do LLM", analysis.timeframe, formatTime(analysis.decided_at)]
+  const head = [
+    analysis.source || "Análise do LLM",
+    analysis.timeframe,
+    formatTime(analysis.decided_at),
+  ]
     .filter(Boolean)
     .join(" ");
   const parts: string[] = [];

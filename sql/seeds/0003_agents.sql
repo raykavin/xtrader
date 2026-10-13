@@ -127,3 +127,25 @@ WITH agent AS (
 )
 INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
 SELECT id, 'mt5', 'http://mt5:18812', 'nb:fibonacci-xau' FROM agent;
+
+-- fimathe: the strategy fimathe (agents/breakoutagent), the first entry of the
+-- trend of the reference channel of each week of the Fimathe technique (lesson
+-- 3 of Fimathe 4.0), without LLM, on XAUUSDm and BTCUSDm: the analysis on 1h,
+-- the entries on the closes of 15m, the stop loss beyond the neutral zone
+-- surfing the subcycle by 50%, no take profit, at most 3% of the free balance
+-- lost at the stop loss, its levels drawn on the chart, operated from
+-- Telegram. Its comment of its own gives it a magic number of its own.
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'fimathe', 'breakout', FALSE, 'live', 'localhost:5573', TRUE, TRUE, FALSE, TRUE,
+           '{"strategy": "fimathe", "pair": "XAUUSDm;BTCUSDm", "timeframe": "15m", "lot": "0.01", "leverage": "20",
+             "fimathe-analysis-timeframe": "1h", "fimathe-mapping": "week", "fimathe-mark": "auto",
+             "fimathe-trail": "surf", "fimathe-trail-step": "0.5", "fimathe-max-risk-pct": "3"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'fimathe')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'fimathe')
+    RETURNING id
+)
+INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+SELECT id, 'mt5', 'http://mt5:18812', 'nb:fimathe' FROM agent;
