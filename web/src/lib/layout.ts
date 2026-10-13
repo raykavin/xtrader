@@ -59,6 +59,13 @@ export interface DashboardLayout {
   hidden: CardId[];
   /** The height of the chart in CSS pixels, null for the one of the responsive layout. */
   chartHeight: number | null;
+  /**
+   * The width of the chart in CSS pixels, null for the one of the responsive
+   * layout: the width of its column, beside the other column of the workspace,
+   * or its own in an area of a single column; never on a screen whose areas are
+   * stacked.
+   */
+  chartWidth: number | null;
 }
 
 /** The layout of the page as designed. */
@@ -72,12 +79,17 @@ export function defaultLayout(): DashboardLayout {
     },
     hidden: [],
     chartHeight: null,
+    chartWidth: null,
   };
 }
 
 /** The bounds of the height of the chart, in CSS pixels. */
 export const CHART_MIN_HEIGHT = 280;
 export const CHART_MAX_HEIGHT = 1600;
+
+/** The bounds of the width of the chart, in CSS pixels. */
+export const CHART_MIN_WIDTH = 360;
+export const CHART_MAX_WIDTH = 4000;
 
 /** The key of the layout in localStorage. */
 export const LAYOUT_KEY = "xtrader.dashboard.layout";
@@ -94,10 +106,20 @@ function defaultZone(card: CardId): ZoneId {
   return ZONES.find((zone) => zones[zone].includes(card)) ?? "bottom";
 }
 
+/** The value within min and max, rounded; null for none or what isn't a number. */
+function bounded(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.round(Math.min(Math.max(value, min), max));
+}
+
 /** The height of the chart within its bounds, rounded; null for none or what isn't one. */
 export function chartHeightOf(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.round(Math.min(Math.max(value, CHART_MIN_HEIGHT), CHART_MAX_HEIGHT));
+  return bounded(value, CHART_MIN_HEIGHT, CHART_MAX_HEIGHT);
+}
+
+/** The width of the chart within its bounds, rounded; null for none or what isn't one. */
+export function chartWidthOf(value: unknown): number | null {
+  return bounded(value, CHART_MIN_WIDTH, CHART_MAX_WIDTH);
 }
 
 /**
@@ -113,6 +135,7 @@ export function normalizeLayout(raw: unknown): DashboardLayout {
     zones?: unknown;
     hidden?: unknown;
     chartHeight?: unknown;
+    chartWidth?: unknown;
   };
   if (saved.version !== undefined && saved.version !== LAYOUT_VERSION) return defaultLayout();
   if (typeof saved.zones !== "object" || saved.zones === null) return defaultLayout();
@@ -136,7 +159,12 @@ export function normalizeLayout(raw: unknown): DashboardLayout {
   const hidden = Array.isArray(saved.hidden)
     ? CARDS.filter((card) => (saved.hidden as unknown[]).includes(card))
     : [];
-  return { zones, hidden, chartHeight: chartHeightOf(saved.chartHeight) };
+  return {
+    zones,
+    hidden,
+    chartHeight: chartHeightOf(saved.chartHeight),
+    chartWidth: chartWidthOf(saved.chartWidth),
+  };
 }
 
 /** Whether layout is the default one, nothing moved, hidden or resized. */
@@ -145,6 +173,7 @@ export function isDefaultLayout(layout: DashboardLayout): boolean {
   return (
     layout.hidden.length === 0 &&
     layout.chartHeight === null &&
+    layout.chartWidth === null &&
     ZONES.every((zone) => layout.zones[zone].join() === fallback.zones[zone].join())
   );
 }
@@ -257,4 +286,9 @@ export function setHidden(layout: DashboardLayout, card: CardId, hidden: boolean
 /** The layout with the chart height, null for the one of the responsive layout. */
 export function setChartHeight(layout: DashboardLayout, height: number | null): DashboardLayout {
   return { ...layout, chartHeight: height === null ? null : chartHeightOf(height) };
+}
+
+/** The layout with the chart width, null for the one of the responsive layout. */
+export function setChartWidth(layout: DashboardLayout, width: number | null): DashboardLayout {
+  return { ...layout, chartWidth: width === null ? null : chartWidthOf(width) };
 }

@@ -56,7 +56,7 @@ const intros: Record<SettingsTab, SectionIntro> = {
   layout: {
     title: "Layout",
     description:
-      "A disposição dos cards do painel neste navegador: a ordem, os ocultos e a altura do gráfico.",
+      "A disposição dos cards do painel neste navegador: a ordem, os ocultos e o tamanho do gráfico.",
   },
 };
 

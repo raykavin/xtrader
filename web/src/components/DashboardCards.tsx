@@ -15,8 +15,11 @@ import {
   CARDS,
   type CardId,
   CHART_MAX_HEIGHT,
+  CHART_MAX_WIDTH,
   CHART_MIN_HEIGHT,
+  CHART_MIN_WIDTH,
   chartHeightOf,
+  chartWidthOf,
   clearLayout,
   type DashboardLayout,
   defaultLayout,
@@ -26,6 +29,7 @@ import {
   moveCard,
   saveLayout,
   setChartHeight,
+  setChartWidth,
   setHidden,
   stepCard,
   ZONE_LABELS,
@@ -89,6 +93,10 @@ interface Drag {
   y: number;
 }
 
+/** The least width of the column beside the chart in the workspace: the side one, the main one. */
+const SIDE_MIN_WIDTH = 300;
+const MAIN_MIN_WIDTH = 360;
+
 /** The columns of the overview row for cards other than its own: the share and the least width of each. */
 const OVERVIEW_TRACKS: Record<CardId, string> = {
   quote: "minmax(300px, 4fr)",
@@ -105,10 +113,32 @@ const OVERVIEW_TRACKS: Record<CardId, string> = {
  * their order (the ones of the stylesheet), a column each for up to three,
  * else as many columns of 300 px at least as fit, the cards wrapping.
  */
-export function overviewColumns(cards: CardId[]): string | undefined {
+export function overviewColumns(cards: CardId[], chartWidth = false): string | undefined {
   if (cards.join() === "quote,sentiment,results") return undefined;
   if (cards.length > 3) return "repeat(auto-fit, minmax(300px, 1fr))";
-  return cards.map((card) => OVERVIEW_TRACKS[card]).join(" ");
+  return cards
+    .map((card) => (card === "chart" && chartWidth ? CHART_WIDTH_TRACK : OVERVIEW_TRACKS[card]))
+    .join(" ");
+}
+
+/** The column of the chart of the width the user set, see DashboardLayout.chartWidth. */
+const CHART_WIDTH_TRACK = "minmax(0, var(--chart-width))";
+
+/**
+ * The columns of the workspace holding the chart of the width the user set
+ * beside another column: the chart's column of that width, the other taking
+ * the rest, at its least width; none for the ones of the stylesheet.
+ */
+export function workspaceColumns(
+  chartZone: ZoneId,
+  withMain: boolean,
+  withSide: boolean,
+): string | undefined {
+  if (chartZone === "main" && withSide)
+    return `${CHART_WIDTH_TRACK} minmax(${SIDE_MIN_WIDTH}px, 1fr)`;
+  if (chartZone === "side" && withMain)
+    return `minmax(${MAIN_MIN_WIDTH}px, 1fr) ${CHART_WIDTH_TRACK}`;
+  return undefined;
 }
 
 /** The step of a move of the height of the chart by the keyboard, in CSS pixels, and with Shift or a page key. */
@@ -146,6 +176,8 @@ export function DashboardCards({
   const [target, setTarget] = useState<DropTarget | null>(null);
   const [focusCard, setFocusCard] = useState<CardId | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // a drag of the width of the chart going on: its columns follow it before it is saved
+  const [sizingWidth, setSizingWidth] = useState(false);
 
   const available = (card: CardId) => cards[card] !== undefined && cards[card] !== null;
   const shown = (card: CardId) => available(card) && !layout.hidden.includes(card);
@@ -330,12 +362,14 @@ export function DashboardCards({
           {node}
         </div>
         {editing && card === "chart" && (
-          <ChartResize
-            key="resize"
+          <ChartSizer
+            key="size"
             root={rootRef}
             layout={layout}
             onLayout={onLayout}
             onAnnounce={setAnnouncement}
+            widthApplies={!(zone === "overview" && zoneCards("overview").length > 3)}
+            onSizingWidth={setSizingWidth}
           />
         )}
       </div>
@@ -359,11 +393,20 @@ export function DashboardCards({
   const main = zoneCards("main");
   const side = zoneCards("side");
   const bottom = zoneCards("bottom");
-  const columns = overviewColumns(overview);
+  // the width of the chart, set or being dragged, and the area of the chart
+  const chartWidth = sizingWidth || layout.chartWidth !== null;
+  const chartZone = zoneOf(layout, "chart");
+  const chartShown = shown("chart");
+  const columns = overviewColumns(overview, chartWidth && chartShown);
+  const workspaceStyle =
+    chartWidth && chartShown
+      ? workspaceColumns(chartZone, main.length > 0 || editing, side.length > 0 || editing)
+      : undefined;
   const areaClass = (base: string, zone: ZoneId) =>
     editing && target?.zone === zone && !target.card ? `${base} is-target` : base;
   const style = {
     ...(layout.chartHeight !== null && { "--chart-height": `${layout.chartHeight}px` }),
+    ...(layout.chartWidth !== null && { "--chart-width": `${layout.chartWidth}px` }),
   } as CSSProperties;
 
   return (
@@ -371,6 +414,7 @@ export function DashboardCards({
       ref={rootRef}
       className={editing ? "dashboard-cards is-editing" : "dashboard-cards"}
       data-chart-height={layout.chartHeight !== null ? "" : undefined}
+      data-chart-width={layout.chartWidth !== null ? "" : undefined}
       data-dragging={drag ? "" : undefined}
       style={style}
     >
@@ -380,7 +424,8 @@ export function DashboardCards({
             <span className="eyebrow">Personalizando o layout</span>
             <p id={hintId}>
               Arraste um card pela barra acima dele, ou use as setas do teclado com ela em foco.
-              Oculte um card no ✕ e ajuste a altura do gráfico pela barra abaixo dele.
+              Oculte um card no ✕ e ajuste o tamanho do gráfico pelas bordas dele: a barra de baixo
+              muda a altura, a da direita a largura, e o canto, as duas.
             </p>
           </div>
           {hidden.length > 0 && (
@@ -440,6 +485,11 @@ export function DashboardCards({
               ? "workspace workspace-single"
               : "workspace"
           }
+          style={
+            workspaceStyle
+              ? ({ "--workspace-columns": workspaceStyle } as CSSProperties)
+              : undefined
+          }
         >
           {(main.length > 0 || editing) && (
             <div className={areaClass("workspace-main", "main")} data-zone-area="main">
@@ -478,122 +528,262 @@ export function DashboardCards({
 }
 
 /**
- * The bar below the chart sizing its height: dragged, or with the arrows of
- * the keyboard, from 280 px to what the window holds; back to the height of
- * the responsive layout with its button. While dragged the height is set on
- * the page alone, saved once released.
+ * The bars sizing the chart, while customizing: below it, its height, from
+ * 280 px to what the window holds; on its right edge, its width, from 360 px
+ * to what its area holds (the other column of the workspace kept at its least
+ * width); at their corner, both. Dragged, or the bars with the arrows of the
+ * keyboard; back to the size of the responsive layout with their buttons.
+ * While dragged the size is set on the page alone, saved once released. The
+ * width shows only where it applies: on a screen whose areas aren't stacked.
  */
-function ChartResize({
+function ChartSizer({
   root,
   layout,
   onLayout,
   onAnnounce,
+  widthApplies,
+  onSizingWidth,
 }: {
   root: RefObject<HTMLDivElement | null>;
   layout: DashboardLayout;
   onLayout: (layout: DashboardLayout) => void;
   onAnnounce: (message: string) => void;
+  /** Whether the area of the chart takes a width, eg: not the overview row wrapping more than three cards. */
+  widthApplies: boolean;
+  /** Tells a drag of the width starting and ending, the columns following it meanwhile. */
+  onSizingWidth: (sizing: boolean) => void;
 }) {
-  const [live, setLive] = useState<number | null>(null);
-  const height = live ?? layout.chartHeight;
+  const [liveHeight, setLiveHeight] = useState<number | null>(null);
+  const [liveWidth, setLiveWidth] = useState<number | null>(null);
+  const height = liveHeight ?? layout.chartHeight;
+  const width = liveWidth ?? layout.chartWidth;
+
+  const frame = () => root.current?.querySelector<HTMLElement>('[data-card="chart"]') ?? null;
 
   /** The height of the chart as drawn now. */
-  const drawn = () => {
-    const chart = root.current?.querySelector<HTMLElement>('[data-card="chart"] .price-chart');
+  const drawnHeight = () => {
+    const chart = frame()?.querySelector<HTMLElement>(".price-chart");
     return Math.round(chart?.getBoundingClientRect().height ?? CHART_MIN_HEIGHT);
   };
 
-  /** Sets the height on the page while it is dragged, before it is saved. */
-  const apply = (value: number) => {
+  /** The width of the chart as drawn now: the one of its frame, its column. */
+  const drawnWidth = () => Math.round(frame()?.getBoundingClientRect().width ?? CHART_MIN_WIDTH);
+
+  /** The widest the chart goes in its area: the area, but the least width of the other column. */
+  const widthCeiling = () => {
+    const card = frame();
+    const area = card?.parentElement;
+    if (!card || !area) return CHART_MAX_WIDTH;
+    const zone = card.dataset.zone as ZoneId;
+    const workspace = area.parentElement;
+    if ((zone === "main" || zone === "side") && workspace?.classList.contains("workspace")) {
+      const other = workspace.querySelector(
+        zone === "main" ? ".workspace-side" : ".workspace-main",
+      );
+      if (other) {
+        const gap = Number.parseFloat(getComputedStyle(workspace).columnGap) || 16;
+        const least = zone === "main" ? SIDE_MIN_WIDTH : MAIN_MIN_WIDTH;
+        return Math.round(workspace.getBoundingClientRect().width - gap - least);
+      }
+    }
+    return Math.round(area.getBoundingClientRect().width);
+  };
+
+  const bound = (value: number, min: number, max: number) =>
+    Math.round(Math.min(Math.max(value, min), Math.max(min, max)));
+
+  /** Sets a size on the page while it is dragged, before it is saved. */
+  const apply = (axis: "height" | "width", value: number) => {
     const element = root.current;
     if (!element) return;
-    element.style.setProperty("--chart-height", `${value}px`);
-    element.dataset.chartHeight = "";
+    element.style.setProperty(axis === "height" ? "--chart-height" : "--chart-width", `${value}px`);
+    if (axis === "height") element.dataset.chartHeight = "";
+    else element.dataset.chartWidth = "";
   };
 
-  const commit = (value: number | null) => {
-    onLayout(setChartHeight(layout, value));
-    onAnnounce(
-      value === null
-        ? "Altura do gráfico automática."
-        : `Altura do gráfico: ${chartHeightOf(value)} px.`,
-    );
-  };
-
-  const start = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const from = drawn();
-    const startY = event.clientY;
-    const ceiling = chartCeiling();
-    let value = from;
-    const move = (moveEvent: globalThis.PointerEvent) => {
-      value = Math.round(
-        Math.min(Math.max(from + moveEvent.clientY - startY, CHART_MIN_HEIGHT), ceiling),
+  const commit = (next: { height?: number | null; width?: number | null }) => {
+    let updated = layout;
+    const said: string[] = [];
+    if (next.height !== undefined) {
+      updated = setChartHeight(updated, next.height);
+      said.push(
+        next.height === null ? "altura automática" : `altura ${chartHeightOf(next.height)} px`,
       );
-      setLive(value);
-      apply(value);
-    };
-    const end = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", end);
-      handle.removeEventListener("pointercancel", end);
-      setLive(null);
-      commit(value);
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", end);
-    handle.addEventListener("pointercancel", end);
+    }
+    if (next.width !== undefined) {
+      updated = setChartWidth(updated, next.width);
+      said.push(
+        next.width === null ? "largura automática" : `largura ${chartWidthOf(next.width)} px`,
+      );
+    }
+    onLayout(updated);
+    onAnnounce(`Gráfico: ${said.join(", ")}.`);
   };
 
-  const keys = (event: KeyboardEvent<HTMLDivElement>) => {
+  /** A drag of the handle of event sizing the axes asked, captured by it until released. */
+  const drag =
+    (axes: { height?: boolean; width?: boolean }) => (event: PointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+      event.preventDefault();
+      const handle = event.currentTarget;
+      handle.setPointerCapture(event.pointerId);
+      const fromHeight = drawnHeight();
+      const fromWidth = drawnWidth();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const heightMax = chartCeiling();
+      const widthMax = widthCeiling();
+      let nextHeight = fromHeight;
+      let nextWidth = fromWidth;
+      if (axes.width) {
+        apply("width", fromWidth);
+        onSizingWidth(true);
+      }
+      const move = (moveEvent: globalThis.PointerEvent) => {
+        if (axes.height) {
+          nextHeight = bound(fromHeight + moveEvent.clientY - startY, CHART_MIN_HEIGHT, heightMax);
+          setLiveHeight(nextHeight);
+          apply("height", nextHeight);
+        }
+        if (axes.width) {
+          nextWidth = bound(fromWidth + moveEvent.clientX - startX, CHART_MIN_WIDTH, widthMax);
+          setLiveWidth(nextWidth);
+          apply("width", nextWidth);
+        }
+      };
+      const end = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", end);
+        handle.removeEventListener("pointercancel", end);
+        setLiveHeight(null);
+        setLiveWidth(null);
+        if (axes.width) onSizingWidth(false);
+        commit({
+          ...(axes.height && { height: nextHeight }),
+          ...(axes.width && { width: nextWidth }),
+        });
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+    };
+
+  /** The size of a key of the keyboard on an axis, from current, between min and max; null for another key. */
+  const keyed = (
+    event: KeyboardEvent<HTMLElement>,
+    less: string,
+    more: string,
+    current: number,
+    min: number,
+    max: number,
+  ) => {
     const step = event.shiftKey ? RESIZE_BIG_STEP : RESIZE_STEP;
-    const current = layout.chartHeight ?? drawn();
     const next =
-      event.key === "ArrowUp"
+      event.key === less
         ? current - step
-        : event.key === "ArrowDown"
+        : event.key === more
           ? current + step
           : event.key === "PageUp"
             ? current - RESIZE_BIG_STEP
             : event.key === "PageDown"
               ? current + RESIZE_BIG_STEP
               : event.key === "Home"
-                ? CHART_MIN_HEIGHT
+                ? min
                 : event.key === "End"
-                  ? chartCeiling()
+                  ? max
                   : null;
-    if (next === null) return;
+    if (next === null) return null;
     event.preventDefault();
-    commit(Math.min(Math.max(next, CHART_MIN_HEIGHT), chartCeiling()));
+    return bound(next, min, max);
+  };
+
+  const heightKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = keyed(
+      event,
+      "ArrowUp",
+      "ArrowDown",
+      layout.chartHeight ?? drawnHeight(),
+      CHART_MIN_HEIGHT,
+      chartCeiling(),
+    );
+    if (next !== null) commit({ height: next });
+  };
+
+  const widthKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = keyed(
+      event,
+      "ArrowLeft",
+      "ArrowRight",
+      layout.chartWidth ?? drawnWidth(),
+      CHART_MIN_WIDTH,
+      widthCeiling(),
+    );
+    if (next !== null) commit({ width: next });
   };
 
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a focusable separator sizing the chart, as the WAI-ARIA window splitter
-    <div
-      className="chart-resize"
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Altura do gráfico: arraste, ou use as setas para cima e para baixo"
-      aria-valuemin={CHART_MIN_HEIGHT}
-      aria-valuemax={CHART_MAX_HEIGHT}
-      aria-valuenow={height ?? undefined}
-      aria-valuetext={height === null ? "automática" : `${height} pixels`}
-      tabIndex={0}
-      onPointerDown={start}
-      onKeyDown={keys}
-    >
-      <span className="chart-resize-grip" aria-hidden="true" />
-      <span className="chart-resize-label">
-        {height === null ? "Altura automática" : `${height} px`} · arraste para redimensionar
-      </span>
-      {layout.chartHeight !== null && (
-        <button type="button" className="btn btn-xs" onClick={() => commit(null)}>
-          Altura automática
-        </button>
+    <>
+      {/* biome-ignore lint/a11y/useSemanticElements: a focusable separator sizing the chart, as the WAI-ARIA window splitter */}
+      <div
+        key="height"
+        className="chart-resize"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Altura do gráfico: arraste, ou use as setas para cima e para baixo"
+        aria-valuemin={CHART_MIN_HEIGHT}
+        aria-valuemax={CHART_MAX_HEIGHT}
+        aria-valuenow={height ?? undefined}
+        aria-valuetext={height === null ? "automática" : `${height} pixels`}
+        tabIndex={0}
+        onPointerDown={drag({ height: true })}
+        onKeyDown={heightKeys}
+      >
+        <span className="chart-resize-grip" aria-hidden="true" />
+        <span className="chart-resize-label">
+          {height === null ? "Altura automática" : `Altura ${height} px`}
+          {widthApplies && ` · ${width === null ? "largura automática" : `largura ${width} px`}`} ·
+          arraste as bordas para redimensionar
+        </span>
+        {layout.chartHeight !== null && (
+          <button type="button" className="btn btn-xs" onClick={() => commit({ height: null })}>
+            Altura automática
+          </button>
+        )}
+        {widthApplies && layout.chartWidth !== null && (
+          <button type="button" className="btn btn-xs" onClick={() => commit({ width: null })}>
+            Largura automática
+          </button>
+        )}
+      </div>
+      {widthApplies && (
+        <>
+          {/* biome-ignore lint/a11y/useSemanticElements: a focusable separator sizing the chart, as the WAI-ARIA window splitter */}
+          <div
+            key="width"
+            className="chart-resize-width"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Largura do gráfico: arraste, ou use as setas para a esquerda e para a direita"
+            aria-valuemin={CHART_MIN_WIDTH}
+            aria-valuemax={CHART_MAX_WIDTH}
+            aria-valuenow={width ?? undefined}
+            aria-valuetext={width === null ? "automática" : `${width} pixels`}
+            title="Arraste para mudar a largura do gráfico"
+            tabIndex={0}
+            onPointerDown={drag({ width: true })}
+            onKeyDown={widthKeys}
+          >
+            <span className="chart-resize-grip" aria-hidden="true" />
+          </div>
+          <div
+            key="corner"
+            className="chart-resize-corner"
+            aria-hidden="true"
+            title="Arraste para mudar a largura e a altura do gráfico"
+            onPointerDown={drag({ height: true, width: true })}
+          />
+        </>
       )}
-    </div>
+    </>
   );
 }
