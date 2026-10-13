@@ -810,8 +810,8 @@ code {
   gap: var(--sp-2);
 }
 
-/* the foot of the pages: the copyright at the start, the logo of who made
-   the dashboard at the end */
+/* the foot of the pages: the logo of who made the dashboard at the start,
+   the copyright at the end; on a phone, the logo over the copyright */
 .footer {
   display: flex;
   align-items: center;
