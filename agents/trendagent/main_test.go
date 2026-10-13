@@ -78,13 +78,51 @@ func requireTrailingATR(t *testing.T, a runner.Agent, takes []string, refused st
 }
 
 // M12a: -trailing-atr as before the flags no strategy takes were refused:
-// taken and applied by trendconfluence and matrend, refused with emapullback
-// and the signal strategies, none of which trails its stop loss by default.
+// taken and applied by trendconfluence and matrend, and by fibonacci since,
+// refused with emapullback and the signal strategies, none of which trails its
+// stop loss by default.
 func TestAgent_TrailingATR(t *testing.T) {
 	a := testAgent()
-	requireTrailingATR(t, a, []string{"trendconfluence", "matrend"},
-		"-trailing-atr is an input of -strategy matrend and trendconfluence")
+	requireTrailingATR(t, a, []string{"trendconfluence", "matrend", "fibonacci"},
+		"-trailing-atr is an input of -strategy fibonacci and matrend and trendconfluence")
 	require.ErrorContains(t, a.CheckInputs("matrend", map[string]bool{"take-profit-atr": true}),
 		"-take-profit-atr is an input of -strategy")
 	requireOwnFlags(t, a)
+}
+
+// fibonacci takes its own flags, refused with the other strategies, and the
+// flags of the exits it uses, but not the stop loss and take profit in ATR,
+// which the levels of the impulse replace.
+func TestAgent_FibonacciInputs(t *testing.T) {
+	a := testAgent()
+	for _, name := range fibInputs {
+		require.NoError(t, a.CheckInputs("fibonacci", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("matrend", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy fibonacci")
+	}
+	for _, name := range []string{"max-bars", "min-atr-pct", "trailing-atr", "timeframe", "lot"} {
+		require.NoError(t, a.CheckInputs("fibonacci", map[string]bool{name: true}), name)
+	}
+	for _, name := range []string{"stop-atr", "take-profit-atr", "stop-buffer-atr", "fast-ema"} {
+		require.ErrorContains(t, a.CheckInputs("fibonacci", map[string]bool{name: true}), "-"+name+" is an input of",
+			name)
+	}
+}
+
+// The strategy fibonacci is created from its defaults, on its own timeframe
+// unless -timeframe is set.
+func TestAgent_Fibonacci(t *testing.T) {
+	a := testAgent()
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "fibonacci" })
+	require.GreaterOrEqual(t, i, 0)
+	in := runner.Inputs{Set: map[string]bool{}, Timeframe: "1h", Direction: strategies.RKDirectionBoth,
+		MinValue: 10, Fraction: 1, Leverage: 1}
+	trader, err := a.Strategies[i].New(in)
+	require.NoError(t, err)
+	require.Equal(t, "15m", trader.Timeframe())
+
+	in.Set["timeframe"] = true
+	trader, err = a.Strategies[i].New(in)
+	require.NoError(t, err)
+	require.Equal(t, "1h", trader.Timeframe())
 }

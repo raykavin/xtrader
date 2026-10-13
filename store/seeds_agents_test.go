@@ -25,7 +25,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 3)
+	require.Len(t, agents, 5)
 
 	llm, err := s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
@@ -97,6 +97,32 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		smc.LLM.Params)
 	require.Less(t, matrend.Position, smc.Position)
 
+	// the strategy fibonacci, without LLM, an agent per pair, each with a magic
+	// number of its own
+	for i, want := range []struct{ name, pair, address string }{
+		{"fibonacci-btc", "BTCUSDm", "localhost:5571"},
+		{"fibonacci-xau", "XAUUSDm", "localhost:5572"},
+	} {
+		fib, err := s.AgentByName(ctx, want.name)
+		require.NoError(t, err)
+		require.Equal(t, "trend", fib.Kind)
+		require.False(t, fib.Enabled, "off until turned on in the dashboard")
+		require.Equal(t, "live", fib.Mode)
+		require.Equal(t, want.address, fib.APIAddress)
+		require.False(t, fib.TradePanel)
+		require.True(t, fib.TelegramControl)
+		require.Equal(t, Params{"strategy": "fibonacci", "pair": want.pair, "timeframe": "15m", "lot": "0.01",
+			"leverage": "20", "fib-swing": "pivot", "fib-pivot": "5", "fib-min-impulse-atr": "3",
+			"fib-entry-low": "0.5", "fib-entry-high": "0.618", "fib-trigger": "close", "fib-stop-level": "0.786",
+			"fib-stop-buffer-atr": "0.25", "fib-target": "extreme"}, fib.Params)
+		require.Equal(t, "http://mt5:18812", fib.Account.BridgeURL)
+		require.Equal(t, "nb:"+want.name, *fib.Account.Comment)
+		require.Empty(t, fib.Account.BridgeToken)
+		require.Nil(t, fib.LLM)
+		require.Less(t, smc.Position, fib.Position)
+		require.Equal(t, smc.Position+1+i, fib.Position, "in the order of the file")
+	}
+
 	// run again on every migration: nothing doubled, an edit kept
 	params := llm.AllParams()
 	params["lot"] = "BTCUSDm=0.05;XAUUSDm=0.05"
@@ -105,7 +131,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 3)
+	require.Len(t, agents, 5)
 	llm, err = s.AgentByName(ctx, "llm")
 	require.NoError(t, err)
 	require.Equal(t, "BTCUSDm=0.05;XAUUSDm=0.05", llm.Params["lot"], "the edit kept")
@@ -117,7 +143,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 2)
+	require.Len(t, agents, 4)
 
 	// nor one renamed under its old name
 	renamed, err := s.RenameAgent(ctx, smc.ID, "llm-liquidez-smc")
@@ -127,5 +153,5 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "not seeded again")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []string{"llm", renamed.Name}, names(agents))
+	require.Equal(t, []string{"llm", renamed.Name, "fibonacci-btc", "fibonacci-xau"}, names(agents))
 }

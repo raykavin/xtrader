@@ -231,26 +231,36 @@ func (s *SignalStrategy) OnCandle(df *model.Dataframe, broker service.Broker) {
 }
 
 // trail moves the stop loss at the broker of the position held on the pair to
-// TrailingATR from the best price since the entry, with the ATR of the last
-// candle, as RKTrendConfluence.trailBroker does: it only tightens, and stays on
-// the losing side of the close, where the broker takes it.
+// TrailingATR from the best price since the entry, see bracket.trail.
 func (s *SignalStrategy) trail(df *model.Dataframe, broker service.Broker) {
-	trade := s.bracket.trades[df.Pair]
+	s.bracket.trail(df, broker, s.trails, s.cfg.TrailingATR, df.Metadata["sg_atr"])
+}
+
+// trail moves the stop loss at the broker of the position held on the pair to
+// trailingATR from the best price since the entry, with the ATR of the last
+// candle of atrs, as RKTrendConfluence.trailBroker does: it only tightens, and
+// stays on the losing side of the close, where the broker takes it. trails
+// holds the best prices of the positions, by pair. Nothing with a trailingATR
+// of 0, or a fixed stop loss (StopValue).
+func (b *bracket) trail(df *model.Dataframe, broker service.Broker, trails map[string]*signalTrail,
+	trailingATR float64, atrs []float64) {
+
+	trade := b.trades[df.Pair]
 	protected, ok := broker.(service.ProtectionBroker)
-	if s.cfg.TrailingATR <= 0 || s.cfg.StopValue > 0 || trade == nil || !ok {
+	if trailingATR <= 0 || b.cfg.StopValue > 0 || trade == nil || !ok {
 		return
 	}
 
-	trail := s.trails[df.Pair]
+	trail := trails[df.Pair]
 	if trail == nil || trail.trade != trade {
 		// a position found after a restart: its best price since its opening,
 		// when known, else trailed from now on
 		trail = &signalTrail{trade: trade, extreme: df.Close.Last(0)}
 		found := rkFound{opened: trade.opened}
-		if _, first, ok := found.held(df, s.cfg.Timeframe); ok && first < len(df.Close) {
+		if _, first, ok := found.held(df, b.timeframe); ok && first < len(df.Close) {
 			trail.extreme = rkExtreme(df, trade.side, first)
 		}
-		s.trails[df.Pair] = trail
+		trails[df.Pair] = trail
 	}
 	sign := rkSign(trade.side)
 	if trade.side == model.SideTypeBuy {
@@ -258,11 +268,10 @@ func (s *SignalStrategy) trail(df *model.Dataframe, broker service.Broker) {
 	} else {
 		trail.extreme = math.Min(trail.extreme, df.Low.Last(0))
 	}
-	atr := df.Metadata["sg_atr"].Last(0)
-	if isNa(atr) || atr <= 0 {
+	if len(atrs) == 0 || isNa(atrs[len(atrs)-1]) || atrs[len(atrs)-1] <= 0 {
 		return
 	}
-	stop := trail.extreme - sign*s.cfg.TrailingATR*atr
+	stop := trail.extreme - sign*trailingATR*atrs[len(atrs)-1]
 
 	for i, leg := range trade.legs {
 		if leg.Type != model.OrderTypeStopLoss {
@@ -281,7 +290,7 @@ func (s *SignalStrategy) trail(df *model.Dataframe, broker service.Broker) {
 			return
 		}
 		trade.legs[i] = moved
-		log.Infof("[%s] %s %s | TRAIL | stop %f", s.bracket.name, df.Pair, s.cfg.Timeframe, stop)
+		log.Infof("[%s] %s %s | TRAIL | stop %f", b.name, df.Pair, b.timeframe, stop)
 	}
 }
 

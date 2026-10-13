@@ -166,8 +166,27 @@ func (b *bracket) manage(df *model.Dataframe, broker service.Broker, exit bracke
 // whether it is held now.
 func (b *bracket) open(df *model.Dataframe, broker service.Broker, entry model.SideType, atr float64) bool {
 	closePrice := df.Close.Last(0)
-	if entry == "" || !rkOpens(b.cfg.Direction, entry) || isNa(atr) || atr <= 0 ||
-		b.cfg.MinATRPct > 0 && atr/closePrice*100 < b.cfg.MinATRPct {
+	if isNa(atr) || atr <= 0 || b.cfg.MinATRPct > 0 && atr/closePrice*100 < b.cfg.MinATRPct {
+		return false
+	}
+
+	sign := rkSign(entry)
+	profit := 0.0 // none
+	if b.cfg.TakeProfitATR > 0 {
+		profit = closePrice + sign*b.cfg.TakeProfitATR*atr
+	}
+	return b.openAt(df, broker, entry, closePrice-sign*b.cfg.StopATR*atr, profit)
+}
+
+// openAt opens a position of entry on the last candle at the market, with its
+// stop loss at stop and its take profit at profit, 0 for none, unless their
+// fixed values replace them (StopValue and TakeProfitValue), and reports
+// whether it is held now.
+func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model.SideType, stop,
+	profit float64) bool {
+
+	closePrice := df.Close.Last(0)
+	if entry == "" || !rkOpens(b.cfg.Direction, entry) {
 		return false
 	}
 
@@ -187,18 +206,7 @@ func (b *bracket) open(df *model.Dataframe, broker service.Broker, entry model.S
 		return false
 	}
 
-	sign := rkSign(entry)
-	stop := closePrice - sign*b.cfg.StopATR*atr
-	if b.cfg.StopValue > 0 {
-		stop = rkLossLevel(entry, closePrice, size, b.cfg.StopValue)
-	}
-	profit := 0.0 // none
-	switch {
-	case b.cfg.TakeProfitValue > 0:
-		profit = rkProfitLevel(entry, closePrice, size, b.cfg.TakeProfitValue)
-	case b.cfg.TakeProfitATR > 0:
-		profit = closePrice + sign*b.cfg.TakeProfitATR*atr
-	}
+	stop, profit = b.fixed(entry, closePrice, size, stop, profit)
 	log.Infof("[%s] %s %s | %s | close %f | stop %f | take profit %f", b.name, df.Pair, b.timeframe, entry,
 		closePrice, stop, profit)
 
@@ -206,9 +214,74 @@ func (b *bracket) open(df *model.Dataframe, broker service.Broker, entry model.S
 	if err != nil {
 		log.Error(err)
 	}
+	return b.follow(df, broker, entry, orders)
+}
 
-	// an order reported as failed may have been filled even so, eg: a request
-	// that timed out, so whatever position is held now is followed
+// place places a limit order of entry at limit on the pair of df, with its
+// stop loss at stop and its take profit at profit, 0 for none, unless their
+// fixed values replace them, see openAt. It returns the orders of the entry
+// still pending, the entry then its legs, none when no entry is pending: not
+// placed, or filled at once, the position then followed, held reporting it.
+func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.SideType, limit, stop,
+	profit float64) (pending []model.Order, held bool) {
+
+	if entry == "" || !rkOpens(b.cfg.Direction, entry) {
+		return nil, false
+	}
+
+	protected, ok := broker.(service.ProtectionBroker)
+	if !ok {
+		log.Errorf("%s: the broker can't place the stop loss and take profit with the order", b.name)
+		return nil, false
+	}
+
+	_, quote, err := broker.Position(df.Pair)
+	if err != nil {
+		log.Error(err)
+		return nil, false
+	}
+	size, _, ok := b.sizing.position(df.Pair, quote, limit)
+	if !ok {
+		return nil, false
+	}
+
+	stop, profit = b.fixed(entry, limit, size, stop, profit)
+	log.Infof("[%s] %s %s | %s LIMIT | limit %f | stop %f | take profit %f | close %f", b.name, df.Pair,
+		b.timeframe, entry, limit, stop, profit, df.Close.Last(0))
+
+	orders, err := protected.CreateOrderLimitProtected(entry, df.Pair, size, limit, stop, profit)
+	if err != nil {
+		log.Error(err)
+	}
+	if b.follow(df, broker, entry, orders) {
+		return nil, true
+	}
+	if len(orders) > 0 && orders[0].Type == model.OrderTypeLimit && !orders[0].Status.Final() {
+		return orders, false
+	}
+	return nil, false
+}
+
+// fixed returns the stop loss and the take profit of a position of entry at
+// price of size, stop and profit unless StopValue or TakeProfitValue replace
+// them.
+func (b *bracket) fixed(entry model.SideType, price, size, stop, profit float64) (float64, float64) {
+	if b.cfg.StopValue > 0 {
+		stop = rkLossLevel(entry, price, size, b.cfg.StopValue)
+	}
+	if b.cfg.TakeProfitValue > 0 {
+		profit = rkProfitLevel(entry, price, size, b.cfg.TakeProfitValue)
+	}
+	return stop, profit
+}
+
+// follow follows the position of entry held on the pair of df after its orders
+// were sent, the entry then its legs, and reports whether it is held. An order
+// reported as failed may have been filled even so, eg: a request that timed
+// out, so whatever position is held now is followed.
+func (b *bracket) follow(df *model.Dataframe, broker service.Broker, entry model.SideType,
+	orders []model.Order) bool {
+
 	if _, now, err := b.position(df, broker); err == nil && now == entry {
 		trade := &scalpTrade{side: entry}
 		if len(orders) > 1 {

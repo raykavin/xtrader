@@ -334,14 +334,16 @@ func run(agent Agent) error {
 	if set["mt5-contract-size"] && (lots == nil || !inLots) {
 		return errors.New("-mt5-contract-size converts the lots of -lot, which needs -lot and -mt5-size lot")
 	}
-	// a fixed stop loss or take profit replaces the ones in ATR
+	// a fixed stop loss or take profit replaces the ones in ATR, and the levels
+	// of fibonacci
 	for fixed, inATR := range map[string][]string{
-		"stop-value":        {"stop-atr", "trailing-atr", "stop-buffer-atr", "broker-stop-atr", "broker-trailing-atr"},
-		"take-profit-value": {"take-profit-atr"},
+		"stop-value": {"stop-atr", "trailing-atr", "stop-buffer-atr", "broker-stop-atr", "broker-trailing-atr",
+			"fib-stop-level", "fib-stop-buffer-atr"},
+		"take-profit-value": {"take-profit-atr", "fib-target", "fib-target-level", "fib-reward-risk"},
 	} {
 		for _, name := range inATR {
 			if set[fixed] && set[name] {
-				return fmt.Errorf("-%s and -%s are exclusive: the fixed value replaces the ATR", fixed, name)
+				return fmt.Errorf("-%s and -%s are exclusive: the fixed value replaces it", fixed, name)
 			}
 		}
 	}
