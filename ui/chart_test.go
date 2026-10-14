@@ -499,3 +499,98 @@ func dedupe(values []int64) []int64 {
 	}
 	return out
 }
+
+// fillOrder notifies c of a fill of pair, at minute of base, the profit the
+// core settled it with (0 for an opening).
+func fillOrder(c *Chart, base time.Time, pair string, id, exchangeID int64, side model.SideType,
+	quantity float64, minute int, profitValue float64) {
+	at := base.Add(time.Duration(minute) * time.Minute)
+	c.OnOrder(model.Order{ID: id, ExchangeID: exchangeID, Pair: pair, Side: side, Type: model.OrderTypeMarket,
+		Status: model.OrderStatusTypeFilled, Quantity: quantity, Price: 4160, CreatedAt: at, UpdatedAt: at,
+		ProfitValue: profitValue, Profit: profitValue / 12480})
+}
+
+// accountProfits returns the account profits of the orders of the snapshot of
+// pair, by ID.
+func accountProfits(t *testing.T, c *Chart, pair string) map[int64]*float64 {
+	t.Helper()
+	profits := map[int64]*float64{}
+	for _, order := range getSnapshot(t, c, pair).Orders {
+		profits[order.ID] = order.AccountProfit
+	}
+	return profits
+}
+
+// A position closed outside the bot (by hand, by a stop out) leaves no fill:
+// the core discards it, and its fills mustn't take the closes of the next
+// positions, which the account books against their own entry: their profits
+// shown as the account books them, in its currency, as the other ones (eg:
+// the XAUUSDm of the Fibonacci agent, its stop against the second entry).
+func TestChart_AccountProfitsAfterAPositionGoneOutsideTheBot(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0).UTC()
+
+	// a long gone, then a long and its stop loss
+	reporter := &fakeReporter{booked: map[int64]float64{700: -251.67}}
+	c := newTestChart(t, WithAccountReporter(reporter))
+	c.OnCandle(candleAt("XAUUSDm", base, 4160))
+	fillOrder(c, base, "XAUUSDm", 6001, 600, model.SideTypeBuy, 3, 0, 0)       // gone: closed outside the bot
+	fillOrder(c, base, "XAUUSDm", 7004, 700, model.SideTypeBuy, 3, 75, 0)      // a long anew
+	fillOrder(c, base, "XAUUSDm", 7006, 706, model.SideTypeSell, 3, 82, -50.0) // its stop loss
+	profits := accountProfits(t, c, "XAUUSDm")
+	require.NotNil(t, profits[7006], "booked against its own entry")
+	assert.Equal(t, -251.67, *profits[7006])
+
+	// a short gone, then a short closed at the market
+	reporter = &fakeReporter{booked: map[int64]float64{420: -42.34}}
+	c = newTestChart(t, WithAccountReporter(reporter))
+	c.OnCandle(candleAt("XAUUSDm", base, 4160))
+	fillOrder(c, base, "XAUUSDm", 41001, 410, model.SideTypeSell, 1, 0, 0)
+	fillOrder(c, base, "XAUUSDm", 42001, 420, model.SideTypeSell, 1, 240, 0)
+	fillOrder(c, base, "XAUUSDm", 42003, 423, model.SideTypeBuy, 1, 255, -8.4)
+	profits = accountProfits(t, c, "XAUUSDm")
+	require.NotNil(t, profits[42003])
+	assert.Equal(t, -42.34, *profits[42003])
+
+	// a long gone, then a short: an opening for the core (no profit), its
+	// close booked against it, not taken for an opening
+	reporter = &fakeReporter{booked: map[int64]float64{800: 12.5, 900: -3.1}}
+	c = newTestChart(t, WithAccountReporter(reporter))
+	c.OnCandle(candleAt("XAUUSDm", base, 4160))
+	fillOrder(c, base, "XAUUSDm", 6001, 600, model.SideTypeBuy, 3, 0, 0)       // gone
+	fillOrder(c, base, "XAUUSDm", 8000, 800, model.SideTypeSell, 2, 30, 0)     // a short
+	fillOrder(c, base, "XAUUSDm", 8002, 802, model.SideTypeBuy, 2, 40, 2.4)    // its close
+	fillOrder(c, base, "XAUUSDm", 9000, 900, model.SideTypeBuy, 1, 50, 0)      // a long
+	fillOrder(c, base, "XAUUSDm", 9001, 901, model.SideTypeSell, 1, 60, -0.62) // its close
+	profits = accountProfits(t, c, "XAUUSDm")
+	require.NotNil(t, profits[8002])
+	assert.Equal(t, 12.5, *profits[8002])
+	require.NotNil(t, profits[9001])
+	assert.Equal(t, -3.1, *profits[9001])
+	assert.Nil(t, profits[8000], "an entry")
+}
+
+// The closes are paired with the fills that opened their position as the core
+// settles them: from the oldest without a booking that tells otherwise, a
+// partial close leaving the rest open, a close beyond the position reversing
+// it, the next close against the reversal.
+func TestChart_CloseEntries(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0).UTC()
+	c := newTestChart(t)
+	c.OnCandle(candleAt("BTCUSDm", base, 84000))
+	fillOrder(c, base, "BTCUSDm", 1, 10, model.SideTypeBuy, 2, 0, 0)   // A long 2
+	fillOrder(c, base, "BTCUSDm", 2, 20, model.SideTypeBuy, 1, 1, 0)   // B adds 1
+	fillOrder(c, base, "BTCUSDm", 3, 30, model.SideTypeSell, 1, 2, 5)  // closes 1 of A
+	fillOrder(c, base, "BTCUSDm", 4, 40, model.SideTypeSell, 4, 3, 7)  // closes A and B, reverses 2
+	fillOrder(c, base, "BTCUSDm", 5, 50, model.SideTypeBuy, 2, 4, -1)  // closes the reversal
+	fillOrder(c, base, "BTCUSDm", 6, 60, model.SideTypeSell, 1, 5, 0)  // a short anew
+	fillOrder(c, base, "BTCUSDm", 7, 70, model.SideTypeBuy, 1, 6, 0.5) // its close
+
+	c.mu.Lock()
+	entries := c.closeEntries("BTCUSDm")
+	c.mu.Unlock()
+	ids := map[int64]int64{}
+	for close, entry := range entries {
+		ids[close] = entry.ID
+	}
+	assert.Equal(t, map[int64]int64{3: 1, 4: 1, 5: 4, 7: 6}, ids)
+}

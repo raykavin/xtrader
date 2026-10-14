@@ -85,7 +85,12 @@ export function StatsBar({ stats, snapshot, theme, since, pnl }: Props) {
       value: formatNumber(stats.totalProfit),
       unit: stats.profitCurrency,
       tone: signClass(stats.totalProfit),
-      hint: stats.trades ? `Média de ${formatPercent(stats.avgReturn)} por operação` : undefined,
+      hint:
+        stats.unbooked > 0
+          ? `Em ${stats.profitCurrency}, pelos preços: ${stats.unbooked === 1 ? "1 operação" : `${stats.unbooked} operações`} sem o valor registrado pela corretora`
+          : stats.trades
+            ? `Média de ${formatPercent(stats.avgReturn)} por operação`
+            : undefined,
       curve: curve(stats.curves.profit),
       footer: <Position pnl={pnl} />,
     },

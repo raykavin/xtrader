@@ -438,6 +438,16 @@ describe("computeStats with the profits the account booked", () => {
     const stats = computeStats(snapshot({ orders: [close(1, -14.49, -75.1), close(2, 12.74)] }));
     expect(stats.profitCurrency).toBe("USDT");
     expect(stats.totalProfit).toBeCloseTo(-1.75, 9);
+    expect(stats.unbooked, "the account not told: nothing awaited from the broker").toBe(0);
+    const told = computeStats(
+      snapshot({ orders: [close(1, -14.49, -75.1), close(2, 12.74)], account_currency: "BRL" }),
+    );
+    expect(told.profitCurrency).toBe("USDT");
+    expect(told.unbooked).toBe(1);
+    expect(
+      computeStats(snapshot({ orders: [close(1, -14.49, -75.1)], account_currency: "BRL" }))
+        .unbooked,
+    ).toBe(0);
   });
 
   it("shows the currency of the account before any trade", () => {
