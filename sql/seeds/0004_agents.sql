@@ -180,8 +180,9 @@ SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
 FROM agent;
 
 -- The strategies of the code, an agent each, without LLM, named after its
--- strategy, the strategies that had a prompt for the LLM agent (matrend has its
--- agent above): on the timeframe of each strategy by default, a leverage of
+-- strategy (matrend, fibonacci and fimathe have theirs above): the ones that
+-- had a prompt for the LLM agent, and the rules of prompts of the LLM agent
+-- coded since: on the timeframe of each strategy by default, a leverage of
 -- 2000, operated from Telegram. The comment of each, the default of its
 -- strategy (eg: nb:emacross), gives it a magic number of its own. Each inserted
 -- once, as the ones above.
@@ -260,7 +261,19 @@ WITH strategy (name, kind, api_address, number) AS (
         -- sweep: Liquidity Sweep, the reversal after the sweep of a swing level
         ('sweep', 'intraday', 'localhost:5633', 33),
         -- zscore: Z-Score Reversion, the close 2 standard deviations away from its mean of 20 candles in a ranging market
-        ('zscore', 'intraday', 'localhost:5634', 34)
+        ('zscore', 'intraday', 'localhost:5634', 34),
+        -- the rules of prompts of the LLM agent, coded as the user approved them, their stop loss moved by the R
+        -- multiple of the position
+        -- meanreversion: the rejections of the Bollinger Bands of a range back to its mean (the prompt mean_reversion)
+        ('meanreversion', 'intraday', 'localhost:5635', 35),
+        -- scalp1m: the micro pullbacks of the micro trend on 1 minute candles (the prompt scalp_1m)
+        ('scalp1m', 'intraday', 'localhost:5636', 36),
+        -- scalp1mbtc: the strong bursts of momentum on 1 minute candles, for a wide spread (the prompt scalp_1m_btc)
+        ('scalp1mbtc', 'intraday', 'localhost:5637', 37),
+        -- trendpullback: the end of the pullbacks of a trend (the setup trend_pullback of the prompt default)
+        ('trendpullback', 'trend', 'localhost:5638', 38),
+        -- squeezebreakout: the release of a compression with the volume (the prompt breakout)
+        ('squeezebreakout', 'breakout', 'localhost:5639', 39)
 ), agent AS (
     INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
                         params, position)

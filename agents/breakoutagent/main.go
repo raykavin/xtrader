@@ -3,7 +3,9 @@
 // atrbreakout (the breakouts of the recent range on an expansion of
 // the volatility), fimathe (the first entry of the trend of the reference
 // channel of each week of the Fimathe technique, its levels drawn on the
-// chart), and the signal strategies donchian, channel, adxdonchian,
+// chart), squeezebreakout (the release of a compression with the volume: the
+// rules of the prompt breakout of the LLM agent, its stop loss moved by the R
+// multiple of the position), and the signal strategies donchian, channel, adxdonchian,
 // donchianatr, bbbreakout, keltner, volumebreakout, highlow and
 // momentumbreakout, see strategies.NewSignal. See runner.Run for the shared
 // flags:
@@ -69,6 +71,8 @@ func agent() runner.Agent {
 			New: f.atrBreakout, Inputs: append([]string{"buffer-atr", "expansion", "breakout-len"}, runner.BracketInputs...)},
 		{Name: "fimathe", About: "the first entry of the trend of the reference channel of the Fimathe technique",
 			New: f.fimathe, Inputs: append(slices.Clone(fimatheInputs), "max-bars")},
+		{Name: "squeezebreakout", About: "the release of a compression with the volume", New: f.squeezeBreakout,
+			Inputs: []string{"min-atr-pct"}},
 	}, runner.Signals("donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner",
 		"volumebreakout", "highlow", "momentumbreakout")...)}
 }
@@ -129,4 +133,11 @@ func (f flags) fimathe(in runner.Inputs) (strategy.Strategy, error) {
 		return nil, err
 	}
 	return trader, nil
+}
+
+func (f flags) squeezeBreakout(in runner.Inputs) (strategy.Strategy, error) {
+	cfg := strategies.DefaultSqueezeBreakoutConfig()
+	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	trader, err := strategies.NewSqueezeBreakout(cfg)
+	return trader, err
 }

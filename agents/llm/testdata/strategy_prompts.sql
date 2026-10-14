@@ -1,10 +1,11 @@
 -- The prompts of the strategies of the code (the ones of agents/trendagent,
--- momentumagent, breakoutagent and intradayagent), traded by the LLM agent:
--- once seeded, now run as agents without a language model (see
--- sql/seeds/0004_agents.sql) and kept here for the tests of the agent, which
--- read their headers (the indicators, the take profit, the context) as the
--- ones of the prompts seeded; a prompt of them can still be created in the
--- dashboard. Not run on a database.
+-- momentumagent, breakoutagent and intradayagent) traded by the LLM agent, and
+-- the prompts whose rules were coded since (breakout, default, mean_reversion,
+-- scalp_1m, scalp_1m_btc): once seeded, now run as agents without a language
+-- model (see sql/seeds/0004_agents.sql) and kept here for the tests of the
+-- agent, which read their headers (the indicators, the take profit, the
+-- context) as the ones of the prompts seeded; a prompt of them can still be
+-- created in the dashboard. Not run on a database.
 INSERT INTO prompts (name, description, content)
 SELECT v.name, v.description, v.content
 FROM (VALUES
@@ -143,6 +144,36 @@ Managing the position held:
 - EXIT on the opposite signal: the rule of a SELL while long, the rule of a BUY while short.
 - Otherwise HOLD: the stop loss and the take profit close the position at the broker; don't move them.
 $prompt$),
+    ('breakout', $d$the breakout of a consolidation, a squeeze of the volatility released with volume, entered on the close or on the retest.$d$,
+$prompt$# breakout: the breakout of a consolidation, a squeeze of the volatility
+# released with volume, entered on the close or on the retest.
+# Flags: -llm-setup free -llm-candles 100 -llm-min-rr 2 -timeframe 5m to 1h.
+# Indicators: ema, sma, atr, adx, bb, volume (drawn on the chart and sent to the model; -llm-indicators overrides)
+
+Setup: volatility breakout. Markets alternate quiet ranges and expansions: trade the release of a compression, with the volume.
+
+1. Compression: before the breakout, the price ranged in a tight box for at least about 10 candles: the Bollinger Bands (bb_upper_20_2 and bb_lower_20_2) at their narrowest of the candles, summary.atr_pct low, the highs and lows contained. The top of the box is the highest high of that range, its bottom the lowest low.
+   structure.recent_range gives the box of the last candles (its width_atr small, under about 3 ATR) and structure.atr_percentile the squeeze (under about 30: a quiet market).
+2. Breakout: the candle just closed, or the previous one, closed beyond the box (the top for a long, the bottom for a short) with a body of at least about half its range, a volume over about 1.5 times its average (summary.volume_ratio), and the ADX (adx_14) rising with the DI of the breakout side on top (plus_di_14 for a long, minus_di_14 for a short).
+   structure.volume_percentile over about 80 confirms the volume; a breakout toward a level of higher_timeframes near the box has little room: WAIT.
+3. Entry: on the breakout close while the price is within about 0.5 ATR of the box; farther, wait for a retest: the price back at the edge of the box, holding it, then a candle resuming the breakout.
+Missing one of them, WAIT.
+- A false breakout is a candle beyond the box closing back inside with a long wick: never enter it; after one, the opposite side is often next.
+- A breakout against the SMA of the trend (sma_200) needs a stronger volume and more confidence.
+
+Stop loss and take profit:
+- The stop loss goes back inside the box: under its middle for a long (over it for a short), or beyond the breakout candle when that is tighter and still at least about 1 ATR from the entry.
+- The take profit goes at the measured move: the height of the box projected from its edge, or about 2 times the risk; before a clear level of the candles in the way.
+- When the box is too tall to offer rules.min_risk_reward, answer WAIT.
+
+Managing the position held:
+- A healthy breakout moves away from the box quickly: HOLD while it does.
+- EXIT when a candle closes back inside the box: the breakout failed.
+- From 1 R, move the stop loss to the entry (break-even, the spread included) with MODIFY_SL.
+- From 1.5 R, trail the stop loss behind the fast EMA (ema_9), or behind the low of the last 2 candles for a long (their high for a short), never back.
+- The expansion fades when the volume drops under its average and the candles shrink, several in a row near the take profit: tighten the stop loss, or EXIT.
+- Before a release of high importance of economic_calendar, protect a position over 1 R: tighten the stop loss, or EXIT.
+$prompt$),
     ('channel', $d$Channel Breakout, the close beyond the channel of 55 candles: the strategy -strategy channel of agents/breakoutagent, traded by the AI agent.$d$,
 $prompt$# channel: Channel Breakout, the close beyond the channel of 55 candles: the strategy -strategy channel of agents/breakoutagent, traded by the AI agent.
 # Flags: -llm-setup free -llm-candles 60 -llm-min-rr 0 -llm-min-stop-atr 0 -timeframe 15m, 1h or 4h.
@@ -163,6 +194,36 @@ Stop loss and take profit:
 Managing the position held:
 - EXIT on the opposite signal: the rule of a SELL while long, the rule of a BUY while short.
 - Otherwise HOLD: the stop loss and the take profit close the position at the broker; don't move them.
+$prompt$),
+    ('default', $d$trend + pullback aligned with the SMA of the trend, confirmed by the momentum; free weighing of the context with -llm-setup free.$d$,
+$prompt$# default: trend + pullback aligned with the SMA of the trend, confirmed by the
+# momentum; free weighing of the context with -llm-setup free.
+# Flags: -llm-setup trend_pullback (the entries of the trend only) or free,
+# -llm-min-rr 1.5, -timeframe 15m to 1h, -llm-max-spread-atr 0.1 on 1h.
+# The lines starting with # at the top of a prompt aren't sent to the model.
+
+Setup, per rules.setup:
+- trend_pullback: trade only with the trend of the SMA of the trend (the sma_200 indicator by default), and only on a pullback confirmed by momentum:
+  1. Trend: summary.trend is up for a long, down for a short (the fast EMA above the slow one and the close above the SMA of the trend, or both below). The system only allows the entry of the trend.
+  2. Pullback: in the last candles the price came back against the trend to the fast or the slow EMA, or to a support in an uptrend (a resistance in a downtrend), without closing beyond the SMA of the trend.
+  3. Momentum confirmation: the candle just closed resumes the trend: it closes back beyond the fast EMA in the direction of the trend, and the MACD histogram turns in that direction or the RSI turns from under 50 up (from over 50 down for a short). An RSI over 70 on a long, or under 30 on a short, is a chase, not a pullback.
+  Missing one of the three, answer WAIT. A strong ADX with its DI on the side of the trend adds confidence; a low ADX, below 20, takes it away.
+  The trend of higher_timeframes on the same side adds confidence; against it, prefer WAIT.
+- free: weigh the trend, the market structure, the momentum, the volatility, the supports and resistances, the breakouts and the reversals the context shows, then decide. Favor the entries with the trend of the SMA of the trend.
+
+Stop loss and take profit:
+- Place the stop loss beyond the structure that invalidates the setup (the low of the pullback for a long, its high for a short), at least about one ATR from the entry, never inside the noise of the last candles.
+- Place the take profit at the next resistance for a long (the next support for a short: the nearest of structure.levels, of the levels of higher_timeframes and of reference_levels), or at a multiple of the risk when there is none nearer.
+- When the structure doesn't offer rules.min_risk_reward, answer WAIT: don't pull the stop loss inside the structure or push the take profit past it to reach the ratio.
+
+Managing the position held, measured in position.r_multiple (the profit of a close now, net of the spread, in units of the initial risk):
+- Leave the trade room to work: HOLD while the setup holds. Don't exit on the noise of one candle against it, nor move the take profit nearer out of fear.
+- From 1 R, move the stop loss to the entry (break-even, the spread included) with MODIFY_SL.
+- From 2 R, trail the stop loss behind the last swing low for a long (swing high for a short), or about one ATR from the price, never back.
+- EXIT when the trend that justified the entry breaks: the close beyond the slow EMA against the position, or summary.trend turned against it, or a clear reversal of the momentum against it near the take profit.
+- Before a release of high importance of economic_calendar, protect the profit of a position already over 1 R: tighten the stop loss, or EXIT.
+- Move the take profit further only with the trend clearly intact and no resistance (support for a short) in the way; never move it behind the price.
+- position.candles_held is the age of the trade: a trade going nowhere for many candles, its r_multiple near 0 while the momentum fades, can be closed with EXIT.
 $prompt$),
     ('donchian', $d$Donchian Breakout, the close beyond the channel of 20 candles: the strategy -strategy donchian of agents/breakoutagent, traded by the AI agent.$d$,
 $prompt$# donchian: Donchian Breakout, the close beyond the channel of 20 candles: the strategy -strategy donchian of agents/breakoutagent, traded by the AI agent.
@@ -478,6 +539,33 @@ Managing the position held:
 - From the candle after the entry, trail the stop loss 3 ATR behind the best price since the entry: the highest high of the candles since it for a long (the last position.candles_held rows), the lowest low for a short, minus (plus) 3 times the last atr_14. MODIFY_SL to that level when it is nearer the price than the stop loss of now and still on its losing side of the close; never move it back.
 - Otherwise HOLD.
 $prompt$),
+    ('mean_reversion', $d$the return to the mean of a ranging market, from the outer Bollinger Bands with the RSI at an extreme; never against a strong trend.$d$,
+$prompt$# mean_reversion: the return to the mean of a ranging market, from the outer
+# Bollinger Bands with the RSI at an extreme; never against a strong trend.
+# Flags: -llm-setup free -llm-min-rr 1.2 -timeframe 5m to 1h.
+# Not with -llm-setup trend_pullback: it fades the moves the trend makes.
+# Indicators: ema, rsi, atr, adx, bb, volume (drawn on the chart and sent to the model; -llm-indicators overrides)
+
+Setup: mean reversion in a range. It fades the extremes of a market without a trend; in a trend it loses, so check the regime first.
+
+1. Regime, else WAIT: a range: the ADX (adx_14) under about 20 and not rising, the fast and the slow EMAs (ema_9 and ema_21) flat and intertwined, the price crossing the middle band (bb_middle_20) back and forth over the candles. With the ADX over 25, or the price riding a band, the market trends: WAIT.
+   structure.swing_structure contracting or mixed, and higher_timeframes without a clear trend, confirm the range; a higher timeframe trending hard: WAIT.
+2. Extreme: the price reached or pierced an outer band, the lower one (bb_lower_20_2) for a long, the upper one (bb_upper_20_2) for a short, with the RSI (rsi_14) under 30 for a long (over 70 for a short).
+3. Rejection: the candle just closed closes back inside the band, in the direction of the trade, leaving a long wick beyond it; better with the RSI turning back and a volume over its average.
+Missing one of them, WAIT. Never enter while the candles still close beyond the band: that is the move, not its end.
+- A release of high importance of economic_calendar can start a trend: no entry around one.
+
+Stop loss and take profit:
+- The stop loss goes beyond the extreme of the move (the lowest low of the dip for a long, the highest high of the spike for a short), plus a buffer of about 0.5 ATR (atr_14).
+- The take profit goes at the middle band (bb_middle_20): the mean. Its distance decides the trade: when it doesn't offer rules.min_risk_reward, answer WAIT.
+
+Managing the position held:
+- The bands move: EXIT once the price reaches the middle band, even before the take profit: the reversion is done.
+- EXIT when the regime breaks against the position: the ADX rising over 25 with the DI against it, or candles closing beyond the outer band again.
+- From about 0.7 R, move the stop loss to the entry (break-even, the spread included) with MODIFY_SL.
+- Time stop: a reversion that doesn't start within about 8 candles (position.candles_held), its r_multiple near 0: EXIT.
+- Don't move the take profit beyond the middle band: past the mean it is another trade.
+$prompt$),
     ('momentumbreakout', $d$Momentum Breakout, the close beyond the channel of 20 candles on a large candle, the ROC 10 on its side: the strategy -strategy momentumbreakout of agents/breakoutagent, traded by the AI agent.$d$,
 $prompt$# momentumbreakout: Momentum Breakout, the close beyond the channel of 20 candles on a large candle, the ROC 10 on its side: the strategy -strategy momentumbreakout of agents/breakoutagent, traded by the AI agent.
 # Flags: -llm-setup free -llm-candles 60 -llm-min-rr 0 -llm-min-stop-atr 0 -timeframe 5m, 15m or 1h.
@@ -662,6 +750,78 @@ Stop loss and take profit:
 Managing the position held:
 - EXIT on the opposite signal: the rule of a SELL while long, the rule of a BUY while short.
 - Otherwise HOLD: the stop loss and the take profit close the position at the broker; don't move them.
+$prompt$),
+    ('scalp_1m', $d$scalping on the 1 minute candles, with the micro trend, on the micro pullbacks, with quick targets and a time stop.$d$,
+$prompt$# scalp_1m: scalping on the 1 minute candles, with the micro trend, on the
+# micro pullbacks, with quick targets and a time stop.
+# Flags: -timeframe 1m -llm-setup free -llm-candles 60 -llm-min-rr 1.2
+# -llm-max-spread-atr 0.3 -llm-max-level-atr 4 -llm-reasoning low.
+# Cost: a request per minute, up to 1440 a day: watch the tokens in the log.
+# Indicators: ema, sma, rsi, atr, adx, macd, volume (drawn on the chart and sent to the model; -llm-indicators overrides)
+
+Setup: scalping on 1 minute candles. The edge is small and the spread large next to the moves: trade only the clean moments, and WAIT the rest of the time.
+
+Filters, all needed, else WAIT:
+- Cost: the spread is at most about a quarter of the ATR (atr_14). On a wider spread the costs eat the edge.
+- Activity: summary.volume_ratio of at least about 0.8, and the ADX (adx_14) above about 18: a quiet or choppy market doesn't pay the spread.
+- Session: a major session open (session.sessions_open London or New York), not a quiet hour between them nor a weekend night, when the spread widens and the moves fade.
+- Direction: a clear micro trend: the fast EMA (ema_9) and the slow one (ema_21) apart and sloping the same way over the last candles, the price on their side. Prefer the side of the SMA of the trend (sma_200, about the last 3 hours on 1 minute).
+- Alignment: the trend of higher_timeframes (15m and 1h) on the side of the trade, or at least not against it.
+- No release of high importance of economic_calendar within the next 15 minutes.
+
+Entry: a micro pullback in the micro trend.
+- In a micro uptrend: the last 1 to 5 candles pulled back to the fast or the slow EMA without closing below the slow one, and the candle just closed resumes up: it closes above the fast EMA and above the high of the previous candle, with the MACD histogram (macd_histogram) turning up or the RSI (rsi_14) crossing 50 up. The mirror for a short.
+- Don't chase: no entry after 3 or more strong candles in a row the same way, nor with the price more than about 1 ATR from the fast EMA, nor with the RSI over 75 on a long (under 25 on a short).
+
+Stop loss and take profit:
+- The stop loss goes beyond the low of the micro pullback for a long (its high for a short), about 1 to 1.5 ATR from the entry, never nearer than twice the spread.
+- The take profit goes at about 1.2 to 2 times the risk, before the recent high (low for a short) when it is nearer: the micro moves stall there.
+- When they can't offer rules.min_risk_reward net of the spread, answer WAIT.
+
+Managing the position held (a scalp lasts minutes, not hours):
+- From about 0.8 R, move the stop loss to the entry (break-even, the spread included) with MODIFY_SL.
+- From 1.5 R, trail the stop loss about 1 ATR behind the price, or behind the low of the previous candle for a long (its high for a short), never back.
+- EXIT at once when a candle closes beyond the slow EMA against the position, or the MACD histogram turns clearly against it with the price back at the entry.
+- Time stop: a scalp that hasn't reached 0.5 R after about 10 candles (position.candles_held) is dead: EXIT.
+- EXIT before a release of high importance of economic_calendar.
+$prompt$),
+    ('scalp_1m_btc', $d$scalping on the 1 minute candles with a spread wide next to the moves, eg: BTCUSDm on Exness (a spread of about 0.6 ATR): the costs are accepted and paid back with larger moves, taken only on strong momentum.$d$,
+$prompt$# scalp_1m_btc: scalping on the 1 minute candles with a spread wide next to
+# the moves, eg: BTCUSDm on Exness (a spread of about 0.6 ATR): the costs are
+# accepted and paid back with larger moves, taken only on strong momentum.
+# Flags: -timeframe 1m -llm-setup free -llm-candles 60 -llm-min-rr 1.2
+# -llm-max-spread-atr 1 -llm-max-level-atr 6 -llm-timeout 40s -llm-reasoning low.
+# Cost: a request per minute while flat, up to 1440 a day: watch the tokens in the log.
+# Indicators: ema, sma, rsi, atr, adx, macd, volume (drawn on the chart and sent to the model; -llm-indicators overrides)
+
+Setup: scalping on 1 minute candles with a wide spread. The spread is a large part of a candle: a small move never pays it back. Trade only the strong, clean bursts of momentum, able to run about 3 ATR, and WAIT the rest of the time.
+
+Filters, all needed, else WAIT:
+- Momentum: the ADX (adx_14) above about 20 and rising, with the DI of the side of the trade on top (plus_di_14 for a long, minus_di_14 for a short).
+- Activity: summary.volume_ratio of at least about 1.2: the burst must be real.
+- Session: a major session open (session.sessions_open London or New York), not a quiet hour between them nor a weekend night, when the spread widens and the moves fade.
+- Direction: the fast EMA (ema_9) and the slow one (ema_21) apart and sloping the same way over the last candles, the price on their side, and on the side of the SMA of the trend (sma_200, about the last 3 hours on 1 minute).
+- Alignment: the trend of higher_timeframes (15m and 1h) on the side of the trade, or at least not against it.
+- Room: no high or low of the candles within about 3 ATR ahead of the price in the direction of the trade, which the move would have to break.
+- No release of high importance of economic_calendar within the next 15 minutes.
+
+Entry: a shallow pullback in the burst.
+- In a burst up: the last 1 to 3 candles paused or pulled back to the fast EMA without closing below it, and the candle just closed resumes up: it closes above the high of the previous candle, with the MACD histogram (macd_histogram) growing. The mirror for a short.
+- Don't chase: no entry after 4 or more strong candles in a row the same way, nor with the price more than about 1.5 ATR from the fast EMA, nor with the RSI (rsi_14) over 78 on a long (under 22 on a short).
+
+Stop loss and take profit:
+- Measure from the fill: a long is filled at the ask, the price plus the spread. The spread widens the risk and shrinks the reward of every trade.
+- The stop loss goes beyond the low of the pullback for a long (its high for a short), about 1.5 to 2 ATR from the price, at least 3 times the spread from the fill: a tighter one is hit by the noise and the spread.
+- The take profit goes at about 1.3 to 2 times the risk net of the spread, which is about 3 ATR or more from the price: before a high (a low for a short) of the candles that would stop the move.
+- When the room ahead can't offer rules.min_risk_reward net of the spread, answer WAIT.
+
+Managing the position held (minutes, not hours):
+- The spread is paid on the entry: a position shows a loss of about the spread at once. Don't exit for that alone.
+- From 1 R, move the stop loss to the entry plus the spread for a long (minus it for a short), with MODIFY_SL: the break-even of a trade that paid the spread.
+- From 1.5 R, trail the stop loss about 1.5 ATR behind the price, or behind the low of the last 2 candles for a long (their high for a short), never back.
+- EXIT when a candle closes beyond the slow EMA against the position, or the ADX falls with the DI of the other side on top.
+- Time stop: a trade that hasn't reached 0.5 R after about 15 candles (position.candles_held) is dead: EXIT.
+- EXIT before a release of high importance of economic_calendar.
 $prompt$),
     ('stochpullback', $d$Stochastic Trend Pullback, the Stochastic crossing out of its extreme zone on the side of the EMA 50: the strategy -strategy stochpullback of agents/momentumagent, traded by the AI agent.$d$,
 $prompt$# stochpullback: Stochastic Trend Pullback, the Stochastic crossing out of its extreme zone on the side of the EMA 50: the strategy -strategy stochpullback of agents/momentumagent, traded by the AI agent.

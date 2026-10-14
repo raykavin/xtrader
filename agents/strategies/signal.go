@@ -10,7 +10,6 @@ import (
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/strategy"
-	"github.com/raykavin/xtrader/tools/log"
 )
 
 // SignalConfig holds the inputs of a signal strategy, see NewSignal, with its
@@ -271,27 +270,7 @@ func (b *bracket) trail(df *model.Dataframe, broker service.Broker, trails map[s
 	if len(atrs) == 0 || isNa(atrs[len(atrs)-1]) || atrs[len(atrs)-1] <= 0 {
 		return
 	}
-	stop := trail.extreme - sign*trailingATR*atrs[len(atrs)-1]
-
-	for i, leg := range trade.legs {
-		if leg.Type != model.OrderTypeStopLoss {
-			continue
-		}
-		current := leg.Price
-		if leg.Stop != nil {
-			current = *leg.Stop
-		}
-		if sign*stop <= sign*current || sign*stop >= sign*df.Close.Last(0) {
-			return
-		}
-		moved, err := protected.UpdateProtection(leg, stop)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		trade.legs[i] = moved
-		log.Infof("[%s] %s %s | TRAIL | stop %f", b.name, df.Pair, b.timeframe, stop)
-	}
+	b.moveStop(df, protected, trade, trail.extreme-sign*trailingATR*atrs[len(atrs)-1], "TRAIL")
 }
 
 // the colors of the lines of the signal strategies
