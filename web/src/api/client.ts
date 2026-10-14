@@ -14,6 +14,7 @@ import type {
   AgentsResponse,
   CandleEvent,
   CandlesResponse,
+  ClosedProfitResponse,
   ControlMoveRequest,
   ControlOrderRequest,
   ControlOrderResponse,
@@ -138,6 +139,18 @@ export function fetchAgents(signal?: AbortSignal): Promise<AgentStatus[]> {
  */
 export function fetchOpenPositions(signal?: AbortSignal): Promise<OpenPositionsResponse> {
   return getJSON<OpenPositionsResponse>("/positions/open", signal);
+}
+
+/**
+ * The closed profit of all the agents from until before to (Unix seconds):
+ * what their accounts booked for the positions they closed then.
+ */
+export function fetchClosedProfit(
+  from: number,
+  to: number,
+  signal?: AbortSignal,
+): Promise<ClosedProfitResponse> {
+  return getJSON<ClosedProfitResponse>(`/positions/closed?from=${from}&to=${to}`, signal);
 }
 
 /** The path of the API of an agent, which the dashboard proxies. */

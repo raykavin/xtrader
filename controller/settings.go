@@ -32,13 +32,15 @@ type settings struct {
 	bot       BotState
 	auth      func() *auth
 	positions *openPositions // of the agents on their accounts, see GET /api/positions/open
+	closed    *closedProfits // of the agents on their accounts, see GET /api/positions/closed
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
 // manager, the state of the Telegram bot told by bot, if any: before Handler.
 func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState) {
+	positions := newOpenPositions(s, manager)
 	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth },
-		positions: newOpenPositions(s, manager)}
+		positions: positions, closed: newClosedProfits(positions)}
 }
 
 func (s *settings) routes(r chi.Router) {
@@ -60,6 +62,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Post("/settings/telegram/users", s.handleAddTelegramUser)
 	r.Delete("/settings/telegram/users/{id}", s.handleDeleteTelegramUser)
 	r.Get("/positions/open", s.positions.handle)
+	r.Get("/positions/closed", s.closed.handle)
 	r.Get("/users", s.handleUsers)
 	r.Post("/users", s.handleCreateUser)
 	r.Patch("/users/{id}", s.handleUpdateUser)

@@ -2212,8 +2212,28 @@ fieldset.seg {
   height: 196px;
 }
 
+/* as tall as the band of the accounts of the agents: their agents beside the
+   metrics on a wide screen, under them below, the metrics stacked on a phone */
 .skeleton-openpl {
   height: 146px;
+}
+
+@media (max-width: 1399px) {
+  .skeleton-openpl {
+    height: 180px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .skeleton-openpl {
+    height: 220px;
+  }
+}
+
+@media (max-width: 599px) {
+  .skeleton-openpl {
+    height: 420px;
+  }
 }
 
 .skeleton-chart,
@@ -2798,10 +2818,11 @@ fieldset.seg {
   grid-template-columns: minmax(300px, 4fr) minmax(0, 6fr);
 }
 
-/* the open profit of all the agents: the sum of their positions open, large,
-   incomplete told beside it, by agent (a stopped one marked), the gaps, and
-   what it isn't; a column in a narrow card, a band across a row of its own
-   (the default layout) */
+/* the accounts of all the agents: the profit of their positions open, the one
+   their positions closed in the period and their balances, each large,
+   incomplete told beside it; by agent (a stopped one marked), and the gaps;
+   stacked in a narrow card, side by side across a row of its own (the
+   default layout) */
 .openpl-card {
   padding: 18px var(--sp-5);
   container-type: inline-size;
@@ -2811,22 +2832,47 @@ fieldset.seg {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   min-height: 0;
 }
 
-.openpl-lead {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-
+.openpl-metric,
 .openpl-main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
   min-width: 0;
+}
+
+.openpl-metric {
+  gap: var(--sp-2);
+}
+
+.openpl-main {
+  gap: 4px;
+}
+
+/* the title of the closed profit, its period picked by a double click */
+.openpl-period {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed var(--text-3);
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.openpl-period:hover {
+  border-bottom-color: var(--accent);
+}
+
+.openpl-period:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .openpl-total {
@@ -2839,7 +2885,7 @@ fieldset.seg {
 .openpl-value {
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: clamp(20px, 13cqi, 34px);
+  font-size: clamp(20px, 13cqi, 30px);
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -2858,8 +2904,7 @@ fieldset.seg {
 }
 
 .openpl-summary,
-.openpl-note,
-.openpl-hint {
+.openpl-note {
   margin: 0;
 }
 
@@ -2878,7 +2923,7 @@ fieldset.seg {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 66px;
+  max-height: 88px;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -2911,8 +2956,24 @@ fieldset.seg {
   line-height: 16px;
 }
 
-.openpl-profit {
+/* the open or the closed profit of an agent, told which */
+.openpl-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.openpl-part:first-of-type {
   margin-left: auto;
+}
+
+.openpl-part small {
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.openpl-profit {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -2933,40 +2994,28 @@ fieldset.seg {
   color: var(--neg);
 }
 
-.openpl-hint {
-  margin-top: auto;
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-  line-height: 1.45;
-}
-
 .openpl-skeleton {
   flex: 1;
   min-height: 56px;
 }
 
-/* across a row: the total at the left, the agents beside it, what it isn't
-   at the right, the gaps under them */
-@container (min-width: 720px) {
+/* side by side: the open profit, the closed one and the balances in a row,
+   the agents under them */
+@container (min-width: 560px) {
   .openpl-layout {
     display: grid;
-    grid-template-areas: "lead agents hint";
-    grid-template-columns: minmax(200px, auto) minmax(0, 1fr) minmax(200px, 300px);
-    align-items: center;
+    grid-template-columns: repeat(3, minmax(0, max-content));
+    align-items: start;
     gap: var(--sp-2) var(--sp-6);
   }
 
-  .openpl-lead {
-    grid-area: lead;
-  }
-
-  .openpl-summary {
-    white-space: nowrap;
+  .openpl-skeleton {
+    width: 180px;
   }
 
   .openpl-agents {
     flex-flow: row wrap;
-    grid-area: agents;
+    grid-column: 1 / -1;
     gap: 6px;
     max-height: none;
   }
@@ -2978,23 +3027,89 @@ fieldset.seg {
     background: var(--surface-3);
   }
 
-  .openpl-profit {
+  .openpl-part:first-of-type {
     margin-left: 2px;
   }
 
-  .openpl-hint {
-    grid-area: hint;
-    margin-top: 0;
-  }
-
   .openpl-gaps,
-  .openpl-note {
+  .openpl-layout > .openpl-note {
     grid-column: 1 / -1;
   }
+}
 
-  .openpl-skeleton {
-    grid-column: 2 / -1;
+/* across a wide row: the agents at the right of them */
+@container (min-width: 1300px) {
+  .openpl-layout {
+    grid-template-columns: repeat(3, minmax(0, max-content)) minmax(0, 1fr);
+    align-items: center;
   }
+
+  .openpl-summary {
+    white-space: nowrap;
+  }
+
+  .openpl-agents {
+    grid-row: 1;
+    grid-column: 4;
+  }
+}
+
+/* the period of the closed profit: its kinds, and the days of a custom one */
+.period-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.period-options legend {
+  margin-bottom: var(--sp-2);
+  padding: 0;
+}
+
+.period-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.period-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.period-option input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.period-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.period-option small {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.period-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.period-range > p {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 /* the quote: the pair, its price set large, how it moved, the position held */

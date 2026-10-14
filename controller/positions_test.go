@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,14 +30,17 @@ type fakeBridge struct {
 	token     string
 	login     int64
 	currency  string
+	balance   float64
 	positions []bridgePosition
+	deals     []bridgeDeal
 	status    int // answered instead, when set
 	requests  int
+	dealsRead []string // the queries of GET /deals
 }
 
 func newFakeBridge(t *testing.T, token string, login int64, currency string) *fakeBridge {
 	t.Helper()
-	b := &fakeBridge{token: token, login: login, currency: currency}
+	b := &fakeBridge{token: token, login: login, currency: currency, balance: 1000}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -50,13 +54,25 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 			w.WriteHeader(b.status)
 			_, _ = w.Write([]byte(`{"error":"account_info: terminal disconnected"}`))
 		case r.URL.Path == "/account":
-			_ = json.NewEncoder(w).Encode(map[string]any{"login": b.login, "currency": b.currency, "balance": 1000.0})
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": b.login, "currency": b.currency, "balance": b.balance})
 		case r.URL.Path == "/positions":
 			positions := b.positions
 			if positions == nil {
 				positions = []bridgePosition{}
 			}
 			_ = json.NewEncoder(w).Encode(positions)
+		case r.URL.Path == "/deals":
+			// as history_deals_get: the deals of the range, by their time
+			b.dealsRead = append(b.dealsRead, r.URL.RawQuery)
+			from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+			to, _ := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+			deals := []bridgeDeal{}
+			for _, deal := range b.deals {
+				if deal.Time >= from && deal.Time <= to {
+					deals = append(deals, deal)
+				}
+			}
+			_ = json.NewEncoder(w).Encode(deals)
 		default:
 			http.NotFound(w, r)
 		}
@@ -131,6 +147,9 @@ func TestOpenPositions_TheAgentsOnTheirAccounts(t *testing.T) {
 	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL"}}, got.Totals, "the account read, its currency, 0")
 	assert.True(t, got.Complete)
 	assert.Empty(t, got.Positions)
+	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL", Amount: 1000}}, got.Balances,
+		"the balance of the account, once for its agents")
+	assert.Equal(t, 1, got.Accounts)
 
 	// gains and losses of several agents, one of a disabled agent, one of a
 	// paper agent and one by hand left out
@@ -175,6 +194,8 @@ func TestOpenPositions_TheAgentsOnTheirAccounts(t *testing.T) {
 	assert.InDelta(t, 81.63-1.2-6.5+25.0-0.4, totalIn(t, got, "BRL"), 1e-9, "the same ticket of the same login once")
 	assert.Len(t, got.Totals, 1)
 	assert.Len(t, got.Positions, 3)
+	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL", Amount: 1000}}, got.Balances, "the same login once")
+	assert.Equal(t, 1, got.Accounts)
 	require.NoError(t, c.store.DeleteAgent(ctx, other.ID))
 
 	// a position closed, another one opened: the next read follows them
@@ -243,6 +264,9 @@ func TestOpenPositions_Incomplete(t *testing.T) {
 	}
 	assert.Equal(t, map[string]string{"wrong": "refused", "offline": "unreachable"}, reasons)
 	require.Len(t, got.Positions, 2)
+	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL", Amount: 1000}, {Currency: "USD", Amount: 1000}},
+		got.Balances, "the balances of the accounts read only")
+	assert.Equal(t, 2, got.Accounts)
 
 	// the terminal of a bridge disconnected
 	brl.mu.Lock()
@@ -294,6 +318,7 @@ func TestOpenPositions_EachInTheCurrencyOfItsAccount(t *testing.T) {
 	}
 	brl.set(position(1, 101, "XAUUSDm", false, 1, 81.63, -1.2))
 	usd.set(position(2, 202, "BTCUSDm", true, 0.01, 3.25, -0.05), position(3, 202, "BTCUSDm", false, 0.01, -1, 0))
+	brl.balance, usd.balance, kwd.balance = 10250.5, 1980.25, 300
 	call, _ := settingsSession(t, c)
 
 	got := openPL(t, call)
@@ -305,6 +330,9 @@ func TestOpenPositions_EachInTheCurrencyOfItsAccount(t *testing.T) {
 		currencies[position.Ticket] = position.Currency
 	}
 	assert.Equal(t, map[int64]string{1: "BRL", 2: "USD", 3: "USD"}, currencies)
+	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL", Amount: 10250.5}, {Currency: "USD", Amount: 1980.25},
+		{Currency: "KWD", Amount: 300}}, got.Balances, "the balance of each account in its currency")
+	assert.Equal(t, 3, got.Accounts)
 }
 
 // roundAmounts returns amounts rounded to the cent.

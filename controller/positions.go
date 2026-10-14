@@ -168,11 +168,24 @@ func liveAccounts(agents []store.Agent) []liveAccount {
 	return accounts
 }
 
-// bridgeAccount is the account of a bridge, of GET /account: its login and its
-// currency.
+// bridgeAccount is the account of a bridge, of GET /account: its login, its
+// currency and its balance.
 type bridgeAccount struct {
-	Login    int64  `json:"login"`
-	Currency string `json:"currency"`
+	Login    int64   `json:"login"`
+	Currency string  `json:"currency"`
+	Balance  float64 `json:"balance"`
+}
+
+// currency returns the currency of the account, as the totals key it.
+func (a bridgeAccount) currency() string { return strings.ToUpper(strings.TrimSpace(a.Currency)) }
+
+// key returns what tells the account apart, eg: 198974329: its login, else the
+// bridge read, for a bridge without one.
+func (a bridgeAccount) key(bridge string) string {
+	if a.Login == 0 {
+		return bridge
+	}
+	return fmt.Sprint(a.Login)
 }
 
 // bridgePosition is a position of an account, of GET /positions: its profit
@@ -199,36 +212,46 @@ type accountRead struct {
 }
 
 // readAccount reads the account and the positions of the bridge of account,
-// with the token of each agent on it in turn until one is taken, without any
-// when none has one.
+// see readBridge.
 func (p *openPositions) readAccount(ctx context.Context, account liveAccount) accountRead {
-	tokens := p.tokens(account)
 	var read accountRead
-	for _, token := range tokens {
+	read.gap, read.err = p.readBridge(ctx, account, "the open positions", func(token string) error {
 		read = accountRead{}
-		if read.err = p.get(ctx, account.bridge, "/account", token, &read.account); read.err == nil {
-			read.err = p.get(ctx, account.bridge, "/positions", token, &read.positions)
+		if err := p.get(ctx, account.bridge, "/account", token, &read.account); err != nil {
+			return err
 		}
+		return p.get(ctx, account.bridge, "/positions", token, &read.positions)
+	})
+	return read
+}
+
+// readBridge reads the bridge of account with read, given the token of each
+// agent on it in turn until one is taken, none when no agent has one: what
+// is read tells in its error, and the reason the account isn't read, see the
+// gap* reasons, logged.
+func (p *openPositions) readBridge(ctx context.Context, account liveAccount, what string,
+	read func(token string) error) (string, error) {
+	var err error
+	for _, token := range p.tokens(account) {
+		err = read(token)
 		var refused *refusedToken
-		if read.err == nil || !errors.As(read.err, &refused) {
+		if err == nil || !errors.As(err, &refused) {
 			break
 		}
 	}
+	if err == nil {
+		return "", nil
+	}
+	log.Warnf("ui: %s of the agents on the bridge %s: %v", what, account.bridge, err)
 	var refused *refusedToken
 	var failed *bridgeFailure
 	switch {
-	case read.err == nil:
-	case errors.As(read.err, &refused):
-		read.gap = gapRefused
-	case errors.As(read.err, &failed):
-		read.gap = gapFailed
-	default:
-		read.gap = gapUnreachable
+	case errors.As(err, &refused):
+		return gapRefused, err
+	case errors.As(err, &failed):
+		return gapFailed, err
 	}
-	if read.err != nil {
-		log.Warnf("ui: the open positions of the agents on the bridge %s: %v", account.bridge, read.err)
-	}
-	return read
+	return gapUnreachable, err
 }
 
 // tokens returns the distinct tokens of the bridge of the agents on account,
@@ -301,47 +324,37 @@ func (p *openPositions) get(ctx context.Context, base, path, token string, out a
 // account (its login, the bridge without one), the one of the agent of its
 // magic number trading its symbol first, else of the first agent of its magic
 // number, the others not of the agents left out. Every account read has a
-// total in its currency, 0 without a position; one not read makes the sum
-// incomplete.
+// total in its currency, 0 without a position, and its balance, once; one not
+// read makes the sum incomplete.
 func (p *openPositions) sum(accounts []liveAccount, reads []accountRead) ui.OpenPositionsResponse {
-	response := ui.OpenPositionsResponse{Totals: []ui.CurrencyAmount{}, Complete: true,
-		Positions: []ui.OpenPosition{}, At: time.Now().Unix()}
+	response := ui.OpenPositionsResponse{Totals: []ui.CurrencyAmount{}, Balances: []ui.CurrencyAmount{},
+		Complete: true, Positions: []ui.OpenPosition{}, At: time.Now().Unix()}
 	order := make(map[string]int) // the place of the agents on the dashboard
 	seen := make(map[string]bool)
-	total := func(currency string) *ui.CurrencyAmount {
-		for i := range response.Totals {
-			if response.Totals[i].Currency == currency {
-				return &response.Totals[i]
-			}
-		}
-		response.Totals = append(response.Totals, ui.CurrencyAmount{Currency: currency})
-		return &response.Totals[len(response.Totals)-1]
-	}
+	counted := make(map[string]bool) // the accounts of the balances
 	for i, account := range accounts {
 		for _, a := range account.agents {
 			order[a.agent.Name] = a.agent.Position
 		}
 		read := reads[i]
 		if read.gap != "" {
-			names := make([]string, 0, len(account.agents))
-			for _, a := range account.agents {
-				names = append(names, a.agent.Name)
-			}
 			response.Complete = false
-			response.Missing = append(response.Missing, ui.OpenPositionsGap{Agents: names, Reason: read.gap})
+			response.Missing = append(response.Missing, gapOf(account, read.gap))
 			continue
 		}
-		currency := strings.ToUpper(strings.TrimSpace(read.account.Currency))
-		total(currency)
+		currency := read.account.currency()
+		total := amountIn(&response.Totals, currency)
+		if key := read.account.key(account.bridge); !counted[key] {
+			counted[key] = true
+			response.Accounts++
+			amountIn(&response.Balances, currency).Amount += read.account.Balance
+		}
 		for _, position := range read.positions {
-			owner, ok := ownerOf(account.agents, position)
+			owner, ok := ownerOf(account.agents, position.Magic, position.Symbol)
 			if !ok {
 				continue // not of an agent, eg: by hand
 			}
-			key := fmt.Sprintf("%d/%d", read.account.Login, position.Ticket)
-			if read.account.Login == 0 {
-				key = account.bridge + "/" + fmt.Sprint(position.Ticket)
-			}
+			key := read.account.key(account.bridge) + "/" + fmt.Sprint(position.Ticket)
 			if seen[key] {
 				continue
 			}
@@ -354,8 +367,8 @@ func (p *openPositions) sum(accounts []liveAccount, reads []accountRead) ui.Open
 			response.Positions = append(response.Positions, ui.OpenPosition{Agent: owner.Name, Pair: position.Symbol,
 				Side: side, Volume: position.Volume, Entry: position.PriceOpen, Price: position.PriceCurrent,
 				Profit: profit, Currency: currency, Ticket: position.Ticket,
-				Running: p.manager != nil && p.manager.State(owner.Name).Running})
-			total(currency).Amount += profit
+				Running: p.running(owner.Name)})
+			total.Amount += profit
 		}
 	}
 	slices.SortStableFunc(response.Positions, func(a, b ui.OpenPosition) int {
@@ -365,19 +378,45 @@ func (p *openPositions) sum(accounts []liveAccount, reads []accountRead) ui.Open
 	return response
 }
 
-// ownerOf returns the agent of agents a position is of, by its magic number:
-// the one trading its symbol, the enabled ones first, else the first one;
-// false for none, eg: a position opened by hand.
-func ownerOf(agents []bookedAgent, position bridgePosition) (store.Agent, bool) {
+// running reports whether the agent of name runs.
+func (p *openPositions) running(name string) bool {
+	return p.manager != nil && p.manager.State(name).Running
+}
+
+// amountIn returns the amount of amounts in currency, added at their end, 0,
+// when missing.
+func amountIn(amounts *[]ui.CurrencyAmount, currency string) *ui.CurrencyAmount {
+	for i := range *amounts {
+		if (*amounts)[i].Currency == currency {
+			return &(*amounts)[i]
+		}
+	}
+	*amounts = append(*amounts, ui.CurrencyAmount{Currency: currency})
+	return &(*amounts)[len(*amounts)-1]
+}
+
+// gapOf returns the gap of account, not read for reason: its agents.
+func gapOf(account liveAccount, reason string) ui.OpenPositionsGap {
+	names := make([]string, 0, len(account.agents))
+	for _, a := range account.agents {
+		names = append(names, a.agent.Name)
+	}
+	return ui.OpenPositionsGap{Agents: names, Reason: reason}
+}
+
+// ownerOf returns the agent of agents a position of magic on symbol is of, by
+// its magic number: the one trading its symbol, the enabled ones first, else
+// the first one; false for none, eg: a position opened by hand.
+func ownerOf(agents []bookedAgent, magic int64, symbol string) (store.Agent, bool) {
 	var owner *bookedAgent
 	rank := -1
 	for i := range agents {
 		a := &agents[i]
-		if a.book.Magic != position.Magic {
+		if a.book.Magic != magic {
 			continue
 		}
 		r := 0
-		if slices.ContainsFunc(a.book.Pairs, func(pair string) bool { return strings.EqualFold(pair, position.Symbol) }) {
+		if slices.ContainsFunc(a.book.Pairs, func(pair string) bool { return strings.EqualFold(pair, symbol) }) {
 			r += 2
 		}
 		if a.agent.Enabled {

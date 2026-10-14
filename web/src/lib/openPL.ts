@@ -1,4 +1,4 @@
-import type { CurrencyAmount, OpenPositionsResponse } from "../api/types";
+import type { ClosedProfitResponse, CurrencyAmount, OpenPositionsResponse } from "../api/types";
 import { formatProfit } from "./format";
 
 /** The open profit of an agent: its positions open and their profit, by the currency of their account. */
@@ -30,12 +30,11 @@ export function openPLByAgent(read: OpenPositionsResponse): AgentOpenPL[] {
 }
 
 /**
- * The profit of an agent as its line shows it: in the currency of its account,
- * its code told when the read has several, eg: +81,63, or +81,63 BRL · +3,20 USD.
+ * Amounts as a line shows them, in the currency of their account, their codes
+ * told when the band shows several, eg: +81,63, or +81,63 BRL · +3,20 USD.
  */
-export function agentOpenPLText(agent: AgentOpenPL, read: OpenPositionsResponse): string {
-  const several = read.totals.length > 1;
-  return agent.amounts
+export function amountsText(amounts: CurrencyAmount[], several: boolean): string {
+  return amounts
     .map((a) => (several ? `${formatProfit(a.amount)} ${a.currency}` : formatProfit(a.amount)))
     .join(" · ");
 }
@@ -46,8 +45,8 @@ const gapReasons: Record<string, string> = {
   failed: "o terminal da conta respondeu com erro",
 };
 
-/** Why the open profit is incomplete, in the words of the dashboard: the agents whose account wasn't read. */
-export function openPLGaps(read: OpenPositionsResponse): string[] {
+/** Why a read of the band is incomplete, in the words of the dashboard: the agents whose account wasn't read. */
+export function openPLGaps(read: Pick<OpenPositionsResponse, "missing">): string[] {
   return (read.missing ?? []).map(
     (gap) => `Sem dados de ${gap.agents.join(", ")}: ${gapReasons[gap.reason] ?? gap.reason}`,
   );
@@ -60,4 +59,73 @@ export function openPLSummary(read: OpenPositionsResponse): string {
   const agents = new Set(read.positions.map((p) => p.agent)).size;
   const count = positions === 1 ? "1 posição aberta" : `${positions} posições abertas`;
   return `${count} em ${agents === 1 ? "1 agente" : `${agents} agentes`}`;
+}
+
+/** The count of the accounts of the balances, eg: 2 contas. */
+export function accountsSummary(read: OpenPositionsResponse): string {
+  if (read.accounts === 0) return "Nenhuma conta lida";
+  return read.accounts === 1 ? "1 conta" : `${read.accounts} contas`;
+}
+
+/** An agent on the band: its profit open now and closed in the period, by the currency of its account. */
+export interface AgentLine {
+  agent: string;
+  /** Whether it runs; else stopped or disabled. */
+  running: boolean;
+  /** Its positions open, and their profit; none without one. */
+  positions: number;
+  open: CurrencyAmount[];
+  /** The positions it closed in the period, and their profit; none without one. */
+  closedPositions: number;
+  closed: CurrencyAmount[];
+}
+
+/**
+ * The agents with positions open or closed in the period: the ones with
+ * positions open first, in the order of the read, then the ones that only
+ * closed some, in the order of theirs.
+ */
+export function agentLines(
+  open: OpenPositionsResponse | null,
+  closed: ClosedProfitResponse | null,
+): AgentLine[] {
+  const lines: AgentLine[] = (open ? openPLByAgent(open) : []).map((agent) => ({
+    agent: agent.agent,
+    running: agent.running,
+    positions: agent.positions,
+    open: agent.amounts,
+    closedPositions: 0,
+    closed: [],
+  }));
+  for (const agent of closed?.agents ?? []) {
+    let line = lines.find((l) => l.agent === agent.agent);
+    if (!line) {
+      line = {
+        agent: agent.agent,
+        running: agent.running,
+        positions: 0,
+        open: [],
+        closedPositions: 0,
+        closed: [],
+      };
+      lines.push(line);
+    }
+    line.running ||= agent.running;
+    line.closedPositions += agent.positions;
+    line.closed.push({ currency: agent.currency, amount: agent.amount });
+  }
+  return lines;
+}
+
+/** Whether the band shows several currencies, each amount then with its code. */
+export function severalCurrencies(
+  open: OpenPositionsResponse | null,
+  closed: ClosedProfitResponse | null,
+): boolean {
+  const currencies = new Set(
+    [...(open?.totals ?? []), ...(open?.balances ?? []), ...(closed?.totals ?? [])].map(
+      (amount) => amount.currency,
+    ),
+  );
+  return currencies.size > 1;
 }
