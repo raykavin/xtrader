@@ -10,6 +10,7 @@ export type CardId =
   | "quote"
   | "sentiment"
   | "results"
+  | "openpl"
   | "chart"
   | "decision"
   | "ticket"
@@ -17,6 +18,7 @@ export type CardId =
 
 /** Every card, in the order of the default layout. */
 export const CARDS: readonly CardId[] = [
+  "openpl",
   "quote",
   "sentiment",
   "results",
@@ -31,6 +33,7 @@ export const CARD_LABELS: Record<CardId, string> = {
   quote: "Cotação",
   sentiment: "Sentimento do mercado",
   results: "Resultados",
+  openpl: "P/L em aberto",
   chart: "Gráfico",
   decision: "Última decisão do LLM",
   ticket: "Boleta",
@@ -62,6 +65,7 @@ export interface DashboardLayout {
 export function defaultLayout(): DashboardLayout {
   return {
     rows: [
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"], ["ticket"]],
       [["activity"]],

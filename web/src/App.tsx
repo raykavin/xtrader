@@ -27,6 +27,7 @@ import { DecisionsPanel } from "./components/DecisionsPanel";
 import { EquityChart } from "./components/EquityChart";
 import { Icon } from "./components/Icon";
 import { LastDecision } from "./components/LastDecision";
+import { OpenProfitCard } from "./components/OpenProfit";
 import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
 import { PriceHero } from "./components/PriceHero";
@@ -621,6 +622,8 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     error={decisionsError}
                   />
                 ) : undefined,
+                // of all the agents, whichever is shown
+                openpl: <OpenProfitCard />,
                 results: (
                   <StatsBar
                     stats={stats}
@@ -765,8 +768,9 @@ function saveDashboardTab(tab: DashboardTab) {
 }
 
 /**
- * The blocks of the panel while its data loads: the quote, the sentiment of
- * an LLM agent (meter), the results, the chart and the ticket.
+ * The blocks of the panel while its data loads: the open profit of the agents,
+ * the quote, the sentiment of an LLM agent (meter), the results, the chart and
+ * the ticket.
  */
 function DashboardSkeleton({
   label,
@@ -784,6 +788,7 @@ function DashboardSkeleton({
           O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
         </Alert>
       )}
+      <Skeleton className="skeleton-openpl" />
       <div className={meter ? "overview" : "overview no-meter"}>
         <Skeleton className="skeleton-hero" />
         {meter && <Skeleton className="skeleton-meter" />}

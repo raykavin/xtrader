@@ -109,6 +109,7 @@ const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
   quote: { min: 300, grow: 4 },
   sentiment: { min: 240, grow: 3 },
   results: { min: 280, grow: 6 },
+  openpl: { min: 260, grow: 3 },
   chart: { min: CHART_MIN_WIDTH, grow: 8 },
   decision: { min: 260, grow: 4 },
   ticket: { min: 300, grow: 0, max: 344 },
@@ -121,7 +122,7 @@ const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
  * taller card (the chart, the ticket, the activity, or a column of several),
  * each keeps the height of its content.
  */
-const EVEN: ReadonlySet<CardId> = new Set(["quote", "sentiment", "results", "decision"]);
+const EVEN: ReadonlySet<CardId> = new Set(["quote", "sentiment", "results", "openpl", "decision"]);
 
 /** The column of the chart of the width the user set, see DashboardLayout.chartWidth. */
 const CHART_WIDTH_TRACK = "minmax(0, var(--chart-width))";

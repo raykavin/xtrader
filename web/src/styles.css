@@ -2212,6 +2212,10 @@ fieldset.seg {
   height: 196px;
 }
 
+.skeleton-openpl {
+  height: 146px;
+}
+
 .skeleton-chart,
 .skeleton-ticket {
   height: clamp(360px, calc(100dvh - 330px), 640px);
@@ -2794,6 +2798,205 @@ fieldset.seg {
   grid-template-columns: minmax(300px, 4fr) minmax(0, 6fr);
 }
 
+/* the open profit of all the agents: the sum of their positions open, large,
+   incomplete told beside it, by agent (a stopped one marked), the gaps, and
+   what it isn't; a column in a narrow card, a band across a row of its own
+   (the default layout) */
+.openpl-card {
+  padding: 18px var(--sp-5);
+  container-type: inline-size;
+}
+
+.openpl-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+}
+
+.openpl-lead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.openpl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.openpl-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.openpl-value {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: clamp(20px, 13cqi, 34px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openpl-value small {
+  margin-left: 5px;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.openpl-summary,
+.openpl-note,
+.openpl-hint {
+  margin: 0;
+}
+
+.openpl-summary {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.openpl-summary time {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.openpl-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 66px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.openpl-agents li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.openpl-agent {
+  overflow: hidden;
+  min-width: 0;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openpl-stopped {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.openpl-profit {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.openpl-gaps {
+  margin: 0;
+  padding-left: var(--sp-4);
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.openpl-note {
+  font-size: var(--fs-sm);
+}
+
+.openpl-note.error {
+  color: var(--neg);
+}
+
+.openpl-hint {
+  margin-top: auto;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.openpl-skeleton {
+  flex: 1;
+  min-height: 56px;
+}
+
+/* across a row: the total at the left, the agents beside it, what it isn't
+   at the right, the gaps under them */
+@container (min-width: 720px) {
+  .openpl-layout {
+    display: grid;
+    grid-template-areas: "lead agents hint";
+    grid-template-columns: minmax(200px, auto) minmax(0, 1fr) minmax(200px, 300px);
+    align-items: center;
+    gap: var(--sp-2) var(--sp-6);
+  }
+
+  .openpl-lead {
+    grid-area: lead;
+  }
+
+  .openpl-summary {
+    white-space: nowrap;
+  }
+
+  .openpl-agents {
+    flex-flow: row wrap;
+    grid-area: agents;
+    gap: 6px;
+    max-height: none;
+  }
+
+  .openpl-agents li {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-3);
+  }
+
+  .openpl-profit {
+    margin-left: 2px;
+  }
+
+  .openpl-hint {
+    grid-area: hint;
+    margin-top: 0;
+  }
+
+  .openpl-gaps,
+  .openpl-note {
+    grid-column: 1 / -1;
+  }
+
+  .openpl-skeleton {
+    grid-column: 2 / -1;
+  }
+}
+
 /* the quote: the pair, its price set large, how it moved, the position held */
 .hero {
   --hero-pad-y: 20px;
@@ -3129,8 +3332,7 @@ fieldset.seg {
 /* the sentiment of the market as the language model reads it: a gauge from
    very bearish to very bullish, a band of the scale each on its arc, the one
    of the reading lit, its value and band inside it, the names of the ends and
-   of the middle by them, and the reading before it; greyed out, without a
-   knob, for an agent without a language model */
+   of the middle by them, and the reading before it; of an LLM agent only */
 .meter-card {
   gap: var(--sp-3);
   padding: 18px var(--sp-5);
@@ -4755,6 +4957,10 @@ fieldset.seg {
   .overview,
   .dash-row.overview {
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+
+  .overview:not(.no-meter) > .skeleton-kpis {
+    grid-column: 1 / -1;
   }
 
   .dash-row.overview > [data-cards="results"] {

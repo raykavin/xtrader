@@ -22,6 +22,7 @@ import type {
   DecisionEvent,
   DecisionsResponse,
   LoginRequest,
+  OpenPositionsResponse,
   Order,
   OrderEvent,
   PairsResponse,
@@ -129,6 +130,14 @@ export function logout(): Promise<SessionResponse> {
 /** The agents of the dashboard, with whether their API answers. */
 export function fetchAgents(signal?: AbortSignal): Promise<AgentStatus[]> {
   return getJSON<AgentsResponse>("/agents", signal).then((r) => r.agents);
+}
+
+/**
+ * The open profit of all the agents, the positions they hold open now on their
+ * accounts, whichever agent the dashboard shows.
+ */
+export function fetchOpenPositions(signal?: AbortSignal): Promise<OpenPositionsResponse> {
+  return getJSON<OpenPositionsResponse>("/positions/open", signal);
 }
 
 /** The path of the API of an agent, which the dashboard proxies. */
