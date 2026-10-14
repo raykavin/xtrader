@@ -178,12 +178,16 @@ func (c *Chart) readCurrency() {
 
 // accountProfit returns the profit the account booked for o, a close (a
 // profit computed by the core), from the fill that opened the position it
-// closes; nil when unknown. The caller holds c.mu.
-func (c *Chart) accountProfit(o model.Order) *float64 {
-	if c.reporter == nil || o.Status != model.OrderStatusTypeFilled || (o.Profit == 0 && o.ProfitValue == 0) {
+// closes (see closeEntries, entries when computed already for its pair); nil
+// when unknown. The caller holds c.mu.
+func (c *Chart) accountProfit(o model.Order, entries map[int64]model.Order) *float64 {
+	if c.reporter == nil || o.Status != model.OrderStatusTypeFilled || !settledClose(o) {
 		return nil
 	}
-	entry, ok := c.entryOf(o)
+	if entries == nil {
+		entries = c.closeEntries(o.Pair)
+	}
+	entry, ok := entries[o.ID]
 	if !ok {
 		return nil
 	}
@@ -194,12 +198,45 @@ func (c *Chart) accountProfit(o model.Order) *float64 {
 	return &profit
 }
 
-// entryOf returns the fill that opened the position close closes, from the
-// fills of its pair in the order they filled. The caller holds c.mu.
-func (c *Chart) entryOf(close model.Order) (model.Order, bool) {
-	ids := c.orderIDs[close.Pair]
+// settledClose reports whether the core settled the fill o as a close of (a
+// part of) its position: it carries the profit of it.
+func settledClose(o model.Order) bool {
+	return o.Profit != 0 || o.ProfitValue != 0
+}
+
+// openLot is a fill that opened or added to a position, and its units still
+// open.
+type openLot struct {
+	entry model.Order
+	open  float64
+}
+
+// lotEpsilon is how many units of a fill are none, against the rounding of
+// the sums of the quantities.
+const lotEpsilon = 1e-9
+
+// closeEntries returns, by the ID of each fill of pair closing (a part of) a
+// position, the fill that opened that position, from the fills of the pair in
+// the order they filled, settled as the core settles them (see
+// order.Controller):
+//   - a fill on the side of the open ones opens or adds to the position;
+//   - one on the other side the core settled as a close (see settledClose)
+//     closes the open ones: first the one the account books it against when
+//     the broker reports the profits of the trades (see
+//     service.AccountReporter.ClosedProfit), else the oldest, then the others
+//     from the oldest; its units beyond them reverse the position, opened by
+//     it;
+//   - one on the other side the core didn't settle as a close opens a
+//     position anew: the one of the open fills was gone for the core, eg:
+//     closed outside the bot (by hand, by a stop out), discarded without a
+//     fill (see order.Controller.reconcile).
+//
+// The caller holds c.mu.
+func (c *Chart) closeEntries(pair string) map[int64]model.Order {
+	entries := make(map[int64]model.Order)
+	ids := c.orderIDs[pair]
 	if ids == nil {
-		return model.Order{}, false
+		return entries
 	}
 	var fills []model.Order
 	for id := range ids.Iter() {
@@ -214,27 +251,64 @@ func (c *Chart) entryOf(close model.Order) (model.Order, bool) {
 		}
 		return fills[i].ID < fills[j].ID
 	})
-	var net float64 // signed, positive long
-	var entry model.Order
+	var lots []openLot
+	var side model.SideType // of the open lots
 	for _, fill := range fills {
-		signed := fill.Quantity
-		if fill.Side == model.SideTypeSell {
-			signed = -signed
-		}
-		if fill.ID == close.ID {
-			return entry, net != 0 && math.Signbit(net) != math.Signbit(signed)
-		}
 		switch {
-		case net == 0:
-			entry = fill
-		case math.Signbit(net) != math.Signbit(signed) && math.Abs(signed) > math.Abs(net)+1e-12:
-			entry = fill // a reversal opens the rest
-		}
-		if net += signed; math.Abs(net) < 1e-12 {
-			net = 0
+		case len(lots) == 0 || fill.Side == side:
+			lots, side = append(lots, openLot{entry: fill, open: fill.Quantity}), fill.Side
+		case !settledClose(fill):
+			lots, side = []openLot{{entry: fill, open: fill.Quantity}}, fill.Side
+		default:
+			first := c.bookedLot(fill, lots)
+			entries[fill.ID] = lots[first].entry
+			lots, side = closeLots(lots, first, fill, side)
 		}
 	}
-	return model.Order{}, false
+	return entries
+}
+
+// bookedLot returns the open lot the account books close against, see
+// service.AccountReporter.ClosedProfit: the oldest when it books none, or
+// without a reporter. The caller holds c.mu.
+func (c *Chart) bookedLot(close model.Order, lots []openLot) int {
+	if c.reporter == nil || len(lots) < 2 {
+		return 0
+	}
+	for i, lot := range lots {
+		if _, ok := c.reporter.ClosedProfit(close, lot.entry); ok {
+			return i
+		}
+	}
+	return 0
+}
+
+// closeLots returns the lots open on side after close, on the other side,
+// closed them: the lot first first, then the others from the oldest; its
+// units beyond them open a lot of its own, the side of the position reversed.
+func closeLots(lots []openLot, first int, close model.Order, side model.SideType) ([]openLot, model.SideType) {
+	left := close.Quantity
+	take := func(i int) {
+		units := math.Min(left, lots[i].open)
+		lots[i].open -= units
+		left -= units
+	}
+	take(first)
+	for i := range lots {
+		if i != first && left > lotEpsilon {
+			take(i)
+		}
+	}
+	open := make([]openLot, 0, len(lots))
+	for _, lot := range lots {
+		if lot.open > lotEpsilon {
+			open = append(open, lot)
+		}
+	}
+	if left > lotEpsilon {
+		return []openLot{{entry: close, open: left}}, close.Side // a reversal opens the rest
+	}
+	return open, side
 }
 
 // WithBrokerPositions sets where the chart reads the open position of a pair
@@ -764,6 +838,13 @@ func candleTimeFor(candles []Candle, t time.Time) int64 {
 // of a fill without a price, sent as 0: JSON can't carry them, and the snapshot
 // of its pair and its events would fail. The caller holds c.mu.
 func (c *Chart) toOrder(o model.Order, candles []Candle) Order {
+	return c.toOrderOf(o, candles, nil)
+}
+
+// toOrderOf is toOrder, entries the fills that opened the positions the
+// closes of the pair of o close, when computed already (see closeEntries).
+// The caller holds c.mu.
+func (c *Chart) toOrderOf(o model.Order, candles []Candle, entries map[int64]model.Order) Order {
 	o, _ = o.Finite()
 	order := Order{
 		ID:          o.ID,
@@ -786,7 +867,7 @@ func (c *Chart) toOrder(o model.Order, candles []Candle) Order {
 		DecisionID:  c.decisionOf(o.ID),
 	}
 	// in the currency of the account: unknown until it is read
-	if profit := c.accountProfit(o); profit != nil && finite(*profit) {
+	if profit := c.accountProfit(o, entries); profit != nil && finite(*profit) {
 		if currency := c.accountCurrency(); currency != "" {
 			order.AccountProfit, order.AccountCurrency = profit, currency
 		}
@@ -801,8 +882,12 @@ func (c *Chart) ordersByPair(pair string) []Order {
 		return orders
 	}
 	candles := c.candles[pair]
+	var entries map[int64]model.Order // of the closes, read once for all of them
+	if c.reporter != nil {
+		entries = c.closeEntries(pair)
+	}
 	for id := range ids.Iter() {
-		orders = append(orders, c.toOrder(c.orderByID[id], candles))
+		orders = append(orders, c.toOrderOf(c.orderByID[id], candles, entries))
 	}
 	return orders
 }

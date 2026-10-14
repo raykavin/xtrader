@@ -15,6 +15,12 @@ export interface Stats {
    * MT5), else the quote (profit_value, the core's).
    */
   profitCurrency: string;
+  /**
+   * The closed trades the broker reports the profits of (the snapshot tells
+   * the currency of the account) without the one of each, eg: older than the
+   * history the broker keeps: the profits are then the core's, in the quote.
+   */
+  unbooked: number;
   /** Gross profit / gross loss; Infinity when there are no losses. */
   profitFactor: number;
   /** The sums of the wins and of the losses (positive), in profitCurrency. */
@@ -97,6 +103,9 @@ export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stat
   const closed = snapshot.orders.filter((o) => isClosedTrade(o) && within(o, window));
   // as the account booked them when it did for all, else the core's
   const booked = closed.every((o) => o.account_profit !== undefined);
+  const unbooked = snapshot.account_currency
+    ? closed.filter((o) => o.account_profit === undefined).length
+    : 0;
   const value = (o: Order) => (booked ? (o.account_profit ?? 0) : o.profit_value);
   const profitCurrency = booked
     ? (closed[0]?.account_currency ?? snapshot.account_currency ?? snapshot.quote)
@@ -134,6 +143,7 @@ export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stat
     winRate: closed.length ? wins.length / closed.length : 0,
     totalProfit,
     profitCurrency,
+    unbooked,
     profitFactor:
       grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Number.POSITIVE_INFINITY : 0,
     grossProfit,
