@@ -3,91 +3,10 @@ package store
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
-
-	"github.com/raykavin/xtrader/config"
 )
-
-// The migration 21 gives each LLM agent the switch of its reanalysis, the one
-// it had: on in paper, whose control panel is on in every channel, and in live
-// with its trade panel or its Telegram control on; the agents of the other
-// kinds get none. The migration down drops the switches only, and up again
-// gives them back from the switches of the channels.
-func TestMigration21_TheReanalysisTheAgentsHad(t *testing.T) {
-	dsn := testDatabase(t)
-	migratedTo(t, dsn, 20)
-	s, err := Open(config.Database{DSN: dsn, MaxOpenConns: 2, LogLevel: "silent"}, testKey)
-	require.NoError(t, err)
-	defer func() { _ = s.Close() }()
-	ctx := context.Background()
-
-	// the agents of before, written as the store of version 20 wrote them
-	before := []struct {
-		name, kind, mode  string
-		panel, telegram   bool
-		allowed, switched bool // the switch after the migration, and whether the agent has one
-	}{
-		{"llm-panel", "llm", "live", true, false, true, true},
-		{"llm-telegram", "llm", "live", false, true, true, true},
-		{"llm-both", "llm", "live", true, true, true, true},
-		{"llm-none", "llm", "live", false, false, false, true},
-		{"llm-paper", "llm", "paper", false, false, true, true},
-		{"trend-both", "trend", "live", true, true, false, false},
-		{"breakout-paper", "breakout", "paper", false, false, false, false},
-	}
-	for i, a := range before {
-		require.NoError(t, s.db.Exec("INSERT INTO agents (name, kind, mode, api_address, trade_panel, "+
-			"telegram_control) VALUES (?, ?, ?, ?, ?, ?)", a.name, a.kind, a.mode, fmt.Sprintf("localhost:%d", 5600+i),
-			a.panel, a.telegram).Error)
-	}
-
-	check := func(when string) {
-		t.Helper()
-		for _, want := range before {
-			agent, err := s.AgentByName(ctx, want.name)
-			require.NoError(t, err)
-			require.Equal(t, want.allowed, agent.ReanalysisAllowed(), "%s: %s", when, want.name)
-			require.Equal(t, want.switched, agent.Reanalysis != nil, "%s: %s has a switch", when, want.name)
-			require.Equal(t, want.panel, agent.TradePanel, "%s: %s: its trade panel kept", when, want.name)
-			require.Equal(t, want.telegram, agent.TelegramControl, "%s: %s: its Telegram control kept", when,
-				want.name)
-		}
-	}
-	migrated(t, dsn)
-	require.NoError(t, s.CheckSchema(ctx))
-	check("migrated")
-
-	run := func(name string) {
-		data, err := os.ReadFile(filepath.Join("..", "sql", "migrations", "000021_create_agent_reanalysis."+name+
-			".sql"))
-		require.NoError(t, err)
-		require.NoError(t, s.db.Transaction(func(tx *gorm.DB) error { // a statement at a time, as prepared
-			for _, statement := range strings.Split(string(data), ";\n") {
-				if strings.TrimSpace(statement) != "" {
-					if err := tx.Exec(statement).Error; err != nil {
-						return err
-					}
-				}
-			}
-			return nil
-		}), name)
-	}
-	run("down")
-	var agents, tables int64
-	require.NoError(t, s.db.Table("agents").Count(&agents).Error)
-	require.EqualValues(t, len(before), agents, "the agents kept")
-	require.NoError(t, s.db.Raw("SELECT count(*) FROM information_schema.tables WHERE table_name = "+
-		"'agent_reanalysis'").Scan(&tables).Error)
-	require.Zero(t, tables, "the switches dropped")
-	run("up")
-	check("up again")
-}
 
 // An LLM agent is created with the switch of its reanalysis, off unless asked
 // on; one of another kind gets none, refused on.

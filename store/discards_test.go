@@ -55,9 +55,9 @@ func TestSaveDiscard_KeptOnceByTheFillAfter(t *testing.T) {
 	}
 }
 
-// The migration 22 adds the table of the discards, the migration down drops
-// it, and up again adds it back, empty, the other tables kept.
-func TestMigration22_TheTableOfTheDiscards(t *testing.T) {
+// The migration of the discards down drops their table only, the agents kept,
+// and up again creates it empty.
+func TestPositionDiscards_MigrationDownAndUp(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	agent := llmAgent(t, s, "llm")
@@ -72,7 +72,7 @@ func TestMigration22_TheTableOfTheDiscards(t *testing.T) {
 		return count
 	}
 	run := func(name string) {
-		data, err := os.ReadFile(filepath.Join("..", "sql", "migrations", "000022_create_position_discards."+name+
+		data, err := os.ReadFile(filepath.Join("..", "sql", "migrations", "000013_create_position_discards."+name+
 			".sql"))
 		require.NoError(t, err)
 		require.NoError(t, s.db.Exec(string(data)).Error, name)
