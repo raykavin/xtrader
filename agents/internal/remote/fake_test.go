@@ -39,6 +39,7 @@ type fakeController struct {
 	changed   chan struct{} // closed as the runtime changes
 	prompt    *agentapi.Prompt
 	orders    []model.Order
+	discards  []model.Discard     // nil: 404, as a controller of a version before
 	leases    []agentapi.OrderIDs // answered in turn, the last one again
 	leased    int
 	decisions []ui.Decision
@@ -56,7 +57,7 @@ type fakeController struct {
 func newFakeController(t *testing.T) *fakeController {
 	t.Helper()
 	f := &fakeController{t: t, changed: make(chan struct{}), links: map[int64]string{},
-		leases: []agentapi.OrderIDs{{First: 1, Last: 1000}}}
+		leases: []agentapi.OrderIDs{{First: 1, Last: 1000}}, discards: []model.Discard{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -157,6 +158,8 @@ func (f *fakeController) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		reply(http.StatusOK, page)
+	case path == "/discards" && f.discards != nil:
+		reply(http.StatusOK, f.discards)
 	case path == "/decisions":
 		pair := query.Get("pair")
 		limit, _ := strconv.Atoi(query.Get("limit"))

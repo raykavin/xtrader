@@ -2,7 +2,8 @@
 // launches: the settings each agent runs with, what it applies while it runs
 // (the channels of its control panel, the prompt of an LLM agent), and the
 // records it keeps through the controller, which alone reaches the database:
-// its orders, and the decisions and journal of an LLM agent.
+// its orders and the positions its order controller discarded, and the
+// decisions and journal of an LLM agent.
 //
 // The controller serves it on the loopback (agents.api of config.yml), under
 // Prefix, and gives each start of an agent its URL and a token of its own in
@@ -149,6 +150,7 @@ const (
 	KindDecision     = "decision"      // a DecisionRecord
 	KindJournal      = "journal"       // a JournalRecord
 	KindPromptStatus = "prompt_status" // a PromptStatus
+	KindDiscard      = "discard"       // a model.Discard
 )
 
 // Record is a record an agent keeps through the controller, of its outbox.
@@ -158,7 +160,8 @@ const (
 // written (see OutboxResponse). Key names what the record writes for the
 // logs, eg: the ID of an order. The controller writes a record by the keys of
 // its payload, never by Seq or Key: the ID of an order, of a decision or of
-// an entry of the journal, the prompt status of the agent. So a record sent
+// an entry of the journal, the prompt status of the agent, the pair and the
+// fill after which a position was discarded (kept once). So a record sent
 // again writes the same, and a later record of the same order, decision or
 // prompt status replaces it, an order never going back (see
 // model.Order.Supersedes). At is when the agent added it, zero for a record

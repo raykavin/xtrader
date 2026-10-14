@@ -406,6 +406,9 @@ type Controller struct {
 	status         Status
 
 	position map[string]*Position
+	// lastFill holds the ID of the last fill of each pair settled, the place
+	// of a discard of its position, see dropPosition.
+	lastFill map[string]int64
 	// openings holds when the fills of each pair opened a position, or
 	// reversed one, the stored ones replayed by restore included, the last
 	// openingsKept of them, see PositionsOpened and PositionsReplayed.
@@ -481,6 +484,7 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 		tickerInterval: time.Second,
 		finish:         make(chan bool),
 		position:       make(map[string]*Position),
+		lastFill:       make(map[string]int64),
 		openings:       make(map[string][]opening),
 		pending:        make(map[int64]model.Order),
 		movedAt:        make(map[int64]uint64),
@@ -496,9 +500,13 @@ func NewController(ctx context.Context, exchange service.Exchange, storage stora
 // orders of the storage, replayed in the order they filled, as they stood
 // before a restart: a stop loss or a take profit filling after it then closes
 // the position it protects, rather than opening one on the other side that
-// the next trades would settle against. The profits computed and missing from
-// the storage are stored. The positions are then checked against the ones the
-// exchange holds, when it tells them, see reconcile.
+// the next trades would settle against. A position discarded as it was gone
+// from the exchange (see dropPosition) is dropped again right after the fill
+// it was discarded after, when the storage keeps the discards: the trades
+// after it settled on their own, as they were. The profits computed that
+// differ from the ones of the storage are stored. The positions are then
+// checked against the ones the exchange holds, when it tells them, see
+// reconcile.
 func (c *Controller) restore() {
 	if c.storage == nil {
 		return
@@ -518,6 +526,7 @@ func (c *Controller) restore() {
 		return orders[i].ID < orders[j].ID
 	})
 
+	discards := c.storedDiscards()
 	c.restoring = true
 	defer func() { c.restoring = false }()
 	for _, order := range orders {
@@ -525,6 +534,9 @@ func (c *Controller) restore() {
 		c.processTrade(order)
 		if order.Profit != profit || order.ProfitValue != value {
 			c.store(order)
+		}
+		for _, discard := range discards[order.ID] {
+			c.replayDiscard(order, discard)
 		}
 	}
 	open := make([]string, 0, len(c.position))
@@ -654,10 +666,73 @@ func (c *Controller) storedClosing(pair string, side model.SideType) (int, error
 // the exchange doesn't hold, see reconcile. Must be called while holding
 // c.mtx, once started.
 func (c *Controller) discard(pair string, position *Position) {
-	delete(c.position, pair)
-	delete(c.unheld, pair)
+	c.dropPosition(pair, position)
 	log.Warnf("[ORDER] %s: the position replayed from the storage (%s) is not held at the exchange, eg: closed "+
 		"outside the bot: discarded, without any order, its trades after settled on their own", pair, position)
+}
+
+// dropPosition drops position, the one of pair, gone from the exchange (see
+// discard and heldEnded), and keeps its discard where the storage keeps them
+// (storage.DiscardStorage), after the last fill of the pair settled: the
+// replay of a restart drops it again there (see restore), rather than
+// settling the trades after it against it. Must be called while holding
+// c.mtx, once started.
+func (c *Controller) dropPosition(pair string, position *Position) {
+	delete(c.position, pair)
+	delete(c.unheld, pair)
+	keeper, ok := c.storage.(storage.DiscardStorage)
+	after := c.lastFill[pair]
+	if !ok || after == 0 {
+		return
+	}
+	discard := model.Discard{Pair: pair, Side: position.Side, Quantity: position.Quantity, AfterID: after,
+		At: time.Now().UTC()}
+	if err := keeper.CreateDiscard(discard); err != nil {
+		log.Errorf("[ORDER] %s: the discard of the position (%s) not kept, the next restart settling the trades "+
+			"after it against it: %v", pair, position, err)
+	}
+}
+
+// storedDiscards returns the discards the storage keeps (see dropPosition),
+// by the fill they came after; none when it keeps none.
+func (c *Controller) storedDiscards() map[int64][]model.Discard {
+	keeper, ok := c.storage.(storage.DiscardStorage)
+	if !ok {
+		return nil
+	}
+	discards, err := keeper.Discards()
+	if err != nil {
+		log.Errorf("order controller: the discards stored, the positions closed outside the bot replayed "+
+			"with the next trades of their pair: %v", err)
+		return nil
+	}
+	byFill := make(map[int64][]model.Discard, len(discards))
+	for _, discard := range discards {
+		byFill[discard.AfterID] = append(byFill[discard.AfterID], discard)
+	}
+	return byFill
+}
+
+// replayDiscard drops again the position of a discard, as it was dropped
+// right after the fill replayed, see restore: nothing without a position
+// there, eg: dropped by a discard before it; a position of the other side
+// left, warned, eg: a storage written otherwise.
+func (c *Controller) replayDiscard(fill *model.Order, discard model.Discard) {
+	position, open := c.position[discard.Pair]
+	switch {
+	case discard.Pair != fill.Pair || !open:
+		log.Debugf("[SETUP] %s: the discard after the fill %d: no position replayed there", discard.Pair,
+			discard.AfterID)
+		return
+	case position.Side != discard.Side:
+		log.Warnf("[SETUP] %s: the discard of a position (%s %g) after the fill %d not replayed: the position "+
+			"replayed there (%s) is of the other side", discard.Pair, discard.Side, discard.Quantity, discard.AfterID,
+			position)
+		return
+	}
+	delete(c.position, discard.Pair)
+	log.Infof("[SETUP] %s: the position %s discarded after the fill %d at %s replayed so: closed outside the bot",
+		discard.Pair, position, discard.AfterID, discard.At.Format(time.RFC3339))
 }
 
 // unheldEnded checks again the position of pair the exchange didn't hold at
@@ -742,8 +817,7 @@ func (c *Controller) heldEnded(pair string) {
 	switch {
 	case !known:
 	case quantity == 0:
-		delete(c.position, pair)
-		delete(c.unheld, pair)
+		c.dropPosition(pair, position)
 		log.Warnf("[ORDER] %s: the position (%s) is not held at the exchange any more, its orders on the other "+
 			"side ended without a fill, eg: closed outside the bot, by hand or by a stop out: discarded, without "+
 			"any order, its trades after settled on their own", pair, position)
@@ -1048,6 +1122,7 @@ func (c *Controller) processTrade(order *model.Order) {
 	if order.Status != model.OrderStatusTypeFilled {
 		return
 	}
+	c.lastFill[order.Pair] = order.ID
 	if c.unheld[order.Pair] && !c.restoring {
 		// the position not held at the exchange closed by its order, or
 		// changed: no longer the one checked, see reconcile

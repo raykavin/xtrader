@@ -153,3 +153,35 @@ func TestBunt_AnEndIsNeverUndone(t *testing.T) {
 	require.NoError(t, st.UpdateOrder(&update))
 	require.Equal(t, 15.0, state().ProfitValue, "an end written again, eg: with its profit")
 }
+
+// The positions discarded are kept once each, apart from the orders: never
+// listed among them nor numbering them, kept in the file across reopens.
+func TestBunt_DiscardsApartFromTheOrders(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "orders.db")
+	db, err := FromFile(file)
+	require.NoError(t, err)
+	order := &model.Order{Pair: "XAUUSDm", Status: model.OrderStatusTypeFilled, UpdatedAt: time.Now()}
+	require.NoError(t, db.CreateOrder(order))
+	at := time.Date(2026, 10, 14, 0, 42, 57, 0, time.UTC)
+	discard := model.Discard{Pair: "XAUUSDm", Side: model.SideTypeBuy, Quantity: 3, AfterID: order.ID, At: at}
+	keeper := db.(DiscardStorage)
+	require.NoError(t, keeper.CreateDiscard(discard))
+	again := discard
+	again.Quantity = 9
+	require.NoError(t, keeper.CreateDiscard(again))
+	require.NoError(t, db.(*Bunt).db.Close())
+
+	db, err = FromFile(file)
+	require.NoError(t, err)
+	discards, err := db.(DiscardStorage).Discards()
+	require.NoError(t, err)
+	require.Len(t, discards, 1, "once")
+	require.InDelta(t, 3, discards[0].Quantity, 1e-9, "the first kept")
+	require.True(t, discards[0].At.Equal(at))
+	orders, err := db.Orders()
+	require.NoError(t, err)
+	require.Len(t, orders, 1, "not an order")
+	next := &model.Order{Pair: "XAUUSDm"}
+	require.NoError(t, db.CreateOrder(next))
+	require.Equal(t, int64(2), next.ID)
+}

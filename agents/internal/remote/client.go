@@ -209,6 +209,13 @@ func (c *Client) Orders(ctx context.Context, after int64, limit int) ([]model.Or
 	return orders, c.get(ctx, fmt.Sprintf("/orders?after=%d&limit=%d", after, limit), &orders)
 }
 
+// Discards returns the positions the order controller of the agent discarded,
+// by the fill after which each one was.
+func (c *Client) Discards(ctx context.Context) ([]model.Discard, error) {
+	var discards []model.Discard
+	return discards, c.get(ctx, "/discards", &discards)
+}
+
 // Decisions returns the last decisions of pair, of every pair when empty,
 // newest first, limit at most.
 func (c *Client) Decisions(ctx context.Context, pair string, limit int) ([]ui.Decision, error) {

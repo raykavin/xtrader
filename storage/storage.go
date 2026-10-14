@@ -14,6 +14,14 @@ type Storage interface {
 	Orders(filters ...OrderFilter) ([]*model.Order, error)
 }
 
+// DiscardStorage is a Storage keeping the positions the order controller
+// discarded, see model.Discard: CreateDiscard keeps one, once for its pair and
+// its AfterID; Discards returns them all.
+type DiscardStorage interface {
+	CreateDiscard(discard model.Discard) error
+	Discards() ([]model.Discard, error)
+}
+
 func WithStatusIn(status ...model.OrderStatusType) OrderFilter {
 	return func(order model.Order) bool {
 		for _, s := range status {

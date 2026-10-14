@@ -110,3 +110,28 @@ func (o Order) String() string {
 	return fmt.Sprintf("[%s] %s %s | ID: %d, Type: %s, %f x $%f (~$%.f)",
 		o.Status, o.Side, o.Pair, o.ID, o.Type, o.Quantity, o.Price, o.Quantity*o.Price)
 }
+
+// Discard is a position of the bot the order controller found gone from the
+// exchange and dropped without a fill, eg: closed outside the bot (by hand in
+// the terminal, by a stop out): its side and its quantity, and where, after
+// the fill of the pair of AfterID, the last one it had settled, and when. The
+// replay of the filled orders after a restart drops it again at the same
+// place, rather than settling the trades after it against it.
+type Discard struct {
+	Pair     string    `json:"pair"`
+	Side     SideType  `json:"side"`
+	Quantity float64   `json:"quantity"`
+	AfterID  int64     `json:"after_id"`
+	At       time.Time `json:"at"`
+}
+
+// Same reports whether d and other are the same discard: of the same pair,
+// after the same fill, as they are kept once.
+func (d Discard) Same(other Discard) bool {
+	return d.Pair == other.Pair && d.AfterID == other.AfterID
+}
+
+// Key names the discard, eg: XAUUSDm:6001, its pair and the fill after it.
+func (d Discard) Key() string {
+	return fmt.Sprintf("%s:%d", d.Pair, d.AfterID)
+}

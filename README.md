@@ -271,6 +271,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - ordens, decisões com anexos, marcações (`decision_drawings`, desde a migração 18), sentimento (`decision_sentiments`, desde a migração 19) e journal;
   - nomes anteriores dos agentes renomeados (`agent_former_names`, desde a migração 20);
   - a reanálise permitida de cada agente LLM (`agent_reanalysis`, desde a migração 21);
+  - as posições que o núcleo descartou por terem sido fechadas fora do bot (`position_discards`, desde a migração 22);
   - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
@@ -288,6 +289,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - Uma posição de outro lado ou de outro tamanho na corretora fica como está, com erro no log, porque não dá para saber o que mudou. O mesmo para uma posição do bot na corretora que as ordens gravadas não mostram. Quando a diferença (a posição a mais na corretora, do mesmo lado) cabe nas ordens abertas gravadas desse lado, como uma entrada pendente (limit ou stop) executada com o agente parado, o log é só um aviso: a execução dela chega logo depois, pela atualização das ordens, e a posição passa a ser a da corretora.
   - Com o agente rodando, a conferência é feita quando uma ordem do outro lado da posição termina sem execução, como as pernas que o MT5 cancela quando a posição é fechada à mão ou por stop out. Quando não sobra nenhuma ordem aberta que possa fechá-la e a corretora não tem a posição, ela é descartada, com aviso no log e sem enviar ordem. Se uma ordem do ativo está em andamento (por exemplo, uma saída a mercado ainda não registrada), a conferência fica para a atualização seguinte.
   - Uma posição sem pernas (sem stop loss nem take profit) fechada fora do bot com o agente rodando não gera nenhum evento: ela continua na memória até o próximo reinício. Também não é descartada a que já recebeu, antes da conferência, uma nova entrada do mesmo lado: a corretora mostra outro tamanho e a posição é mantida, com aviso no log.
+  - Cada descarte fica gravado (`position_discards`, pelo outbox; no buntdb do paper e do backtest, junto das ordens) com o ativo, o lado, o tamanho e a última execução do ativo antes dele. Ao reiniciar, o bot refaz as posições pelas ordens executadas e descarta a posição de novo logo depois daquela execução. Assim, as operações seguintes são apuradas sozinhas, como foram, e o lucro gravado delas não muda a cada reinício. Antes, o descarte só acontecia depois de refeitas todas as ordens: o fechamento seguinte era apurado contra o preço médio da posição descartada com a nova, e esse lucro errado (em % e na moeda de cotação) era gravado por cima do certo. Os lucros gravados assim se corrigem no reinício seguinte à gravação do descarte. O lucro líquido na moeda da conta, que vem da corretora, não muda.
 
 ## Arquitetura
 
