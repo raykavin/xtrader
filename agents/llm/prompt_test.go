@@ -18,17 +18,24 @@ import (
 // description and its content, dollar-quoted.
 var seedPattern = regexp.MustCompile(`(?s)\('([a-z0-9_.-]+)', \$d\$.*?\$d\$,\n\$prompt\$(.*?)\$prompt\$\)`)
 
-// seededPrompts returns the prompts the database is seeded with, by name,
-// the strategies the agents start with.
+// seededPrompts returns the prompts the database is seeded with, by name, the
+// strategies the LLM agents start with, and the ones of the strategies of the
+// code once seeded, kept as test data (testdata/strategy_prompts.sql): the
+// prompts the agent reads alike.
 func seededPrompts(t *testing.T) map[string]string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "sql", "seeds", "0002_prompts.sql"))
-	require.NoError(t, err)
 	prompts := make(map[string]string)
-	for _, match := range seedPattern.FindAllStringSubmatch(string(data), -1) {
-		prompts[match[1]] = match[2]
+	for _, file := range []string{filepath.Join("..", "..", "sql", "seeds", "0002_prompts.sql"),
+		filepath.Join("testdata", "strategy_prompts.sql")} {
+		data, err := os.ReadFile(file)
+		require.NoError(t, err)
+		matches := seedPattern.FindAllStringSubmatch(string(data), -1)
+		require.GreaterOrEqual(t, len(matches), 5, file)
+		for _, match := range matches {
+			require.NotContains(t, prompts, match[1], "%s twice", match[1])
+			prompts[match[1]] = match[2]
+		}
 	}
-	require.GreaterOrEqual(t, len(prompts), 5)
 	return prompts
 }
 
