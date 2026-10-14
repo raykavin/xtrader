@@ -1,4 +1,4 @@
-import echos from "../assets/echos.png";
+import echos from "../assets/echos.svg";
 
 interface Props {
   className?: string;
