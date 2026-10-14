@@ -2,10 +2,13 @@
 // Trend Confluence), matrend (MA Trend: the break of the SMA 200 with the EMA
 // 9/21 on its side), emapullback (the pullbacks to the fast EMA in a trend of
 // two EMAs), fibonacci (the pullbacks of the impulses to their Fibonacci
-// retracements), and the signal strategies emacross, ema200, ribbon,
-// supertrend, emasupertrend, psarema, atrtrailing, ichimoku, ichimokuadx,
-// mtftrend and mtfema, see strategies.NewSignal. See runner.Run for the shared
-// flags:
+// retracements), trendpullback (the end of the pullbacks of the trend of the
+// EMA 9/21 over the SMA 200, confirmed by the momentum: the rules of the setup
+// trend_pullback of the prompt default of the LLM agent, its stop loss moved
+// by the R multiple of the position), and the signal strategies emacross,
+// ema200, ribbon, supertrend, emasupertrend, psarema, atrtrailing, ichimoku,
+// ichimokuadx, mtftrend and mtfema, see strategies.NewSignal. See runner.Run
+// for the shared flags:
 //
 //	# RK Trend Confluence, a stop on the close 3 ATR from the entry, backed up
 //	# by a stop placed at the broker 4 ATR away
@@ -92,6 +95,8 @@ func agent() runner.Agent {
 			Inputs: append([]string{"fast-ema", "slow-ema"}, runner.BracketInputs...)},
 		{Name: "fibonacci", About: "the pullbacks of the impulses to their Fibonacci retracements", New: f.fibonacci,
 			Inputs: append(slices.Clone(fibInputs), "trailing-atr", "max-bars", "min-atr-pct")},
+		{Name: "trendpullback", About: "the end of the pullbacks of a trend, confirmed by the momentum",
+			New: f.trendPullback, Inputs: []string{"min-atr-pct"}},
 	}, runner.Signals("emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema", "atrtrailing",
 		"ichimoku", "ichimokuadx", "mtftrend", "mtfema")...)}
 }
@@ -191,4 +196,11 @@ func (f flags) fibonacci(in runner.Inputs) (strategy.Strategy, error) {
 		return nil, err
 	}
 	return trader, nil
+}
+
+func (f flags) trendPullback(in runner.Inputs) (strategy.Strategy, error) {
+	cfg := strategies.DefaultTrendPullbackConfig()
+	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	trader, err := strategies.NewTrendPullback(cfg)
+	return trader, err
 }

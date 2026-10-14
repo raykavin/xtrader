@@ -126,7 +126,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		require.Nil(t, agent.Account.Comment)
 		require.Equal(t, "nb:"+name, agent.MT5Book().Comment, "the default of its strategy")
 	}
-	for kind, count := range map[string]int{"trend": 13, "momentum": 7, "breakout": 10, "intraday": 5} {
+	for kind, count := range map[string]int{"trend": 14, "momentum": 7, "breakout": 11, "intraday": 8} {
 		n := 0
 		for _, name := range codeStrategies {
 			if byName[name].Kind == kind {
@@ -196,7 +196,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 41)
+	require.Len(t, agents, 46)
 	llm, err = s.AgentByName(ctx, "llm-trend")
 	require.NoError(t, err)
 	require.Equal(t, "XAUUSDm=0.02;BTCUSDm=0.02", llm.Params["lot"], "the edit kept")
@@ -222,7 +222,8 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 // The prompts of a new database: the ones of the strategies only a language
 // model trades and the ones created in the dashboard, each with its first
 // version, the same content, once however many times the seeds run; none of
-// the strategies of the code, traded by agents without LLM.
+// the strategies of the code nor of the rules of prompts coded, traded by
+// agents without LLM.
 func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 	dsn := testDatabase(t)
 	pgtest.MigrateSeeded(t, dsn, "..")
@@ -234,14 +235,15 @@ func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 
 	prompts, err := s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 9)
-	for _, name := range []string{"breakout", "default", "mean_reversion", "scalp_1m", "scalp_1m_btc", "smc_ict",
-		"support_resistance", "trend_following", "trend_following_v0"} {
+	require.Len(t, prompts, 4)
+	for _, name := range []string{"smc_ict", "support_resistance", "trend_following", "trend_following_v0"} {
 		_, err := s.PromptByName(ctx, name)
 		require.NoError(t, err, name)
 	}
-	_, err = s.PromptByName(ctx, "emacross")
-	require.ErrorIs(t, err, ErrNotFound, "a strategy of the code")
+	for _, name := range []string{"emacross", "breakout", "default", "mean_reversion", "scalp_1m", "scalp_1m_btc"} {
+		_, err = s.PromptByName(ctx, name)
+		require.ErrorIs(t, err, ErrNotFound, "%s: a strategy of the code", name)
+	}
 	copied, err := s.PromptByName(ctx, "trend_following_v0")
 	require.NoError(t, err)
 	original, err := s.PromptByName(ctx, "trend_following")
@@ -252,19 +254,19 @@ func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 	require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
 	require.NoError(t, s.db.Raw("SELECT count(*) FROM prompt_versions v JOIN prompts p ON p.id = v.prompt_id "+
 		"WHERE v.version <> p.version OR v.content <> p.content OR v.created_by <> 'seed'").Scan(&mismatched).Error)
-	require.EqualValues(t, 9, versions, "the first version of each")
+	require.EqualValues(t, 4, versions, "the first version of each")
 	require.Zero(t, mismatched)
 
 	pgtest.MigrateSeeded(t, dsn, "..")
 	prompts, err = s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 9, "once")
+	require.Len(t, prompts, 4, "once")
 }
 
 // codeStrategies are the strategies of the code the seeds create an agent of,
 // in the order of the file: the ones of agents/trendagent, momentumagent,
 // breakoutagent and intradayagent but matrend, fibonacci and fimathe, seeded
-// before them with settings of their own.
+// before them with settings of their own, the rules of the prompts coded last.
 var codeStrategies = []string{
 	"trendconfluence", "emapullback", "emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema",
 	"atrtrailing", "ichimoku", "ichimokuadx", "mtftrend", "mtfema",
@@ -272,4 +274,5 @@ var codeStrategies = []string{
 	"atrbreakout", "donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner", "volumebreakout",
 	"highlow", "momentumbreakout",
 	"orb", "asialondon", "vwap", "sweep", "zscore",
+	"meanreversion", "scalp1m", "scalp1mbtc", "trendpullback", "squeezebreakout",
 }

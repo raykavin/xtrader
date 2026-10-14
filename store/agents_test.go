@@ -272,7 +272,7 @@ func TestUpdateAgent_SwitchesAndPrompt(t *testing.T) {
 	_, err = s.UpdateAgent(ctx, 999999, AgentUpdate{Enabled: &on})
 	require.ErrorIs(t, err, ErrNotFound)
 
-	prompt, err := s.PromptByName(ctx, "scalp_1m")
+	prompt, err := s.PromptByName(ctx, "smc_ict")
 	require.NoError(t, err)
 	require.NoError(t, s.SetAgentPrompt(ctx, agent.ID, &prompt.ID))
 	updated, err = s.Agent(ctx, agent.ID)
@@ -287,7 +287,7 @@ func TestUpdateAgent_SwitchesAndPrompt(t *testing.T) {
 	require.ErrorIs(t, s.SetAgentPrompt(ctx, agent.ID, &missing), ErrNotFound)
 	require.ErrorIs(t, s.SetAgentPrompt(ctx, trend.ID, &prompt.ID), ErrInvalid, "not an LLM agent")
 
-	require.NoError(t, s.SetPromptStatus(ctx, agent.ID, PromptStatus{PromptID: prompt.ID, Name: "scalp_1m",
+	require.NoError(t, s.SetPromptStatus(ctx, agent.ID, PromptStatus{PromptID: prompt.ID, Name: "smc_ict",
 		Version: 1, Error: "needs 1441 candles"}))
 	updated, err = s.Agent(ctx, agent.ID)
 	require.NoError(t, err)
@@ -303,7 +303,7 @@ func TestUpdateAgent_EditsEveryField(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	agent := llmAgent(t, s, "llm")
-	require.NoError(t, s.SetPromptStatus(ctx, agent.ID, PromptStatus{Name: "scalp_1m", Version: 1, Applied: true}))
+	require.NoError(t, s.SetPromptStatus(ctx, agent.ID, PromptStatus{Name: "smc_ict", Version: 1, Applied: true}))
 
 	updated, err := s.UpdateAgent(ctx, agent.ID, AgentUpdate{Mode: ptr("paper"), APIAddress: ptr(" localhost:5599 "),
 		Launched: ptr(false), Restart: ptr(false),

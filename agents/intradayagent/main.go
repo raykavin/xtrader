@@ -5,7 +5,12 @@
 // asialondon (the Asia range broken in London), vwap (the reclaim and the
 // reject of the VWAP of the session, -setup reject trading the continuation of
 // its trend), sweep (the sweeps of the liquidity of the swings) and zscore (the
-// reversion of the Z-Score of the close). See runner.Run for the shared flags:
+// reversion of the Z-Score of the close); and the rules of prompts of the LLM
+// agent, their stop loss and take profit set by each, moved by the R multiple
+// of the position: meanreversion (the rejections of the Bollinger Bands of a
+// range back to its mean, 15m), scalp1m (the micro pullbacks of the micro
+// trend, 1m) and scalp1mbtc (the strong bursts of momentum, for a spread wide
+// next to the moves, 1m). See runner.Run for the shared flags:
 //
 //	go run ./agents/intradayagent -strategy orb -pair XAUUSDm -csv xau-5m.csv -lot 0.01
 //	go run ./agents/intradayagent -strategy asialondon -mode paper -pair XAUUSDm \
@@ -47,6 +52,12 @@ func agent() runner.Agent {
 			Inputs: inputs("timezone", "lookback", "day-levels")},
 		{Name: "zscore", About: "reversion of the Z-Score of the close", New: f.zscore,
 			Inputs: inputs("entry-z", "exit-z", "max-adx")},
+		{Name: "meanreversion", About: "the rejections of the Bollinger Bands of a range back to its mean",
+			New: f.meanReversion, Inputs: []string{"min-atr-pct"}},
+		{Name: "scalp1m", About: "scalping the micro pullbacks of the micro trend on 1 minute candles",
+			New: f.scalp1m, Inputs: []string{"min-atr-pct"}},
+		{Name: "scalp1mbtc", About: "scalping the strong bursts of momentum on 1 minute candles, for a wide spread",
+			New: f.scalp1mBTC, Inputs: []string{"min-atr-pct"}},
 	}}
 }
 
@@ -206,5 +217,27 @@ func (f flags) asiaLondon(in runner.Inputs) (strategy.Strategy, error) {
 	}
 	cfg.MaxRangeATR, cfg.TrendLen, cfg.VWAP = *f.maxRangeATR, *f.trendEMA, *f.vwap
 	trader, err := strategies.NewAsiaLondon(cfg)
+	return trader, err
+}
+
+func (f flags) meanReversion(in runner.Inputs) (strategy.Strategy, error) {
+	cfg := strategies.DefaultMeanReversionConfig()
+	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	trader, err := strategies.NewMeanReversion(cfg)
+	return trader, err
+}
+
+func (f flags) scalp1m(in runner.Inputs) (strategy.Strategy, error) {
+	return microScalp(in, strategies.DefaultScalp1mConfig())
+}
+
+func (f flags) scalp1mBTC(in runner.Inputs) (strategy.Strategy, error) {
+	return microScalp(in, strategies.DefaultScalp1mBTCConfig())
+}
+
+// microScalp creates the scalp of cfg with the inputs.
+func microScalp(in runner.Inputs, cfg strategies.MicroScalpConfig) (strategy.Strategy, error) {
+	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	trader, err := strategies.NewMicroScalp(cfg)
 	return trader, err
 }

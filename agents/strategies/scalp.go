@@ -154,6 +154,12 @@ type scalpTrade struct {
 	exiting bool
 	bare    rkLevels
 	opened  time.Time
+
+	// entry and risk are the close the position was opened on and the
+	// distance to its first stop loss, see bracket.openAt: risk 0 when
+	// unknown, eg: a position adopted after a restart; bestR is the best R
+	// multiple of a close since its opening, see bracket.trackR.
+	entry, risk, bestR float64
 }
 
 // adoptTrade returns the trade of a position held on side found on the last

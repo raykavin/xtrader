@@ -30,7 +30,7 @@ func seededPrompts(t *testing.T) map[string]string {
 		data, err := os.ReadFile(file)
 		require.NoError(t, err)
 		matches := seedPattern.FindAllStringSubmatch(string(data), -1)
-		require.GreaterOrEqual(t, len(matches), 5, file)
+		require.NotEmpty(t, matches, file)
 		for _, match := range matches {
 			require.NotContains(t, prompts, match[1], "%s twice", match[1])
 			prompts[match[1]] = match[2]

@@ -91,5 +91,5 @@ func TestPrompts_Interpretation(t *testing.T) {
 	want, err := os.ReadFile(path)
 	require.NoError(t, err, "go test -run TestPrompts_Interpretation -update writes it")
 	require.JSONEq(t, string(want), string(data))
-	require.Len(t, got, 45, "the 8 prompts seeded, the 36 of the strategies of the code and the default one")
+	require.Len(t, got, 45, "the 3 prompts seeded, the 41 of the strategies of the code and the default one")
 }

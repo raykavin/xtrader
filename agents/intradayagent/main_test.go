@@ -80,11 +80,18 @@ func requireTrailingATR(t *testing.T, a runner.Agent, takes []string, refused st
 
 // M12a: no strategy of the agent trails its stop loss (BracketConfig has no
 // trailing): -trailing-atr is refused with every one, rather than accepted and
-// ignored as before.
+// ignored as before. The ones of the rules of the prompts set their own stop
+// loss and take profit: -stop-atr is refused with them too.
 func TestAgent_TrailingATR(t *testing.T) {
 	a := testAgent()
 	requireTrailingATR(t, a, nil, "-trailing-atr is an input of no strategy of the agent")
 	for _, s := range a.Strategies {
+		if !slices.Contains(s.Inputs, "stop-atr") {
+			require.NoError(t, a.CheckInputs(s.Name, map[string]bool{"min-atr-pct": true, "lot": true}), s.Name)
+			require.ErrorContains(t, a.CheckInputs(s.Name, map[string]bool{"stop-atr": true}), "is an input of",
+				s.Name)
+			continue
+		}
 		require.NoError(t, a.CheckInputs(s.Name, map[string]bool{"stop-atr": true, "lot": true}), s.Name)
 	}
 	require.ErrorContains(t, a.CheckInputs("vwap", map[string]bool{"max-trades": true}),

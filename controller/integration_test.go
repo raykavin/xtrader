@@ -410,7 +410,7 @@ func TestSettingsAPI_TheAgents(t *testing.T) {
 		assert.NotContains(t, body, secret, "never a secret")
 	}
 
-	prompt, err := c.store.PromptByName(context.Background(), "scalp_1m")
+	prompt, err := c.store.PromptByName(context.Background(), "smc_ict")
 	require.NoError(t, err)
 	resp, body = call(http.MethodPatch, "/api/settings/agents/llm", ui.AgentSettingsRequest{Enabled: boolPtr(true),
 		TelegramControl: boolPtr(true), PromptID: &prompt.ID, LLMAPIKey: secret("sk-new"), CalendarToken: secret("")})
@@ -824,7 +824,7 @@ func TestSettingsAPI_ThePrompts(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var prompts ui.PromptsResponse
 	require.NoError(t, json.Unmarshal([]byte(body), &prompts))
-	assert.Len(t, prompts.Prompts, 9, "the ones only a language model trades and the one created in the dashboard")
+	assert.Len(t, prompts.Prompts, 4, "the ones only a language model trades and the one created in the dashboard")
 
 	resp, body = call(http.MethodPost, "/api/prompts", ui.PromptRequest{Name: "breakout_v2",
 		Description: secret("the breakouts"), Content: secret("# Indicators: atr\n\nSetup: v1")})

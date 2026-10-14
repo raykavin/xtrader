@@ -14,7 +14,7 @@ func TestPrompts_TheSeedsAndTheirUsers(t *testing.T) {
 	ctx := context.Background()
 	prompts, err := s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 9, "the ones only a language model trades and the one created in the dashboard")
+	require.Len(t, prompts, 4, "the ones only a language model trades and the one created in the dashboard")
 	require.Empty(t, prompts[0].Content, "the list leaves the content out")
 
 	trend, err := s.PromptByName(ctx, "trend_following")
@@ -83,7 +83,7 @@ func TestCreatePrompt_RefusesWhatTheAgentsCantRead(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	for _, tc := range []struct{ name, prompt, content, want string }{
-		{"taken", "default", "Setup: x", "already exists"},
+		{"taken", "trend_following", "Setup: x", "already exists"},
 		{"uppercase", "Breakout", "Setup: x", "prompt name"},
 		{"empty", "blank", " \n ", "empty"},
 		{"not utf-8", "binary", "Setup: \xff", "not UTF-8"},

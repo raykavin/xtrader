@@ -3,6 +3,7 @@ package strategies
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
@@ -225,7 +226,12 @@ func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model
 	if err != nil {
 		log.Error(err)
 	}
-	return b.follow(df, broker, entry, orders)
+	if !b.follow(df, broker, entry, orders) {
+		return false
+	}
+	trade := b.trades[df.Pair]
+	trade.entry, trade.risk = closePrice, math.Abs(closePrice-stop)
+	return true
 }
 
 // place places a limit order of entry at limit on the pair of df, with its
