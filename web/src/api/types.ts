@@ -845,12 +845,16 @@ export interface AgentSettingsRequest {
  * disabled), each position once by its ticket on its account, whatever the
  * agents sharing it. Totals sum them by the currency of their account, none
  * converted, in the order of the accounts: one for each account read, 0
- * without a position. Complete tells that every account was read: else Missing
- * tells the agents whose account wasn't, left out of Totals. At is when the
- * accounts were read, in Unix seconds.
+ * without a position. Balances sum the balances of the accounts read, each
+ * account once by its login, by their currency in the same order; Accounts
+ * counts them. Complete tells that every account was read: else Missing tells
+ * the agents whose account wasn't, left out of Totals and Balances. At is when
+ * the accounts were read, in Unix seconds.
  */
 export interface OpenPositionsResponse {
   totals: CurrencyAmount[];
+  balances: CurrencyAmount[];
+  accounts: number /* int */;
   complete: boolean;
   positions: OpenPosition[];
   missing?: OpenPositionsGap[];
@@ -883,6 +887,41 @@ export interface OpenPosition {
 export interface OpenPositionsGap {
   agents: string[];
   reason: string;
+}
+/**
+ * ClosedProfitResponse is the payload of GET /api/positions/closed: the
+ * closed profit of the agents from From until before To (Unix seconds), what
+ * their accounts booked for the positions they opened and closed then, read
+ * from the deals of their MT5 accounts: the profit, swap, commission and fee
+ * of each exit of a position, as the net profit of an agent counts it, the
+ * position of the agent of the magic number of its entry, closed by the bot or
+ * outside it (by hand, by a stop out); of every agent trading live, running or
+ * not, each deal once by its ticket on its account. Totals sum them by the
+ * currency of their account, none converted, as OpenPositionsResponse does,
+ * and Agents by agent, the ones that closed positions then. Complete and
+ * Missing as OpenPositionsResponse; At is when the deals were read.
+ */
+export interface ClosedProfitResponse {
+  from: number /* int64 */;
+  to: number /* int64 */;
+  totals: CurrencyAmount[];
+  agents: AgentClosedProfit[];
+  complete: boolean;
+  missing?: OpenPositionsGap[];
+  at: number /* int64 */;
+}
+/**
+ * AgentClosedProfit is the closed profit of an agent, see
+ * ClosedProfitResponse: Amount in Currency, the one of its account, of the
+ * Positions it closed (a part of). Running tells that the agent runs, else
+ * stopped or disabled.
+ */
+export interface AgentClosedProfit {
+  agent: string;
+  amount: number /* float64 */;
+  currency: string;
+  positions: number /* int */;
+  running: boolean;
 }
 /**
  * CurrencyAmount is an amount in Currency.
