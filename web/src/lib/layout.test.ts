@@ -98,6 +98,7 @@ describe("normalizeLayout", () => {
     expect(layout.rows).toEqual([
       [["chart"], ["quote"]],
       [["decision"]],
+      [["openpl"]],
       [["sentiment"]],
       [["results"]],
       [["ticket"]],
@@ -108,7 +109,7 @@ describe("normalizeLayout", () => {
   });
 
   it("reads a layout of the areas of before into rows", () => {
-    // the default one of version 1
+    // the default one of version 1, the open profit added since at the end
     expect(
       normalizeLayout({
         version: 1,
@@ -121,7 +122,15 @@ describe("normalizeLayout", () => {
         hidden: [],
         chartHeight: null,
       }),
-    ).toEqual(defaultLayout());
+    ).toEqual({
+      ...defaultLayout(),
+      rows: [
+        [["quote"], ["sentiment"], ["results"]],
+        [["chart", "decision"], ["ticket"]],
+        [["activity"]],
+        [["openpl"]],
+      ],
+    });
     // the ticket in the overview, the side column empty, the activity at the top
     const layout = normalizeLayout({
       version: 1,
@@ -140,11 +149,33 @@ describe("normalizeLayout", () => {
         [["activity"], ["ticket"]],
         [["chart"]],
         [["quote", "sentiment", "results", "decision"]],
+        [["openpl"]],
       ],
       hidden: ["sentiment"],
       chartHeight: 640,
       chartWidth: 900,
     });
+  });
+
+  it("adds the open profit, a card added since, in a row of its own at the end of a layout saved before it", () => {
+    const saved = {
+      version: 2,
+      rows: [
+        [["chart", "decision"], ["ticket"]],
+        [["results"], ["quote"], ["sentiment"]],
+        [["activity"]],
+      ],
+      hidden: ["sentiment"],
+      chartHeight: 520,
+      chartWidth: null,
+    };
+    const layout = normalizeLayout(saved);
+    expect(layout.rows).toEqual([...saved.rows, [["openpl"]]]);
+    expect(layout.hidden, "the cards hidden kept").toEqual(["sentiment"]);
+    expect(layout.chartHeight).toBe(520);
+    expect(isDefaultArrangement(layout)).toBe(false);
+    // the default one has it first, a row of its own across the page
+    expect(defaultLayout().rows[0]).toEqual([["openpl"]]);
   });
 
   it("keeps the size of the chart within its bounds", () => {
@@ -166,6 +197,7 @@ describe("moveCard", () => {
     expect(
       moveCard(defaultLayout(), "ticket", { kind: "beside", card: "quote", side: "before" }).rows,
     ).toEqual([
+      [["openpl"]],
       [["ticket"], ["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"]],
       [["activity"]],
@@ -175,6 +207,7 @@ describe("moveCard", () => {
       moveCard(defaultLayout(), "activity", { kind: "beside", card: "decision", side: "after" })
         .rows,
     ).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"], ["activity"], ["ticket"]],
     ]);
@@ -184,6 +217,7 @@ describe("moveCard", () => {
     expect(
       moveCard(defaultLayout(), "ticket", { kind: "stack", card: "chart", side: "before" }).rows,
     ).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["ticket", "chart", "decision"]],
       [["activity"]],
@@ -191,6 +225,7 @@ describe("moveCard", () => {
     expect(
       moveCard(defaultLayout(), "quote", { kind: "stack", card: "ticket", side: "after" }).rows,
     ).toEqual([
+      [["openpl"]],
       [["sentiment"], ["results"]],
       [
         ["chart", "decision"],
@@ -202,11 +237,13 @@ describe("moveCard", () => {
 
   it("swaps two cards, wherever they are", () => {
     expect(moveCard(defaultLayout(), "ticket", { kind: "swap", card: "results" }).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["ticket"]],
       [["chart", "decision"], ["results"]],
       [["activity"]],
     ]);
     expect(moveCard(defaultLayout(), "chart", { kind: "swap", card: "activity" }).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["activity", "decision"], ["ticket"]],
       [["chart"]],
@@ -216,27 +253,30 @@ describe("moveCard", () => {
   it("puts a card in a row of its own", () => {
     expect(moveCard(defaultLayout(), "chart", { kind: "row", index: 0 }).rows).toEqual([
       [["chart"]],
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["decision"], ["ticket"]],
       [["activity"]],
     ]);
-    expect(moveCard(defaultLayout(), "ticket", { kind: "row", index: 3 }).rows).toEqual([
+    expect(moveCard(defaultLayout(), "ticket", { kind: "row", index: 4 }).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"]],
       [["activity"]],
       [["ticket"]],
     ]);
     // the row it leaves gone, the rows after it one up
-    expect(moveCard(defaultLayout(), "activity", { kind: "row", index: 3 }).rows).toEqual(
+    expect(moveCard(defaultLayout(), "activity", { kind: "row", index: 4 }).rows).toEqual(
       defaultLayout().rows,
     );
-    const lone = moveCard(defaultLayout(), "activity", { kind: "row", index: 1 }).rows;
+    const lone = moveCard(defaultLayout(), "activity", { kind: "row", index: 2 }).rows;
     expect(lone).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["activity"]],
       [["chart", "decision"], ["ticket"]],
     ]);
-    expect(moveCard(withRows(lone), "activity", { kind: "row", index: 3 }).rows).toEqual(
+    expect(moveCard(withRows(lone), "activity", { kind: "row", index: 4 }).rows).toEqual(
       defaultLayout().rows,
     );
   });
@@ -248,6 +288,7 @@ describe("moveCard", () => {
       { kind: "beside", card: "results", side: "after" },
     );
     expect(layout.rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"], ["activity"]],
       [["chart", "decision", "ticket"]],
     ]);
@@ -274,11 +315,11 @@ describe("moveCard", () => {
 
 describe("stepCard", () => {
   it("moves a card up and down in its column", () => {
-    expect(stepCard(defaultLayout(), "decision", "up", all).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "decision", "up", all).rows[2]).toEqual([
       ["decision", "chart"],
       ["ticket"],
     ]);
-    expect(stepCard(defaultLayout(), "chart", "down", all).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "chart", "down", all).rows[2]).toEqual([
       ["decision", "chart"],
       ["ticket"],
     ]);
@@ -286,12 +327,14 @@ describe("stepCard", () => {
 
   it("takes a card at the edge of its column out into a row of its own", () => {
     expect(stepCard(defaultLayout(), "chart", "up", all).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["chart"]],
       [["decision"], ["ticket"]],
       [["activity"]],
     ]);
     expect(stepCard(defaultLayout(), "ticket", "down", all).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"]],
       [["ticket"]],
@@ -301,24 +344,26 @@ describe("stepCard", () => {
 
   it("swaps the row of a card alone in it with the row beside", () => {
     expect(stepCard(defaultLayout(), "activity", "up", all).rows).toEqual([
+      [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
       [["activity"]],
       [["chart", "decision"], ["ticket"]],
     ]);
-    const top = withRows([[["activity"]], ...defaultLayout().rows.slice(0, 2)]);
+    const top = withRows([[["activity"]], ...defaultLayout().rows.slice(0, 3)]);
     expect(stepCard(top, "activity", "down", all).rows).toEqual([
-      [["quote"], ["sentiment"], ["results"]],
+      [["openpl"]],
       [["activity"]],
+      [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"], ["ticket"]],
     ]);
   });
 
   it("swaps the column of a card alone in it with the column beside", () => {
-    expect(stepCard(defaultLayout(), "ticket", "left", all).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "ticket", "left", all).rows[2]).toEqual([
       ["ticket"],
       ["chart", "decision"],
     ]);
-    expect(stepCard(defaultLayout(), "quote", "right", all).rows[0]).toEqual([
+    expect(stepCard(defaultLayout(), "quote", "right", all).rows[1]).toEqual([
       ["sentiment"],
       ["quote"],
       ["results"],
@@ -326,12 +371,12 @@ describe("stepCard", () => {
   });
 
   it("takes a card out of a column of several into a column of its own", () => {
-    expect(stepCard(defaultLayout(), "decision", "right", all).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "decision", "right", all).rows[2]).toEqual([
       ["chart"],
       ["decision"],
       ["ticket"],
     ]);
-    expect(stepCard(defaultLayout(), "chart", "left", all).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "chart", "left", all).rows[2]).toEqual([
       ["chart"],
       ["decision"],
       ["ticket"],
@@ -341,18 +386,19 @@ describe("stepCard", () => {
   it("passes over the hidden cards, and stops at the edges of the page", () => {
     const shown = (card: CardId) => card !== "sentiment";
     // the results swap with the quote, the column shown at their left
-    expect(stepCard(defaultLayout(), "results", "left", shown).rows[0]).toEqual([
+    expect(stepCard(defaultLayout(), "results", "left", shown).rows[1]).toEqual([
       ["results"],
       ["sentiment"],
       ["quote"],
     ]);
     // the decision hidden, the chart alone in its column: its column swaps
     const noDecision = (card: CardId) => card !== "decision";
-    expect(stepCard(defaultLayout(), "chart", "right", noDecision).rows[1]).toEqual([
+    expect(stepCard(defaultLayout(), "chart", "right", noDecision).rows[2]).toEqual([
       ["ticket"],
       ["chart", "decision"],
     ]);
     expect(stepCard(defaultLayout(), "quote", "left", all)).toEqual(defaultLayout());
+    expect(stepCard(defaultLayout(), "openpl", "up", all)).toEqual(defaultLayout());
     expect(stepCard(defaultLayout(), "activity", "down", all)).toEqual(defaultLayout());
     expect(stepCard(withRows([[["quote"]], [["chart"]]]), "quote", "up", all).rows).toEqual([
       [["quote"]],
@@ -365,8 +411,9 @@ describe("shownRows", () => {
   it("leaves out the columns and the rows without a card shown, keeping their indexes", () => {
     const shown = (card: CardId) => !["ticket", "quote", "sentiment", "results"].includes(card);
     expect(shownRows(defaultLayout(), shown)).toEqual([
-      { index: 1, columns: [{ index: 0, cards: ["chart", "decision"] }] },
-      { index: 2, columns: [{ index: 0, cards: ["activity"] }] },
+      { index: 0, columns: [{ index: 0, cards: ["openpl"] }] },
+      { index: 2, columns: [{ index: 0, cards: ["chart", "decision"] }] },
+      { index: 3, columns: [{ index: 0, cards: ["activity"] }] },
     ]);
   });
 });
@@ -453,6 +500,7 @@ describe("the layout in storage", () => {
       [["quote"], ["sentiment"], ["results"]],
       [["chart", "decision"]],
       [["activity"]],
+      [["openpl"]],
       [["ticket"]],
     ]);
     expect(layout.hidden).toEqual(["ticket"]);

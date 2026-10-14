@@ -739,6 +739,57 @@ type AgentSettingsRequest struct {
 	CalendarToken   *string              `json:"calendar_token,omitempty"`
 }
 
+// OpenPositionsResponse is the payload of GET /api/positions/open: the open
+// profit of the agents, the profit and the swap of the positions they hold
+// open now on their MT5 accounts, as the terminals report them (the closed
+// trades and the pending orders left out), the accounts read from their
+// bridges: of every agent trading live, running or not (stopped, exited,
+// disabled), each position once by its ticket on its account, whatever the
+// agents sharing it. Totals sum them by the currency of their account, none
+// converted, in the order of the accounts: one for each account read, 0
+// without a position. Complete tells that every account was read: else Missing
+// tells the agents whose account wasn't, left out of Totals. At is when the
+// accounts were read, in Unix seconds.
+type OpenPositionsResponse struct {
+	Totals    []CurrencyAmount   `json:"totals"`
+	Complete  bool               `json:"complete"`
+	Positions []OpenPosition     `json:"positions"`
+	Missing   []OpenPositionsGap `json:"missing,omitempty"`
+	At        int64              `json:"at"`
+}
+
+// OpenPosition is a position open on an MT5 account, of the agent of its
+// magic number: its side (BUY or SELL), its volume in lots, its open and
+// current prices, and its profit with its swap in Currency, the one of the
+// account. Running tells that the agent runs, else stopped or disabled.
+type OpenPosition struct {
+	Agent    string  `json:"agent"`
+	Pair     string  `json:"pair"`
+	Side     string  `json:"side"`
+	Volume   float64 `json:"volume"`
+	Entry    float64 `json:"entry"`
+	Price    float64 `json:"price"`
+	Profit   float64 `json:"profit"`
+	Currency string  `json:"currency"`
+	Ticket   int64   `json:"ticket"`
+	Running  bool    `json:"running"`
+}
+
+// OpenPositionsGap is an account of the agents not read, see
+// OpenPositionsResponse: the agents on it, and why: unreachable (the bridge
+// didn't answer), refused (the bridge refused their tokens) or failed (the
+// bridge answered an error, eg: its terminal disconnected).
+type OpenPositionsGap struct {
+	Agents []string `json:"agents"`
+	Reason string   `json:"reason"`
+}
+
+// CurrencyAmount is an amount in Currency.
+type CurrencyAmount struct {
+	Currency string  `json:"currency"`
+	Amount   float64 `json:"amount"`
+}
+
 // AgentPeriod is an accounting period of an agent: the cards of the dashboard
 // (trades, win rate, net profit, profit factor) count the trades closed from
 // StartedAt, the close of their order, until EndedAt, the start of the next

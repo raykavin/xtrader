@@ -27,16 +27,18 @@ type BotState interface {
 // users: the agents, the prompts, Telegram and the users. Every change is
 // applied by the manager at once.
 type settings struct {
-	store   *store.Store
-	manager *Manager
-	bot     BotState
-	auth    func() *auth
+	store     *store.Store
+	manager   *Manager
+	bot       BotState
+	auth      func() *auth
+	positions *openPositions // of the agents on their accounts, see GET /api/positions/open
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
 // manager, the state of the Telegram bot told by bot, if any: before Handler.
 func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState) {
-	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth }}
+	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth },
+		positions: newOpenPositions(s, manager)}
 }
 
 func (s *settings) routes(r chi.Router) {
@@ -57,6 +59,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Patch("/settings/telegram", s.handleUpdateTelegram)
 	r.Post("/settings/telegram/users", s.handleAddTelegramUser)
 	r.Delete("/settings/telegram/users/{id}", s.handleDeleteTelegramUser)
+	r.Get("/positions/open", s.positions.handle)
 	r.Get("/users", s.handleUsers)
 	r.Post("/users", s.handleCreateUser)
 	r.Patch("/users/{id}", s.handleUpdateUser)

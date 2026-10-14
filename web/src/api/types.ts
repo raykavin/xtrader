@@ -837,6 +837,61 @@ export interface AgentSettingsRequest {
   calendar_token?: string;
 }
 /**
+ * OpenPositionsResponse is the payload of GET /api/positions/open: the open
+ * profit of the agents, the profit and the swap of the positions they hold
+ * open now on their MT5 accounts, as the terminals report them (the closed
+ * trades and the pending orders left out), the accounts read from their
+ * bridges: of every agent trading live, running or not (stopped, exited,
+ * disabled), each position once by its ticket on its account, whatever the
+ * agents sharing it. Totals sum them by the currency of their account, none
+ * converted, in the order of the accounts: one for each account read, 0
+ * without a position. Complete tells that every account was read: else Missing
+ * tells the agents whose account wasn't, left out of Totals. At is when the
+ * accounts were read, in Unix seconds.
+ */
+export interface OpenPositionsResponse {
+  totals: CurrencyAmount[];
+  complete: boolean;
+  positions: OpenPosition[];
+  missing?: OpenPositionsGap[];
+  at: number /* int64 */;
+}
+/**
+ * OpenPosition is a position open on an MT5 account, of the agent of its
+ * magic number: its side (BUY or SELL), its volume in lots, its open and
+ * current prices, and its profit with its swap in Currency, the one of the
+ * account. Running tells that the agent runs, else stopped or disabled.
+ */
+export interface OpenPosition {
+  agent: string;
+  pair: string;
+  side: string;
+  volume: number /* float64 */;
+  entry: number /* float64 */;
+  price: number /* float64 */;
+  profit: number /* float64 */;
+  currency: string;
+  ticket: number /* int64 */;
+  running: boolean;
+}
+/**
+ * OpenPositionsGap is an account of the agents not read, see
+ * OpenPositionsResponse: the agents on it, and why: unreachable (the bridge
+ * didn't answer), refused (the bridge refused their tokens) or failed (the
+ * bridge answered an error, eg: its terminal disconnected).
+ */
+export interface OpenPositionsGap {
+  agents: string[];
+  reason: string;
+}
+/**
+ * CurrencyAmount is an amount in Currency.
+ */
+export interface CurrencyAmount {
+  currency: string;
+  amount: number /* float64 */;
+}
+/**
  * AgentPeriod is an accounting period of an agent: the cards of the dashboard
  * (trades, win rate, net profit, profit factor) count the trades closed from
  * StartedAt, the close of their order, until EndedAt, the start of the next
