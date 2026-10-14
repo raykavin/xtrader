@@ -116,7 +116,10 @@ func orderJSON(order model.Order) ([]byte, error) {
 func (b *Bunt) Orders(filters ...OrderFilter) ([]*model.Order, error) {
 	orders := make([]*model.Order, 0)
 	err := b.db.View(func(tx *buntdb.Tx) error {
-		err := tx.Ascend("update_index", func(_, value string) bool {
+		err := tx.Ascend("update_index", func(key, value string) bool {
+			if _, err := strconv.ParseInt(key, 10, 64); err != nil {
+				return true // not an order, eg: a discard
+			}
 			var order model.Order
 			err := json.Unmarshal([]byte(value), &order)
 			if err != nil {
@@ -140,4 +143,43 @@ func (b *Bunt) Orders(filters ...OrderFilter) ([]*model.Order, error) {
 		return nil, err
 	}
 	return orders, nil
+}
+
+// discardPrefix is the prefix of the keys of the discards, see CreateDiscard.
+const discardPrefix = "discard:"
+
+var _ DiscardStorage = (*Bunt)(nil)
+
+// CreateDiscard keeps discard, once for its pair and its AfterID, under a key
+// of its own, apart from the orders (see Orders).
+func (b *Bunt) CreateDiscard(discard model.Discard) error {
+	content, err := json.Marshal(discard)
+	if err != nil {
+		return err
+	}
+	key := discardPrefix + discard.Key()
+	return b.db.Update(func(tx *buntdb.Tx) error {
+		if _, err := tx.Get(key); err == nil {
+			return nil
+		}
+		_, _, err := tx.Set(key, string(content), nil)
+		return err
+	})
+}
+
+// Discards returns the discards kept, see CreateDiscard.
+func (b *Bunt) Discards() ([]model.Discard, error) {
+	var discards []model.Discard
+	err := b.db.View(func(tx *buntdb.Tx) error {
+		return tx.AscendKeys(discardPrefix+"*", func(key, value string) bool {
+			var discard model.Discard
+			if err := json.Unmarshal([]byte(value), &discard); err != nil {
+				log.Printf("storage: the discard %s: %v", key, err)
+				return true
+			}
+			discards = append(discards, discard)
+			return true
+		})
+	})
+	return discards, err
 }

@@ -52,6 +52,7 @@ func (m *Manager) InternalHandler() http.Handler {
 		r.Get("/prompt", m.handlePrompt)
 		r.Post("/order-ids", m.handleOrderIDs)
 		r.Get("/orders", m.handleOrders)
+		r.Get("/discards", m.handleDiscards)
 		r.Get("/decisions", m.handleDecisions)
 		r.Get("/decisions/{id}", m.handleDecision)
 		r.Get("/decisions/{id}/attachments/{index}", m.handleAttachment)
@@ -214,6 +215,17 @@ func (m *Manager) handleOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, orders)
+}
+
+// handleDiscards answers the positions the order controller of the agent
+// discarded, by the fill after which each one was.
+func (m *Manager) handleDiscards(w http.ResponseWriter, r *http.Request) {
+	discards, err := m.store.Discards(r.Context(), agentOf(r))
+	if err != nil {
+		m.fail(w, err)
+		return
+	}
+	writeJSON(w, discards)
 }
 
 // handleDecisions answers the last decisions of the agent: of pair, limit at
@@ -399,6 +411,12 @@ func (m *Manager) write(ctx context.Context, id int64, record agentapi.Record) e
 		return m.store.AppendJournal(ctx, id, []store.JournalEntry{{ID: e.ID, At: e.At, Pair: e.Pair,
 			Trigger: e.Trigger, RequestedBy: e.RequestedBy, Model: e.Model, Prompt: e.Prompt, LatencyMS: e.LatencyMS,
 			Input: e.Input, Decision: e.Decision, Error: e.Error}})
+	case agentapi.KindDiscard:
+		var discard model.Discard
+		if err := json.Unmarshal(record.Payload, &discard); err != nil {
+			return fmt.Errorf("%w: discard %s", errRecord, record.Key)
+		}
+		return m.store.SaveDiscard(ctx, id, discard)
 	case agentapi.KindPromptStatus:
 		var s agentapi.PromptStatus
 		if err := json.Unmarshal(record.Payload, &s); err != nil {

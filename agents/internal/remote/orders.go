@@ -70,8 +70,9 @@ type Orders struct {
 
 	mu        sync.Mutex
 	orders    map[int64]model.Order
-	next      int64 // the ID of the next order
-	last      int64 // the last ID leased
+	discards  []model.Discard // the positions discarded, see CreateDiscard
+	next      int64           // the ID of the next order
+	last      int64           // the last ID leased
 	leasing   bool
 	warned    bool
 	notifier  Notifier
@@ -92,8 +93,9 @@ type Orders struct {
 var ordersNotifyEvery = time.Minute
 
 // NewOrders returns the orders of the agent: the ones of the controller, and
-// the ones of the outbox not sent yet, newer, with the IDs leased to it. The
-// next IDs are leased until ctx is done or Close, see lease.
+// the ones of the outbox not sent yet, newer, with the IDs leased to it; so
+// are the positions its order controller discarded. The next IDs are leased
+// until ctx is done or Close, see lease.
 func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (_ *Orders, err error) {
 	o := &Orders{outbox: outbox, ids: client, orders: make(map[int64]model.Order),
 		unwritten: make(map[int64]bool), closed: make(chan struct{})}
@@ -131,6 +133,10 @@ func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (_ *Orders, 
 		o.orders[order.ID] = order
 	}
 
+	if o.discards, err = discardsOf(ctx, client, outbox); err != nil {
+		return nil, err
+	}
+
 	ids, err := client.LeaseOrderIDs(ctx, leaseSize)
 	if err != nil {
 		return nil, fmt.Errorf("remote: the order IDs: %w", err)
@@ -141,11 +147,60 @@ func NewOrders(ctx context.Context, client *Client, outbox *Outbox) (_ *Orders, 
 		// out of reach, keeps its ID
 		o.next = max(o.next, id+1)
 	}
-	log.Infof("[SETUP] orders of the controller: %d, the next numbered from %d", len(o.orders), o.next)
+	log.Infof("[SETUP] orders of the controller: %d, the next numbered from %d; positions discarded: %d",
+		len(o.orders), o.next, len(o.discards))
 	return o, nil
 }
 
-var _ storage.Storage = (*Orders)(nil)
+// discardsOf returns the positions the order controller of the agent
+// discarded: the ones of the controller, and the ones of the outbox not sent
+// yet, each one once.
+func discardsOf(ctx context.Context, client *Client, outbox *Outbox) ([]model.Discard, error) {
+	discards, err := client.Discards(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("remote: the positions discarded: %w", err)
+	}
+	pending, err := outbox.Pending(agentapi.KindDiscard)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range pending {
+		var discard model.Discard
+		if err := json.Unmarshal(record.Payload, &discard); err != nil {
+			return nil, fmt.Errorf("remote: the discard %s of the outbox: %w", record.Key, err)
+		}
+		if !slices.ContainsFunc(discards, discard.Same) {
+			discards = append(discards, discard)
+		}
+	}
+	return discards, nil
+}
+
+var (
+	_ storage.Storage        = (*Orders)(nil)
+	_ storage.DiscardStorage = (*Orders)(nil)
+)
+
+// CreateDiscard keeps a position the order controller discarded, written
+// through the outbox, once: the controller keeps it once too. A failure of the
+// outbox is its error, the discard kept in memory for this run only.
+func (o *Orders) CreateDiscard(discard model.Discard) error {
+	o.mu.Lock()
+	if slices.ContainsFunc(o.discards, discard.Same) {
+		o.mu.Unlock()
+		return nil
+	}
+	o.discards = append(o.discards, discard)
+	o.mu.Unlock()
+	return o.outbox.Add(agentapi.KindDiscard, discard.Key(), discard)
+}
+
+// Discards returns the positions the order controller discarded.
+func (o *Orders) Discards() ([]model.Discard, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.discards), nil
+}
 
 // SetNotifier sets who is told of the orders the outbox fails to write.
 func (o *Orders) SetNotifier(notifier Notifier) {
