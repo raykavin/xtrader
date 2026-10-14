@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/internal/runner"
 	"github.com/raykavin/xtrader/agents/strategies"
+	"github.com/raykavin/xtrader/internal/seedtest"
 )
 
 // The default strategy of the agent names the comment of its orders on MT5,
@@ -88,4 +90,16 @@ func TestAgent_TrailingATR(t *testing.T) {
 	require.ErrorContains(t, a.CheckInputs("vwap", map[string]bool{"max-trades": true}),
 		"-max-trades is an input of -strategy asialondon and orb")
 	requireOwnFlags(t, a)
+}
+
+// The seeds of the database create an agent of each strategy of the agent, and
+// each agent of the kind intraday they create trades one of them.
+func TestAgent_TheStrategiesOfTheSeeds(t *testing.T) {
+	seeded, err := seedtest.Strategies(filepath.Join("..", ".."), "intraday")
+	require.NoError(t, err)
+	var known []string
+	for _, s := range testAgent().Strategies {
+		known = append(known, s.Name)
+	}
+	require.ElementsMatch(t, known, seeded)
 }

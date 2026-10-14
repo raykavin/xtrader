@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,10 +12,12 @@ import (
 	"github.com/raykavin/xtrader/internal/pgtest"
 )
 
-// The agents of a new database come from sql/seeds/0004_agents.sql, the
-// agents the database had, all of them off and without secrets, on XAUUSDm and
-// BTCUSDm with a lot of 0.01 on each: inserted once, never overwriting an edit
-// nor bringing back an agent deleted or renamed.
+// The agents of a new database come from sql/seeds/0004_agents.sql: the
+// agents the database had, an LLM agent of the prompt support_resistance, and
+// an agent without LLM of each strategy of the code, all of them off and
+// without secrets, on XAUUSDm and BTCUSDm with a lot of 0.01 on each: inserted
+// once, never overwriting an edit nor bringing back an agent deleted or
+// renamed.
 func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	dsn := testDatabase(t)
 	pgtest.MigrateSeeded(t, dsn, "..")
@@ -26,8 +29,8 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []string{"llm-trend", "matrend", "llm-smc-liquidity", "fibonacci", "fimathe"}, names(agents),
-		"in the order of the file")
+	require.Equal(t, append([]string{"llm-trend", "matrend", "llm-smc-liquidity", "fibonacci", "fimathe",
+		"llm-support-resistance"}, codeStrategies...), names(agents), "in the order of the file")
 	for i, agent := range agents {
 		require.False(t, agent.Enabled, "%s: off until its secrets are set", agent.Name)
 		require.Equal(t, "live", agent.Mode)
@@ -96,7 +99,42 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Equal(t, Params{"llm-setup": "free", "llm-candles": "2000", "llm-timeout": "3m",
 		"calendar-importance": "high", "llm-consult-interval": "30m", "llm-higher-timeframes": "1h"}, smc.LLM.Params)
 
+	sr := byName["llm-support-resistance"]
+	require.Equal(t, "llm", sr.Kind)
+	require.Equal(t, "localhost:5582", sr.APIAddress)
+	require.True(t, sr.ReanalysisAllowed())
+	require.Equal(t, Params{"pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.01", "timeframe": "15m",
+		"leverage": "400"}, sr.Params)
+	require.Equal(t, "nb:llm-support-resistance", *sr.Account.Comment, "apart from llm-trend")
+	require.Equal(t, "gpt-6-astra", sr.LLM.Model)
+	require.Equal(t, "high", *sr.LLM.ReasoningEffort)
+	require.Equal(t, "http://mt5:22347/mcp", *sr.LLM.CalendarURL)
+	levels, err := s.PromptByName(ctx, "support_resistance")
+	require.NoError(t, err)
+	require.Equal(t, levels.ID, *sr.LLM.PromptID)
+	require.Equal(t, Params{"llm-setup": "free", "llm-candles": "60", "llm-min-rr": "1.5",
+		"calendar-importance": "high", "llm-consult-interval": "15m"}, sr.LLM.Params)
+
 	// the agents of the strategies of the code, without LLM
+	for i, name := range codeStrategies {
+		agent := byName[name]
+		require.Equal(t, Params{"strategy": name, "pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.01",
+			"leverage": "2000"}, agent.Params, "%s: on the timeframe of its strategy", name)
+		require.Equal(t, fmt.Sprintf("localhost:%d", 5600+i), agent.APIAddress)
+		require.Nil(t, agent.LLM)
+		require.Nil(t, agent.Reanalysis)
+		require.Nil(t, agent.Account.Comment)
+		require.Equal(t, "nb:"+name, agent.MT5Book().Comment, "the default of its strategy")
+	}
+	for kind, count := range map[string]int{"trend": 13, "momentum": 7, "breakout": 10, "intraday": 5} {
+		n := 0
+		for _, name := range codeStrategies {
+			if byName[name].Kind == kind {
+				n++
+			}
+		}
+		require.Equal(t, count, n, kind)
+	}
 	matrend := byName["matrend"]
 	require.Equal(t, "trend", matrend.Kind)
 	require.Equal(t, "localhost:5570", matrend.APIAddress)
@@ -158,7 +196,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 5)
+	require.Len(t, agents, 41)
 	llm, err = s.AgentByName(ctx, "llm-trend")
 	require.NoError(t, err)
 	require.Equal(t, "XAUUSDm=0.02;BTCUSDm=0.02", llm.Params["lot"], "the edit kept")
@@ -177,12 +215,14 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "not seeded again")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []string{"llm-trend", renamed.Name, "fibonacci", "fimathe"}, names(agents))
+	require.Equal(t, append([]string{"llm-trend", renamed.Name, "fibonacci", "fimathe", "llm-support-resistance"},
+		codeStrategies...), names(agents))
 }
 
-// The prompts of a new database: the ones of the strategies of the code and
-// the ones created in the dashboard, each with its first version, the same
-// content, once however many times the seeds run.
+// The prompts of a new database: the ones of the strategies only a language
+// model trades and the ones created in the dashboard, each with its first
+// version, the same content, once however many times the seeds run; none of
+// the strategies of the code, traded by agents without LLM.
 func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 	dsn := testDatabase(t)
 	pgtest.MigrateSeeded(t, dsn, "..")
@@ -194,7 +234,14 @@ func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 
 	prompts, err := s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 45)
+	require.Len(t, prompts, 9)
+	for _, name := range []string{"breakout", "default", "mean_reversion", "scalp_1m", "scalp_1m_btc", "smc_ict",
+		"support_resistance", "trend_following", "trend_following_v0"} {
+		_, err := s.PromptByName(ctx, name)
+		require.NoError(t, err, name)
+	}
+	_, err = s.PromptByName(ctx, "emacross")
+	require.ErrorIs(t, err, ErrNotFound, "a strategy of the code")
 	copied, err := s.PromptByName(ctx, "trend_following_v0")
 	require.NoError(t, err)
 	original, err := s.PromptByName(ctx, "trend_following")
@@ -205,11 +252,24 @@ func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 	require.NoError(t, s.db.Table("prompt_versions").Count(&versions).Error)
 	require.NoError(t, s.db.Raw("SELECT count(*) FROM prompt_versions v JOIN prompts p ON p.id = v.prompt_id "+
 		"WHERE v.version <> p.version OR v.content <> p.content OR v.created_by <> 'seed'").Scan(&mismatched).Error)
-	require.EqualValues(t, 45, versions, "the first version of each")
+	require.EqualValues(t, 9, versions, "the first version of each")
 	require.Zero(t, mismatched)
 
 	pgtest.MigrateSeeded(t, dsn, "..")
 	prompts, err = s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 45, "once")
+	require.Len(t, prompts, 9, "once")
+}
+
+// codeStrategies are the strategies of the code the seeds create an agent of,
+// in the order of the file: the ones of agents/trendagent, momentumagent,
+// breakoutagent and intradayagent but matrend, fibonacci and fimathe, seeded
+// before them with settings of their own.
+var codeStrategies = []string{
+	"trendconfluence", "emapullback", "emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema",
+	"atrtrailing", "ichimoku", "ichimokuadx", "mtftrend", "mtfema",
+	"adxema", "macdtrend", "emamacd", "emarsiadx", "rsitrend", "stochpullback", "papullback",
+	"atrbreakout", "donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner", "volumebreakout",
+	"highlow", "momentumbreakout",
+	"orb", "asialondon", "vwap", "sweep", "zscore",
 }

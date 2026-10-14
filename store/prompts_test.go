@@ -14,7 +14,7 @@ func TestPrompts_TheSeedsAndTheirUsers(t *testing.T) {
 	ctx := context.Background()
 	prompts, err := s.Prompts(ctx)
 	require.NoError(t, err)
-	require.Len(t, prompts, 45, "the ones of the strategies and the one created in the dashboard")
+	require.Len(t, prompts, 9, "the ones only a language model trades and the one created in the dashboard")
 	require.Empty(t, prompts[0].Content, "the list leaves the content out")
 
 	trend, err := s.PromptByName(ctx, "trend_following")
