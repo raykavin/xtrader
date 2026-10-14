@@ -60,7 +60,7 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - posição aberta, com os candles fechados desde a entrada (`candles_held`), ou desde que o bot passou a acompanhá-la. A contagem é pelos horários dos candles, então inclui os fechamentos que o intervalo de consulta pula e não conta o tempo com o mercado fechado (fim de semana).
 - **Decisões possíveis:** entrar, sair, manter, mover stop loss e take profit, ou esperar. Cada entrada leva stop loss (e take profit, conforme o prompt) na própria ordem. Um prompt pode liberar também ordens pendentes e marcações no gráfico (veja [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)).
 - **Justificativa:** em duas ou três frases curtas, no idioma de `-llm-language`: o cenário lido e as evidências da decisão, a principal evidência contrária e, numa entrada, o que a invalida; numa espera, o que falta e o que mudaria a decisão.
-- **Sentimento do mercado:** toda resposta do modelo traz, além da decisão, a leitura dele do mercado do ativo (`sentiment`), de 0 (muito baixista) a 100 (muito altista), 50 neutro, qualquer que seja a ação. Ela só informa: não muda a ação, não passa pelas regras nem pela confiança mínima, e não envia ordens. Um valor fora de 0 a 100, ou ausente, fica de fora com uma anotação, e a decisão é mantida. Fica com a decisão (no banco desde a migração 19, na tabela `decision_sentiments`; no paper, na memória) e aparece no medidor do painel e no diálogo da decisão; as decisões anteriores a ela, as falhas e as análises não consultadas não têm leitura.
+- **Sentimento do mercado:** toda resposta do modelo traz, além da decisão, a leitura dele do mercado do ativo (`sentiment`), de 0 (muito baixista) a 100 (muito altista), 50 neutro, qualquer que seja a ação. Ela só informa: não muda a ação, não passa pelas regras nem pela confiança mínima, e não envia ordens. Um valor fora de 0 a 100, ou ausente, fica de fora com uma anotação, e a decisão é mantida. Fica com a decisão (no banco, na tabela `decision_sentiments`; no paper, na memória) e aparece no medidor do painel e no diálogo da decisão; as decisões anteriores a ela, as falhas e as análises não consultadas não têm leitura.
 - **Saída que falha** (mercado fechado, cotação recusada, bridge fora do ar, bot parado): a posição não fica sem stop loss e take profit.
   - No MT5, a ordem de fechamento sai com eles no lugar. Eles saem junto com a posição, e um fechamento recusado não mexe neles.
   - No paper, as pernas reservam a posição: são canceladas antes do fechamento e, se ele falhar, recolocadas nos mesmos níveis.
@@ -81,7 +81,7 @@ O agente `agents/llm/llmagent` pede uma decisão ao modelo e a aplica dentro de 
   - esses modelos pensam antes de responder, e o pensamento conta no limite de tokens: sem `llm-max-tokens`, o limite da resposta livre é 16000 (4096 na chamada forçada);
   - uma resposta cortada (limite de tokens, janela de contexto do modelo) ou pausada é uma falha da consulta, sem decisão, mesmo com a chamada da ferramenta completa.
 - **Falha momentânea do provedor:** uma resposta que a API não cobra, porque não rodou o pedido (`429`, exceto a cota esgotada `insufficient_quota`; `503`; `529`, a Anthropic sobrecarregada), é reenviada uma vez, depois do `Retry-After` dela ou de 1 s, só se a espera for de até 10 s e sobrarem 5 s do `llm-timeout` depois dela. Senão, ou se o reenvio falhar, a consulta falha como antes e o agente pausa as consultas pelo `Retry-After`. Os outros erros (`500`, `502`, `400` etc.) nunca são reenviados.
-- **Esforço de raciocínio** (`llm-reasoning`, só OpenAI): `none`, `minimal`, `low`, `medium`, `high` ou `xhigh`, conforme o modelo aceita (os mais novos aceitam `none` e `xhigh`, e alguns não aceitam `minimal`). Um valor que o modelo não aceita é recusado pela API (HTTP 400), e o erro diz o parâmetro (`the param reasoning_effort`) e a mensagem dela. O banco aceita esses seis desde a migração 17.
+- **Esforço de raciocínio** (`llm-reasoning`, só OpenAI): `none`, `minimal`, `low`, `medium`, `high` ou `xhigh`, conforme o modelo aceita (os mais novos aceitam `none` e `xhigh`, e alguns não aceitam `minimal`). Um valor que o modelo não aceita é recusado pela API (HTTP 400), e o erro diz o parâmetro (`the param reasoning_effort`) e a mensagem dela. O banco aceita esses seis.
 - **Uso de tokens:** cada resposta registra no log os tokens de entrada (com os lidos do cache), os gravados no cache (Anthropic, `cache_creation_input_tokens`, cobrados à parte e fora da entrada), os de saída e os de raciocínio (OpenAI), e a soma do dia (UTC, zerada a cada reinício). Uma resposta 2xx que não é JSON válido, ou de outro formato, ainda conta os tokens quando o objeto `usage` dela pode ser lido. O custo em dinheiro não é calculado: não há tabela de preços no código.
 - **Prompts:** editáveis e trocados com o agente rodando. A troca vale a partir da próxima análise, e cada decisão registra o prompt e a versão usados.
 - **Proteções:**
@@ -257,7 +257,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
 - **Bot:** iniciar e parar o bot de cada agente no estado do topo do painel, ao lado do agente e do par.
 - **Configurações, por seção (na navegação do topo):**
   - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, renomear, excluir, ligar e desligar, reiniciar e definir os segredos.
-  - **Renomear** (botão no card do agente): só com o agente desativado e parado. Muda apenas o nome: o agente mantém o ID, a conta (comentário e número mágico na corretora, então as posições continuam dele), o modelo, os segredos, as ordens, as decisões, os resultados e a fila de registros ainda não enviados (o arquivo `data/outbox/<nome>-<id>.db` é renomeado junto; se a troca falhar, nada muda). O nome antigo fica em `agent_former_names` (migração 20), para os seeds não recriarem o agente com ele, e fica livre para outro agente. No Telegram, o agente é selecionado de novo pelo nome novo (`/agent`).
+  - **Renomear** (botão no card do agente): só com o agente desativado e parado. Muda apenas o nome: o agente mantém o ID, a conta (comentário e número mágico na corretora, então as posições continuam dele), o modelo, os segredos, as ordens, as decisões, os resultados e a fila de registros ainda não enviados (o arquivo `data/outbox/<nome>-<id>.db` é renomeado junto; se a troca falhar, nada muda). O nome antigo fica em `agent_former_names`, para os seeds não recriarem o agente com ele, e fica livre para outro agente. No Telegram, o agente é selecionado de novo pelo nome novo (`/agent`).
   - **Resultados** (botão no card do agente): os resultados por período e a redefinição deles. Veja [Redefinir os resultados](#redefinir-os-resultados).
   - **Layout:** a disposição dos cards do painel neste navegador e o botão **Restaurar layout padrão**.
   - **Prompts:** editor com histórico de versões.
@@ -272,10 +272,10 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - prompts com versões;
   - agentes, contas MT5 e configuração dos modelos;
   - Telegram;
-  - ordens, decisões com anexos, marcações (`decision_drawings`, desde a migração 18), sentimento (`decision_sentiments`, desde a migração 19) e journal;
-  - nomes anteriores dos agentes renomeados (`agent_former_names`, desde a migração 20);
-  - a reanálise permitida de cada agente LLM (`agent_reanalysis`, desde a migração 21);
-  - as posições que o núcleo descartou por terem sido fechadas fora do bot (`position_discards`, desde a migração 22);
+  - ordens, decisões com anexos, marcações (`decision_drawings`), sentimento (`decision_sentiments`) e journal;
+  - nomes anteriores dos agentes renomeados (`agent_former_names`);
+  - a reanálise permitida de cada agente LLM (`agent_reanalysis`);
+  - as posições que o núcleo descartou por terem sido fechadas fora do bot (`position_discards`);
   - períodos de apuração dos resultados de cada agente.
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
@@ -391,7 +391,7 @@ export XTRADER_BOOTSTRAP_USERNAME=admin XTRADER_BOOTSTRAP_PASSWORD='...'
 
 cp configs/config.example.yml configs/config.yml
 (cd web && bun install --frozen-lockfile && bun run build)   # o painel em web/dist
-go run ./cmd/migrator -config configs/config.yml up          # schema e seeds (44 prompts)
+go run ./cmd/migrator -config configs/config.yml up          # schema e seeds (prompts e agentes)
 go run ./cmd/controller -config configs/config.yml           # ou: tools/automator.sh start configs/config.yml
 ```
 
@@ -470,7 +470,6 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
 - Só existe nos agentes LLM: o card e o formulário só mostram o switch neles, e o controller recusa ligá-lo em outro tipo (`400`). Num agente novo, vem desligado.
 - Vale na hora, com o agente rodando (paper ou live), sem reinício.
 - Fora do controller, o agente LLM só aceita reanálise com a flag `-reanalysis`.
-- Na migração 21, cada agente LLM que já existia ficou com a reanálise que tinha: ligada em paper, onde o painel de controle vale em todos os canais, e em live com o painel de trading ou o controle via Telegram ligado; desligada nos demais. Daí em diante, os switches são independentes.
 
 **Quando o agente sai sozinho:**
 
@@ -510,7 +509,7 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
 Em **Configurações → Agentes**, o botão **Resultados** do card do agente mostra os resultados por período e permite redefini-los.
 
 - **O que zera:** Operações, Taxa de acerto, Lucro líquido e Fator de lucro de todos os ativos do agente. Depois da redefinição, os cards do painel e o `/profit` do Telegram contam só as operações fechadas a partir dela, pela hora de fechamento: o `updated_at` da ordem de saída executada, que é a hora da execução informada pela corretora (no MT5, a do deal). Uma vez executada, essa hora não muda: o banco e o agente guardam a da primeira gravação da execução, mesmo que uma cópia posterior da mesma ordem chegue com outra hora, então uma operação nunca muda de período depois de fechada.
-- **Depósito:** é o saldo inicial do novo período, na moeda informada (a da conta, por exemplo BRL). É um saldo único do agente: os resultados de todos os ativos somam nele, sem divisão entre ativos. Ele é arredondado para o centavo como foi digitado (`2500.555` vira `2500.56`) e guardado em centavos exatos (`NUMERIC(16,2)`, desde a migração 16).
+- **Depósito:** é o saldo inicial do novo período, na moeda informada (a da conta, por exemplo BRL). É um saldo único do agente: os resultados de todos os ativos somam nele, sem divisão entre ativos. Ele é arredondado para o centavo como foi digitado (`2500.555` vira `2500.56`) e guardado em centavos exatos (`NUMERIC(16,2)`).
 - **O que não muda:**
   - as ordens continuam no histórico;
   - posições abertas e ordens pendentes seguem na corretora, e uma posição aberta na hora da redefinição conta no novo período quando fechar;
@@ -608,15 +607,42 @@ O agente LLM também roda backtests, mas cada candle vira uma requisição paga 
 
 ### Agentes iniciais
 
-Num banco novo, o `migrator up` cria os agentes do seed `sql/seeds/0003_agents.sql`, todos desligados e sem segredos:
+Num banco novo, o `migrator up` cria os agentes do seed `sql/seeds/0004_agents.sql`, a configuração que o banco tinha em 14/10/2026, todos **desligados e sem segredos**, em XAUUSDm e BTCUSDm com lote 0.01 em cada (`pair = XAUUSDm;BTCUSDm`, `lot = XAUUSDm=0.01;BTCUSDm=0.01`), todos em live, com o controle via Telegram e sem o painel de trading:
 
-- **`llm`:** a estratégia LLM (OpenAI `gpt-5`, raciocínio `low`, prompt `trend_following`) em BTCUSDm e XAUUSDm, 30m, com a tendência de 4h exigida, `lot = BTCUSDm=0.01;XAUUSDm=0.02`, `llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm`, o calendário de alta importância, o painel de trading, o controle via Telegram e a reanálise permitida;
-- **`matrend-btc`:** matrend em BTCUSDm 5m (`agents/trendagent`), com stop de 1 e take profit de 2 no preço e controle via Telegram;
-- **`llm-smc`:** a estratégia LLM com o prompt `smc_ict` (ordens pendentes limit, marcações no gráfico e contexto SMC), nos pares, lotes, timeframe (30m), timeframe maior (4h), mercados correlacionados e modelo do `llm`, com comentário próprio (`nb:llm-smc`), e por isso magic próprio, separado do `llm` na mesma conta, e, como ele, o painel de trading, o controle via Telegram e a reanálise permitida. Os parâmetros de risco medidos pelo prompt (`llm-min-rr`, `llm-min-stop-atr`, `llm-max-spread-atr`) e a validade das pendentes (`llm-pending-expiry`) ficam para o operador definir antes de ligar o agente;
-- **`fibonacci-btc`** e **`fibonacci-xau`:** a estratégia `fibonacci` (`agents/trendagent`, sem LLM), um agente para BTCUSDm e outro para XAUUSDm, em 15m, lote 0.01, com o setup clássico explícito nos parâmetros (impulso entre pivôs de 5 candles de no mínimo 3 ATR, entrada no fechamento que rejeita a zona de 50% a 61,8%, stop 0,25 ATR além de 78,6%, alvo no extremo do impulso) e controle via Telegram. Os comentários próprios (`nb:fibonacci-btc`, `nb:fibonacci-xau`) dão a cada um magic próprio na conta. Endereços da API: `localhost:5571` e `localhost:5572`;
-- **`fimathe`:** a estratégia `fimathe` (`agents/breakoutagent`, sem LLM) em XAUUSDm e BTCUSDm, análise em 1h e entradas em 15m, mapeamento semanal, lote 0.01, stop surfando o subciclo, no máximo 3% do saldo livre por operação, controle via Telegram, comentário próprio (`nb:fimathe`) e API em `localhost:5573`. Com o lote fixo, a regra dos 3% recusa (no log) uma entrada cujo stop passe desse risco, conforme a margem livre da conta.
+- **`llm-trend`:** a estratégia LLM com o prompt `trend_following` (OpenAI `gpt-6-astra`, raciocínio `high`) em 15m, consultada a cada 15 min, com as tendências de 1h e 4h como filtro (`llm-higher-trend-filter`), `llm-min-stop-atr = 1`, `llm-max-spread-atr = 0.2`, alavancagem 400, o calendário de alta importância e a reanálise permitida. Comentário padrão de agente LLM (`nb:llm`). API em `localhost:5580`;
+- **`matrend`:** matrend em 5m (`agents/trendagent`), stop de 1 e take profit de 2 no preço, `max-distance = 0.5`, alavancagem 400, comentário padrão da estratégia (`nb:matrend`). API em `localhost:5570`;
+- **`llm-smc-liquidity`:** a estratégia LLM com o prompt `smc_ict` (ordens pendentes limit, marcações no gráfico e contexto SMC; `gpt-6-astra`, raciocínio `high`) em 5m, consultada a cada 30 min, viés de 1h, 2000 candles de contexto, 3 min de prazo para o modelo, alavancagem 400 e a reanálise permitida. Comentário próprio (`nb:llm-smc`), e por isso magic próprio, separado do `llm-trend` na mesma conta. API em `localhost:5581`;
+- **`fibonacci`:** a estratégia `fibonacci` (`agents/trendagent`, sem LLM) em 15m, com o setup clássico explícito nos parâmetros (impulso entre pivôs de 5 candles de no mínimo 3 ATR, entrada no fechamento que rejeita a zona de 50% a 61,8%, stop 0,25 ATR além de 78,6%, alvo no extremo do impulso) e alavancagem 2000. Mantém o comentário `nb:fibonacci-xau` (o nome antigo), e com ele o magic das posições dele. API em `localhost:5572`;
+- **`fimathe`:** a estratégia `fimathe` (`agents/breakoutagent`, sem LLM), análise em 1h e entradas em 15m, mapeamento semanal, stop surfando o subciclo, no máximo 3% do saldo livre por operação, alavancagem 20, comentário próprio (`nb:fimathe`). API em `localhost:5573`. Com o lote fixo, a regra dos 3% recusa (no log) uma entrada cujo stop passe desse risco, conforme a margem livre da conta.
 
-Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, nem mesmo um apagado. Os seeds rodam a cada `migrator up`, mas nunca sobrescrevem uma edição do painel nem recriam um agente apagado. Os segredos (a chave do LLM e os tokens da bridge e do calendário) nunca vão para o seed: defina-os em **Configurações > Agentes** e só então ligue o agente. Para mudar a configuração inicial de um banco novo, edite o seed; num banco existente, use o painel.
+Os prompts vêm de `sql/seeds/0002_prompts.sql` (os 44 das estratégias do código, com o conteúdo atual) e de `sql/seeds/0003_prompts_dashboard.sql` (os criados no painel: `trend_following_v0`, uma cópia do `trend_following`), cada um na versão 1. Cada agente acha o prompt pelo nome, nunca por um ID.
+
+Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, nem mesmo um apagado ou renomeado. Os seeds rodam a cada `migrator up`, mas nunca sobrescrevem uma edição do painel nem recriam um agente apagado. Os segredos (a chave do LLM e os tokens da bridge e do calendário) nunca vão para o seed: defina-os em **Configurações > Agentes** e só então ligue o agente. Desligado, o controller nunca o inicia. Para mudar a configuração inicial de um banco novo, edite o seed; num banco existente, use o painel.
+
+### Recriar o banco do zero
+
+As migrações de `sql/migrations` criam o schema inteiro, uma tabela por arquivo, na ordem das dependências, sem `ALTER`. Os seeds de `sql/seeds` inserem as configurações: o Telegram desligado, os prompts e os agentes. Num banco vazio, o `migrator up` deixa tudo pronto, faltando só os dados sensíveis. As migrações não continuam as de antes de 14/10/2026: um banco antigo (versão 22) é recusado pelo `migrator up` e precisa ser recriado. As ordens, as decisões, o journal, os períodos de apuração e os descartes do banco antigo não são levados.
+
+Antes, feche as posições abertas pelos agentes. Sem as ordens no banco, uma posição de um agente que continue aberta na corretora fica como está, com erro no log, e o núcleo não a conta no lucro nem nos resultados quando ela fechar.
+
+A imagem com estas migrações só deve ser gerada na hora de recriar o banco: com ela, o `migrator` recusa o banco antigo, e o `controller`, que espera por ele, não sobe.
+
+```bash
+deploy/docker/build.sh controller                                                      # no repositório: a imagem com as migrações novas
+cd /var/containers/xtrader
+docker compose exec -T postgres pg_dump -U xtrader -Fc xtrader > xtrader-$(date +%F).dump  # backup do banco antigo
+docker compose stop controller                                                         # os agentes param
+docker compose exec postgres dropdb -U xtrader --force xtrader
+docker compose exec postgres createdb -U xtrader -O xtrader xtrader
+docker compose up -d                                                                   # o migrator cria o schema e os seeds
+docker compose logs migrator                                                           # "schema at version 19 at least"
+```
+
+Depois, no painel:
+
+1. **Usuário:** se o banco não tem usuário, o controller cria o primeiro com `XTRADER_BOOTSTRAP_USERNAME` e `XTRADER_BOOTSTRAP_PASSWORD` de `services/controller/.env` (8 caracteres ao menos). Recrie os demais em **Configurações > Usuários** e apague a senha do bootstrap do `.env`.
+2. **Agentes**, em **Configurações > Agentes**: o token da bridge (`MT5_BRIDGE_TOKEN` de `services/mt5/.env`) em todos; a chave da OpenAI e o token do MCP do calendário nos dois agentes LLM. Então ligue os agentes.
+3. **Telegram**, em **Configurações > Telegram**: o token do bot e os usuários autorizados (o banco antigo não tinha nenhum), e então ligue.
 
 ## Desenvolvimento
 

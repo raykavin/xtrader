@@ -3,6 +3,10 @@
 -- schema for all of them, each row of an agent scoped by its agent_id. Only the
 -- controller reads and writes it; the agents go through its internal API.
 --
+-- Each file creates one table whole, its columns, defaults, keys and checks in
+-- its CREATE TABLE, its indexes after it, in the order of their dependencies:
+-- the schema of a new database, its settings then inserted by sql/seeds.
+--
 -- The secrets (the API keys, the tokens) are kept encrypted, AES-256-GCM with
 -- the secrets_key of config.yml (gobox/secure): the BYTEA columns noted so.
 --

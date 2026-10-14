@@ -79,7 +79,7 @@ func TestDecisionSentiments_MigrationDownAndUp(t *testing.T) {
 	require.NoError(t, s.SaveDecision(ctx, agent.ID, d, nil, true))
 
 	run := func(name string) {
-		data, err := os.ReadFile(filepath.Join("..", "sql", "migrations", "000019_create_decision_sentiments."+name+".sql"))
+		data, err := os.ReadFile(filepath.Join("..", "sql", "migrations", "000018_create_decision_sentiments."+name+".sql"))
 		require.NoError(t, err)
 		require.NoError(t, s.db.Exec(string(data)).Error, name)
 	}

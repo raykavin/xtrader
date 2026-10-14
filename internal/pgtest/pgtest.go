@@ -68,7 +68,7 @@ func Migrated(t *testing.T, root string) string {
 }
 
 // Migrate applies the migrations and the seeds of the repository at root to
-// the database of dsn. The agents the seeds add (sql/seeds/0003_agents.sql)
+// the database of dsn. The agents the seeds add (sql/seeds/0004_agents.sql)
 // are taken out again, the tests starting without any: the ones there before
 // are kept. MigrateSeeded keeps them.
 func Migrate(t *testing.T, dsn, root string) {

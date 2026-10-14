@@ -1,7 +1,8 @@
 -- the agents the controller serves and launches: params holds the settings of
 -- their kind that no column holds, by the name of their flag, only the ones
--- set, eg: {"strategy": "matrend", "timeframe": "15m"}; order_id_next is the
--- first ID of the next range of order IDs leased to the agent
+-- set, eg: {"strategy": "matrend", "pair": "XAUUSDm;BTCUSDm", "timeframe": "15m"};
+-- position is their order on the dashboard; order_id_next is the first ID of
+-- the next range of order IDs leased to the agent
 CREATE TABLE IF NOT EXISTS agents (
     id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name             TEXT        NOT NULL CHECK (name ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
