@@ -2943,7 +2943,29 @@ func (m *MT5) CreateOrderMarket(side model.SideType, pair string, size float64) 
 	if err := m.settleLocked(m.ctx, pair); err != nil {
 		log.Warnf("[MT5] %v", err)
 	}
-	return m.marketNet(m.ctx, side, pair, lots)
+	return m.marketNet(m.ctx, side, pair, lots, false)
+}
+
+// CreateOrderMarketReduce closes up to size units of the bot's positions
+// against side on pair, first in, first out, by their tickets, and never opens
+// a position with the rest, see service.ReduceOnlyBroker: a position closed
+// meanwhile, eg: by its stop loss, is refused by the terminal rather than
+// opening the other side. Their stop loss and take profit go with them, as
+// with CreateOrderMarket. exchange.ErrNothingToReduce when the bot holds none.
+func (m *MT5) CreateOrderMarketReduce(side model.SideType, pair string, size float64) (model.Order, error) {
+	if m.dataOnly {
+		return model.Order{}, m.errDataOnly("CreateOrderMarketReduce")
+	}
+	lots, _, err := m.dealSize(pair, size)
+	if err != nil {
+		return model.Order{}, err
+	}
+	unlock := m.lockPair(pair)
+	defer unlock()
+	if err := m.settleLocked(m.ctx, pair); err != nil {
+		log.Warnf("[MT5] %v", err)
+	}
+	return m.marketNet(m.ctx, side, pair, lots, true)
 }
 
 // ClosesProtected reports that a market order closes a protected position with
@@ -2955,8 +2977,11 @@ func (m *MT5) ClosesProtected() bool {
 	return true
 }
 
-// marketNet is CreateOrderMarket of lots under the lock of the pair.
-func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, lots float64) (model.Order, error) {
+// marketNet is CreateOrderMarket of lots under the lock of the pair, or
+// CreateOrderMarketReduce when reduce: the rest of the lots, once the opposite
+// positions are closed, opens no position then.
+func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, lots float64,
+	reduce bool) (model.Order, error) {
 	symbol := m.instruments[pair]
 	requested := symbol.units(lots)
 	remaining := symbol.steps(lots)
@@ -3045,6 +3070,13 @@ func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, l
 			return finish(fmt.Errorf("mt5: the close of the position %d filled %v lots of %v", position.id(),
 				volume, symbol.lotsOf(steps)))
 		}
+	}
+
+	if reduce {
+		if done == 0 {
+			return model.Order{}, &OrderError{Err: ErrNothingToReduce, Pair: pair, Quantity: requested}
+		}
+		return finish(nil) // the rest, if any, was held no more
 	}
 
 	// the rest opens a position

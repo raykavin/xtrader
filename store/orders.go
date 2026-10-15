@@ -136,6 +136,20 @@ func (s *Store) keptStates(ctx context.Context, id int64, rows []orderRow, kept 
 	return strings.Join(states, "; ")
 }
 
+// RecentOrders returns the last limit orders of the agent of id, by ID.
+func (s *Store) RecentOrders(ctx context.Context, id int64, limit int) ([]model.Order, error) {
+	var rows []orderRow
+	err := s.conn(ctx).Where("agent_id = ?", id).Order("id DESC").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	orders := make([]model.Order, len(rows))
+	for i, row := range rows {
+		orders[len(rows)-1-i] = row.order()
+	}
+	return orders, nil
+}
+
 // Orders returns at most limit orders of the agent of id after the order of
 // ID after, by ID.
 func (s *Store) Orders(ctx context.Context, id, after int64, limit int) ([]model.Order, error) {

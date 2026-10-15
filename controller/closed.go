@@ -193,9 +193,49 @@ type dealsRead struct {
 // readAll reads the deals of the accounts of the agents trading live, at once,
 // from closedLookback before window.
 func (c *closedProfits) readAll(ctx context.Context, window closedRange) (ui.ClosedProfitResponse, error) {
-	agents, err := c.positions.store.Agents(ctx)
+	accounts, reads, err := c.readDeals(ctx, window)
 	if err != nil {
 		return ui.ClosedProfitResponse{}, err
+	}
+	return c.sum(window, accounts, reads), nil
+}
+
+// readWindows returns the closed profit of the agents in each of windows, of a
+// single read of the deals of their accounts, now, whatever the reads the
+// dashboards share (see read): the windows of the supervisor.
+func (c *closedProfits) readWindows(ctx context.Context, windows []closedRange) ([]ui.ClosedProfitResponse,
+	error) {
+	if len(windows) == 0 {
+		return nil, nil
+	}
+	span := windows[0]
+	for _, window := range windows[1:] {
+		if window.from.Before(span.from) {
+			span.from = window.from
+		}
+		if window.to.After(span.to) {
+			span.to = window.to
+		}
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 2*bridgeTimeout+time.Second)
+	defer cancel()
+	accounts, reads, err := c.readDeals(readCtx, span)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]ui.ClosedProfitResponse, 0, len(windows))
+	for _, window := range windows {
+		responses = append(responses, c.sum(window, accounts, reads))
+	}
+	return responses, nil
+}
+
+// readDeals reads the deals of the accounts of the agents trading live, at
+// once, from closedLookback before window.
+func (c *closedProfits) readDeals(ctx context.Context, window closedRange) ([]liveAccount, []dealsRead, error) {
+	agents, err := c.positions.store.Agents(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	accounts := liveAccounts(agents)
 	query := "?" + url.Values{
@@ -220,7 +260,7 @@ func (c *closedProfits) readAll(ctx context.Context, window closedRange) (ui.Clo
 		}()
 	}
 	wg.Wait()
-	return c.sum(window, accounts, reads), nil
+	return accounts, reads, nil
 }
 
 // sum sums the exits in window of the positions of the agents of the accounts
@@ -235,7 +275,8 @@ func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []
 		Agents: []ui.AgentClosedProfit{}, Complete: true, At: time.Now().Unix()}
 	order := make(map[string]int) // the place of the agents on the dashboard
 	seen := make(map[string]bool)
-	closed := make(map[string]map[string]bool) // the positions of each agent closed in window
+	closed := make(map[string]map[string]bool)  // the positions of each agent closed in window
+	results := make(map[int]map[string]float64) // the profit of each position closed, by agent of the response
 	for i, account := range accounts {
 		for _, a := range account.agents {
 			order[a.agent.Name] = a.agent.Position
@@ -292,6 +333,23 @@ func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []
 			if !closed[owner.Name][position] {
 				closed[owner.Name][position] = true
 				response.Agents[i].Positions++
+			}
+			if results[i] == nil {
+				results[i] = make(map[string]float64)
+			}
+			results[i][position] += profit
+		}
+	}
+	// the positions won and lost, each by the profit of all its exits
+	for i, positions := range results {
+		for _, profit := range positions {
+			switch {
+			case profit > 0:
+				response.Agents[i].Wins++
+				response.Agents[i].GrossProfit += profit
+			case profit < 0:
+				response.Agents[i].Losses++
+				response.Agents[i].GrossLoss -= profit
 			}
 		}
 	}

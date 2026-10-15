@@ -849,6 +849,45 @@ func (p *PaperWallet) CreateOrderMarket(side model.SideType, pair string, size f
 	return p.createOrderMarket(side, pair, size)
 }
 
+// CreateOrderMarketReduce closes up to size units of the position held against
+// side on pair at the market, never opening the other side, see
+// service.ReduceOnlyBroker: the legs protecting the position, which reserve
+// it, are canceled with it, as its stop loss and take profit go with a
+// position closed on MT5, and the size is cut to the position.
+// ErrNothingToReduce when none is held against side.
+func (p *PaperWallet) CreateOrderMarketReduce(side model.SideType, pair string, size float64) (model.Order, error) {
+	p.Lock()
+	defer p.Unlock()
+
+	if size <= 0 {
+		return model.Order{}, ErrInvalidQuantity
+	}
+	asset, _ := p.ensureAssets(pair)
+	// the legs on the side of the order protect the position: they go with it
+	for _, i := range p.pendingOrders[pair] {
+		leg := p.orders[i]
+		if leg.GroupID == nil || leg.Side != side || leg.Status != model.OrderStatusTypeNew {
+			continue
+		}
+		for j, o := range p.orders {
+			if o.GroupID != nil && *o.GroupID == *leg.GroupID && o.Status == model.OrderStatusTypeNew {
+				p.orders[j].Status = model.OrderStatusTypeCanceled
+				p.orders[j].UpdatedAt = p.lastCandle[pair].Time
+			}
+		}
+		p.release(lockKey(leg), pair)
+	}
+
+	held := p.assets[asset].Free // the position, its legs released
+	if side == model.SideTypeBuy {
+		held = -held // a buy reduces a short
+	}
+	if held <= 0 {
+		return model.Order{}, &OrderError{Err: ErrNothingToReduce, Pair: pair, Quantity: size}
+	}
+	return p.createOrderMarket(side, pair, math.Min(size, held))
+}
+
 func (p *PaperWallet) CreateOrderStop(pair string, size float64, limit float64) (model.Order, error) {
 	p.Lock()
 	defer p.Unlock()

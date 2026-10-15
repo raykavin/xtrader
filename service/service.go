@@ -107,6 +107,18 @@ type ProtectedCloser interface {
 	ClosesProtected() bool
 }
 
+// ReduceOnlyBroker is implemented by the brokers that close a position at the
+// market without ever opening the other side, eg: MT5 and the paper wallet:
+// CreateOrderMarketReduce closes up to size units of the positions held
+// against side on pair, the size cut to what they hold as the order executes,
+// a stop loss filled meanwhile included, and their stop loss and take profit
+// go with them. It fails with exchange.ErrNothingToReduce when nothing is held
+// against side. The order controller sends its market orders through it while
+// the entries of the bot are blocked, see order.Controller.BlockEntries.
+type ReduceOnlyBroker interface {
+	CreateOrderMarketReduce(side model.SideType, pair string, size float64) (model.Order, error)
+}
+
 // PositionProtector is implemented by the brokers that protect a position
 // already held, eg: placing again the legs canceled for a close that failed.
 // Protect places a stop loss at stop and a take profit at profit, 0 for none,

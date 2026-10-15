@@ -133,6 +133,15 @@ func userOf(ctx context.Context) string {
 	return name
 }
 
+// userIDKey is the key of the ID of the user of the request in its context.
+type userIDKey struct{}
+
+// userIDOf returns the ID of the user of the request, 0 without a session.
+func userIDOf(ctx context.Context) int64 {
+	id, _ := ctx.Value(userIDKey{}).(int64)
+	return id
+}
+
 // protect serves the login and, to the requests with a session, the routes of
 // next, their user in their context: without one, the pages lead to the login
 // and the API answers 401 (503 without users). A request changing something
@@ -157,7 +166,8 @@ func (a *auth) protect(next http.Handler) http.Handler {
 		case s != nil && !safeMethod(r.Method) && !validCSRF(r, s):
 			writeJSONError(w, http.StatusForbidden, "invalid or missing CSRF token: reload the page")
 		case s != nil:
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, s.username)))
+			ctx := context.WithValue(context.WithValue(r.Context(), userKey{}, s.username), userIDKey{}, s.userID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		case strings.HasPrefix(r.URL.Path, "/api/") && !a.configured(r.Context()):
 			writeJSONError(w, http.StatusServiceUnavailable, errNoUsers)
 		case strings.HasPrefix(r.URL.Path, "/api/") || !safeMethod(r.Method):

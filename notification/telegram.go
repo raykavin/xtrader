@@ -251,9 +251,17 @@ func (t telegram) ProfitHandle(m *tb.Message) {
 
 // notifyOrderError reports a failed manual order back to the user. The
 // controller notifies exchange/storage failures on its own, but orders
-// rejected because the bot is stopped never reach that path — without this
-// the command would silently do nothing.
+// rejected because the bot is stopped, or its entries blocked, never reach
+// that path — without this the command would silently do nothing.
 func (t telegram) notifyOrderError(m *tb.Message, err error) {
+	if errors.Is(err, order.ErrEntriesBlocked) {
+		_, sendErr := t.client.Send(m.Sender, "The entries of the bot are blocked, no position was opened: "+
+			err.Error(), t.defaultMenu)
+		if sendErr != nil {
+			log.Error(sendErr)
+		}
+		return
+	}
 	if !errors.Is(err, order.ErrBotStopped) {
 		log.Error(err)
 		return

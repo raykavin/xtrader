@@ -1460,6 +1460,11 @@ func (t *Trader) apply(df *model.Dataframe, broker service.Broker, st *promptSta
 	var orders []model.Order
 	switch d.Action {
 	case ActionEnterLong, ActionEnterShort, ActionBuyLimit, ActionSellLimit, ActionBuyStop, ActionSellStop:
+		// the entries of the agent blocked by the supervisor or the dashboard:
+		// the broker would refuse the order anyway
+		if why := entriesBlockedBy(broker); why != "" {
+			return refused(why)
+		}
 		// the daily limits again, whatever the decision: a close booked since
 		// the context was read
 		now := t.dayClock(df)
@@ -2522,4 +2527,27 @@ func oppositeSide(side model.SideType) model.SideType {
 		return model.SideTypeBuy
 	}
 	return model.SideTypeSell
+}
+
+// entriesBlocker is a broker whose entries may be blocked, eg: the order
+// controller, see order.Controller.BlockEntries.
+type entriesBlocker interface {
+	EntriesBlocked() (blocked bool, reason string, revision int64)
+}
+
+// entriesBlockedBy returns why the entries of broker are blocked, "" when they
+// aren't, or the broker doesn't tell.
+func entriesBlockedBy(broker service.Broker) string {
+	blocker, ok := broker.(entriesBlocker)
+	if !ok {
+		return ""
+	}
+	blocked, reason, _ := blocker.EntriesBlocked()
+	if !blocked {
+		return ""
+	}
+	if reason == "" {
+		return "the entries of the agent are blocked"
+	}
+	return "the entries of the agent are blocked: " + reason
 }

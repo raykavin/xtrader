@@ -1,5 +1,11 @@
 import { useId, useState } from "react";
-import { deleteAgent, renameAgent, restartAgent, updateAgentSettings } from "../api/client";
+import {
+  deleteAgent,
+  renameAgent,
+  restartAgent,
+  setAgentEntries,
+  updateAgentSettings,
+} from "../api/client";
 import type { AgentSettings, AgentSettingsRequest, PromptInfo } from "../api/types";
 import {
   type AgentGroup,
@@ -13,6 +19,7 @@ import {
   reanalysisHint,
   tradePanelHint,
 } from "../lib/settings";
+import { supervisionBadges } from "../lib/supervisor";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
@@ -24,6 +31,7 @@ import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
 import { EmptyState } from "./States";
 import { StatusIcon } from "./StatusIcon";
+import { toneClass } from "./SupervisorAction";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -208,6 +216,26 @@ function AgentCard({
       setBusy(false);
     }
   };
+  const entries = async (blocked: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await setAgentEntries(agent.name, { blocked });
+      if (result.action.status !== "succeeded") {
+        setError(
+          `${blocked ? "Bloqueio" : "Liberação"} gravado, sem confirmação do agente: ${
+            result.action.result?.items.map((item) => item.detail).join("; ") ??
+            result.action.status
+          }`,
+        );
+      }
+      onDeleted(); // listed again, with its supervision
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const remove = async () => {
     setBusy(true);
     setError(null);
@@ -239,6 +267,8 @@ function AgentCard({
       ? "O agente ainda está parando: aguarde para excluí-lo"
       : "Exclui o agente; as ordens e as decisões dele são mantidas";
   const notes = [agentNote(agent), outboxNote(agent)].filter(Boolean);
+  const badges = supervisionBadges(agent.supervision);
+  const blocked = Boolean(agent.supervision?.entries_blocked);
 
   return (
     <article className={`card agent-card ${state.tone}`} aria-label={`Agente ${agent.name}`}>
@@ -263,6 +293,12 @@ function AgentCard({
           {summary.map((part) => (
             <span key={part.label} className="tag tag-mono" title={part.label}>
               {part.value}
+            </span>
+          ))}
+          {badges.map((badge) => (
+            <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>
+              <Icon name={badge.tone === "error" ? "shield" : "lock"} size={12} />
+              {badge.text}
             </span>
           ))}
         </div>
@@ -367,6 +403,32 @@ function AgentCard({
         </div>
       </div>
 
+      {agent.supervision && (agent.supervision.stop_state !== "none" || blocked) && (
+        <div className="agent-block agent-supervision">
+          {agent.supervision.stop_state === "stopped" && (
+            <p className="msg msg-error">
+              Interrompido pelo supervisor:{" "}
+              {agent.supervision.stop_reason || "sem motivo registrado"}. Ative o agente para
+              retomá-lo.
+            </p>
+          )}
+          {agent.supervision.stop_state === "pending_flat" && (
+            <p className="msg msg-warn">
+              Parada pendente: o agente é desligado quando ficar sem posição e sem pendente (
+              {agent.supervision.stop_reason}).
+            </p>
+          )}
+          {blocked && (
+            <p className="msg msg-warn">
+              Entradas bloqueadas
+              {agent.supervision.entries_by ? ` por ${agent.supervision.entries_by}` : ""}:{" "}
+              {agent.supervision.entries_reason || "sem motivo registrado"}. O agente gerencia as
+              posições que tem.
+            </p>
+          )}
+        </div>
+      )}
+
       <footer className="agent-card-foot">
         {notes.map((note) => (
           <p key={note} className="agent-note">
@@ -409,6 +471,29 @@ function AgentCard({
             <Icon name="restart" size={14} />
             Reiniciar
           </button>
+          {blocked ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Liberar as entradas de ${agent.name}`}
+              title="O agente volta a abrir posições conforme a estratégia"
+              disabled={busy}
+              onClick={() => entries(false)}
+            >
+              <Icon name="lock" size={14} />
+              Liberar entradas
+            </button>
+          ) : (
+            <ConfirmButton
+              label="Bloquear entradas"
+              icon="lock"
+              ariaLabel={`Bloquear as entradas de ${agent.name}`}
+              question="Bloquear novas entradas?"
+              title="O agente não abre nem aumenta posições; continua gerenciando as que tem"
+              disabled={busy}
+              onConfirm={() => entries(true)}
+            />
+          )}
           <button
             type="button"
             className="btn btn-sm"

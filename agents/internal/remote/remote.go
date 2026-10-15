@@ -45,10 +45,11 @@ type Agent struct {
 	outbox  *Outbox
 	prompts *Prompts
 
-	mu     sync.Mutex
-	orders *Orders
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu      sync.Mutex
+	entries Entries // of the bot, see Supervise
+	orders  *Orders
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 // Connect returns the agent launched by the controller, its settings read from
@@ -274,14 +275,53 @@ func (a *Agent) Serve(ctx context.Context, apply func(agentapi.Runtime), run fun
 	return nil
 }
 
+// Entries is the order controller of a bot whose entries the controller
+// blocks and allows again, eg: *order.Controller, see Supervise.
+type Entries interface {
+	BlockEntries(revision int64, reason string) bool
+	AllowEntries(revision int64) bool
+}
+
+// Supervise has the entries of the bot of controller follow the ones the
+// controller tells (see agentapi.Entries): the ones of its settings at once,
+// before the bot trades, then the ones of its runtime as they change, before
+// its prompt, whose switch may fail: a block never waits for it. Before Run.
+func (a *Agent) Supervise(controller Entries) {
+	a.mu.Lock()
+	a.entries = controller
+	a.mu.Unlock()
+	applyEntries(a.Config.Name, controller, a.Config.Entries)
+}
+
+// applyEntries applies entries to controller, an older revision ignored.
+func applyEntries(name string, controller Entries, entries agentapi.Entries) {
+	if entries.EntriesBlocked {
+		if controller.BlockEntries(entries.EntriesRevision, entries.EntriesReason) {
+			log.Warnf("%s: the entries blocked (revision %d): %s", name, entries.EntriesRevision,
+				entries.EntriesReason)
+		}
+		return
+	}
+	controller.AllowEntries(entries.EntriesRevision)
+}
+
 // watch applies the runtime of the agent as it changes until ctx is done, see
-// Run: it returns ErrUnauthorized when the controller refuses the agent.
+// Run: it returns ErrUnauthorized when the controller refuses the agent. Its
+// entries apply first (see Supervise), whatever its prompt.
 func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 	var version int64
 	delay := retryDelay
 	var warned time.Time
 	for {
 		runtime, changed, err := a.client.Runtime(ctx, version, runtimeWait)
+		if err == nil && changed {
+			a.mu.Lock()
+			entries := a.entries
+			a.mu.Unlock()
+			if entries != nil {
+				applyEntries(a.Config.Name, entries, runtime.Entries)
+			}
+		}
 		if err == nil && changed && a.prompts != nil {
 			err = a.prompts.update(ctx, a.client, runtime.Prompt)
 		}

@@ -212,7 +212,14 @@ describe("agents", () => {
 
 describe("the tabs of the settings", () => {
   it("reads the tab of the hash of the URL, the agents by default", () => {
-    expect(settingsTabs).toEqual(["agentes", "prompts", "telegram", "usuarios", "layout"]);
+    expect(settingsTabs).toEqual([
+      "agentes",
+      "prompts",
+      "supervisor",
+      "telegram",
+      "usuarios",
+      "layout",
+    ]);
     for (const tab of settingsTabs) {
       expect(settingsTabFromHash(`#${tab}`)).toBe(tab);
     }

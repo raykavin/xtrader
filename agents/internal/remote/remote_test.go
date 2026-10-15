@@ -297,3 +297,90 @@ func TestAgent_Serve(t *testing.T) {
 	require.ErrorIs(t, c.Serve(context.Background(), nil, func(context.Context) error { return failed }), failed)
 	require.NoError(t, c.Close())
 }
+
+// fakeEntries is the order controller of a bot whose entries the controller
+// blocks, see Supervise.
+type fakeEntries struct {
+	mu       sync.Mutex
+	blocked  bool
+	reason   string
+	revision int64
+}
+
+func (f *fakeEntries) BlockEntries(revision int64, reason string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if revision < f.revision {
+		return false
+	}
+	f.blocked, f.reason, f.revision = true, reason, revision
+	return true
+}
+
+func (f *fakeEntries) AllowEntries(revision int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if revision < f.revision {
+		return false
+	}
+	f.blocked, f.reason, f.revision = false, "", revision
+	return true
+}
+
+func (f *fakeEntries) state() (bool, string, int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.blocked, f.reason, f.revision
+}
+
+// The entries of the bot follow the ones of the settings at once, then the
+// ones of the runtime, before its prompt: a prompt that can't be read delays
+// the rest of the runtime, never a block.
+func TestAgent_SuperviseEntries(t *testing.T) {
+	f := newFakeController(t)
+	f.set(func(f *fakeController) {
+		f.cfg = testConfig()
+		f.cfg.Entries = agentapi.Entries{EntriesBlocked: true, EntriesReason: "stopped by the supervisor",
+			EntriesRevision: 2}
+		f.runtime = agentapi.Runtime{Version: 1, Entries: f.cfg.Entries}
+	})
+	a, err := connect(context.Background(), f.client(), "llm")
+	require.NoError(t, err)
+	require.NoError(t, a.Open(t.TempDir()))
+
+	entries := &fakeEntries{}
+	a.Supervise(entries)
+	blocked, reason, revision := entries.state()
+	require.True(t, blocked, "before the bot trades")
+	require.Equal(t, "stopped by the supervisor", reason)
+	require.EqualValues(t, 2, revision)
+
+	var mu sync.Mutex
+	applied := 0
+	a.Run(context.Background(), func(agentapi.Runtime) {
+		mu.Lock()
+		defer mu.Unlock()
+		applied++
+	})
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return applied == 1
+	}, 5*time.Second, time.Millisecond)
+
+	// allowed again with a prompt the controller can't serve
+	f.setRuntime(agentapi.Runtime{Entries: agentapi.Entries{EntriesRevision: 3},
+		Prompt: &agentapi.PromptRef{ID: 9, Name: "missing", Version: 1}})
+	require.Eventually(t, func() bool {
+		blocked, _, revision := entries.state()
+		return !blocked && revision == 3
+	}, 5*time.Second, time.Millisecond)
+
+	// an older block, eg: read before, is ignored
+	f.setRuntime(agentapi.Runtime{Entries: agentapi.Entries{EntriesBlocked: true, EntriesRevision: 1}})
+	time.Sleep(50 * time.Millisecond)
+	blocked, _, revision = entries.state()
+	require.False(t, blocked)
+	require.EqualValues(t, 3, revision)
+	require.NoError(t, a.Close())
+}

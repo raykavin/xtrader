@@ -28,6 +28,10 @@ var (
 	// ErrInvalidProtection is returned for a stop loss or take profit on the
 	// wrong side of the position they protect.
 	ErrInvalidProtection = errors.New("invalid stop loss or take profit")
+	// ErrNothingToReduce is returned by a reduce-only order when nothing is
+	// held against its side, see service.ReduceOnlyBroker: flat, eg: closed by
+	// its stop loss meanwhile, or held on the side of the order.
+	ErrNothingToReduce = errors.New("no position to reduce")
 )
 
 // checkProtection validates the stop loss and the take profit of a position

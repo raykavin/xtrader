@@ -54,6 +54,13 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 // Telegram of the controller: its control panel must be enabled on it. An error
 // answered is an *apiError.
 func (d *Dashboard) call(ctx context.Context, a *agent, method, path string, body, out any) error {
+	return d.callWith(ctx, d.client, a, ui.ChannelTelegram, method, path, body, out)
+}
+
+// callWith is call with client, on behalf of channel, eg: the supervisor of
+// the agents, see ui.ChannelSupervisor.
+func (d *Dashboard) callWith(ctx context.Context, client *http.Client, a *agent, channel ui.Channel, method,
+	path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -70,10 +77,10 @@ func (d *Dashboard) call(ctx context.Context, a *agent, method, path string, bod
 	if body != nil || !safeMethod(method) {
 		request.Header.Set("Content-Type", "application/json") // a change is JSON, see ui.Chart
 	}
-	request.Header.Set(ui.ChannelHeader, string(ui.ChannelTelegram))
+	request.Header.Set(ui.ChannelHeader, string(channel))
 	d.keys.authorize(a.Name, request.Header)
 
-	response, err := d.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		log.Debugf("controller: agent %s: %v", a.Name, err)
 		return offline(a.Agent)

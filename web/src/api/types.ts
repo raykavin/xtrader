@@ -382,6 +382,7 @@ export interface AgentStatus {
   address: string;
   online: boolean;
   period?: AgentPeriod;
+  supervision?: AgentSupervisionInfo; // absent for an agent never supervised
 }
 /**
  * AgentsResponse lists the agents of the dashboard, in the order of its
@@ -726,6 +727,7 @@ export interface AgentSettings {
   prompt_id?: number /* int64 */;
   prompt_status?: AgentPromptStatus;
   secrets: AgentSecretsPresent;
+  supervision?: AgentSupervisionInfo; // absent for an agent never supervised
 }
 /**
  * AgentOutbox is what the outbox of an agent holds, as it told the
@@ -873,6 +875,8 @@ export interface OpenPosition {
   volume: number /* float64 */;
   entry: number /* float64 */;
   price: number /* float64 */;
+  stop_loss?: number /* float64 */; // at the broker, absent for none
+  take_profit?: number /* float64 */; // at the broker, absent for none
   profit: number /* float64 */;
   currency: string;
   ticket: number /* int64 */;
@@ -922,6 +926,14 @@ export interface AgentClosedProfit {
   currency: string;
   positions: number /* int */;
   running: boolean;
+  /**
+   * the positions won and lost, by the profit of all their exits, and the
+   * sum of the profits of the ones won and of the losses of the ones lost
+   */
+  wins?: number /* int */;
+  losses?: number /* int */;
+  gross_profit?: number /* float64 */;
+  gross_loss?: number /* float64 */;
 }
 /**
  * CurrencyAmount is an amount in Currency.
@@ -1119,4 +1131,551 @@ export interface UserRequest {
   username?: string;
   password?: string;
   enabled?: boolean;
+}
+/**
+ * SupervisionState is the answer of GET /api/supervision of an agent, to the
+ * supervisor of the controller only (the channel supervisor): whether its
+ * entries are refused, why, and the revision of their last block or
+ * allowance (see order.Controller.BlockEntries), the status of its order
+ * controller (running or stopped), its positions as its exchange holds them,
+ * and its pending orders, the entries apart from the legs of the positions.
+ */
+export interface SupervisionState {
+  entries_blocked: boolean;
+  entries_reason?: string;
+  entries_revision: number /* int64 */;
+  status: string;
+  positions: SupervisedPosition[];
+  pending: SupervisedOrder[];
+}
+/**
+ * SupervisedPosition is the position an agent holds on a pair, BUY or SELL,
+ * its size in units of the base asset.
+ */
+export interface SupervisedPosition {
+  pair: string;
+  side: string;
+  quantity: number /* float64 */;
+}
+/**
+ * SupervisedOrder is a pending order of an agent: an Entry, which would open a
+ * position, or a leg protecting one.
+ */
+export interface SupervisedOrder {
+  id: number /* int64 */;
+  pair: string;
+  side: string;
+  type: string;
+  price: number /* float64 */;
+  quantity: number /* float64 */;
+  entry: boolean;
+}
+/**
+ * SupervisionEntriesRequest is the payload of POST /api/supervision/entries:
+ * the entries of the agent blocked, for Reason, or allowed again, at
+ * Revision, ignored when older than the last change.
+ */
+export interface SupervisionEntriesRequest {
+  blocked: boolean;
+  revision: number /* int64 */;
+  reason?: string;
+}
+/**
+ * SupervisionCloseRequest is the payload of POST /api/supervision/close: the
+ * positions of Pairs closed, all of them without any, never opening the
+ * other side; Block blocks the entries first, at Revision, for Reason, and
+ * they are held anyway as the positions are closed, then HoldSeconds more.
+ */
+export interface SupervisionCloseRequest {
+  pairs?: string[];
+  block: boolean;
+  revision?: number /* int64 */;
+  reason?: string;
+  hold_seconds?: number /* int */;
+}
+/**
+ * SupervisionCloseResponse answers POST /api/supervision/close: a result by
+ * pair.
+ */
+export interface SupervisionCloseResponse {
+  results: SupervisionCloseResult[];
+}
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionClosed = "closed"; // the position closed
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionFlat = "flat"; // nothing held, nothing done
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionCanceled = "canceled"; // the order canceled
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionGone = "gone"; // the order ended before its cancel
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionFailed = "failed"; // refused, nothing done
+/**
+ * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+ */
+export const SupervisionUnknown = "unknown"; // maybe done: to check on the account, never to send again
+/**
+ * SupervisionCloseResult is how the close of the position of a pair went: the
+ * order closing it, its side and size, when closed, and the error else.
+ */
+export interface SupervisionCloseResult {
+  pair: string;
+  status: string;
+  side?: string;
+  quantity?: number /* float64 */;
+  error?: string;
+}
+/**
+ * SupervisionCancelRequest is the payload of POST /api/supervision/cancel: the
+ * pending entries of Pairs canceled, all of them without any; the legs of
+ * the positions stay.
+ */
+export interface SupervisionCancelRequest {
+  pairs?: string[];
+}
+/**
+ * SupervisionCancelResponse answers POST /api/supervision/cancel: a result by
+ * pending entry.
+ */
+export interface SupervisionCancelResponse {
+  results: SupervisionCancelResult[];
+}
+/**
+ * SupervisionCancelResult is how the cancel of a pending entry went.
+ */
+export interface SupervisionCancelResult {
+  id: number /* int64 */;
+  pair: string;
+  status: string;
+  error?: string;
+}
+/**
+ * AgentSupervisionInfo is the supervision of an agent on the dashboard: its
+ * entries blocked, why, by whom and when (Unix seconds), and its stop by the
+ * supervisor: pending_flat while it waits for the agent to hold nothing,
+ * stopped once disabled, until a user enables it again; none otherwise.
+ */
+export interface AgentSupervisionInfo {
+  entries_blocked: boolean;
+  entries_reason?: string;
+  entries_by?: string;
+  entries_at?: number /* int64 */;
+  stop_state: string;
+  stop_reason?: string;
+  stop_category?: string;
+  stop_by?: string;
+  stop_at?: number /* int64 */;
+}
+/**
+ * SupervisorAutonomy is what the supervisor does alone in its analyses, see
+ * store.Autonomy: closing positions is never one of them.
+ */
+export interface SupervisorAutonomy {
+  block_entries: boolean;
+  stop_when_flat: boolean;
+  cancel_pending: boolean;
+  max_actions_per_run: number /* int */;
+}
+/**
+ * SupervisorSettingsResponse is the payload of GET /api/settings/supervisor:
+ * its settings, whether its key is set, never its value, the bounds of the
+ * interval and of the timeout, in seconds, and its state: an analysis
+ * running, the next one (Unix seconds) and the failed ones in a row.
+ */
+export interface SupervisorSettingsResponse {
+  configured: boolean; // false before the seeds: run the migrator
+  enabled: boolean;
+  interval_seconds: number /* int */;
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  reasoning_effort?: string;
+  max_tokens?: number /* int */;
+  timeout_seconds: number /* int */;
+  instructions: string;
+  autonomy: SupervisorAutonomy;
+  api_key_set: boolean;
+  min_interval: number /* int */;
+  max_interval: number /* int */;
+  min_timeout: number /* int */;
+  max_timeout: number /* int */;
+  max_actions: number /* int */;
+  analyzing: boolean;
+  next_run_at?: number /* int64 */;
+  failures_in_row: number /* int */;
+  updated_at: number /* int64 */;
+}
+/**
+ * SupervisorSettingsRequest is the payload of PATCH /api/settings/supervisor,
+ * of the fields set: an empty BaseURL or ReasoningEffort and a MaxTokens of 0
+ * remove them; APIKey sets the key, "" removes it.
+ */
+export interface SupervisorSettingsRequest {
+  enabled?: boolean;
+  interval_seconds?: number /* int */;
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  reasoning_effort?: string;
+  max_tokens?: number /* int */;
+  timeout_seconds?: number /* int */;
+  instructions?: string;
+  autonomy?: SupervisorAutonomy;
+  api_key?: string;
+}
+/**
+ * SupervisorSnapshot is what the supervisor knows of the agents, sent to its
+ * model as is, never a secret: when it was made, in the zone of the
+ * controller, the windows of the realized results, the accounts by an alias
+ * with their currency, the exposure of the agents on each account and pair,
+ * the agents, and what couldn't be read. Money comes with its currency,
+ * never converted nor summed across currencies; the volumes in lots.
+ */
+export interface SupervisorSnapshot {
+  generated_at: string;
+  timezone: string;
+  windows: SupervisorWindow[];
+  accounts: SupervisorAccount[];
+  exposure: SupervisorExposure[];
+  agents: SupervisorAgent[];
+  gaps?: string[];
+}
+/**
+ * SupervisorWindow is a window of the realized results, its start and end.
+ */
+export interface SupervisorWindow {
+  name: string;
+  from: string;
+  to: string;
+}
+/**
+ * SupervisorAccount is an account of the agents trading live: its alias, its
+ * currency and balance, when it was read, why not (Gap), and its agents.
+ */
+export interface SupervisorAccount {
+  account: string;
+  currency?: string;
+  balance?: number /* float64 */;
+  read_at?: string;
+  gap?: string;
+  agents: string[];
+}
+/**
+ * SupervisorExposure is the exposure of the agents on a pair of an account:
+ * the lots and positions bought and sold, the agents on each side, and the
+ * open profit of them, in the currency of the account.
+ */
+export interface SupervisorExposure {
+  account: string;
+  currency: string;
+  pair: string;
+  buy_lots: number /* float64 */;
+  sell_lots: number /* float64 */;
+  buy_positions: number /* int */;
+  sell_positions: number /* int */;
+  buy_agents?: string[];
+  sell_agents?: string[];
+  open_profit: number /* float64 */;
+}
+/**
+ * SupervisorAgent is an agent as the supervisor knows it: its settings, the
+ * state of its process and of its outbox, its supervision, its limits of risk
+ * (the ones of its settings, by the name of their flag, and the daily ones of
+ * its prompt), its positions and pending orders, its results and its last
+ * decisions.
+ */
+export interface SupervisorAgent {
+  name: string;
+  kind: string;
+  strategy?: string;
+  mode: string;
+  enabled: boolean;
+  state: string;
+  reachable: boolean;
+  restarts?: number /* int */;
+  last_exit?: string;
+  launch_error?: string;
+  restart_pending?: boolean;
+  outbox?: AgentOutbox;
+  entries_blocked: boolean;
+  entries_reason?: string;
+  stop_state?: string;
+  stop_reason?: string;
+  account?: string;
+  pairs: string[];
+  timeframe?: string;
+  risk?: { [key: string]: string};
+  daily_limits?: SupervisorDailyLimits;
+  model?: string;
+  prompt?: string;
+  prompt_status?: string;
+  period_start?: string;
+  positions: SupervisorPosition[];
+  pending: SupervisorPending[];
+  open_profit: CurrencyAmount[];
+  realized: SupervisorRealized[];
+  decisions?: SupervisorDecision[];
+}
+/**
+ * SupervisorDailyLimits are the daily limits of the prompt of an LLM agent:
+ * the gain and the loss after which it takes no entry on a pair that day.
+ */
+export interface SupervisorDailyLimits {
+  gain?: number /* float64 */;
+  loss?: number /* float64 */;
+  currency: string;
+}
+/**
+ * SupervisorPosition is a position of an agent: on its account (its ticket,
+ * its levels at the broker, 0 for none, its profit in the currency of the
+ * account, when it opened), or simulated, in paper (Paper, its size in units
+ * of the base asset, without ticket nor levels).
+ */
+export interface SupervisorPosition {
+  ticket?: number /* int64 */;
+  pair: string;
+  side: string;
+  volume: number /* float64 */;
+  entry?: number /* float64 */;
+  price?: number /* float64 */;
+  stop_loss: number /* float64 */;
+  take_profit: number /* float64 */;
+  profit: number /* float64 */;
+  currency?: string;
+  opened_at?: string;
+  paper?: boolean;
+}
+/**
+ * SupervisorPending is a pending order of an agent: its ticket on the account,
+ * or its ID in paper, and whether it is an entry or a leg of a position.
+ */
+export interface SupervisorPending {
+  ticket: number /* int64 */;
+  pair: string;
+  side: string;
+  type: string;
+  price: number /* float64 */;
+  volume: number /* float64 */;
+  stop_loss?: number /* float64 */;
+  take_profit?: number /* float64 */;
+  entry: boolean;
+  paper?: boolean;
+}
+/**
+ * SupervisorRealized is the result an agent realized in a window, as its
+ * account booked it, in its currency: the positions closed, won and lost,
+ * the sum of the profits of the ones won and of the losses of the ones lost.
+ */
+export interface SupervisorRealized {
+  window: string;
+  amount: number /* float64 */;
+  currency: string;
+  positions: number /* int */;
+  wins: number /* int */;
+  losses: number /* int */;
+  gross_profit: number /* float64 */;
+  gross_loss: number /* float64 */;
+}
+/**
+ * SupervisorDecision is a recent decision of an LLM agent: when, on which
+ * pair, its action, confidence, outcome and the start of its reason.
+ */
+export interface SupervisorDecision {
+  at: string;
+  pair: string;
+  action: string;
+  confidence: number /* float64 */;
+  outcome: string;
+  reason?: string;
+}
+/**
+ * SupervisorFinding is a finding of an analysis of the supervisor about an
+ * agent, or the agents as a whole without one: its category (operational,
+ * risk or performance), severity (info, warning or critical), what it rests
+ * on, and what it recommends, eg: stop.
+ */
+export interface SupervisorFinding {
+  agent?: string;
+  category: string;
+  severity: string;
+  summary: string;
+  evidence?: string;
+  recommendation?: string;
+}
+/**
+ * SupervisorRunInfo is an analysis of the supervisor, its times in Unix
+ * seconds: schedule or manual, running, ok, failed or skipped.
+ */
+export interface SupervisorRunInfo {
+  id: number /* int64 */;
+  origin: string;
+  status: string;
+  requested_by?: string;
+  model?: string;
+  started_at: number /* int64 */;
+  finished_at?: number /* int64 */;
+  summary?: string;
+  findings: SupervisorFinding[];
+  error?: string;
+  action_ids?: number /* int64 */[];
+}
+/**
+ * SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the
+ * newest first.
+ */
+export interface SupervisorRunsResponse {
+  runs: SupervisorRunInfo[];
+}
+/**
+ * SupervisorRunResponse is the payload of GET /api/supervisor/runs/{id}: the
+ * analysis and the data sent to the model.
+ */
+export interface SupervisorRunResponse {
+  run: SupervisorRunInfo;
+  snapshot?: SupervisorSnapshot;
+}
+/**
+ * SupervisorScope is what an action of the supervision acts on: the agents,
+ * the pairs (all of them without any), and, confirmed, the positions and the
+ * pending orders it was proposed with, the ones of agents not running apart
+ * (closed on their bridge).
+ */
+export interface SupervisorScope {
+  agents: string[];
+  pairs?: string[];
+  positions?: SupervisorScopePosition[];
+  orders?: SupervisorScopeOrder[];
+}
+/**
+ * SupervisorScopePosition is a position an action closes: of an agent, on an
+ * account, as it was read when proposed.
+ */
+export interface SupervisorScopePosition extends SupervisorPosition {
+  agent: string;
+  account?: string;
+  running: boolean;
+}
+/**
+ * SupervisorScopeOrder is a pending entry an action cancels: of an agent.
+ */
+export interface SupervisorScopeOrder extends SupervisorPending {
+  agent: string;
+  running: boolean;
+}
+/**
+ * SupervisorOptions is what goes with an action: the pending entries of the
+ * agents canceled, their entries kept blocked once their positions closed.
+ */
+export interface SupervisorOptions {
+  cancel_pending: boolean;
+  keep_blocked: boolean;
+}
+/**
+ * SupervisorResultItem is how an action went on an agent, a position or an
+ * order, as checked: done, already (nothing to do), pending (applied once the
+ * agent runs, or once it is flat), failed (nothing done) or unknown (maybe
+ * done: to check on the account, never sent again).
+ */
+export interface SupervisorResultItem {
+  agent: string;
+  kind: string;
+  pair?: string;
+  ticket?: number /* int64 */;
+  status: string;
+  detail?: string;
+}
+/**
+ * SupervisorResult is the result of an action, checked at CheckedAt (Unix
+ * seconds).
+ */
+export interface SupervisorResult {
+  items: SupervisorResultItem[];
+  error?: string;
+  checked_at?: number /* int64 */;
+}
+/**
+ * SupervisorActionInfo is an action of the supervision on the agents, its
+ * times in Unix seconds: asked by the supervisor (alone, or proposed) or by a
+ * user; block_entries, allow_entries, stop_agent (when_flat or now),
+ * cancel_pending or close_positions; why, of which category (operational,
+ * risk or performance); proposed until confirmed, rejected or expired, then
+ * executing, succeeded, partial, failed or unknown.
+ */
+export interface SupervisorActionInfo {
+  id: number /* int64 */;
+  source: string;
+  run_id?: number /* int64 */;
+  action: string;
+  mode?: string;
+  scope: SupervisorScope;
+  options: SupervisorOptions;
+  reason: string;
+  category?: string;
+  evidence: string[];
+  status: string;
+  result?: SupervisorResult;
+  requested_by?: string;
+  confirmed_by?: string;
+  created_at: number /* int64 */;
+  expires_at?: number /* int64 */;
+  decided_at?: number /* int64 */;
+  finished_at?: number /* int64 */;
+}
+/**
+ * SupervisorActionsResponse is the payload of GET /api/supervisor/actions,
+ * the newest first.
+ */
+export interface SupervisorActionsResponse {
+  actions: SupervisorActionInfo[];
+}
+/**
+ * SupervisorMessageInfo is a message of the conversation of the user with the
+ * supervisor, its times in Unix seconds: a question of the user, an answer of
+ * the supervisor (analytical), a proposal of an action, its result once
+ * confirmed and checked, or an error, eg: the model unavailable; DataAt is
+ * when the data the answer rests on was read.
+ */
+export interface SupervisorMessageInfo {
+  id: number /* int64 */;
+  role: string;
+  kind: string;
+  content: string;
+  action?: SupervisorActionInfo;
+  data_at?: number /* int64 */;
+  created_at: number /* int64 */;
+}
+/**
+ * SupervisorMessagesResponse is the payload of GET /api/supervisor/messages,
+ * the oldest first, and of POST /api/supervisor/messages, the messages it
+ * added; More tells there are older ones.
+ */
+export interface SupervisorMessagesResponse {
+  messages: SupervisorMessageInfo[];
+  more?: boolean;
+}
+/**
+ * SupervisorMessageRequest is the payload of POST /api/supervisor/messages: a
+ * question or a request of the user to the supervisor.
+ */
+export interface SupervisorMessageRequest {
+  text: string;
+}
+/**
+ * SupervisorEntriesRequest is the payload of POST
+ * /api/supervisor/agents/{name}/entries: the entries of the agent blocked,
+ * for Reason, or allowed again, by the user.
+ */
+export interface SupervisorEntriesRequest {
+  blocked: boolean;
+  reason?: string;
 }

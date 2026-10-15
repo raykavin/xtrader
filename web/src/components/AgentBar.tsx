@@ -1,8 +1,10 @@
 import type { AgentStatus, ControlsResponse } from "../api/types";
 import { agentLabel } from "../lib/agents";
+import { supervisionBadges } from "../lib/supervisor";
 import { timeframeLabel } from "../lib/timeframes";
 import { BotControl } from "./BotControl";
 import { Select } from "./Select";
+import { toneClass } from "./SupervisorAction";
 
 interface Props {
   agents: AgentStatus[];
@@ -109,6 +111,18 @@ export function AgentBar({
                 <i aria-hidden="true" />
                 Offline
               </span>
+            </dd>
+          </div>
+        )}
+        {supervisionBadges(current?.supervision).length > 0 && (
+          <div className="status-item">
+            <dt className="status-label">Supervisor</dt>
+            <dd className="status-value">
+              {supervisionBadges(current?.supervision).map((badge) => (
+                <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>
+                  {badge.text}
+                </span>
+              ))}
             </dd>
           </div>
         )}

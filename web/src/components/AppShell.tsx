@@ -7,6 +7,7 @@ import { Footer } from "./Footer";
 import { Header } from "./Header";
 import { Icon, type IconName } from "./Icon";
 import { Logo } from "./Logo";
+import { SupervisorChat } from "./SupervisorChat";
 
 /** What a section of the settings shows in the navigation once known, eg: how many agents. */
 export interface NavHint {
@@ -35,6 +36,7 @@ interface Props {
 const sections: { tab: SettingsTab; label: string; icon: IconName }[] = [
   { tab: "agentes", label: "Agentes", icon: "bot" },
   { tab: "prompts", label: "Prompts", icon: "prompt" },
+  { tab: "supervisor", label: "Supervisor", icon: "shield" },
   { tab: "telegram", label: "Telegram", icon: "send" },
   { tab: "usuarios", label: "Usuários", icon: "users" },
   { tab: "layout", label: "Layout", icon: "layout" },
@@ -160,6 +162,7 @@ export function AppShell({
         {children}
       </main>
       <Footer />
+      <SupervisorChat />
     </div>
   );
 }

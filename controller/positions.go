@@ -139,7 +139,7 @@ func (p *openPositions) readAll(ctx context.Context) (ui.OpenPositionsResponse, 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reads[i] = p.readAccount(ctx, account)
+			reads[i] = p.readAccount(ctx, account, false)
 		}()
 	}
 	wg.Wait()
@@ -197,32 +197,89 @@ type bridgePosition struct {
 	Volume       float64 `json:"volume"`
 	PriceOpen    float64 `json:"price_open"`
 	PriceCurrent float64 `json:"price_current"`
+	SL           float64 `json:"sl"` // the stop loss at the broker, 0 for none
+	TP           float64 `json:"tp"` // the take profit at the broker, 0 for none
 	Swap         float64 `json:"swap"`
 	Profit       float64 `json:"profit"`
 	Symbol       string  `json:"symbol"`
+	TimeMsc      int64   `json:"time_msc"` // of its opening, by the clock of the server
 }
 
-// accountRead is what came of reading an account: its positions, or the
-// reason it couldn't be read.
+// bridgeOrder is a pending order of an account, of GET /orders: its type is
+// the one of MT5 (ORDER_TYPE_*), 2 a buy limit, 3 a sell limit, 4 a buy stop,
+// 5 a sell stop, 6 and 7 the stop limits.
+type bridgeOrder struct {
+	Ticket        int64   `json:"ticket"`
+	Type          int     `json:"type"`
+	Magic         int64   `json:"magic"`
+	Symbol        string  `json:"symbol"`
+	PriceOpen     float64 `json:"price_open"`
+	VolumeCurrent float64 `json:"volume_current"`
+	SL            float64 `json:"sl"`
+	TP            float64 `json:"tp"`
+	TimeSetupMsc  int64   `json:"time_setup_msc"`
+}
+
+// side returns the side of the pending order, BUY or SELL.
+func (o bridgeOrder) side() string {
+	if o.Type%2 == 1 {
+		return "SELL"
+	}
+	return "BUY"
+}
+
+// accountRead is what came of reading an account: its positions, its pending
+// orders when read, or the reason it couldn't be read.
 type accountRead struct {
 	account   bridgeAccount
 	positions []bridgePosition
-	gap       string // why the account isn't read, see the gap* reasons
+	orders    []bridgeOrder // read with the positions when asked, see readAccount
+	gap       string        // why the account isn't read, see the gap* reasons
 	err       error
 }
 
 // readAccount reads the account and the positions of the bridge of account,
-// see readBridge.
-func (p *openPositions) readAccount(ctx context.Context, account liveAccount) accountRead {
+// and its pending orders withOrders, see readBridge.
+func (p *openPositions) readAccount(ctx context.Context, account liveAccount, withOrders bool) accountRead {
 	var read accountRead
 	read.gap, read.err = p.readBridge(ctx, account, "the open positions", func(token string) error {
 		read = accountRead{}
 		if err := p.get(ctx, account.bridge, "/account", token, &read.account); err != nil {
 			return err
 		}
-		return p.get(ctx, account.bridge, "/positions", token, &read.positions)
+		if err := p.get(ctx, account.bridge, "/positions", token, &read.positions); err != nil {
+			return err
+		}
+		if !withOrders {
+			return nil
+		}
+		return p.get(ctx, account.bridge, "/orders", token, &read.orders)
 	})
 	return read
+}
+
+// readFresh reads the accounts of the agents trading live at once, now,
+// whatever the read the dashboards share (see read), with their pending
+// orders: what the supervisor checks the agents with.
+func (p *openPositions) readFresh(ctx context.Context) ([]liveAccount, []accountRead, error) {
+	agents, err := p.store.Agents(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	accounts := liveAccounts(agents)
+	reads := make([]accountRead, len(accounts))
+	readCtx, cancel := context.WithTimeout(ctx, 3*bridgeTimeout+time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reads[i] = p.readAccount(readCtx, account, true)
+		}()
+	}
+	wg.Wait()
+	return accounts, reads, nil
 }
 
 // readBridge reads the bridge of account with read, given the token of each
@@ -366,8 +423,8 @@ func (p *openPositions) sum(accounts []liveAccount, reads []accountRead) ui.Open
 			}
 			response.Positions = append(response.Positions, ui.OpenPosition{Agent: owner.Name, Pair: position.Symbol,
 				Side: side, Volume: position.Volume, Entry: position.PriceOpen, Price: position.PriceCurrent,
-				Profit: profit, Currency: currency, Ticket: position.Ticket,
-				Running: p.running(owner.Name)})
+				StopLoss: position.SL, TakeProfit: position.TP, Profit: profit, Currency: currency,
+				Ticket: position.Ticket, Running: p.running(owner.Name)})
 			total.Amount += profit
 		}
 	}

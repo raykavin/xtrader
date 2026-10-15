@@ -301,7 +301,8 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 func writeControlError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, order.ErrBotStopped), errors.Is(err, exchange.ErrOrderNotOpen):
+	case errors.Is(err, order.ErrBotStopped), errors.Is(err, order.ErrEntriesBlocked),
+		errors.Is(err, exchange.ErrOrderNotOpen):
 		status = http.StatusConflict
 	case errors.Is(err, exchange.ErrInvalidProtection), errors.Is(err, exchange.ErrInvalidQuantity):
 		status = http.StatusBadRequest

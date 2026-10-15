@@ -3,10 +3,17 @@ import {
   fetchAgentSettings,
   fetchPrompts,
   fetchSessionInfo,
+  fetchSupervisorSettings,
   fetchTelegramSettings,
   fetchUsers,
 } from "../api/client";
-import type { AgentSettings, PromptInfo, TelegramSettingsResponse, UserInfo } from "../api/types";
+import type {
+  AgentSettings,
+  PromptInfo,
+  SupervisorSettingsResponse,
+  TelegramSettingsResponse,
+  UserInfo,
+} from "../api/types";
 import { type SettingsTab, settingsTabFromHash } from "../lib/settings";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { AgentsSettings } from "./AgentsSettings";
@@ -15,6 +22,7 @@ import { LayoutSettings } from "./LayoutSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
 import { Alert, Loading, Skeleton } from "./States";
+import { SupervisorSettings } from "./SupervisorSettings";
 import { TelegramSettings } from "./TelegramSettings";
 import { UsersSettings } from "./UsersSettings";
 
@@ -42,6 +50,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
         próxima análise.
       </>
     ),
+  },
+  supervisor: {
+    title: "Supervisor",
+    description:
+      "Um modelo de linguagem que acompanha todos os agentes: analisa periodicamente, bloqueia entradas ou para um agente dentro da autonomia definida aqui, e propõe o resto para você confirmar na conversa.",
   },
   telegram: {
     title: "Telegram",
@@ -72,6 +85,7 @@ export function SettingsPage() {
   const [agents, setAgents] = useState<AgentSettings[] | null>(null);
   const [prompts, setPrompts] = useState<PromptInfo[] | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettingsResponse | null>(null);
+  const [supervisor, setSupervisor] = useState<SupervisorSettingsResponse | null>(null);
   const [users, setUsers] = useState<UserInfo[] | null>(null);
   const [current, setCurrent] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +126,11 @@ export function SettingsPage() {
         });
       fetchTelegramSettings(controller.signal)
         .then(setTelegram)
+        .catch((e) => {
+          if (!controller.signal.aborted) fail(e);
+        });
+      fetchSupervisorSettings(controller.signal)
+        .then(setSupervisor)
         .catch((e) => {
           if (!controller.signal.aborted) fail(e);
         });
@@ -163,6 +182,11 @@ export function SettingsPage() {
       agentes: { text: `${running}/${agents.length}`, tone: running > 0 ? "on" : undefined },
     }),
     ...(prompts && { prompts: { text: String(prompts.length) } }),
+    ...(supervisor && {
+      supervisor: supervisor.enabled
+        ? { text: "ativo", tone: "on" }
+        : { text: "desligado", tone: "off" },
+    }),
     ...(telegram && {
       telegram: telegram.running ? { text: "ativo", tone: "on" } : { text: "parado", tone: "off" },
     }),
@@ -203,6 +227,17 @@ export function SettingsPage() {
           <SectionLoading intro={intros.prompts} />
         ) : (
           <PromptsSettings intro={intros.prompts} prompts={prompts} onChange={loadPrompts} />
+        )}
+      </Panel>
+      <Panel tab="supervisor" shown={tab}>
+        {supervisor === null ? (
+          <SectionLoading intro={intros.supervisor} />
+        ) : (
+          <SupervisorSettings
+            intro={intros.supervisor}
+            settings={supervisor}
+            onChange={setSupervisor}
+          />
         )}
       </Panel>
       <Panel tab="telegram" shown={tab}>

@@ -50,21 +50,22 @@ type PromptVersion struct {
 // Params are its other settings by the name of their flag, only the ones set.
 type Agent struct {
 	Model
-	Name            string           `json:"name"`
-	Kind            string           `json:"kind"`
-	Enabled         bool             `json:"enabled"`
-	Mode            string           `json:"mode"`
-	APIAddress      string           `gorm:"column:api_address" json:"api_address"`
-	Launched        bool             `json:"launched"`
-	Restart         bool             `json:"restart"`
-	TradePanel      bool             `json:"trade_panel"`
-	TelegramControl bool             `json:"telegram_control"`
-	Reanalysis      *AgentReanalysis `gorm:"foreignKey:AgentID" json:"reanalysis,omitempty"`
-	Params          Params           `gorm:"type:jsonb" json:"params"`
-	Position        int              `json:"position"`
-	OrderIDNext     int64            `gorm:"column:order_id_next" json:"-"`
-	Account         *Account         `gorm:"foreignKey:AgentID" json:"account,omitempty"`
-	LLM             *LLMSettings     `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
+	Name            string            `json:"name"`
+	Kind            string            `json:"kind"`
+	Enabled         bool              `json:"enabled"`
+	Mode            string            `json:"mode"`
+	APIAddress      string            `gorm:"column:api_address" json:"api_address"`
+	Launched        bool              `json:"launched"`
+	Restart         bool              `json:"restart"`
+	TradePanel      bool              `json:"trade_panel"`
+	TelegramControl bool              `json:"telegram_control"`
+	Reanalysis      *AgentReanalysis  `gorm:"foreignKey:AgentID" json:"reanalysis,omitempty"`
+	Params          Params            `gorm:"type:jsonb" json:"params"`
+	Position        int               `json:"position"`
+	OrderIDNext     int64             `gorm:"column:order_id_next" json:"-"`
+	Account         *Account          `gorm:"foreignKey:AgentID" json:"account,omitempty"`
+	LLM             *LLMSettings      `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
+	Supervision     *AgentSupervision `gorm:"foreignKey:AgentID" json:"supervision,omitempty"` // see SupervisionOf
 }
 
 // AgentReanalysis is the switch of the reanalysis of an LLM agent, "Permitir
