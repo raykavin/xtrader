@@ -23,6 +23,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 
 - [Recursos](#recursos)
   - [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)
+  - [Supervisor com IA](#supervisor-com-ia)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Requisitos](#requisitos)
@@ -37,6 +38,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Prompts](#prompts)
   - [Limites diários](#limites-diários)
   - [Telegram](#telegram)
+  - [Supervisor](#supervisor)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Agentes iniciais](#agentes-iniciais)
 - [Desenvolvimento](#desenvolvimento)
@@ -227,6 +229,40 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - No próprio bot, as gravações de uma ordem não se cruzam. Uma movimentação (limite, stop loss, take profit) ou um cancelamento que a corretora responde depois da execução não regrava a ordem como aberta: ela fica como terminou, e a movimentação devolve a ordem nesse estado (o painel mostra a ordem executada). Um estado lido da corretora antes de uma movimentação é lido de novo no ciclo seguinte (1 s), em vez de desfazê-la. O cancelamento grava a ordem como o bot a acompanha (com o preço movido), não uma cópia antiga. O painel e o Telegram recebem os estados de cada ordem na ordem em que foram gravados, e um consumidor lento (o envio de uma notificação, por exemplo) não segura o bot. No paper e no backtest, o armazenamento local também nunca troca um estado final por um aberto.
 - **Interfaces:** serve o painel web (login com sessão e CSRF) e o bot do Telegram.
 
+### Supervisor com IA
+
+Um modelo de linguagem (OpenAI ou Anthropic) acompanha todos os agentes: analisa o conjunto periodicamente, pode interromper um agente com justificativa e conversa pela interface. Ele só age por ferramentas estruturadas, que o controller valida e executa com as mesmas proteções das outras ordens. O modelo nunca envia uma ordem, nunca abre posição nem afrouxa um stop e nunca vê segredos.
+
+- **Análise periódica:** desligada por padrão. Ligada (exige provedor, modelo e chave), roda a cada intervalo configurado (de 5 min a 24 h; 15 min no seed), uma por vez: a que coincide com outra em andamento fica registrada como ignorada. Um modelo fora do ar, que recusa a chave ou não responde no prazo (`timeout_seconds`, 2 min no seed) deixa a análise como falha, sem tocar em nenhum agente, e o próximo intervalo tenta de novo. Ao iniciar, o controller marca como falha a análise que ficou em andamento.
+- **O que o modelo recebe:** um retrato consolidado, o mesmo de `GET /api/supervisor/overview`, gravado em cada análise:
+  - quando foi gerado, com o fuso, e as janelas dos resultados (hoje, últimas 24 h e o período de apuração de cada agente), com início e fim;
+  - as contas MT5 por apelido ("conta 1"), com a moeda, o saldo, a hora da leitura e o motivo quando não puderam ser lidas;
+  - a exposição calculada em código, por conta, moeda e par: compras, vendas e quantos agentes em cada lado;
+  - por agente: nome, tipo, estratégia, modo, se está ligado e rodando, reinícios, última saída, erro de lançamento, outbox, bloqueio e parada pelo supervisor, pares, timeframe, os parâmetros que limitam o risco (lote, alavancagem, `max-risk-pct`, stops etc.), os limites diários do prompt, modelo e prompt dos agentes LLM, posições (ticket, lado, volume, preços, SL/TP, P/L), pendentes, aberto e realizado por moeda e as 5 últimas decisões, com o motivo resumido;
+  - as lacunas: conta não lida, agente fora do ar.
+
+  Valores em dinheiro vêm sempre com a moeda da conta, nunca somados entre moedas nem convertidos. Nunca entram no retrato: chaves, tokens, a URL da bridge, o login da conta nem o número mágico.
+- **Critérios:** as instruções do supervisor, editáveis, com o padrão do seed em três grupos: operacional (agente fora do ar, em loop de reinício, outbox falhando, posição sem stop loss), risco (exposição somada na mesma direção, posição além dos limites do próprio agente) e desempenho (só com amostra suficiente, comparando o agente com ele mesmo). Nenhum limite financeiro fixo: o supervisor compara com os limites configurados em cada agente.
+- **Ações, sempre separadas:**
+  - **Bloquear novas entradas:** o agente não abre nem aumenta posições, e continua gerenciando as que tem (stop, trailing, saídas da estratégia). Nada é fechado nem cancelado. Vale ao vivo, sem reiniciar o agente, e também na próxima partida de um agente parado;
+  - **Parar o agente quando zerado:** bloqueia as entradas e cancela as pendentes de entrada; o agente continua gerenciando as posições e só é desligado quando fica sem posição e sem pendente. Nenhuma posição é liquidada nem abandonada;
+  - **Parar o agente agora:** só com confirmação, e recusada se alguma posição estiver sem stop loss na corretora. As posições ficam com o stop loss e o take profit na corretora;
+  - **Cancelar pendentes de entrada:** nunca as proteções (stop loss e take profit) de uma posição;
+  - **Encerrar posições:** sempre uma proposta para o usuário confirmar, só das posições dos agentes da aplicação (pelo número mágico), nunca operações manuais;
+  - **Liberar as entradas:** só o usuário.
+- **Autonomia** (configurável): sozinho, o supervisor pode bloquear entradas e parar quando zerado (padrão do seed) e, se ligado, cancelar pendentes de entrada, no máximo 3 ações por análise (configurável, até 10). O resto, e o que passa do teto, vira uma proposta para o usuário, que expira no intervalo seguinte. Uma ação autônoma é recusada quando o retrato tem lacuna no agente ou na conta dele, e a parada só acontece quando duas análises seguidas a pedem para o mesmo agente (o bloqueio vale já na primeira).
+- **Nunca reativa:** o supervisor não tem como ligar um agente nem liberar entradas. Reativar o agente nas configurações limpa, junto, a marca da parada e o bloqueio que ela criou; um bloqueio criado à parte só sai com **Liberar**.
+- **Conversa:** um botão flutuante, em todas as páginas, abre o painel do supervisor. Ele responde com o retrato (renovado a cada 30 s, no máximo) e as últimas 20 mensagens do usuário; a resposta mostra a hora dos dados. Um pedido de ação vira uma proposta, que o backend monta com a lista real de agentes, posições (tickets) e pendentes afetados, e que só é executada com **Confirmar**, em até 10 min. Pedido ambíguo (agente inexistente, mais de um agente casando, escopo vazio) volta como pergunta. O histórico é por usuário; o registro das ações é um só, visível para todos.
+- **Execução confiável:**
+  - uma proposta confirmada executa uma vez, mesmo com dois cliques ou duas abas (a passagem de "proposta" para "executando" é condicional no banco);
+  - as ações sobre o mesmo agente não se cruzam, e o fechamento de várias posições é uma ação por vez;
+  - o fechamento de um agente rodando é feito pelo próprio agente, com ordens "só reduzir": se o stop for atingido no meio, a ordem não abre uma posição nova. Um agente que não está rodando é impedido de subir e a posição é fechada direto na bridge, conferindo antes e depois que o terminal está na conta certa;
+  - o resultado de cada item vem de uma leitura nova da conta, repetida por até 15 s: fechado, já fechado, ainda aberto ou desconhecido. Um resultado desconhecido (sem resposta da corretora) nunca é reenviado;
+  - uma posição aberta depois da proposta não é tocada; cada ticket conta uma vez por conta, mesmo com agentes na mesma conta;
+  - falhas parciais ficam como **Parcial**, com o resultado de cada item;
+  - a parada quando zerado é conferida a cada 15 s: só desliga com o bloqueio confirmado no agente, sem posição nem pendente no agente e na conta (lida inteira), visto assim em leituras com pelo menos 10 s entre a primeira e a última, e com o outbox sem pendência.
+- **Registro:** cada análise (o retrato enviado, o resumo, os achados por agente, categoria e gravidade, o uso de tokens) e cada ação (quem pediu e confirmou, motivo, categoria, evidências, escopo e resultado) ficam no banco. O card do agente e a barra do painel mostram **Entradas bloqueadas** e **Interrompido pelo supervisor**, com o motivo.
+
 ### Painel web
 
 - **Painel:**
@@ -270,6 +306,7 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - **Layout:** a disposição dos cards do painel neste navegador e o botão **Restaurar layout padrão**.
   - **Prompts:** editor com histórico de versões.
   - **Telegram:** liga e desliga o bot, token e IDs autorizados.
+  - **Supervisor:** veja [Supervisor](#supervisor).
   - **Usuários.**
 - **Navegação e layout:** a barra do topo leva ao Painel e às seções das Configurações num controle segmentado (ao lado da marca no desktop, numa segunda linha abaixo de 1200 px, gaveta pelo botão ☰ no celular), com a contagem de cada seção; o link do Painel volta ao agente, ao par e ao timeframe deixados. Os cards seguem um mesmo padrão (rótulo curto em destaque sobre o título, valores em fonte monoespaçada) e o laranja marca o que está escolhido e a ação principal. Tema escuro e claro. No celular, as tabelas viram cartões e os diálogos abrem como painéis vindos de baixo; numa tabela larga demais para a tela, a coluna de ações fica fixa à direita.
 
@@ -284,7 +321,8 @@ Cada agente roda em modo `live` (lançado pelo controller) ou `paper`. Pela linh
   - nomes anteriores dos agentes renomeados (`agent_former_names`);
   - a reanálise permitida de cada agente LLM (`agent_reanalysis`);
   - as posições que o núcleo descartou por terem sido fechadas fora do bot (`position_discards`);
-  - períodos de apuração dos resultados de cada agente.
+  - períodos de apuração dos resultados de cada agente;
+  - o supervisor: as configurações (`supervisor_settings`), as análises com o retrato enviado (`supervisor_runs`), as ações (`supervisor_actions`), as conversas por usuário (`supervisor_messages`) e o bloqueio e a parada de cada agente (`agent_supervision`).
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
 - **Leituras ao iniciar um agente LLM:** as últimas decisões de cada ativo e a memória do prompt (as últimas decisões do journal de cada ativo) são lidas pelos índices do agente e do ativo, um ativo por vez, só as linhas pedidas: o tempo de leitura não cresce com meses de decisões guardadas. Os vínculos entre decisões e ordens são lidos todos, porque o painel mostra a decisão de cada ordem do agente, e há um por ordem.
@@ -319,7 +357,9 @@ navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegra
 
 - **`cmd/controller`:** o único processo que acessa o banco.
 - **`cmd/migrator`:** aplica as migrações e os seeds (`gobox/database/migrate`): num banco novo, o Telegram desligado, os prompts e os agentes iniciais (veja [Agentes iniciais](#agentes-iniciais)). A configuração fica só no banco, alterada pelo painel. O controller não migra: ele confere a versão do schema. Cada arquivo de seed começa com um advisory lock do Postgres (`pg_advisory_xact_lock`), então dois migrators rodando ao mesmo tempo aplicam os seeds um depois do outro, sem duplicar nem falhar.
-- **Agentes:** recebem a configuração pela API interna (`agentapi`). Os parâmetros viram as mesmas flags da linha de comando, e os segredos nunca passam por argumento.
+- **Agentes:** recebem a configuração pela API interna (`agentapi`). Os parâmetros viram as mesmas flags da linha de comando, e os segredos nunca passam por argumento. O bloqueio de entradas chega pela mesma API (na configuração e no runtime, com uma revisão que só cresce) e vale sem reiniciar o agente.
+- **Supervisor** (`controller/supervision*.go`): roda dentro do controller. Monta o retrato a partir do banco, do `Manager`, das bridges e da API de cada agente, chama o modelo com ferramentas (`agents/llm/chat.go`) e executa as ações pelo canal `supervisor` da API do agente, que só reduz risco, ou direto pela bridge quando o agente não está rodando.
+- **Entradas bloqueadas no núcleo** (`order.Controller`): com as entradas bloqueadas, as ordens a mercado só reduzem a posição (`CreateOrderMarketReduce` no MT5 e na paper wallet, que nunca abrem o restante) e são recusadas, com `ErrEntriesBlocked`, as entradas, as pendentes de entrada, as ordens em dinheiro e a OCO que não protege uma posição. Proteger, mover stops, cancelar e fechar seguem.
 - **`tools/mt5bridge`:** uma ponte HTTP em Python para o terminal MT5, que roda no Wine, dentro do container `mt5`. Ela atende uma requisição por vez e protege as ordens:
   - cada ordem leva um prazo de 20 s, em dois headers: `X-Bridge-Deadline` (instante em ms Unix, pelo relógio do agente) e `X-Bridge-Timeout` (ms restantes, que a bridge conta pelo próprio relógio a partir do recebimento). A bridge usa o que vencer primeiro, contado no relógio monotônico. Assim, uma bridge em outro host com o relógio atrasado não envia a ordem mais tarde. Se o terminal estiver ocupado ou reconectando além do prazo, a ordem é recusada sem ir ao terminal (`504` com `"sent": false`), e nunca é executada depois que o agente desistiu dela. Um relógio da bridge adiantado encurta o prazo: o agente avisa no log quando a diferença passa de 1 s;
   - antes de cada ordem, a bridge confere se o terminal ainda está na conta do `--login` e se uma conta real tem `--allow-real`. Se não, recusa a ordem (`409`);
@@ -335,7 +375,7 @@ navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegra
 ```none
 agentapi/            contrato da API interna entre controller e agentes
 agents/
-  llm/               estratégia do modelo de linguagem (+ llmagent, o binário)
+  llm/               estratégia do modelo de linguagem (+ llmagent, o binário) e o cliente com ferramentas do supervisor
   strategies/        estratégias clássicas
   trendagent/ momentumagent/ breakoutagent/ intradayagent/   binários das famílias
   internal/          runner comum e cliente remoto (outbox, config)
@@ -344,7 +384,7 @@ cmd/
   migrator/          migrações e seeds
   xtrader/           utilitários (download de candles)
 config/ configs/     leitura do config.yml e o exemplo do host
-controller/          implementação do controller
+controller/          implementação do controller (supervision*.go: o supervisor com IA)
 deploy/docker/       imagens, compose e scripts de instalação
 exchange/ order/     MT5, paper wallet e controle de ordens
 sql/                 migrações e seeds
@@ -595,6 +635,28 @@ A edição pelo Telegram funciona assim:
 - Se o prompt for editado em outro lugar (no painel, por exemplo) depois do `/editprompt`, a confirmação é recusada e nada é salvo; a mensagem diz a versão atual. O controle via Telegram dos agentes é conferido de novo no `/confirm`.
 - Se o banco falhar no `/confirm` (ao ler o prompt, os agentes ou ao salvar), nada é salvo e o conteúdo continua pendente: um novo `/confirm` tenta de novo, dentro do mesmo prazo. Uma recusa definitiva (prompt inexistente, conteúdo inválido, editado em outro lugar ou controle desligado) descarta a edição.
 
+### Supervisor
+
+Em **Configurações > Supervisor**:
+
+1. **Modelo:** provedor (OpenAI ou Anthropic), modelo, **Chave da API** (só de escrita), base URL opcional, raciocínio, max tokens e o prazo de cada resposta. A chave fica cifrada no banco, como a dos agentes LLM.
+2. **Intervalo** das análises (de 5 min a 24 h) e as **instruções**: os critérios operacionais, de risco e de desempenho, em texto livre.
+3. **Autonomia:** o que o supervisor faz sozinho (**Bloquear novas entradas**, **Parar o agente quando zerado**, **Cancelar pendentes de entrada**) e quantas ações por análise. Desligado um item, a ação vira proposta.
+4. **Supervisor ativo:** liga as análises periódicas; exige o provedor, o modelo e a chave. **Analisar agora** roda uma análise na hora, mesmo desligado (com o modelo e a chave definidos).
+
+A mesma página mostra o **Histórico** das análises (resumo e achados) e o **Registro** das ações, com origem, situação e motivo.
+
+O botão flutuante do canto da tela abre a conversa, com as abas **Conversa** e **Análises**:
+
+- **Perguntas** ("Quais agentes estão perdendo hoje?") recebem uma resposta analítica, com a hora dos dados.
+- **Pedidos de ação** ("Bloqueie as entradas do orb", "Encerre todas as posições") viram um cartão de proposta: o escopo por extenso, as posições (agente, par, lado, volume, ticket, SL/TP e P/L na moeda da conta) e as pendentes afetadas, as posições de agentes parados marcadas, o que a ação faz e o que não faz e, em separado, se as pendentes são canceladas e se as entradas ficam bloqueadas. "Encerrar todas" é só das posições dos agentes da aplicação. Fechar posições e parar agora pedem um segundo clique de confirmação.
+- **Resultado:** depois de **Confirmar**, o cartão mostra a situação (concluída, parcial, falhou ou resultado desconhecido) e o resultado de cada item, conferido na conta. Um resultado desconhecido nunca é reenviado: confira a conta antes de pedir de novo.
+
+Nos cards dos agentes (em **Configurações > Agentes**), **Bloquear entradas** e **Liberar entradas** fazem o mesmo que o supervisor, registrados como ações do usuário. Um agente interrompido pelo supervisor mostra o selo com o motivo e só volta quando um usuário o liga de novo.
+
+> [!NOTE]
+> O supervisor usa as migrações `000020` a `000024` e o seed `0005_supervisor.sql`: rode o `migrator` antes de subir o controller novo (no Docker, o compose já faz isso). Sem o seed, o supervisor fica desligado.
+
 ### Backtest e dados históricos
 
 ```bash
@@ -640,7 +702,7 @@ As migrações de `sql/migrations` criam o schema inteiro, uma tabela por arquiv
 
 Antes, feche as posições abertas pelos agentes. Sem as ordens no banco, uma posição de um agente que continue aberta na corretora fica como está, com erro no log, e o núcleo não a conta no lucro nem nos resultados quando ela fechar.
 
-A imagem com estas migrações só deve ser gerada na hora de recriar o banco: com ela, o `migrator` recusa o banco antigo, e o `controller`, que espera por ele, não sobe.
+A imagem com estas migrações só deve ser gerada na hora de recriar o banco: com ela, o `migrator` falha no banco antigo, e o `controller`, que espera por ele, não sobe. O banco antigo está na versão 22 da numeração anterior, que agora é uma migração do supervisor: o `migrator` tenta aplicar a `000023`, que falha (a tabela `supervisor_actions` não existe nele), e o banco fica marcado como sujo (`dirty`) na versão 23, sem nenhuma tabela nova. Para voltar à imagem anterior sem recriar o banco, desfaça a marca antes: `UPDATE schema_migrations SET version = 22, dirty = false;`.
 
 ```bash
 deploy/docker/build.sh controller                                                      # no repositório: a imagem com as migrações novas
@@ -650,7 +712,7 @@ docker compose stop controller                                                  
 docker compose exec postgres dropdb -U xtrader --force xtrader
 docker compose exec postgres createdb -U xtrader -O xtrader xtrader
 docker compose up -d                                                                   # o migrator cria o schema e os seeds
-docker compose logs migrator                                                           # "schema at version 19 at least"
+docker compose logs migrator                                                           # "schema at version 24 at least"
 ```
 
 Depois, no painel:
@@ -688,10 +750,12 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - `GET /api/positions/open`: as posições abertas dos agentes nas contas MT5, lidas das bridges (a leitura vale por 2 s para todas as abas), com `totals` (um por moeda das contas lidas, na ordem delas, 0 sem posição), `balances` e `accounts` (os saldos das contas lidas, cada uma uma vez pelo login, por moeda, e quantas são), `complete`, `positions` (agente, par, lado, volume em lotes, preços, lucro com swap e a moeda da conta, ticket, se o agente roda) e `missing` (as contas não lidas, com os agentes e o motivo: `unreachable`, `refused` ou `failed`);
   - `GET /api/positions/closed?from=…&to=…`: o lucro das posições dos agentes fechadas de `from` até antes de `to` (segundos Unix, até 400 dias), lido dos deals das contas MT5 (a leitura de cada intervalo vale por 10 s; os deals são lidos desde 30 dias antes de `from`, para achar a entrada de cada posição), com `from`, `to`, `totals` (um por moeda das contas lidas, 0 sem fechamento), `agents` (agente, valor, moeda da conta, quantas posições fechou, se roda), `complete` e `missing`, como em `/api/positions/open`. `400` para um intervalo inválido;
   - `GET /api/agents/{agente}/{par}/candles?timeframe=4h&limit=1000`: os candles do par no timeframe pedido (`1m`, `5m`, `15m`, `30m`, `4h`, `1d` ou `D`, ou o de execução; sem `timeframe`, o de execução), os últimos `limit` (1000 por padrão, até 5000), o último em formação, com `execution_timeframe` e a origem (`strategy`, `broker` ou `resampled`). `400` para um timeframe fora da lista, `404` para um par desconhecido, `409` para um timeframe indisponível no modo do agente (abaixo do de execução no backtest), `502` quando a leitura na corretora falha. O snapshot traz `timeframe` (o de execução) e `timeframes` (os do seletor, com `execution` e `available`);
+  - **Supervisor:** `GET`/`PATCH /api/settings/supervisor` (a chave só de escrita: `api_key_set` diz se está definida; `""` a apaga), `GET /api/supervisor/overview` (o retrato que o modelo recebe), `POST /api/supervisor/run` (`202`; `409` com outra análise em andamento), `GET /api/supervisor/runs[/{id}]` (com o retrato no detalhe), `GET /api/supervisor/actions`, `GET`/`POST /api/supervisor/messages` (a conversa do usuário da sessão), `POST /api/supervisor/actions/{id}/confirm` e `/reject` (`409` para uma ação já decidida, `410` para uma proposta expirada) e `POST /api/supervisor/agents/{nome}/entries` com `{"blocked": true, "reason": "…"}`. `/api/agents` e `/api/settings/agents` trazem `supervision` (bloqueio e parada) em cada agente;
   - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory`, `outbox` e `outbox/check` (responde como o `outbox`, sem gravar nada).
 - **API de cada agente** (`ui`, no `api_address` dele): só responde ao controller. Exige um host do loopback no `Host`, recusa com `403` requisições de navegador (com `Origin`, ou `Sec-Fetch-Site` `cross-site`/`same-site`) e, num agente lançado pelo controller, as que não trazem `X-Xtrader-Agent-Key` com a chave daquele start. `POST`, `PUT`, `PATCH` e `DELETE` exigem `Content-Type: application/json`, mesmo sem corpo (senão `415`).
+  - **Canal `supervisor`:** `GET /api/supervision` (bloqueio e revisão aplicada, posições e pendentes de entrada), `POST /api/supervision/entries`, `POST /api/supervision/close` (fecha os pares pedidos com ordens "só reduzir", o bloqueio aplicado antes; resultado por par: `closed`, `failed` ou `unknown`) e `POST /api/supervision/cancel` (só as pendentes de entrada). Só o controller as chama, no canal `supervisor`; o proxy do painel sempre usa o canal `web`, e as rotas respondem `404` a qualquer outro canal.
 
 ## Segurança
 
@@ -716,6 +780,7 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 - **Cabeçalhos do painel:** todas as respostas levam `Content-Security-Policy` só com os arquivos do próprio painel (`default-src 'self'`; o script inline de configuração do `index.html` liberado pelo hash SHA-256; `frame-ancestors 'none'`; `object-src 'none'`; `base-uri 'none'`), além de `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` e `Referrer-Policy: same-origin`. Os diretórios do pacote do painel não são listados (`404`). Se o pacote não carrega, a página de erro mostra uma mensagem genérica, e o motivo vai só para o log (`ui: dashboard bundle unavailable`).
 - **Conexões lentas:** o painel, a API interna e a API de cada agente dão 10 s para os headers (no máximo 32 KiB) e 30 s para a requisição inteira, corpo incluído, e fecham uma conexão keep-alive ociosa depois de 2 min. A resposta não tem prazo, porque os eventos (SSE) e a espera longa da API interna duram mais que isso.
 - **Logs:** uma mensagem de quem não é usuário do bot do Telegram é recusada e registrada só pelo ID do remetente, no máximo uma linha por minuto (com a contagem das recusadas no intervalo), nunca o conteúdo. Um erro HTTP do servidor MCP do calendário guarda só o início do corpo (1 KiB), sem o token nem nada parecido com uma chave.
+- **Supervisor:** o modelo nunca recebe chaves, tokens, a URL da bridge, o login da conta nem o número mágico (as contas vão por apelido). Uma leitura que falha entra no retrato só como o motivo (`unreachable`, `refused`, `failed`, "its API doesn't answer"); o erro completo vai só para o log. Ele age só por ferramentas com argumentos validados no backend: nenhuma abre posição, aumenta uma posição, afrouxa um stop, libera entradas ou religa um agente. O canal `supervisor` da API do agente só reduz risco e não é alcançável pelo painel. Fechar posições, parar agora e liberar entradas exigem um usuário logado, com a sessão e o CSRF de sempre. Uma bridge em modo só leitura ou numa conta real sem **Permitir conta real** recusa os fechamentos diretos.
 - **Conta real:** exige **Permitir conta real** no agente. No container `mt5`, a bridge também tem `MT5_ALLOW_REAL` e `MT5_READ_ONLY`.
 - **Portas publicadas no Docker:** só no loopback do host, `127.0.0.1:8082` (painel, para onde o ngrok do host tunela), `127.0.0.1:5900` (VNC, que só sobe com senha) e `127.0.0.1:5432` (PostgreSQL). O Docker publica as portas por fora do firewall do host (ufw), então uma porta em `0.0.0.0` ficaria aberta para a rede mesmo "fechada" no firewall. De outra máquina, use um túnel SSH, ex.: `ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` para o VNC e `ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>` para o `psql -h 127.0.0.1 -p 5433` (detalhes em [deploy/docker/README.md](deploy/docker/README.md#acesso-de-outra-máquina)).
 - **Dependências:** o `go.mod` fixa o toolchain (`toolchain go1.25.14`), com as correções de segurança da biblioteca padrão, e a imagem compila com o Go 1.26.8. Para conferir as vulnerabilidades conhecidas: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`.

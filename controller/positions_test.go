@@ -32,16 +32,33 @@ type fakeBridge struct {
 	currency  string
 	balance   float64
 	positions []bridgePosition
+	orders    []bridgeOrder
 	deals     []bridgeDeal
 	status    int // answered instead, when set
 	requests  int
 	dealsRead []string // the queries of GET /deals
+	tradeMode int      // of the account: 0 demo, 2 real
+	trades    []map[string]any
+	// tradeAnswer answers POST /order in place of the bridge when set, onTrade
+	// is called with each trade request, before it, the bridge unlocked
+	tradeAnswer func(request map[string]any) (int, any)
+	onTrade     func(request map[string]any)
 }
 
 func newFakeBridge(t *testing.T, token string, login int64, currency string) *fakeBridge {
 	t.Helper()
 	b := &fakeBridge{token: token, login: login, currency: currency, balance: 1000}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var trade map[string]any
+		if r.Method == http.MethodPost && r.URL.Path == "/order" {
+			_ = json.NewDecoder(r.Body).Decode(&trade)
+			b.mu.Lock()
+			onTrade := b.onTrade
+			b.mu.Unlock()
+			if onTrade != nil {
+				onTrade(trade)
+			}
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.requests++
@@ -54,7 +71,29 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 			w.WriteHeader(b.status)
 			_, _ = w.Write([]byte(`{"error":"account_info: terminal disconnected"}`))
 		case r.URL.Path == "/account":
-			_ = json.NewEncoder(w).Encode(map[string]any{"login": b.login, "currency": b.currency, "balance": b.balance})
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": b.login, "currency": b.currency, "balance": b.balance,
+				"trade_mode": b.tradeMode})
+		case r.URL.Path == "/orders":
+			orders := b.orders
+			if orders == nil {
+				orders = []bridgeOrder{}
+			}
+			_ = json.NewEncoder(w).Encode(orders)
+		case r.URL.Path == "/symbol":
+			_ = json.NewEncoder(w).Encode(map[string]any{"digits": 3, "filling_mode": 1})
+		case r.URL.Path == "/tick":
+			_ = json.NewEncoder(w).Encode(map[string]any{"bid": 4160.0, "ask": 4160.2})
+		case r.URL.Path == "/order":
+			b.trades = append(b.trades, trade)
+			var status int
+			var answer any
+			if b.tradeAnswer != nil {
+				status, answer = b.tradeAnswer(trade)
+			} else {
+				status, answer = http.StatusOK, b.trade(trade)
+			}
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(answer)
 		case r.URL.Path == "/positions":
 			positions := b.positions
 			if positions == nil {
@@ -79,6 +118,46 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 	}))
 	t.Cleanup(b.Close)
 	return b
+}
+
+// trade executes a trade request as the terminal: a position closed by its
+// ticket, a pending order removed. The caller holds b.mu.
+func (b *fakeBridge) trade(request map[string]any) map[string]any {
+	number := func(name string) int64 {
+		value, _ := request[name].(float64)
+		return int64(value)
+	}
+	switch number("action") {
+	case 1:
+		for i, p := range b.positions {
+			if p.Ticket == number("position") {
+				b.positions = append(b.positions[:i:i], b.positions[i+1:]...)
+				return map[string]any{"retcode": 10009, "deal": 9000 + p.Ticket, "order": 8000 + p.Ticket}
+			}
+		}
+	case 8:
+		for i, o := range b.orders {
+			if o.Ticket == number("order") {
+				b.orders = append(b.orders[:i:i], b.orders[i+1:]...)
+				return map[string]any{"retcode": 10009, "order": o.Ticket}
+			}
+		}
+	}
+	return map[string]any{"retcode": 10013, "comment": "Invalid request"}
+}
+
+// tradeRequests returns the trade requests the bridge got.
+func (b *fakeBridge) tradeRequests() []map[string]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]map[string]any(nil), b.trades...)
+}
+
+// held returns the positions of the account.
+func (b *fakeBridge) held() []bridgePosition {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bridgePosition(nil), b.positions...)
 }
 
 func (b *fakeBridge) set(positions ...bridgePosition) {

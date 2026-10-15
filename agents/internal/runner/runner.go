@@ -543,9 +543,13 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 	if err != nil {
 		return err
 	}
+	if agent != nil {
+		agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not
+	}
 
 	if chart != nil {
 		chart.SetOrderController(bot.Controller()) // its orders are simulated too: every channel
+		chart.SetSupervision(bot.Controller())
 		go func() {
 			log.Fatal(dash.serve(chart))
 		}()
@@ -583,6 +587,7 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 	if err != nil {
 		return err
 	}
+	agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not, before it trades
 
 	apply := func(agentapi.Runtime) {}
 	if chart != nil {
@@ -602,6 +607,7 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 		// the channels of the settings, switched while the bot runs
 		chart.SetOrderController(bot.Controller(), ui.ChannelWeb)
 		chart.SetChannels(dash.channels()...)
+		chart.SetSupervision(bot.Controller())
 		apply = func(runtime agentapi.Runtime) {
 			chart.SetChannels(dashboard{tradePanel: runtime.TradePanel, telegram: runtime.TelegramControl}.channels()...)
 		}

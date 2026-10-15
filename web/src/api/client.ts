@@ -35,6 +35,17 @@ import type {
   ReanalysisResponse,
   SessionResponse,
   Snapshot,
+  SupervisorActionInfo,
+  SupervisorActionsResponse,
+  SupervisorEntriesRequest,
+  SupervisorMessageInfo,
+  SupervisorMessageRequest,
+  SupervisorMessagesResponse,
+  SupervisorRunResponse,
+  SupervisorRunsResponse,
+  SupervisorSettingsRequest,
+  SupervisorSettingsResponse,
+  SupervisorSnapshot,
   TelegramSettingsRequest,
   TelegramSettingsResponse,
   TelegramUserRequest,
@@ -417,4 +428,86 @@ export function updateUser(id: number, request: UserRequest): Promise<UserInfo> 
 /** Deletes a user, never the last one enabled. */
 export function deleteUser(id: number): Promise<void> {
   return sendJSON<void>("DELETE", `/users/${id}`);
+}
+
+/** The settings of the supervisor of the agents and its state, never its key. */
+export function fetchSupervisorSettings(signal?: AbortSignal): Promise<SupervisorSettingsResponse> {
+  return getJSON<SupervisorSettingsResponse>("/settings/supervisor", signal);
+}
+
+/** Changes the settings of the supervisor, the fields set. */
+export function updateSupervisorSettings(
+  request: SupervisorSettingsRequest,
+): Promise<SupervisorSettingsResponse> {
+  return sendJSON<SupervisorSettingsResponse>("PATCH", "/settings/supervisor", request);
+}
+
+/** What the supervisor knows of the agents now, as its model gets it. */
+export function fetchSupervisorOverview(signal?: AbortSignal): Promise<SupervisorSnapshot> {
+  return getJSON<SupervisorSnapshot>("/supervisor/overview", signal);
+}
+
+/** Starts an analysis of the supervisor now: the list of the analyses tells how it went. */
+export function runSupervisor(): Promise<{ started: boolean }> {
+  return postJSON<{ started: boolean }>("/supervisor/run");
+}
+
+/** The last analyses of the supervisor, the newest first. */
+export function fetchSupervisorRuns(signal?: AbortSignal): Promise<SupervisorRunsResponse> {
+  return getJSON<SupervisorRunsResponse>("/supervisor/runs", signal);
+}
+
+/** An analysis of the supervisor and the data sent to its model. */
+export function fetchSupervisorRun(
+  id: number,
+  signal?: AbortSignal,
+): Promise<SupervisorRunResponse> {
+  return getJSON<SupervisorRunResponse>(`/supervisor/runs/${id}`, signal);
+}
+
+/** The last actions of the supervision on the agents, the newest first. */
+export function fetchSupervisorActions(signal?: AbortSignal): Promise<SupervisorActionInfo[]> {
+  return getJSON<SupervisorActionsResponse>("/supervisor/actions", signal).then((r) => r.actions);
+}
+
+/** The answer of a confirmation or a rejection: the action and the message telling it. */
+export interface SupervisorDecision {
+  action: SupervisorActionInfo;
+  message?: SupervisorMessageInfo;
+}
+
+/** Executes a proposal of the supervisor, confirmed by the user: its result, checked. */
+export function confirmSupervisorAction(id: number): Promise<SupervisorDecision> {
+  return postJSON<SupervisorDecision>(`/supervisor/actions/${id}/confirm`);
+}
+
+/** Rejects a proposal of the supervisor. */
+export function rejectSupervisorAction(id: number): Promise<SupervisorDecision> {
+  return postJSON<SupervisorDecision>(`/supervisor/actions/${id}/reject`);
+}
+
+/** The conversation of the user with the supervisor, the last messages, or the ones before. */
+export function fetchSupervisorMessages(
+  before?: number,
+  signal?: AbortSignal,
+): Promise<SupervisorMessagesResponse> {
+  const query = before ? `?before=${before}` : "";
+  return getJSON<SupervisorMessagesResponse>(`/supervisor/messages${query}`, signal);
+}
+
+/** Sends a message to the supervisor: the messages it added, its answer and proposals. */
+export function sendSupervisorMessage(text: string): Promise<SupervisorMessagesResponse> {
+  const request: SupervisorMessageRequest = { text };
+  return postJSON<SupervisorMessagesResponse>("/supervisor/messages", request);
+}
+
+/** Blocks the entries of an agent, or allows them again, by the user. */
+export function setAgentEntries(
+  name: string,
+  request: SupervisorEntriesRequest,
+): Promise<SupervisorDecision> {
+  return postJSON<SupervisorDecision>(
+    `/supervisor/agents/${encodeURIComponent(name)}/entries`,
+    request,
+  );
 }

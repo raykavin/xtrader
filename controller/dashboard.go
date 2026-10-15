@@ -66,14 +66,15 @@ type agent struct {
 // WithUsers): without any, it is closed. Any of them can operate the agents
 // with the control panel enabled, and change the settings.
 type Dashboard struct {
-	agents   *registry
-	keys     *agentKeys   // of the API of the agents the controller launched
-	probe    *http.Client // lists the agents online
-	client   *http.Client // calls their API, see call
-	stream   *http.Client // follows their events, see events
-	bundle   bundleConfig
-	auth     *auth
-	settings *settings
+	agents      *registry
+	keys        *agentKeys   // of the API of the agents the controller launched
+	probe       *http.Client // lists the agents online
+	client      *http.Client // calls their API, see call
+	stream      *http.Client // follows their events, see events
+	bundle      bundleConfig
+	auth        *auth
+	settings    *settings
+	supervision *Supervision // see ServeSupervision
 }
 
 // DashboardOption configures a Dashboard.
@@ -201,6 +202,9 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		if d.settings != nil {
 			d.settings.routes(r)
 		}
+		if d.supervision != nil {
+			d.supervision.routes(r)
+		}
 	})
 
 	var page []byte
@@ -271,13 +275,15 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 	agents := d.agents.list()
 	statuses := make([]ui.AgentStatus, len(agents))
 	periods := d.currentPeriods(ctx)
+	supervisions := d.supervisions(ctx)
 
 	var wg sync.WaitGroup
 	for i, a := range agents {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			statuses[i] = ui.AgentStatus{Name: a.Name, Kind: a.Kind, Address: a.Address, Online: d.online(ctx, a)}
+			statuses[i] = ui.AgentStatus{Name: a.Name, Kind: a.Kind, Address: a.Address, Online: d.online(ctx, a),
+				Supervision: supervisions[a.Name]}
 			if period, ok := periods[a.Name]; ok {
 				current := uiPeriod(period, nil)
 				statuses[i].Period = &current
@@ -286,6 +292,26 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 	}
 	wg.Wait()
 	return statuses
+}
+
+// supervisions returns the supervision of the agents supervised, by name, none
+// without settings.
+func (d *Dashboard) supervisions(ctx context.Context) map[string]*ui.AgentSupervisionInfo {
+	if d.settings == nil {
+		return nil
+	}
+	agents, err := d.settings.store.Agents(ctx)
+	if err != nil {
+		log.Warnf("ui: the supervision of the agents: %v", err)
+		return nil
+	}
+	infos := make(map[string]*ui.AgentSupervisionInfo)
+	for _, a := range agents {
+		if info := supervisionInfo(a); info != nil {
+			infos[a.Name] = info
+		}
+	}
+	return infos
 }
 
 // Online tells whether the API of the agent of that name answers.

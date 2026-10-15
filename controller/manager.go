@@ -96,6 +96,12 @@ type Manager struct {
 	locks       agentLocks
 	starting    sync.Mutex // the launches one at a time, each checked with the others (see conflict)
 
+	// fences keeps agents from launching while the supervisor closes their
+	// positions on their bridge, by name, see Fence: a leaf, taken alone, by
+	// the starts and the prepares of the supervisor of the processes too
+	fenceMu sync.Mutex
+	fences  map[string]int
+
 	mu        sync.Mutex
 	closed    bool              // the controller stops: nothing launched anymore, see Run
 	launched  map[string]launch // what each agent runs with
@@ -144,7 +150,55 @@ func NewManager(s *store.Store, agents config.Agents, sup *Supervisor, dashboard
 		backlogs: newBacklogs(), dashboard: dashboard, bot: bot, trigger: make(chan struct{}, 1),
 		locks: agentLocks{locks: make(map[string]*sync.Mutex)}, launched: make(map[string]launch),
 		byName: make(map[string]store.Agent), launchErr: make(map[string]string),
-		exited: make(map[string][32]byte)}
+		exited: make(map[string][32]byte), fences: make(map[string]int)}
+}
+
+// errFenced is the error of a launch of an agent kept from launching, see
+// Fence.
+var errFenced = errors.New("the supervisor closes its positions: launched once done")
+
+// Fence keeps the agent of name from launching until release: its starts, the
+// ones of the supervisor of the processes once it exited included, fail
+// (errFenced) and are tried again later, eg: while the supervisor closes its
+// positions on its bridge, which nothing else trades meanwhile. A start
+// begun before goes on: State, which waits for it, tells it.
+func (m *Manager) Fence(name string) (release func()) {
+	m.fenceMu.Lock()
+	m.fences[name]++
+	m.fenceMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.fenceMu.Lock()
+			if m.fences[name]--; m.fences[name] <= 0 {
+				delete(m.fences, name)
+			}
+			m.fenceMu.Unlock()
+			m.Trigger() // launched now if it is wanted
+		})
+	}
+}
+
+// fenced reports whether the agent of name is kept from launching, see Fence.
+func (m *Manager) fenced(name string) bool {
+	m.fenceMu.Lock()
+	defer m.fenceMu.Unlock()
+	return m.fences[name] > 0
+}
+
+// RefreshRuntime reads the agent of name again and publishes its runtime at
+// once, eg: its entries just blocked, rather than at the next Reconcile.
+func (m *Manager) RefreshRuntime(ctx context.Context, name string) error {
+	a, err := m.store.AgentByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	doc, ok := runtimeOf(ctx, m.store, a)
+	if !ok {
+		return fmt.Errorf("the runtime of the agent %s can't be read now", name)
+	}
+	m.runtimes.set(a.ID, doc)
+	return nil
 }
 
 // Trigger makes the manager apply the database now.
@@ -372,6 +426,9 @@ func (m *Manager) start(a store.Agent) error {
 	if _, err := agentAPI(a.APIAddress); err != nil {
 		return fmt.Errorf("the address of its API: %w: change it in its settings", err)
 	}
+	if m.fenced(a.Name) {
+		return errFenced
+	}
 	m.starting.Lock()
 	defer m.starting.Unlock()
 	live, book := a.Mode == "live", a.MT5Book()
@@ -399,6 +456,9 @@ func (m *Manager) start(a store.Agent) error {
 	id, name, restart := a.ID, a.Name, a.Restart
 	keys := m.dashboard.keys
 	prepare := func() (map[string]string, func(), error) {
+		if m.fenced(name) {
+			return nil, nil, errFenced // started again later, once its positions are closed
+		}
 		token, err := m.tokens.issue(id)
 		if err != nil {
 			return nil, nil, err
@@ -441,6 +501,7 @@ func (m *Manager) launchedAs(current store.Agent) store.Agent {
 	}
 	a := withSecretsOf(l.agent, current)
 	a.TradePanel, a.TelegramControl, a.Reanalysis = current.TradePanel, current.TelegramControl, current.Reanalysis
+	a.Supervision = current.Supervision // its entries apply while it runs
 	if a.LLM != nil && current.LLM != nil {
 		model := *a.LLM
 		model.PromptID, model.PromptStatus = current.LLM.PromptID, current.LLM.PromptStatus
@@ -615,7 +676,7 @@ func (m *Manager) State(name string) AgentState {
 // its default prompt.
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
 	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl,
-		Reanalysis: a.ReanalysisAllowed()}
+		Reanalysis: a.ReanalysisAllowed(), Entries: entriesOf(a)}
 	if a.LLM != nil && a.LLM.PromptID != nil {
 		prompt, err := s.Prompt(ctx, *a.LLM.PromptID)
 		if err != nil {
@@ -654,4 +715,11 @@ func launchHash(a store.Agent) [32]byte {
 	}
 	data, _ := json.Marshal(settings)
 	return sha256.Sum256(data)
+}
+
+// entriesOf returns the entries of the agent a, as its supervision tells them.
+func entriesOf(a store.Agent) agentapi.Entries {
+	supervision := a.SupervisionOf()
+	return agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked, EntriesReason: supervision.EntriesReason,
+		EntriesRevision: supervision.EntriesRevision}
 }

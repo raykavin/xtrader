@@ -57,7 +57,8 @@ func (r *runtimes) get(id int64) (agentapi.Runtime, <-chan struct{}, bool) {
 // sameRuntime reports whether two runtimes tell the agent the same.
 func sameRuntime(a, b agentapi.Runtime) bool {
 	switch {
-	case a.TradePanel != b.TradePanel || a.TelegramControl != b.TelegramControl || a.Reanalysis != b.Reanalysis:
+	case a.TradePanel != b.TradePanel || a.TelegramControl != b.TelegramControl || a.Reanalysis != b.Reanalysis,
+		a.Entries != b.Entries:
 		return false
 	case a.Prompt == nil || b.Prompt == nil:
 		return a.Prompt == b.Prompt

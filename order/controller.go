@@ -1,6 +1,7 @@
 package order
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,39 @@ var ErrBotStopped = errors.New("bot is stopped")
 
 // errClosed refuses every call to the exchange of a closed controller.
 var errClosed = fmt.Errorf("%w for good, as it exits", ErrBotStopped)
+
+// ErrEntriesBlocked is returned by the orders that would open a position, or
+// add to one, while the entries of the bot are blocked (see BlockEntries) or
+// held (see HoldEntries): the bot only reduces what it holds then.
+var ErrEntriesBlocked = errors.New("the entries of the bot are blocked")
+
+// entryState tells whether the bot opens positions: blocked for good, until
+// allowed again, at the revision of the last change (see BlockEntries), or
+// held a while by the ones holding it (see HoldEntries).
+type entryState struct {
+	blocked  bool
+	reason   string
+	revision int64
+	holds    map[int64]string // the reason of each hold, by its number
+	lastHold int64
+}
+
+// shut returns why the entries are refused, "" when they aren't.
+func (e entryState) shut() string {
+	if e.blocked {
+		return cmp.Or(e.reason, "blocked")
+	}
+	var first int64
+	for id := range e.holds {
+		if first == 0 || id < first {
+			first = id
+		}
+	}
+	if first != 0 {
+		return cmp.Or(e.holds[first], "held")
+	}
+	return ""
+}
 
 type summary struct {
 	Pair             string
@@ -404,6 +438,7 @@ type Controller struct {
 	tickerInterval time.Duration
 	finish         chan bool
 	status         Status
+	entries        entryState // under mtx, see BlockEntries
 
 	position map[string]*Position
 	// lastFill holds the ID of the last fill of each pair settled, the place
@@ -1643,6 +1678,192 @@ func (c *Controller) Close() {
 	c.updatesClosed = true
 }
 
+// BlockEntries blocks the entries of the bot, for reason, at revision, until
+// AllowEntries: the orders that would open a position or add to one are
+// refused (ErrEntriesBlocked), a market order against a position is sent as
+// one that only reduces it (see service.ReduceOnlyBroker), and the
+// protections of the positions, their cancels and the following of the
+// orders go on. A revision older than the one of the last change is ignored,
+// eg: a runtime read before a newer one applied, and reported false.
+func (c *Controller) BlockEntries(revision int64, reason string) bool {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if revision < c.entries.revision {
+		return false
+	}
+	c.entries.blocked, c.entries.reason, c.entries.revision = true, reason, revision
+	return true
+}
+
+// AllowEntries allows the entries blocked by BlockEntries again, at revision,
+// unless it is older than the one of the last change (false); the holds of
+// HoldEntries stay.
+func (c *Controller) AllowEntries(revision int64) bool {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if revision < c.entries.revision {
+		return false
+	}
+	c.entries.blocked, c.entries.reason, c.entries.revision = false, "", revision
+	return true
+}
+
+// HoldEntries refuses the entries as BlockEntries does until release, eg: as
+// the positions are closed, so that none opens meanwhile, whatever the
+// blocks; release may be called more than once.
+func (c *Controller) HoldEntries(reason string) (release func()) {
+	c.mtx.Lock()
+	if c.entries.holds == nil {
+		c.entries.holds = make(map[int64]string)
+	}
+	c.entries.lastHold++
+	id := c.entries.lastHold
+	c.entries.holds[id] = reason
+	c.mtx.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mtx.Lock()
+			delete(c.entries.holds, id)
+			c.mtx.Unlock()
+		})
+	}
+}
+
+// EntriesBlocked reports whether the entries are refused, blocked or held,
+// why, and the revision of their last block or allowance.
+func (c *Controller) EntriesBlocked() (blocked bool, reason string, revision int64) {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+	reason = c.entries.shut()
+	return reason != "", reason, c.entries.revision
+}
+
+// refusedEntry returns ErrEntriesBlocked when the entries are refused, nil
+// when they aren't.
+func (c *Controller) refusedEntry() error {
+	c.mtx.RLock()
+	reason := c.entries.shut()
+	c.mtx.RUnlock()
+	if reason == "" {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrEntriesBlocked, reason)
+}
+
+// held returns the side and the size of the position the bot holds on pair as
+// the exchange holds it, polled when it tells it (service.PositionReporter),
+// else read: a size of 0 when flat. Never under mtx: a read may reach the
+// exchange.
+func (c *Controller) held(pair string) (model.SideType, float64, error) {
+	if reporter, ok := c.exchange.(service.PositionReporter); ok {
+		if side, quantity, known := reporter.HeldPosition(pair); known {
+			return side, quantity, nil
+		}
+	}
+	asset, _, err := c.exchange.Position(pair)
+	switch {
+	case err != nil:
+		return "", 0, err
+	case asset > 0:
+		return model.SideTypeBuy, asset, nil
+	case asset < 0:
+		return model.SideTypeSell, -asset, nil
+	}
+	return "", 0, nil
+}
+
+// reduce sends a market order of size against the position of pair that never
+// opens the other side, see service.ReduceOnlyBroker, and records it: the
+// market orders while the entries are refused, under the lock of the pair. A
+// market order with nothing to reduce is an entry: ErrEntriesBlocked.
+func (c *Controller) reduce(side model.SideType, pair string, size float64, refused error) (model.Order,
+	error) {
+	reducer, ok := c.exchange.(service.ReduceOnlyBroker)
+	if !ok {
+		return model.Order{}, fmt.Errorf("%w: the exchange can't only reduce a position: %w", refused,
+			exchange.ErrNotSupported)
+	}
+	log.Infof("[ORDER] Creating MARKET %s order for %s, reducing the position only: %v", side, pair, refused)
+	order, err := reducer.CreateOrderMarketReduce(side, pair, size)
+	if errors.Is(err, exchange.ErrNothingToReduce) {
+		return model.Order{}, fmt.Errorf("%w: %w", refused, err)
+	}
+	if err != nil {
+		c.notifyError(err)
+		return model.Order{}, err
+	}
+	return c.recordMarket(order), nil
+}
+
+// recordMarket records a market order the exchange executed: stored, its
+// profit calculated, followed, and published.
+func (c *Controller) recordMarket(order model.Order) model.Order {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.create(&order)
+	c.processTrade(&order)
+	c.track(order) // exchanges may report a market order as new and fill it right after
+	c.publish(order, true)
+	log.Infof("[ORDER CREATED] %s", order)
+	return order
+}
+
+// ClosePosition closes the whole position the bot holds on pair at the market,
+// never opening the other side (see service.ReduceOnlyBroker), its stop loss
+// and take profit going with it, on a stopped bot too, not once the
+// controller is closed (see Close): the way the supervisor of the agents
+// closes a position, whatever the entries, see ui.Chart. It returns an error
+// wrapping exchange.ErrNothingToReduce when the bot holds none.
+func (c *Controller) ClosePosition(pair string) (model.Order, error) {
+	end, err := c.beginProtection(pair)
+	if err != nil {
+		return model.Order{}, err
+	}
+	order, err := c.closePosition(pair)
+	end()
+	if c.Status() == StatusStopped {
+		c.UpdateOrders() // not followed while stopped: what the close ended told now
+	}
+	return order, err
+}
+
+// closePosition is ClosePosition under the lock of the pair.
+func (c *Controller) closePosition(pair string) (model.Order, error) {
+	reducer, ok := c.exchange.(service.ReduceOnlyBroker)
+	if !ok {
+		return model.Order{}, fmt.Errorf("closing the position of %s: %w", pair, exchange.ErrNotSupported)
+	}
+	side, quantity, err := c.held(pair)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if quantity <= 0 {
+		return model.Order{}, fmt.Errorf("%s: %w", pair, exchange.ErrNothingToReduce)
+	}
+	closing := model.SideTypeSell
+	if side == model.SideTypeSell {
+		closing = model.SideTypeBuy
+	}
+	log.Infof("[ORDER] Closing the %s position of %v %s", side, quantity, pair)
+	order, err := reducer.CreateOrderMarketReduce(closing, pair, quantity)
+	if err != nil {
+		if !errors.Is(err, exchange.ErrNothingToReduce) {
+			c.notifyError(err)
+		}
+		return model.Order{}, err
+	}
+	return c.recordMarket(order), nil
+}
+
+// protects reports whether an order of size on side protects the position
+// held on pair: on its other side, of its size at most, as the legs of an OCO
+// order do. Never under mtx.
+func (c *Controller) protects(side model.SideType, pair string, size float64) bool {
+	held, quantity, err := c.held(pair)
+	return err == nil && quantity > 0 && held != side && size <= quantity*(1+quantityEpsilon)
+}
+
 func (c *Controller) Account() (model.Account, error) {
 	return c.exchange.Account()
 }
@@ -1677,6 +1898,9 @@ func (c *Controller) CreateOrderOCO(side model.SideType, pair string, size, pric
 		return nil, err
 	}
 	defer end()
+	if refused := c.refusedEntry(); refused != nil && !c.protects(side, pair, size) {
+		return nil, refused // an entry, not the legs of a position
+	}
 
 	log.Infof("[ORDER] Creating OCO order for %s", pair)
 	orders, err := c.exchange.CreateOrderOCO(side, pair, size, price, stop, stopLimit)
@@ -1739,6 +1963,9 @@ func (c *Controller) createProtected(kind string, side model.SideType, pair stri
 		return nil, err
 	}
 	defer end()
+	if refused := c.refusedEntry(); refused != nil {
+		return nil, refused
+	}
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -1977,6 +2204,9 @@ func (c *Controller) UpdateLimit(order model.Order, limit float64) (model.Order,
 		return model.Order{}, err
 	}
 	defer end()
+	if refused := c.refusedEntry(); refused != nil && order.GroupID == nil {
+		return model.Order{}, refused // a pending entry, not a leg
+	}
 
 	broker, ok := c.exchange.(service.ProtectionBroker)
 	if !ok {
@@ -2009,6 +2239,10 @@ func (c *Controller) CreateOrderLimit(side model.SideType, pair string, size, li
 	}
 	defer end()
 
+	if refused := c.refusedEntry(); refused != nil {
+		return model.Order{}, refused
+	}
+
 	log.Infof("[ORDER] Creating LIMIT %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderLimit(side, pair, size, limit)
 	if err != nil {
@@ -2032,23 +2266,17 @@ func (c *Controller) CreateOrderMarketQuote(side model.SideType, pair string, am
 	}
 	defer end()
 
+	if refused := c.refusedEntry(); refused != nil {
+		return model.Order{}, refused // sized in quote: never compared with the position
+	}
+
 	log.Infof("[ORDER] Creating MARKET %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderMarketQuote(side, pair, amount)
 	if err != nil {
 		c.notifyError(err)
 		return model.Order{}, err
 	}
-
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-	c.create(&order)
-
-	// calculate profit
-	c.processTrade(&order)
-	c.track(order) // exchanges may report a market order as new and fill it right after
-	c.publish(order, true)
-	log.Infof("[ORDER CREATED] %s", order)
-	return order, nil
+	return c.recordMarket(order), nil
 }
 
 func (c *Controller) CreateOrderMarket(side model.SideType, pair string, size float64) (model.Order, error) {
@@ -2058,23 +2286,17 @@ func (c *Controller) CreateOrderMarket(side model.SideType, pair string, size fl
 	}
 	defer end()
 
+	if refused := c.refusedEntry(); refused != nil {
+		return c.reduce(side, pair, size, refused)
+	}
+
 	log.Infof("[ORDER] Creating MARKET %s order for %s", side, pair)
 	order, err := c.exchange.CreateOrderMarket(side, pair, size)
 	if err != nil {
 		c.notifyError(err)
 		return model.Order{}, err
 	}
-
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-	c.create(&order)
-
-	// calculate profit
-	c.processTrade(&order)
-	c.track(order) // exchanges may report a market order as new and fill it right after
-	c.publish(order, true)
-	log.Infof("[ORDER CREATED] %s", order)
-	return order, nil
+	return c.recordMarket(order), nil
 }
 
 func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (model.Order, error) {
@@ -2083,6 +2305,10 @@ func (c *Controller) CreateOrderStop(pair string, size float64, limit float64) (
 		return model.Order{}, err
 	}
 	defer end()
+
+	if refused := c.refusedEntry(); refused != nil {
+		return model.Order{}, refused
+	}
 
 	log.Infof("[ORDER] Creating STOP order for %s", pair)
 	order, err := c.exchange.CreateOrderStop(pair, size, limit)

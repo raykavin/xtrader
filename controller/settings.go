@@ -143,7 +143,7 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 		TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(), Running: state.Running,
 		RestartPending: state.RestartPending, Restarts: state.Restarts, Restarting: state.Restarting,
 		Exited: state.Exited, LastExit: state.LastExit, LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID),
-		Params: a.AllParams()}
+		Params: a.AllParams(), Supervision: supervisionInfo(a)}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
@@ -237,6 +237,13 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		case request.PromptID != nil:
 			if err := s.store.SetAgentPrompt(ctx, a.ID, request.PromptID); err != nil {
+				return err
+			}
+		}
+		if request.Enabled != nil && *request.Enabled && !a.Enabled {
+			// enabled again by a user: a stop of the supervisor ends, with the
+			// block of the entries it made
+			if _, err := s.store.ClearAgentStop(ctx, a.ID, userOf(ctx)); err != nil {
 				return err
 			}
 		}

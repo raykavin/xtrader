@@ -315,11 +315,12 @@ type PairsResponse struct {
 // dashboard counting the trades closed since its start: absent before the
 // first reset of its results, all of them counted.
 type AgentStatus struct {
-	Name    string       `json:"name"`
-	Kind    string       `json:"kind"`
-	Address string       `json:"address"`
-	Online  bool         `json:"online"`
-	Period  *AgentPeriod `json:"period,omitempty"`
+	Name        string                `json:"name"`
+	Kind        string                `json:"kind"`
+	Address     string                `json:"address"`
+	Online      bool                  `json:"online"`
+	Period      *AgentPeriod          `json:"period,omitempty"`
+	Supervision *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
 }
 
 // AgentsResponse lists the agents of the dashboard, in the order of its
@@ -636,6 +637,7 @@ type AgentSettings struct {
 	PromptID        *int64                `json:"prompt_id,omitempty"`
 	PromptStatus    *AgentPromptStatus    `json:"prompt_status,omitempty"`
 	Secrets         AgentSecretsPresent   `json:"secrets"`
+	Supervision     *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
 }
 
 // AgentOutbox is what the outbox of an agent holds, as it told the
@@ -767,16 +769,18 @@ type OpenPositionsResponse struct {
 // current prices, and its profit with its swap in Currency, the one of the
 // account. Running tells that the agent runs, else stopped or disabled.
 type OpenPosition struct {
-	Agent    string  `json:"agent"`
-	Pair     string  `json:"pair"`
-	Side     string  `json:"side"`
-	Volume   float64 `json:"volume"`
-	Entry    float64 `json:"entry"`
-	Price    float64 `json:"price"`
-	Profit   float64 `json:"profit"`
-	Currency string  `json:"currency"`
-	Ticket   int64   `json:"ticket"`
-	Running  bool    `json:"running"`
+	Agent      string  `json:"agent"`
+	Pair       string  `json:"pair"`
+	Side       string  `json:"side"`
+	Volume     float64 `json:"volume"`
+	Entry      float64 `json:"entry"`
+	Price      float64 `json:"price"`
+	StopLoss   float64 `json:"stop_loss,omitempty"`   // at the broker, absent for none
+	TakeProfit float64 `json:"take_profit,omitempty"` // at the broker, absent for none
+	Profit     float64 `json:"profit"`
+	Currency   string  `json:"currency"`
+	Ticket     int64   `json:"ticket"`
+	Running    bool    `json:"running"`
 }
 
 // OpenPositionsGap is an account of the agents not read, see
@@ -819,6 +823,12 @@ type AgentClosedProfit struct {
 	Currency  string  `json:"currency"`
 	Positions int     `json:"positions"`
 	Running   bool    `json:"running"`
+	// the positions won and lost, by the profit of all their exits, and the
+	// sum of the profits of the ones won and of the losses of the ones lost
+	Wins        int     `json:"wins,omitempty"`
+	Losses      int     `json:"losses,omitempty"`
+	GrossProfit float64 `json:"gross_profit,omitempty"`
+	GrossLoss   float64 `json:"gross_loss,omitempty"`
 }
 
 // CurrencyAmount is an amount in Currency.
@@ -999,4 +1009,499 @@ type UserRequest struct {
 	Username string  `json:"username,omitempty"`
 	Password *string `json:"password,omitempty"`
 	Enabled  *bool   `json:"enabled,omitempty"`
+}
+
+// SupervisionState is the answer of GET /api/supervision of an agent, to the
+// supervisor of the controller only (the channel supervisor): whether its
+// entries are refused, why, and the revision of their last block or
+// allowance (see order.Controller.BlockEntries), the status of its order
+// controller (running or stopped), its positions as its exchange holds them,
+// and its pending orders, the entries apart from the legs of the positions.
+type SupervisionState struct {
+	EntriesBlocked  bool                 `json:"entries_blocked"`
+	EntriesReason   string               `json:"entries_reason,omitempty"`
+	EntriesRevision int64                `json:"entries_revision"`
+	Status          string               `json:"status"`
+	Positions       []SupervisedPosition `json:"positions"`
+	Pending         []SupervisedOrder    `json:"pending"`
+}
+
+// SupervisedPosition is the position an agent holds on a pair, BUY or SELL,
+// its size in units of the base asset.
+type SupervisedPosition struct {
+	Pair     string  `json:"pair"`
+	Side     string  `json:"side"`
+	Quantity float64 `json:"quantity"`
+}
+
+// SupervisedOrder is a pending order of an agent: an Entry, which would open a
+// position, or a leg protecting one.
+type SupervisedOrder struct {
+	ID       int64   `json:"id"`
+	Pair     string  `json:"pair"`
+	Side     string  `json:"side"`
+	Type     string  `json:"type"`
+	Price    float64 `json:"price"`
+	Quantity float64 `json:"quantity"`
+	Entry    bool    `json:"entry"`
+}
+
+// SupervisionEntriesRequest is the payload of POST /api/supervision/entries:
+// the entries of the agent blocked, for Reason, or allowed again, at
+// Revision, ignored when older than the last change.
+type SupervisionEntriesRequest struct {
+	Blocked  bool   `json:"blocked"`
+	Revision int64  `json:"revision"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// SupervisionCloseRequest is the payload of POST /api/supervision/close: the
+// positions of Pairs closed, all of them without any, never opening the
+// other side; Block blocks the entries first, at Revision, for Reason, and
+// they are held anyway as the positions are closed, then HoldSeconds more.
+type SupervisionCloseRequest struct {
+	Pairs       []string `json:"pairs,omitempty"`
+	Block       bool     `json:"block"`
+	Revision    int64    `json:"revision,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+	HoldSeconds int      `json:"hold_seconds,omitempty"`
+}
+
+// SupervisionCloseResponse answers POST /api/supervision/close: a result by
+// pair.
+type SupervisionCloseResponse struct {
+	Results []SupervisionCloseResult `json:"results"`
+}
+
+// The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
+const (
+	SupervisionClosed   = "closed"   // the position closed
+	SupervisionFlat     = "flat"     // nothing held, nothing done
+	SupervisionCanceled = "canceled" // the order canceled
+	SupervisionGone     = "gone"     // the order ended before its cancel
+	SupervisionFailed   = "failed"   // refused, nothing done
+	SupervisionUnknown  = "unknown"  // maybe done: to check on the account, never to send again
+)
+
+// SupervisionCloseResult is how the close of the position of a pair went: the
+// order closing it, its side and size, when closed, and the error else.
+type SupervisionCloseResult struct {
+	Pair     string  `json:"pair"`
+	Status   string  `json:"status"`
+	Side     string  `json:"side,omitempty"`
+	Quantity float64 `json:"quantity,omitempty"`
+	Error    string  `json:"error,omitempty"`
+}
+
+// SupervisionCancelRequest is the payload of POST /api/supervision/cancel: the
+// pending entries of Pairs canceled, all of them without any; the legs of
+// the positions stay.
+type SupervisionCancelRequest struct {
+	Pairs []string `json:"pairs,omitempty"`
+}
+
+// SupervisionCancelResponse answers POST /api/supervision/cancel: a result by
+// pending entry.
+type SupervisionCancelResponse struct {
+	Results []SupervisionCancelResult `json:"results"`
+}
+
+// SupervisionCancelResult is how the cancel of a pending entry went.
+type SupervisionCancelResult struct {
+	ID     int64  `json:"id"`
+	Pair   string `json:"pair"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// AgentSupervisionInfo is the supervision of an agent on the dashboard: its
+// entries blocked, why, by whom and when (Unix seconds), and its stop by the
+// supervisor: pending_flat while it waits for the agent to hold nothing,
+// stopped once disabled, until a user enables it again; none otherwise.
+type AgentSupervisionInfo struct {
+	EntriesBlocked bool   `json:"entries_blocked"`
+	EntriesReason  string `json:"entries_reason,omitempty"`
+	EntriesBy      string `json:"entries_by,omitempty"`
+	EntriesAt      *int64 `json:"entries_at,omitempty"`
+	StopState      string `json:"stop_state"`
+	StopReason     string `json:"stop_reason,omitempty"`
+	StopCategory   string `json:"stop_category,omitempty"`
+	StopBy         string `json:"stop_by,omitempty"`
+	StopAt         *int64 `json:"stop_at,omitempty"`
+}
+
+// SupervisorAutonomy is what the supervisor does alone in its analyses, see
+// store.Autonomy: closing positions is never one of them.
+type SupervisorAutonomy struct {
+	BlockEntries     bool `json:"block_entries"`
+	StopWhenFlat     bool `json:"stop_when_flat"`
+	CancelPending    bool `json:"cancel_pending"`
+	MaxActionsPerRun int  `json:"max_actions_per_run"`
+}
+
+// SupervisorSettingsResponse is the payload of GET /api/settings/supervisor:
+// its settings, whether its key is set, never its value, the bounds of the
+// interval and of the timeout, in seconds, and its state: an analysis
+// running, the next one (Unix seconds) and the failed ones in a row.
+type SupervisorSettingsResponse struct {
+	Configured      bool               `json:"configured"` // false before the seeds: run the migrator
+	Enabled         bool               `json:"enabled"`
+	IntervalSeconds int                `json:"interval_seconds"`
+	Provider        string             `json:"provider,omitempty"`
+	Model           string             `json:"model,omitempty"`
+	BaseURL         string             `json:"base_url,omitempty"`
+	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+	MaxTokens       int                `json:"max_tokens,omitempty"`
+	TimeoutSeconds  int                `json:"timeout_seconds"`
+	Instructions    string             `json:"instructions"`
+	Autonomy        SupervisorAutonomy `json:"autonomy"`
+	APIKeySet       bool               `json:"api_key_set"`
+	MinInterval     int                `json:"min_interval"`
+	MaxInterval     int                `json:"max_interval"`
+	MinTimeout      int                `json:"min_timeout"`
+	MaxTimeout      int                `json:"max_timeout"`
+	MaxActions      int                `json:"max_actions"`
+	Analyzing       bool               `json:"analyzing"`
+	NextRunAt       *int64             `json:"next_run_at,omitempty"`
+	FailuresInRow   int                `json:"failures_in_row"`
+	UpdatedAt       int64              `json:"updated_at"`
+}
+
+// SupervisorSettingsRequest is the payload of PATCH /api/settings/supervisor,
+// of the fields set: an empty BaseURL or ReasoningEffort and a MaxTokens of 0
+// remove them; APIKey sets the key, "" removes it.
+type SupervisorSettingsRequest struct {
+	Enabled         *bool               `json:"enabled,omitempty"`
+	IntervalSeconds *int                `json:"interval_seconds,omitempty"`
+	Provider        *string             `json:"provider,omitempty"`
+	Model           *string             `json:"model,omitempty"`
+	BaseURL         *string             `json:"base_url,omitempty"`
+	ReasoningEffort *string             `json:"reasoning_effort,omitempty"`
+	MaxTokens       *int                `json:"max_tokens,omitempty"`
+	TimeoutSeconds  *int                `json:"timeout_seconds,omitempty"`
+	Instructions    *string             `json:"instructions,omitempty"`
+	Autonomy        *SupervisorAutonomy `json:"autonomy,omitempty"`
+	APIKey          *string             `json:"api_key,omitempty"`
+}
+
+// SupervisorSnapshot is what the supervisor knows of the agents, sent to its
+// model as is, never a secret: when it was made, in the zone of the
+// controller, the windows of the realized results, the accounts by an alias
+// with their currency, the exposure of the agents on each account and pair,
+// the agents, and what couldn't be read. Money comes with its currency,
+// never converted nor summed across currencies; the volumes in lots.
+type SupervisorSnapshot struct {
+	GeneratedAt string               `json:"generated_at"`
+	Timezone    string               `json:"timezone"`
+	Windows     []SupervisorWindow   `json:"windows"`
+	Accounts    []SupervisorAccount  `json:"accounts"`
+	Exposure    []SupervisorExposure `json:"exposure"`
+	Agents      []SupervisorAgent    `json:"agents"`
+	Gaps        []string             `json:"gaps,omitempty"`
+}
+
+// SupervisorWindow is a window of the realized results, its start and end.
+type SupervisorWindow struct {
+	Name string `json:"name"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// SupervisorAccount is an account of the agents trading live: its alias, its
+// currency and balance, when it was read, why not (Gap), and its agents.
+type SupervisorAccount struct {
+	Account  string   `json:"account"`
+	Currency string   `json:"currency,omitempty"`
+	Balance  *float64 `json:"balance,omitempty"`
+	ReadAt   string   `json:"read_at,omitempty"`
+	Gap      string   `json:"gap,omitempty"`
+	Agents   []string `json:"agents"`
+}
+
+// SupervisorExposure is the exposure of the agents on a pair of an account:
+// the lots and positions bought and sold, the agents on each side, and the
+// open profit of them, in the currency of the account.
+type SupervisorExposure struct {
+	Account       string   `json:"account"`
+	Currency      string   `json:"currency"`
+	Pair          string   `json:"pair"`
+	BuyLots       float64  `json:"buy_lots"`
+	SellLots      float64  `json:"sell_lots"`
+	BuyPositions  int      `json:"buy_positions"`
+	SellPositions int      `json:"sell_positions"`
+	BuyAgents     []string `json:"buy_agents,omitempty"`
+	SellAgents    []string `json:"sell_agents,omitempty"`
+	OpenProfit    float64  `json:"open_profit"`
+}
+
+// SupervisorAgent is an agent as the supervisor knows it: its settings, the
+// state of its process and of its outbox, its supervision, its limits of risk
+// (the ones of its settings, by the name of their flag, and the daily ones of
+// its prompt), its positions and pending orders, its results and its last
+// decisions.
+type SupervisorAgent struct {
+	Name           string                 `json:"name"`
+	Kind           string                 `json:"kind"`
+	Strategy       string                 `json:"strategy,omitempty"`
+	Mode           string                 `json:"mode"`
+	Enabled        bool                   `json:"enabled"`
+	State          string                 `json:"state"`
+	Reachable      bool                   `json:"reachable"`
+	Restarts       int                    `json:"restarts,omitempty"`
+	LastExit       string                 `json:"last_exit,omitempty"`
+	LaunchError    string                 `json:"launch_error,omitempty"`
+	RestartPending bool                   `json:"restart_pending,omitempty"`
+	Outbox         *AgentOutbox           `json:"outbox,omitempty"`
+	EntriesBlocked bool                   `json:"entries_blocked"`
+	EntriesReason  string                 `json:"entries_reason,omitempty"`
+	StopState      string                 `json:"stop_state,omitempty"`
+	StopReason     string                 `json:"stop_reason,omitempty"`
+	Account        string                 `json:"account,omitempty"`
+	Pairs          []string               `json:"pairs"`
+	Timeframe      string                 `json:"timeframe,omitempty"`
+	Risk           map[string]string      `json:"risk,omitempty"`
+	DailyLimits    *SupervisorDailyLimits `json:"daily_limits,omitempty"`
+	Model          string                 `json:"model,omitempty"`
+	Prompt         string                 `json:"prompt,omitempty"`
+	PromptStatus   string                 `json:"prompt_status,omitempty"`
+	PeriodStart    string                 `json:"period_start,omitempty"`
+	Positions      []SupervisorPosition   `json:"positions"`
+	Pending        []SupervisorPending    `json:"pending"`
+	OpenProfit     []CurrencyAmount       `json:"open_profit"`
+	Realized       []SupervisorRealized   `json:"realized"`
+	Decisions      []SupervisorDecision   `json:"decisions,omitempty"`
+}
+
+// SupervisorDailyLimits are the daily limits of the prompt of an LLM agent:
+// the gain and the loss after which it takes no entry on a pair that day.
+type SupervisorDailyLimits struct {
+	Gain     float64 `json:"gain,omitempty"`
+	Loss     float64 `json:"loss,omitempty"`
+	Currency string  `json:"currency"`
+}
+
+// SupervisorPosition is a position of an agent: on its account (its ticket,
+// its levels at the broker, 0 for none, its profit in the currency of the
+// account, when it opened), or simulated, in paper (Paper, its size in units
+// of the base asset, without ticket nor levels).
+type SupervisorPosition struct {
+	Ticket     int64   `json:"ticket,omitempty"`
+	Pair       string  `json:"pair"`
+	Side       string  `json:"side"`
+	Volume     float64 `json:"volume"`
+	Entry      float64 `json:"entry,omitempty"`
+	Price      float64 `json:"price,omitempty"`
+	StopLoss   float64 `json:"stop_loss"`
+	TakeProfit float64 `json:"take_profit"`
+	Profit     float64 `json:"profit"`
+	Currency   string  `json:"currency,omitempty"`
+	OpenedAt   string  `json:"opened_at,omitempty"`
+	Paper      bool    `json:"paper,omitempty"`
+}
+
+// SupervisorPending is a pending order of an agent: its ticket on the account,
+// or its ID in paper, and whether it is an entry or a leg of a position.
+type SupervisorPending struct {
+	Ticket     int64   `json:"ticket"`
+	Pair       string  `json:"pair"`
+	Side       string  `json:"side"`
+	Type       string  `json:"type"`
+	Price      float64 `json:"price"`
+	Volume     float64 `json:"volume"`
+	StopLoss   float64 `json:"stop_loss,omitempty"`
+	TakeProfit float64 `json:"take_profit,omitempty"`
+	Entry      bool    `json:"entry"`
+	Paper      bool    `json:"paper,omitempty"`
+}
+
+// SupervisorRealized is the result an agent realized in a window, as its
+// account booked it, in its currency: the positions closed, won and lost,
+// the sum of the profits of the ones won and of the losses of the ones lost.
+type SupervisorRealized struct {
+	Window      string  `json:"window"`
+	Amount      float64 `json:"amount"`
+	Currency    string  `json:"currency"`
+	Positions   int     `json:"positions"`
+	Wins        int     `json:"wins"`
+	Losses      int     `json:"losses"`
+	GrossProfit float64 `json:"gross_profit"`
+	GrossLoss   float64 `json:"gross_loss"`
+}
+
+// SupervisorDecision is a recent decision of an LLM agent: when, on which
+// pair, its action, confidence, outcome and the start of its reason.
+type SupervisorDecision struct {
+	At         string  `json:"at"`
+	Pair       string  `json:"pair"`
+	Action     string  `json:"action"`
+	Confidence float64 `json:"confidence"`
+	Outcome    string  `json:"outcome"`
+	Reason     string  `json:"reason,omitempty"`
+}
+
+// SupervisorFinding is a finding of an analysis of the supervisor about an
+// agent, or the agents as a whole without one: its category (operational,
+// risk or performance), severity (info, warning or critical), what it rests
+// on, and what it recommends, eg: stop.
+type SupervisorFinding struct {
+	Agent          string `json:"agent,omitempty"`
+	Category       string `json:"category"`
+	Severity       string `json:"severity"`
+	Summary        string `json:"summary"`
+	Evidence       string `json:"evidence,omitempty"`
+	Recommendation string `json:"recommendation,omitempty"`
+}
+
+// SupervisorRunInfo is an analysis of the supervisor, its times in Unix
+// seconds: schedule or manual, running, ok, failed or skipped.
+type SupervisorRunInfo struct {
+	ID          int64               `json:"id"`
+	Origin      string              `json:"origin"`
+	Status      string              `json:"status"`
+	RequestedBy string              `json:"requested_by,omitempty"`
+	Model       string              `json:"model,omitempty"`
+	StartedAt   int64               `json:"started_at"`
+	FinishedAt  *int64              `json:"finished_at,omitempty"`
+	Summary     string              `json:"summary,omitempty"`
+	Findings    []SupervisorFinding `json:"findings"`
+	Error       string              `json:"error,omitempty"`
+	ActionIDs   []int64             `json:"action_ids,omitempty"`
+}
+
+// SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the
+// newest first.
+type SupervisorRunsResponse struct {
+	Runs []SupervisorRunInfo `json:"runs"`
+}
+
+// SupervisorRunResponse is the payload of GET /api/supervisor/runs/{id}: the
+// analysis and the data sent to the model.
+type SupervisorRunResponse struct {
+	Run      SupervisorRunInfo   `json:"run"`
+	Snapshot *SupervisorSnapshot `json:"snapshot,omitempty"`
+}
+
+// SupervisorScope is what an action of the supervision acts on: the agents,
+// the pairs (all of them without any), and, confirmed, the positions and the
+// pending orders it was proposed with, the ones of agents not running apart
+// (closed on their bridge).
+type SupervisorScope struct {
+	Agents    []string                  `json:"agents"`
+	Pairs     []string                  `json:"pairs,omitempty"`
+	Positions []SupervisorScopePosition `json:"positions,omitempty"`
+	Orders    []SupervisorScopeOrder    `json:"orders,omitempty"`
+}
+
+// SupervisorScopePosition is a position an action closes: of an agent, on an
+// account, as it was read when proposed.
+type SupervisorScopePosition struct {
+	Agent              string `json:"agent"`
+	SupervisorPosition `tstype:",extends"`
+	Account            string `json:"account,omitempty"`
+	Running            bool   `json:"running"`
+}
+
+// SupervisorScopeOrder is a pending entry an action cancels: of an agent.
+type SupervisorScopeOrder struct {
+	Agent             string `json:"agent"`
+	SupervisorPending `tstype:",extends"`
+	Running           bool `json:"running"`
+}
+
+// SupervisorOptions is what goes with an action: the pending entries of the
+// agents canceled, their entries kept blocked once their positions closed.
+type SupervisorOptions struct {
+	CancelPending bool `json:"cancel_pending"`
+	KeepBlocked   bool `json:"keep_blocked"`
+}
+
+// SupervisorResultItem is how an action went on an agent, a position or an
+// order, as checked: done, already (nothing to do), pending (applied once the
+// agent runs, or once it is flat), failed (nothing done) or unknown (maybe
+// done: to check on the account, never sent again).
+type SupervisorResultItem struct {
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Pair   string `json:"pair,omitempty"`
+	Ticket int64  `json:"ticket,omitempty"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SupervisorResult is the result of an action, checked at CheckedAt (Unix
+// seconds).
+type SupervisorResult struct {
+	Items     []SupervisorResultItem `json:"items"`
+	Error     string                 `json:"error,omitempty"`
+	CheckedAt int64                  `json:"checked_at,omitempty"`
+}
+
+// SupervisorActionInfo is an action of the supervision on the agents, its
+// times in Unix seconds: asked by the supervisor (alone, or proposed) or by a
+// user; block_entries, allow_entries, stop_agent (when_flat or now),
+// cancel_pending or close_positions; why, of which category (operational,
+// risk or performance); proposed until confirmed, rejected or expired, then
+// executing, succeeded, partial, failed or unknown.
+type SupervisorActionInfo struct {
+	ID          int64             `json:"id"`
+	Source      string            `json:"source"`
+	RunID       *int64            `json:"run_id,omitempty"`
+	Action      string            `json:"action"`
+	Mode        string            `json:"mode,omitempty"`
+	Scope       SupervisorScope   `json:"scope"`
+	Options     SupervisorOptions `json:"options"`
+	Reason      string            `json:"reason"`
+	Category    string            `json:"category,omitempty"`
+	Evidence    []string          `json:"evidence"`
+	Status      string            `json:"status"`
+	Result      *SupervisorResult `json:"result,omitempty"`
+	RequestedBy string            `json:"requested_by,omitempty"`
+	ConfirmedBy string            `json:"confirmed_by,omitempty"`
+	CreatedAt   int64             `json:"created_at"`
+	ExpiresAt   *int64            `json:"expires_at,omitempty"`
+	DecidedAt   *int64            `json:"decided_at,omitempty"`
+	FinishedAt  *int64            `json:"finished_at,omitempty"`
+}
+
+// SupervisorActionsResponse is the payload of GET /api/supervisor/actions,
+// the newest first.
+type SupervisorActionsResponse struct {
+	Actions []SupervisorActionInfo `json:"actions"`
+}
+
+// SupervisorMessageInfo is a message of the conversation of the user with the
+// supervisor, its times in Unix seconds: a question of the user, an answer of
+// the supervisor (analytical), a proposal of an action, its result once
+// confirmed and checked, or an error, eg: the model unavailable; DataAt is
+// when the data the answer rests on was read.
+type SupervisorMessageInfo struct {
+	ID        int64                 `json:"id"`
+	Role      string                `json:"role"`
+	Kind      string                `json:"kind"`
+	Content   string                `json:"content"`
+	Action    *SupervisorActionInfo `json:"action,omitempty"`
+	DataAt    *int64                `json:"data_at,omitempty"`
+	CreatedAt int64                 `json:"created_at"`
+}
+
+// SupervisorMessagesResponse is the payload of GET /api/supervisor/messages,
+// the oldest first, and of POST /api/supervisor/messages, the messages it
+// added; More tells there are older ones.
+type SupervisorMessagesResponse struct {
+	Messages []SupervisorMessageInfo `json:"messages"`
+	More     bool                    `json:"more,omitempty"`
+}
+
+// SupervisorMessageRequest is the payload of POST /api/supervisor/messages: a
+// question or a request of the user to the supervisor.
+type SupervisorMessageRequest struct {
+	Text string `json:"text"`
+}
+
+// SupervisorEntriesRequest is the payload of POST
+// /api/supervisor/agents/{name}/entries: the entries of the agent blocked,
+// for Reason, or allowed again, by the user.
+type SupervisorEntriesRequest struct {
+	Blocked bool   `json:"blocked"`
+	Reason  string `json:"reason,omitempty"`
 }

@@ -141,6 +141,7 @@ func run() int {
 	bot := controller.NewTelegramRunner(ctx, dashboard, controller.WithPrompts(st, func() { manager.Trigger() }))
 	manager = controller.NewManager(st, cfg.Agents, agents, dashboard, bot)
 	dashboard.ServeSettings(st, manager, bot)
+	supervision := dashboard.ServeSupervision(st, manager)
 
 	// the internal API first, then the dashboard: nothing is launched unless
 	// both can serve
@@ -175,6 +176,7 @@ func run() int {
 		manager.Run(ctx) // until ctx is done, then stops the agents
 		close(managed)
 	}()
+	go supervision.Run(ctx) // the analyses of the agents, until ctx is done
 
 	<-ctx.Done()
 	return life.stop(func() {
