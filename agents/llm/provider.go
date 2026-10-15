@@ -266,7 +266,27 @@ func (c client) post(ctx context.Context, path string, headers http.Header, body
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
-	answer, err := c.send(ctx, path, headers, data)
+	return retrying(ctx, c, func() ([]byte, error) { return c.send(ctx, path, headers, data) })
+}
+
+// postStream posts body, JSON, to path with headers as post does, asking for
+// the answer as a stream of server-sent events, and returns its body open for
+// the caller to read and close. It is sent again as post sends it, only on an
+// error of the request, before a byte of the answer is read.
+func (c client) postStream(ctx context.Context, path string, headers http.Header, body any) (io.ReadCloser, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c.name, err)
+	}
+	return retrying(ctx, c, func() (io.ReadCloser, error) { return c.open(ctx, path, headers, data) })
+}
+
+// retrying returns what send returns, called again once after a wait when it
+// fails with an error worth it (see retriable) and the wait fits the deadline
+// of ctx.
+func retrying[T any](ctx context.Context, c client, send func() (T, error)) (T, error) {
+	var none T
+	answer, err := send()
 	apiErr, ok := retriable(err)
 	if !ok {
 		return answer, err
@@ -276,15 +296,15 @@ func (c client) post(ctx context.Context, path string, headers http.Header, body
 		wait = retryWait
 	}
 	if deadline, ok := ctx.Deadline(); wait > retryMaxWait || ok && time.Until(deadline) < wait+retryRoom {
-		return nil, err // the Trader pauses for its Retry-After
+		return none, err // the Trader pauses for its Retry-After
 	}
 	log.Warnf("[LLM] %s: %v: sent again in %s", c, err, wait)
 	select {
 	case <-ctx.Done():
-		return nil, err
+		return none, err
 	case <-time.After(wait):
 	}
-	return c.send(ctx, path, headers, data)
+	return send()
 }
 
 // send sends data, JSON, to path with headers, see post.
@@ -315,6 +335,37 @@ func (c client) send(ctx context.Context, path string, headers http.Header, data
 		return nil, c.apiError(response, answer)
 	}
 	return answer, nil
+}
+
+// open sends data, JSON, to path with headers, see postStream: the body of a
+// successful answer is returned unread, the one of an error read as send
+// reads it.
+func (c client) open(ctx context.Context, path string, headers http.Header, data []byte) (io.ReadCloser, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c.name, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	for key, values := range headers {
+		for _, value := range values {
+			request.Header.Add(key, value)
+		}
+	}
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, c.failure(ctx, err)
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		defer func() { _ = response.Body.Close() }()
+		answer, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+		if err != nil {
+			return nil, c.failure(ctx, err)
+		}
+		return nil, c.apiError(response, answer)
+	}
+	return response.Body, nil
 }
 
 // failure classifies an error of a request without answer: a timeout, or the

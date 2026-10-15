@@ -1,5 +1,6 @@
 import { liveStream } from "../lib/events";
 import { csrfToken } from "../lib/settings";
+import { createSSEParser } from "../lib/sse";
 import { APIError, retryAfterSeconds } from "./errors";
 import type {
   AgentCreateRequest,
@@ -46,6 +47,9 @@ import type {
   SupervisorSettingsRequest,
   SupervisorSettingsResponse,
   SupervisorSnapshot,
+  SupervisorStreamError,
+  SupervisorStreamStage,
+  SupervisorStreamText,
   TelegramSettingsRequest,
   TelegramSettingsResponse,
   TelegramUserRequest,
@@ -85,21 +89,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     window.location.assign(loginPath());
   }
   const text = await response.text();
-  if (!response.ok) {
-    let message = `${path}: ${response.status} ${response.statusText}`;
-    try {
-      const parsed = JSON.parse(text) as { error?: string };
-      if (parsed.error) message = parsed.error;
-    } catch {
-      // not JSON; keep the generic message
-    }
-    throw new APIError(
-      message,
-      response.status,
-      retryAfterSeconds(response.headers.get("Retry-After")),
-    );
-  }
+  if (!response.ok) throw failureOf(path, response, text);
   return (text ? JSON.parse(text) : undefined) as T; // none for 204
+}
+
+/** The error of an answer of the API refused: its message, else the status. */
+function failureOf(path: string, response: Response, text: string): APIError {
+  let message = `${path}: ${response.status} ${response.statusText}`;
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    if (parsed.error) message = parsed.error;
+  } catch {
+    // not JSON; keep the generic message
+  }
+  return new APIError(
+    message,
+    response.status,
+    retryAfterSeconds(response.headers.get("Retry-After")),
+  );
 }
 
 function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -499,6 +506,83 @@ export function fetchSupervisorMessages(
 export function sendSupervisorMessage(text: string): Promise<SupervisorMessagesResponse> {
   const request: SupervisorMessageRequest = { text };
   return postJSON<SupervisorMessagesResponse>("/supervisor/messages", request);
+}
+
+/** What an answer of the XTrader AI tells as it streams. */
+export interface SupervisorStreamHandlers {
+  /** A message kept: the question, then each proposal as the model makes it. */
+  onMessage?: (message: SupervisorMessageInfo) => void;
+  /** Where the answer is; the text of the stage before is dropped. */
+  onStage?: (stage: SupervisorStreamStage) => void;
+  /** A piece of the text the model writes, in Markdown. */
+  onText?: (piece: string) => void;
+}
+
+/**
+ * Sends a message to the XTrader AI and follows its answer as the server
+ * streams it (POST /supervisor/messages/stream), telling handlers what comes:
+ * the messages it added once done, as sendSupervisorMessage answers them. A
+ * stream cut before its end fails: what the server kept is read again.
+ */
+export async function streamSupervisorMessage(
+  text: string,
+  handlers: SupervisorStreamHandlers,
+  signal?: AbortSignal,
+): Promise<SupervisorMessagesResponse> {
+  const path = "/supervisor/messages/stream";
+  const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
+  const token = csrfToken(document.cookie);
+  if (token) headers.set("X-CSRF-Token", token);
+  const request: SupervisorMessageRequest = { text };
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(request),
+    signal,
+  });
+  if (response.status === 401) window.location.assign(loginPath());
+  if (!response.ok || !response.body) throw failureOf(path, response, await response.text());
+
+  let done: SupervisorMessagesResponse | null = null;
+  let failure: string | null = null;
+  const parser = createSSEParser(({ event, data }) => {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return; // not an event of the answer
+    }
+    switch (event) {
+      case "message":
+        handlers.onMessage?.(payload as SupervisorMessageInfo);
+        break;
+      case "stage":
+        handlers.onStage?.(payload as SupervisorStreamStage);
+        break;
+      case "text":
+        handlers.onText?.((payload as SupervisorStreamText).text);
+        break;
+      case "error":
+        failure = (payload as SupervisorStreamError).error;
+        break;
+      case "done":
+        done = payload as SupervisorMessagesResponse;
+        break;
+    }
+  });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { value, done: ended } = await reader.read();
+    if (ended) break;
+    parser.push(decoder.decode(value, { stream: true }));
+  }
+  parser.push(decoder.decode());
+  parser.end();
+  if (failure !== null) throw new APIError(failure, response.status);
+  if (done === null)
+    throw new APIError("A resposta foi interrompida antes do fim.", response.status);
+  return done;
 }
 
 /** Blocks the entries of an agent, or allows them again, by the user. */

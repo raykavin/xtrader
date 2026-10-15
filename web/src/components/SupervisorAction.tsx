@@ -11,6 +11,7 @@ import {
   actionLabel,
   actionNote,
   actionStatusLabel,
+  actorLabel,
   awaitingDecision,
   categoryLabel,
   itemStatusLabel,
@@ -242,7 +243,7 @@ export function SupervisorActionCard({
       )}
       {action.result && <ResultItems items={action.result.items} error={action.result.error} />}
       <footer className="sup-action-foot">
-        {action.requested_by && <span>Pedido por {action.requested_by}</span>}
+        {action.requested_by && <span>Pedido por {actorLabel(action.requested_by)}</span>}
         {action.confirmed_by && action.status !== "proposed" && (
           <span>
             {action.status === "rejected" ? "Recusado" : "Confirmado"} por {action.confirmed_by}

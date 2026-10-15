@@ -156,6 +156,14 @@ type openAIChatRequest struct {
 	ToolChoice          string              `json:"tool_choice,omitempty"`
 	MaxCompletionTokens int                 `json:"max_completion_tokens"`
 	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
+	Stream              bool                `json:"stream,omitempty"`
+	StreamOptions       *openAIStreamOpts   `json:"stream_options,omitempty"`
+}
+
+// openAIStreamOpts asks for the tokens of a streamed answer, in its last
+// event.
+type openAIStreamOpts struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openAIChatAnswer struct {
@@ -173,31 +181,7 @@ type openAIChatAnswer struct {
 // Complete answers the conversation, see Chat.
 func (o *openAIChat) Complete(ctx context.Context, system string, messages []ChatMessage,
 	tools []ToolSpec) (ChatAnswer, error) {
-	text := func(value string) *string { return &value }
-	request := openAIChatRequest{Model: o.model, MaxCompletionTokens: o.maxTokens, ReasoningEffort: o.reasoning,
-		Messages: []openAIChatMessage{{Role: "system", Content: text(system)}}}
-	for _, m := range messages {
-		message := openAIChatMessage{Role: m.Role, Content: text(m.Content), ToolCallID: m.ToolCallID}
-		for _, call := range m.ToolCalls {
-			c := openAIChatToolCall{ID: call.ID, Type: "function"}
-			c.Function.Name, c.Function.Arguments = call.Name, string(arguments(call.Arguments))
-			message.ToolCalls = append(message.ToolCalls, c)
-		}
-		if m.Role == ChatAssistant && m.Content == "" && len(m.ToolCalls) > 0 {
-			message.Content = nil
-		}
-		request.Messages = append(request.Messages, message)
-	}
-	for _, tool := range tools {
-		t := openAIChatTool{Type: "function"}
-		t.Function.Name, t.Function.Description, t.Function.Parameters = tool.Name, tool.Description,
-			tool.parameters()
-		request.Tools = append(request.Tools, t)
-	}
-	if len(tools) > 0 {
-		request.ToolChoice = "auto"
-	}
-
+	request := o.request(system, messages, tools)
 	headers := http.Header{"Authorization": {"Bearer " + o.apiKey}}
 	data, err := o.post(ctx, "/chat/completions", headers, request)
 	if err != nil {
@@ -231,6 +215,36 @@ func (o *openAIChat) Complete(ctx context.Context, system string, messages []Cha
 	return result, nil
 }
 
+// request returns the request of the conversation: the instructions system
+// first, the calls of tools as functions.
+func (o *openAIChat) request(system string, messages []ChatMessage, tools []ToolSpec) openAIChatRequest {
+	text := func(value string) *string { return &value }
+	request := openAIChatRequest{Model: o.model, MaxCompletionTokens: o.maxTokens, ReasoningEffort: o.reasoning,
+		Messages: []openAIChatMessage{{Role: "system", Content: text(system)}}}
+	for _, m := range messages {
+		message := openAIChatMessage{Role: m.Role, Content: text(m.Content), ToolCallID: m.ToolCallID}
+		for _, call := range m.ToolCalls {
+			c := openAIChatToolCall{ID: call.ID, Type: "function"}
+			c.Function.Name, c.Function.Arguments = call.Name, string(arguments(call.Arguments))
+			message.ToolCalls = append(message.ToolCalls, c)
+		}
+		if m.Role == ChatAssistant && m.Content == "" && len(m.ToolCalls) > 0 {
+			message.Content = nil
+		}
+		request.Messages = append(request.Messages, message)
+	}
+	for _, tool := range tools {
+		t := openAIChatTool{Type: "function"}
+		t.Function.Name, t.Function.Description, t.Function.Parameters = tool.Name, tool.Description,
+			tool.parameters()
+		request.Tools = append(request.Tools, t)
+	}
+	if len(tools) > 0 {
+		request.ToolChoice = "auto"
+	}
+	return request
+}
+
 // anthropicChat is the Chat of Anthropic, through the Messages API and its
 // tools.
 type anthropicChat struct {
@@ -259,6 +273,7 @@ type anthropicChatRequest struct {
 	Messages   []anthropicChatMessage `json:"messages"`
 	Tools      []anthropicTool        `json:"tools,omitempty"`
 	ToolChoice *anthropicToolChoice   `json:"tool_choice,omitempty"`
+	Stream     bool                   `json:"stream,omitempty"`
 }
 
 type anthropicChatAnswer struct {
@@ -267,10 +282,61 @@ type anthropicChatAnswer struct {
 	Usage      anthropicUsage       `json:"usage"`
 }
 
-// Complete answers the conversation, see Chat. The results of consecutive
-// calls of tools go in one message of the user, as the API wants.
+// Complete answers the conversation, see Chat.
 func (a *anthropicChat) Complete(ctx context.Context, system string, messages []ChatMessage,
 	tools []ToolSpec) (ChatAnswer, error) {
+	request := a.request(system, messages, tools)
+	headers := http.Header{"X-Api-Key": {a.apiKey}, "Anthropic-Version": {anthropicVersion}}
+	data, err := a.post(ctx, "/messages", headers, request)
+	if err != nil {
+		return ChatAnswer{}, err
+	}
+	var answer anthropicChatAnswer
+	if err := json.Unmarshal(data, &answer); err != nil {
+		var usage anthropicUsage
+		if usageIn(data, &usage) {
+			a.recordChat(usage.usage())
+		}
+		return ChatAnswer{}, invalidAnswer(a.name, "%v", err)
+	}
+	usage := answer.Usage.usage()
+	a.recordChat(usage)
+	if err := a.stopped(answer.StopReason); err != nil {
+		return ChatAnswer{}, err
+	}
+	result := ChatAnswer{Usage: usage, Truncated: answer.StopReason == "max_tokens"}
+	var texts []string
+	for _, block := range answer.Content {
+		switch block.Type {
+		case "text":
+			if text := strings.TrimSpace(block.Text); text != "" {
+				texts = append(texts, text)
+			}
+		case "tool_use":
+			result.ToolCalls = append(result.ToolCalls, ToolCall{ID: block.ID, Name: block.Name,
+				Arguments: arguments(block.Input)})
+		}
+	}
+	result.Content = strings.Join(texts, "\n\n")
+	return result, nil
+}
+
+// stopped returns the error of an answer stopped for reason short of an
+// answer: refused, or cut at the context window of the model.
+func (a *anthropicChat) stopped(reason string) error {
+	switch reason {
+	case "refusal":
+		return invalidAnswer(a.name, "refused")
+	case "model_context_window_exceeded":
+		return invalidAnswer(a.name, "cut at the context window of the model")
+	}
+	return nil
+}
+
+// request returns the request of the conversation: the instructions apart,
+// the results of consecutive calls of tools in one message of the user, as
+// the API wants.
+func (a *anthropicChat) request(system string, messages []ChatMessage, tools []ToolSpec) anthropicChatRequest {
 	request := anthropicChatRequest{Model: a.model, MaxTokens: a.maxTokens, System: system}
 	for _, m := range messages {
 		switch m.Role {
@@ -307,41 +373,5 @@ func (a *anthropicChat) Complete(ctx context.Context, system string, messages []
 	if len(tools) > 0 {
 		request.ToolChoice = &anthropicToolChoice{Type: "auto"}
 	}
-
-	headers := http.Header{"X-Api-Key": {a.apiKey}, "Anthropic-Version": {anthropicVersion}}
-	data, err := a.post(ctx, "/messages", headers, request)
-	if err != nil {
-		return ChatAnswer{}, err
-	}
-	var answer anthropicChatAnswer
-	if err := json.Unmarshal(data, &answer); err != nil {
-		var usage anthropicUsage
-		if usageIn(data, &usage) {
-			a.recordChat(usage.usage())
-		}
-		return ChatAnswer{}, invalidAnswer(a.name, "%v", err)
-	}
-	usage := answer.Usage.usage()
-	a.recordChat(usage)
-	switch answer.StopReason {
-	case "refusal":
-		return ChatAnswer{}, invalidAnswer(a.name, "refused")
-	case "model_context_window_exceeded":
-		return ChatAnswer{}, invalidAnswer(a.name, "cut at the context window of the model")
-	}
-	result := ChatAnswer{Usage: usage, Truncated: answer.StopReason == "max_tokens"}
-	var texts []string
-	for _, block := range answer.Content {
-		switch block.Type {
-		case "text":
-			if text := strings.TrimSpace(block.Text); text != "" {
-				texts = append(texts, text)
-			}
-		case "tool_use":
-			result.ToolCalls = append(result.ToolCalls, ToolCall{ID: block.ID, Name: block.Name,
-				Arguments: arguments(block.Input)})
-		}
-	}
-	result.Content = strings.Join(texts, "\n\n")
-	return result, nil
+	return request
 }

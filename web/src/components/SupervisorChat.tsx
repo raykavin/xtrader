@@ -12,16 +12,18 @@ import {
   fetchSupervisorSettings,
   runSupervisor,
   type SupervisorDecision,
-  sendSupervisorMessage,
+  streamSupervisorMessage,
 } from "../api/client";
 import type {
   SupervisorMessageInfo,
   SupervisorRunInfo,
   SupervisorSettingsResponse,
+  SupervisorStreamStage,
 } from "../api/types";
 import { settingsHref } from "../lib/nav";
-import { awaitingDecision, mergeMessages, withAction } from "../lib/supervisor";
+import { awaitingDecision, mergeMessages, stageLabel, withAction } from "../lib/supervisor";
 import { Icon } from "./Icon";
+import { Markdown } from "./Markdown";
 import { Alert } from "./States";
 import { clock, SupervisorActionCard, toneClass } from "./SupervisorAction";
 import { SupervisorRuns } from "./SupervisorRuns";
@@ -35,11 +37,13 @@ const RUNS_POLL = 3000;
 const MAX_MESSAGE = 4000;
 
 /**
- * The supervisor of the agents, at hand on every page: a button opens a panel
- * beside the page (the whole screen on a phone) with the conversation of the
- * user with the supervisor, kept on the server, and its analyses. Its answers
- * are analyses; an action it proposes shows as a card the user confirms or
- * rejects; the result of one confirmed comes back checked on the account.
+ * The XTrader AI, the supervisor of the agents, at hand on every page: a
+ * button opens a panel beside the page (the whole screen on a phone) with the
+ * conversation of the user with it, kept on the server, and its analyses. Its
+ * answers stream as the model writes them, in Markdown, an animation telling
+ * what it does until the text comes; an action it proposes shows as a card
+ * the user confirms or rejects; the result of one confirmed comes back
+ * checked on the account.
  */
 export function SupervisorChat() {
   const [open, setOpen] = useState(false);
@@ -50,7 +54,12 @@ export function SupervisorChat() {
   const [runs, setRuns] = useState<SupervisorRunInfo[] | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState<string | null>(null);
+  // the answer streaming: its question kept, its stage, the text of the stage
+  const [asked, setAsked] = useState(false);
+  const [stage, setStage] = useState<SupervisorStreamStage | null>(null);
+  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const streaming = useRef<AbortController | null>(null);
   const panel = useRef<HTMLElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -97,11 +106,13 @@ export function SupervisorChat() {
     return () => window.clearInterval(timer);
   }, [open, tab, running, loadRuns, fail]);
 
-  // the last message in view
+  // the last message in view, the text streaming too
   const count = (messages?.length ?? 0) + (sending ? 1 : 0);
   useEffect(() => {
-    if (count > 0) list.current?.scrollTo({ top: list.current.scrollHeight });
-  }, [count]);
+    if (count > 0 || draft) list.current?.scrollTo({ top: list.current.scrollHeight });
+  }, [count, draft]);
+  // a page left: the stream stops, the server keeps the answer
+  useEffect(() => () => streaming.current?.abort(), []);
 
   const close = () => {
     setOpen(false);
@@ -116,16 +127,42 @@ export function SupervisorChat() {
     const message = text.trim();
     if (!message || sending) return;
     setSending(message);
+    setAsked(false);
+    setStage(null);
+    setDraft("");
     setText("");
     setError(null);
+    const controller = new AbortController();
+    streaming.current = controller;
+    const keep = (kept: SupervisorMessageInfo[]) =>
+      setMessages((current) => mergeMessages(current ?? [], kept));
     try {
-      const response = await sendSupervisorMessage(message);
-      setMessages((current) => mergeMessages(current ?? [], response.messages));
+      const response = await streamSupervisorMessage(
+        message,
+        {
+          onMessage: (m) => {
+            if (m.kind === "question") setAsked(true);
+            keep([m]);
+          },
+          onStage: (next) => {
+            setStage(next);
+            setDraft(""); // the text before a tool isn't the answer
+          },
+          onText: (piece) => setDraft((current) => current + piece),
+        },
+        controller.signal,
+      );
+      keep(response.messages);
     } catch (e) {
-      fail(e);
-      loadMessages(); // what the server kept, eg: the question, the answer after a timeout of the network
+      if (!controller.signal.aborted) {
+        fail(e);
+        loadMessages(); // what the server kept, eg: the question, the answer after a drop of the network
+      }
     } finally {
+      streaming.current = null;
       setSending(null);
+      setStage(null);
+      setDraft("");
       input.current?.focus();
     }
   };
@@ -176,12 +213,12 @@ export function SupervisorChat() {
         className="supervisor-fab"
         aria-expanded={open}
         aria-controls="supervisor-panel"
-        aria-label={open ? "Fechar o supervisor" : "Abrir o supervisor"}
-        title="Supervisor dos agentes"
+        aria-label={open ? "Fechar o XTrader AI" : "Abrir o XTrader AI"}
+        title="XTrader AI, o supervisor dos agentes"
         onClick={() => (open ? close() : setOpen(true))}
       >
         <Icon name={open ? "close" : "shield"} size={20} />
-        <span className="supervisor-fab-label">Supervisor</span>
+        <span className="supervisor-fab-label">XTrader AI</span>
         {waiting > 0 && !open && (
           <span className="supervisor-fab-badge" title={`${waiting} proposta(s) aguardando`}>
             {waiting}
@@ -194,14 +231,14 @@ export function SupervisorChat() {
           id="supervisor-panel"
           className="supervisor-panel"
           role="dialog"
-          aria-label="Supervisor dos agentes"
+          aria-label="XTrader AI"
           onKeyDown={onKeyDown}
         >
           <header className="supervisor-head">
             <div className="supervisor-title">
               <Icon name="shield" size={18} />
               <div>
-                <strong>Supervisor</strong>
+                <strong>XTrader AI</strong>
                 <span className="supervisor-sub">
                   {settings === null
                     ? "carregando…"
@@ -216,7 +253,7 @@ export function SupervisorChat() {
             <a
               className="btn btn-ghost btn-icon"
               href={settingsHref("supervisor")}
-              title="Configurações do supervisor"
+              title="Configurações do XTrader AI"
             >
               <Icon name="settings" size={16} />
             </a>
@@ -229,7 +266,7 @@ export function SupervisorChat() {
               <Icon name="close" size={16} />
             </button>
           </header>
-          <div className="supervisor-tabs" role="tablist" aria-label="Seções do supervisor">
+          <div className="supervisor-tabs" role="tablist" aria-label="Seções do XTrader AI">
             {(
               [
                 ["conversa", "Conversa"],
@@ -257,7 +294,7 @@ export function SupervisorChat() {
           {!ready && (
             <Alert tone="warn" className="supervisor-alert">
               Defina o provedor, o modelo e a chave em{" "}
-              <a href={settingsHref("supervisor")}>Configurações → Supervisor</a>.
+              <a href={settingsHref("supervisor")}>Configurações → XTrader AI</a>.
             </Alert>
           )}
 
@@ -288,10 +325,15 @@ export function SupervisorChat() {
                 )}
                 {sending && (
                   <>
-                    <div className="sup-bubble question pending">{sending}</div>
-                    <div className="sup-bubble answer thinking" aria-busy="true">
-                      O supervisor está analisando…
-                    </div>
+                    {!asked && <div className="sup-bubble question pending">{sending}</div>}
+                    {draft ? (
+                      <div className="sup-bubble answer streaming" aria-busy="true">
+                        <span className="sup-answer-label">Análise</span>
+                        <Markdown text={draft} writing />
+                      </div>
+                    ) : (
+                      <Thinking label={stageLabel(stage)} />
+                    )}
                   </>
                 )}
               </div>
@@ -301,8 +343,8 @@ export function SupervisorChat() {
                   className="textarea"
                   rows={2}
                   maxLength={MAX_MESSAGE}
-                  placeholder="Escreva para o supervisor…"
-                  aria-label="Mensagem para o supervisor"
+                  placeholder="Escreva para o XTrader AI…"
+                  aria-label="Mensagem para o XTrader AI"
                   value={text}
                   disabled={sending !== null}
                   onChange={(e) => setText(e.target.value)}
@@ -399,8 +441,29 @@ function Message({
   return (
     <div className="sup-bubble answer">
       <span className="sup-answer-label">Análise</span>
-      <p>{message.content}</p>
+      <Markdown text={message.content} />
       {message.data_at && <span className="sup-data-at">dados de {clock(message.data_at)}</span>}
+    </div>
+  );
+}
+
+/**
+ * The XTrader AI at work, until the text of its answer comes: a pulsing
+ * mark, three dots and what it does, eg: Lendo os agentes. Still with the
+ * motion reduced, the words telling it.
+ */
+function Thinking({ label }: { label: string }) {
+  return (
+    <div className="sup-bubble answer thinking" role="status" aria-busy="true">
+      <span className="sup-thinking-mark" aria-hidden="true">
+        <Icon name="shield" size={14} />
+      </span>
+      <span className="sup-thinking-label">{label}</span>
+      <span className="sup-thinking-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
     </div>
   );
 }

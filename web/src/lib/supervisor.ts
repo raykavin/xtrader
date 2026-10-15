@@ -6,6 +6,7 @@ import type {
   SupervisorActionInfo,
   SupervisorMessageInfo,
   SupervisorResultItem,
+  SupervisorStreamStage,
 } from "../api/types";
 import { formatProfit } from "./format";
 
@@ -154,11 +155,16 @@ export function runStatusLabel(status: string): ToneLabel {
   return { text: status, tone: "off" };
 }
 
+/** Who did something, as the server records it: the supervisor by its name, XTrader AI. */
+export function actorLabel(by: string): string {
+  return by === "supervisor" ? "XTrader AI" : by;
+}
+
 /** Who asked for an analysis or an action. */
 export function originLabel(origin: string, by?: string): string {
   if (origin === "schedule") return "Periódica";
   if (origin === "manual") return by ? `Manual (${by})` : "Manual";
-  if (origin === "supervisor") return "Supervisor";
+  if (origin === "supervisor") return "XTrader AI";
   if (origin === "user") return by ? `Usuário (${by})` : "Usuário";
   return origin;
 }
@@ -169,9 +175,9 @@ export function supervisionBadges(info?: AgentSupervisionInfo): (ToneLabel & { t
   const badges: (ToneLabel & { title: string })[] = [];
   if (info.stop_state === "stopped") {
     badges.push({
-      text: "Interrompido pelo supervisor",
+      text: "Interrompido pelo XTrader AI",
       tone: "error",
-      title: info.stop_reason ? `Motivo: ${info.stop_reason}` : "Parado pelo supervisor",
+      title: info.stop_reason ? `Motivo: ${info.stop_reason}` : "Parado pelo XTrader AI",
     });
   } else if (info.stop_state === "pending_flat") {
     badges.push({
@@ -186,7 +192,7 @@ export function supervisionBadges(info?: AgentSupervisionInfo): (ToneLabel & { t
       tone: "warn",
       title: [
         info.entries_reason ? `Motivo: ${info.entries_reason}` : "",
-        info.entries_by ? `Por: ${info.entries_by}` : "",
+        info.entries_by ? `Por: ${actorLabel(info.entries_by)}` : "",
       ]
         .filter(Boolean)
         .join(" · "),
@@ -284,4 +290,19 @@ export function withAction(
   action: SupervisorActionInfo,
 ): SupervisorMessageInfo[] {
   return messages.map((m) => (m.action?.id === action.id ? { ...m, action } : m));
+}
+
+/** What an answer streaming is doing, eg: Lendo os agentes, while the model is awaited. */
+export function stageLabel(stage: SupervisorStreamStage | null): string {
+  switch (stage?.stage) {
+    case "reading":
+      return "Lendo os agentes";
+    case "thinking":
+      return "Analisando";
+    case "tool":
+      if (stage.tool === "get_agent") return "Consultando os detalhes do agente";
+      if (stage.tool === "propose_action") return "Montando a proposta";
+      return "Consultando os dados";
+  }
+  return "Enviando";
 }

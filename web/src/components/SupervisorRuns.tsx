@@ -18,7 +18,7 @@ export function SupervisorRuns({
   if (runs.length === 0) {
     return (
       <EmptyState compact icon="shield" title="Nenhuma análise ainda">
-        As análises aparecem aqui: as periódicas, com o supervisor ligado, e as pedidas em Analisar
+        As análises aparecem aqui: as periódicas, com o XTrader AI ligado, e as pedidas em Analisar
         agora.
       </EmptyState>
     );

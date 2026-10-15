@@ -4,12 +4,14 @@ import {
   actionLabel,
   actionNote,
   actionStatusLabel,
+  actorLabel,
   awaitingDecision,
   formatInterval,
   intervalError,
   mergeMessages,
   scopeProfit,
   scopeText,
+  stageLabel,
   supervisionBadges,
   withAction,
 } from "./supervisor";
@@ -94,11 +96,11 @@ describe("the badges of an agent supervised", () => {
       stop_reason: "loop de reinício",
     });
     expect(badges.map((b) => b.text)).toEqual([
-      "Interrompido pelo supervisor",
+      "Interrompido pelo XTrader AI",
       "Entradas bloqueadas",
     ]);
     expect(badges[0]?.title).toBe("Motivo: loop de reinício");
-    expect(badges[1]?.title).toBe("Motivo: loop de reinício · Por: supervisor");
+    expect(badges[1]?.title).toBe("Motivo: loop de reinício · Por: XTrader AI");
   });
 });
 
@@ -127,5 +129,22 @@ describe("the conversation", () => {
     expect(merged.map((m) => m.id)).toEqual([1, 2, 3]);
     const decided = withAction(merged, { ...close, status: "succeeded" });
     expect(decided[2]?.action?.status).toBe("succeeded");
+  });
+});
+
+describe("an answer streaming", () => {
+  it("tells its stage while the text is awaited", () => {
+    expect(stageLabel(null)).toBe("Enviando");
+    expect(stageLabel({ stage: "reading" })).toBe("Lendo os agentes");
+    expect(stageLabel({ stage: "thinking" })).toBe("Analisando");
+    expect(stageLabel({ stage: "tool", tool: "get_agent" })).toBe(
+      "Consultando os detalhes do agente",
+    );
+    expect(stageLabel({ stage: "tool", tool: "propose_action" })).toBe("Montando a proposta");
+  });
+
+  it("names the supervisor XTrader AI, the users as they are", () => {
+    expect(actorLabel("supervisor")).toBe("XTrader AI");
+    expect(actorLabel("admin")).toBe("admin");
   });
 });

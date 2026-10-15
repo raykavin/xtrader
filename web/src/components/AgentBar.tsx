@@ -116,7 +116,7 @@ export function AgentBar({
         )}
         {supervisionBadges(current?.supervision).length > 0 && (
           <div className="status-item">
-            <dt className="status-label">Supervisor</dt>
+            <dt className="status-label">XTrader AI</dt>
             <dd className="status-value">
               {supervisionBadges(current?.supervision).map((badge) => (
                 <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>

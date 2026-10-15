@@ -164,7 +164,7 @@ func (s *Supervision) setEntries(ctx context.Context, a store.Agent, blocked boo
 	var refused *apiError
 	switch {
 	case errors.As(err, &refused) && refused.Status == 404:
-		item.Status, item.Detail = itemUnknown, "o agente não tem o canal do supervisor (versão anterior): "+
+		item.Status, item.Detail = itemUnknown, "o agente não tem o canal do XTrader AI (versão anterior): "+
 			"gravado, aplicado quando ele for reiniciado"
 	case err != nil:
 		item.Status, item.Detail = itemPending, "gravado: o agente aplica ao ler o runtime ("+err.Error()+")"
@@ -193,7 +193,7 @@ func (s *Supervision) stopAgent(ctx context.Context, a store.Agent, act store.Su
 		return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "stop", Status: itemAlready,
 			Detail: "o agente já está desligado"}}
 	}
-	reason := "parada pelo supervisor: " + act.Reason
+	reason := "parada pelo XTrader AI: " + act.Reason
 	if act.Mode == store.ModeNow {
 		v, err := s.read(ctx)
 		if err != nil {
