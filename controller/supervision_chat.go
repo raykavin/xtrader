@@ -169,6 +169,12 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 		}
 		if len(reply.ToolCalls) == 0 {
 			answer = strings.TrimSpace(reply.Content)
+			if answer == "" && reply.Truncated && len(turn.proposals) == 0 {
+				return fail(maxTokensMessage(settings, reply.Usage), errors.New("cut at the max tokens"))
+			}
+			if answer != "" && reply.Truncated {
+				answer += "\n\n*(resposta cortada no limite de tokens)*"
+			}
 			break
 		}
 		messages = append(messages, llm.ChatMessage{Role: llm.ChatAssistant, Content: reply.Content,

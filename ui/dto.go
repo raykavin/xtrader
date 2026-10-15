@@ -1161,10 +1161,13 @@ type SupervisorSettingsResponse struct {
 	MinTimeout      int                `json:"min_timeout"`
 	MaxTimeout      int                `json:"max_timeout"`
 	MaxActions      int                `json:"max_actions"`
-	Analyzing       bool               `json:"analyzing"`
-	NextRunAt       *int64             `json:"next_run_at,omitempty"`
-	FailuresInRow   int                `json:"failures_in_row"`
-	UpdatedAt       int64              `json:"updated_at"`
+	// the max tokens of an answer without MaxTokens, a model that reasons
+	// spending them thinking too
+	DefaultMaxTokens int    `json:"default_max_tokens"`
+	Analyzing        bool   `json:"analyzing"`
+	NextRunAt        *int64 `json:"next_run_at,omitempty"`
+	FailuresInRow    int    `json:"failures_in_row"`
+	UpdatedAt        int64  `json:"updated_at"`
 }
 
 // SupervisorSettingsRequest is the payload of PATCH /api/settings/supervisor,

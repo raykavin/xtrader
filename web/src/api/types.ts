@@ -1310,6 +1310,11 @@ export interface SupervisorSettingsResponse {
   min_timeout: number /* int */;
   max_timeout: number /* int */;
   max_actions: number /* int */;
+  /**
+   * the max tokens of an answer without MaxTokens, a model that reasons
+   * spending them thinking too
+   */
+  default_max_tokens: number /* int */;
   analyzing: boolean;
   next_run_at?: number /* int64 */;
   failures_in_row: number /* int */;

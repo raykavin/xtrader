@@ -50,9 +50,10 @@ const (
 	AnthropicKeyEnv = "ANTHROPIC_API_KEY"
 )
 
-// defaultMaxTokens caps the tokens of an answer, the reasoning of the models
-// that reason included: a decision takes a few hundred.
-const defaultMaxTokens = 4096
+// DefaultMaxTokens caps the tokens of an answer without WithMaxTokens, the
+// reasoning of the models that reason included: a decision takes a few
+// hundred, a model that reasons may spend them all thinking on a longer task.
+const DefaultMaxTokens = 4096
 
 var (
 	// ErrTimeout is returned when the answer doesn't come in time: the
@@ -201,7 +202,7 @@ type client struct {
 
 func newClient(name, baseURL, keyEnv, model, apiKey string, options []ProviderOption) (client, error) {
 	c := client{name: name, model: strings.TrimSpace(model), apiKey: strings.TrimSpace(apiKey), baseURL: baseURL,
-		maxTokens: defaultMaxTokens, http: http.DefaultClient, usage: newUsageMeter(), system: defaultSystemPrompt}
+		maxTokens: DefaultMaxTokens, http: http.DefaultClient, usage: newUsageMeter(), system: defaultSystemPrompt}
 	for _, option := range options {
 		option(&c)
 	}

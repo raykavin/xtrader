@@ -342,6 +342,9 @@ func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 			if !a.reported {
 				a.summary = strings.TrimSpace(answer.Content)
 			}
+			if a.summary == "" && answer.Truncated {
+				return errors.New(maxTokensMessage(a.settings, answer.Usage))
+			}
 			if a.summary == "" {
 				return errors.New("the model answered without its report")
 			}
@@ -361,6 +364,23 @@ func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 		return fmt.Errorf("the model didn't report in %d answers", maxToolRounds)
 	}
 	return nil
+}
+
+// maxTokensMessage tells the user an answer of the model was cut at its max
+// tokens before any text or call, usage its tokens: a model that reasons
+// spends them thinking. The max tokens of settings, the default of the client
+// without one.
+func maxTokensMessage(settings store.SupervisorSettings, usage llm.Usage) string {
+	limit := llm.DefaultMaxTokens
+	if settings.MaxTokens != nil {
+		limit = *settings.MaxTokens
+	}
+	spent := fmt.Sprintf("%d tokens", usage.Output)
+	if usage.Reasoning > 0 {
+		spent = fmt.Sprintf("%d tokens, %d deles raciocinando", usage.Output, usage.Reasoning)
+	}
+	return fmt.Sprintf("O modelo gastou todo o limite da resposta (%s; o limite é %d) antes de responder. "+
+		"Aumente o Máximo de tokens em Configurações → XTrader AI ou reduza o raciocínio.", spent, limit)
 }
 
 // hasAction reports whether calls ask for an action, not only the report.
