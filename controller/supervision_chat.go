@@ -55,6 +55,41 @@ func (s *Supervision) chatView(ctx context.Context) (*view, error) {
 	return v, nil
 }
 
+// The stages of an answer of the conversation, see chatEvents.
+const (
+	stageReading  = "reading"  // the agents read for the model
+	stageThinking = "thinking" // the model asked, writing its answer
+	stageTool     = "tool"     // a tool the model called runs, eg: get_agent
+)
+
+// chatEvents is told what an answer of the conversation does as it goes, eg:
+// streamed to the browser: the messages kept, the stage it is at, the pieces
+// of the text the model writes, the ones of a stage dropped at the next one
+// (the text written before a call of a tool isn't the answer). Called from
+// the goroutine of the answer, in order.
+type chatEvents interface {
+	message(m store.SupervisorMessage)
+	stage(stage, tool string)
+	text(piece string)
+}
+
+// noEvents is the chatEvents of an answer nobody follows.
+type noEvents struct{}
+
+func (noEvents) message(store.SupervisorMessage) {}
+func (noEvents) stage(string, string)            {}
+func (noEvents) text(string)                     {}
+
+// checkMessage returns the text of a message of the user trimmed, or
+// errEmptyMessage.
+func checkMessage(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" || utf8.RuneCountInString(text) > maxMessageLength {
+		return "", errEmptyMessage
+	}
+	return text, nil
+}
+
 // Ask answers the message text of the user of userID, by, with the model of
 // the supervisor, and returns the messages it added to the conversation: the
 // question, the proposals of actions the model made through its tool (see
@@ -62,9 +97,17 @@ func (s *Supervision) chatView(ctx context.Context) (*view, error) {
 // answer, or the error, eg: the model unavailable. Nothing the model writes
 // runs.
 func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([]store.SupervisorMessage, error) {
-	text = strings.TrimSpace(text)
-	if text == "" || utf8.RuneCountInString(text) > maxMessageLength {
-		return nil, errEmptyMessage
+	return s.AskFollowed(ctx, userID, by, text, noEvents{})
+}
+
+// AskFollowed answers as Ask does, telling events what it does as it goes,
+// the model asked for a stream of its answer when it has one (see
+// llm.ChatStreamer).
+func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text string,
+	events chatEvents) ([]store.SupervisorMessage, error) {
+	text, err := checkMessage(text)
+	if err != nil {
+		return nil, err
 	}
 	ctx = context.WithoutCancel(ctx) // the answer is kept whatever the request
 	history, err := s.store.SupervisorMessages(ctx, userID, 0, chatHistory)
@@ -76,6 +119,7 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 	if err != nil {
 		return nil, err
 	}
+	events.message(question)
 	added := []store.SupervisorMessage{question}
 	fail := func(message string, cause error) ([]store.SupervisorMessage, error) {
 		log.Warnf("supervisor: the answer to %s: %v", by, cause)
@@ -90,11 +134,12 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 	settings, chat, err := s.settingsAndChat(ctx)
 	if err != nil {
 		if errors.Is(err, errNotConfigured) {
-			return fail("O supervisor ainda não tem um modelo configurado: defina o provedor, o modelo e a chave "+
-				"em Configurações → Supervisor.", err)
+			return fail("O XTrader AI ainda não tem um modelo configurado: defina o provedor, o modelo e a chave "+
+				"em Configurações → XTrader AI.", err)
 		}
-		return fail("Não consegui ler as configurações do supervisor agora.", err)
+		return fail("Não consegui ler as configurações do XTrader AI agora.", err)
 	}
+	events.stage(stageReading, "")
 	v, err := s.chatView(ctx)
 	if err != nil {
 		return fail("Não consegui ler os agentes agora: tente de novo em instantes.", err)
@@ -113,12 +158,13 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 	var answer string
 	for round := 0; ; round++ {
 		if round == maxToolRounds {
-			return fail("O supervisor não concluiu a resposta: tente reformular o pedido.",
+			return fail("O XTrader AI não concluiu a resposta: tente reformular o pedido.",
 				errors.New("too many calls of tools"))
 		}
-		reply, err := chat.Complete(askCtx, chatSystem(settings), messages, chatTools())
+		events.stage(stageThinking, "")
+		reply, err := complete(askCtx, chat, chatSystem(settings), messages, events)
 		if err != nil {
-			return fail("O modelo do supervisor não respondeu ("+modelFailure(err)+"). Os agentes não foram "+
+			return fail("O modelo do XTrader AI não respondeu ("+modelFailure(err)+"). Os agentes não foram "+
 				"afetados; tente de novo em instantes.", err)
 		}
 		if len(reply.ToolCalls) == 0 {
@@ -128,8 +174,13 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 		messages = append(messages, llm.ChatMessage{Role: llm.ChatAssistant, Content: reply.Content,
 			ToolCalls: reply.ToolCalls})
 		for _, call := range reply.ToolCalls {
+			events.stage(stageTool, call.Name)
+			proposed := len(turn.proposals)
 			messages = append(messages, llm.ChatMessage{Role: llm.ChatTool, ToolCallID: call.ID,
 				Content: turn.call(ctx, call)})
+			for _, m := range turn.proposals[proposed:] {
+				events.message(m)
+			}
 		}
 	}
 	added = append(added, turn.proposals...)
@@ -137,7 +188,7 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 		answer = "Preparei a proposta acima: confira o escopo e confirme ou recuse."
 	}
 	if answer == "" {
-		return fail("O supervisor respondeu vazio: tente de novo.", errors.New("an empty answer"))
+		return fail("O XTrader AI respondeu vazio: tente de novo.", errors.New("an empty answer"))
 	}
 	at := v.at
 	m, err := s.store.AddSupervisorMessage(ctx, store.SupervisorMessage{UserID: userID, Role: store.RoleAssistant,
@@ -146,6 +197,21 @@ func (s *Supervision) Ask(ctx context.Context, userID int64, by, text string) ([
 		return added, err
 	}
 	return append(added, m), nil
+}
+
+// complete returns the answer of the model of chat to the conversation of
+// messages with the tools of the conversation: streamed, its pieces told to
+// events, when chat streams; else whole, its text told at once.
+func complete(ctx context.Context, chat llm.Chat, system string, messages []llm.ChatMessage,
+	events chatEvents) (llm.ChatAnswer, error) {
+	if streamer, ok := chat.(llm.ChatStreamer); ok {
+		return streamer.Stream(ctx, system, messages, chatTools(), events.text)
+	}
+	reply, err := chat.Complete(ctx, system, messages, chatTools())
+	if err == nil && reply.Content != "" {
+		events.text(reply.Content)
+	}
+	return reply, err
 }
 
 // modelFailure names the failure of the model for the user.
@@ -203,7 +269,8 @@ Nesta conversa com o usuário:
 - As ações são separadas: bloquear novas entradas (block_entries), liberar entradas (allow_entries), parar o agente (stop_agent, mode when_flat: quando zerado; now: já, só se toda posição tiver stop loss na corretora), cancelar ordens pendentes de entrada (cancel_pending) e encerrar posições (close_positions).
 - Encerrar posições atinge só as posições dos agentes da aplicação, nunca operações feitas fora deles. Diga se o usuário também quer cancelar as pendentes (cancel_pending) e manter as entradas bloqueadas depois (keep_blocked, padrão sim).
 - Se o pedido for ambíguo (qual agente, quais pares, fechar ou só bloquear, parar quando zerado ou agora), pergunte antes de propor. Nunca adivinhe nomes de agentes: use os nomes exatos do retrato.
-- Deixe claro o que é análise, o que é proposta e o que já foi confirmado: o resultado de uma ação confirmada aparece na conversa, conferido na conta.` +
+- Deixe claro o que é análise, o que é proposta e o que já foi confirmado: o resultado de uma ação confirmada aparece na conversa, conferido na conta.
+- A interface mostra suas respostas em Markdown: use listas, **negrito** e tabelas quando ajudarem a ler os números (por exemplo, uma linha por agente), sem títulos longos nem HTML.` +
 		criteria(settings)
 }
 

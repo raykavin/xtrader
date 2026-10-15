@@ -167,7 +167,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
     return (
       <div className="settings-section">
         <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
-        <Alert tone="warn" title="O supervisor ainda não está no banco">
+        <Alert tone="warn" title="O XTrader AI ainda não está no banco">
           Rode o migrator (<code>migrator up</code>), que cria as tabelas e a configuração padrão
           dele.
         </Alert>
@@ -201,7 +201,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
         <section className="card card-flush" aria-labelledby="supervisor-state-title">
           <header className="card-header">
             <div className="card-heading">
-              <span className="eyebrow">Supervisor</span>
+              <span className="eyebrow">XTrader AI</span>
               <h3 id="supervisor-state-title" className="card-title">
                 Análises periódicas
               </h3>
@@ -212,7 +212,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
           </header>
           <div className="card-body stack">
             <Switch
-              label="Supervisor ativo"
+              label="XTrader AI ativo"
               checked={settings.enabled}
               disabled={busy || (!settings.enabled && !ready)}
               title={ready ? undefined : "Defina o provedor, o modelo e a chave antes"}
@@ -220,13 +220,13 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             />
             {!ready && (
               <p className="msg msg-warn">
-                Defina o provedor, o modelo e a chave para ligar o supervisor.
+                Defina o provedor, o modelo e a chave para ligar o XTrader AI.
               </p>
             )}
             <p className="field-hint">
               {settings.enabled && settings.next_run_at
                 ? `Próxima análise às ${clock(settings.next_run_at)}, depois a cada ${formatInterval(settings.interval_seconds)}.`
-                : "Desligado, o supervisor não analisa sozinho; a conversa e Analisar agora continuam disponíveis."}
+                : "Desligado, o XTrader AI não analisa sozinho; a conversa e Analisar agora continuam disponíveis."}
               {settings.failures_in_row > 0 &&
                 ` ${settings.failures_in_row} análise(s) seguida(s) falharam: os agentes não foram afetados.`}
             </p>
@@ -278,7 +278,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
           <form
             className="card-body stack"
             onSubmit={save}
-            aria-label="Configurações do supervisor"
+            aria-label="Configurações do XTrader AI"
           >
             <div className="form-grid">
               <div className="field">
@@ -397,7 +397,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
               />
               <p className="field-hint">
                 Separe problemas operacionais, de risco e de desempenho. Não há limites financeiros
-                fixos: o supervisor compara com os limites configurados em cada agente.
+                fixos: o XTrader AI compara com os limites configurados em cada agente.
               </p>
             </div>
             <div className="form-actions">

@@ -1492,10 +1492,47 @@ type SupervisorMessagesResponse struct {
 	More     bool                    `json:"more,omitempty"`
 }
 
-// SupervisorMessageRequest is the payload of POST /api/supervisor/messages: a
-// question or a request of the user to the supervisor.
+// SupervisorMessageRequest is the payload of POST /api/supervisor/messages
+// and of POST /api/supervisor/messages/stream: a question or a request of the
+// user to the supervisor.
 type SupervisorMessageRequest struct {
 	Text string `json:"text"`
+}
+
+// The events of POST /api/supervisor/messages/stream, server-sent: "message"
+// a SupervisorMessageInfo kept (the question, then each proposal as the model
+// makes it), "stage" a SupervisorStreamStage, "text" a SupervisorStreamText,
+// "error" a SupervisorStreamError, and last "done", a
+// SupervisorMessagesResponse with every message the answer added, as POST
+// /api/supervisor/messages answers them.
+const (
+	SupervisorEventMessage = "message"
+	SupervisorEventStage   = "stage"
+	SupervisorEventText    = "text"
+	SupervisorEventError   = "error"
+	SupervisorEventDone    = "done"
+)
+
+// SupervisorStreamStage is where an answer of the supervisor is: reading (the
+// agents read for the model), thinking (the model writing its answer) or tool
+// (a tool the model called runs, Tool, eg: get_agent or propose_action). The
+// text of a stage is dropped at the next one: the text the model writes
+// before calling a tool isn't its answer.
+type SupervisorStreamStage struct {
+	Stage string `json:"stage"`
+	Tool  string `json:"tool,omitempty"`
+}
+
+// SupervisorStreamText is a piece of the text the model of the supervisor
+// writes, in Markdown.
+type SupervisorStreamText struct {
+	Text string `json:"text"`
+}
+
+// SupervisorStreamError is an error that ended the stream of an answer before
+// its end; what the server kept is read with GET /api/supervisor/messages.
+type SupervisorStreamError struct {
+	Error string `json:"error"`
 }
 
 // SupervisorEntriesRequest is the payload of POST

@@ -52,9 +52,9 @@ const intros: Record<SettingsTab, SectionIntro> = {
     ),
   },
   supervisor: {
-    title: "Supervisor",
+    title: "XTrader AI",
     description:
-      "Um modelo de linguagem que acompanha todos os agentes: analisa periodicamente, bloqueia entradas ou para um agente dentro da autonomia definida aqui, e propõe o resto para você confirmar na conversa.",
+      "O supervisor dos agentes, um modelo de linguagem que acompanha todos eles: analisa periodicamente, bloqueia entradas ou para um agente dentro da autonomia definida aqui, e propõe o resto para você confirmar na conversa.",
   },
   telegram: {
     title: "Telegram",

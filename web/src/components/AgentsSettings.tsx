@@ -19,7 +19,7 @@ import {
   reanalysisHint,
   tradePanelHint,
 } from "../lib/settings";
-import { supervisionBadges } from "../lib/supervisor";
+import { actorLabel, supervisionBadges } from "../lib/supervisor";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
@@ -407,7 +407,7 @@ function AgentCard({
         <div className="agent-block agent-supervision">
           {agent.supervision.stop_state === "stopped" && (
             <p className="msg msg-error">
-              Interrompido pelo supervisor:{" "}
+              Interrompido pelo XTrader AI:{" "}
               {agent.supervision.stop_reason || "sem motivo registrado"}. Ative o agente para
               retomá-lo.
             </p>
@@ -421,8 +421,10 @@ function AgentCard({
           {blocked && (
             <p className="msg msg-warn">
               Entradas bloqueadas
-              {agent.supervision.entries_by ? ` por ${agent.supervision.entries_by}` : ""}:{" "}
-              {agent.supervision.entries_reason || "sem motivo registrado"}. O agente gerencia as
+              {agent.supervision.entries_by
+                ? ` por ${actorLabel(agent.supervision.entries_by)}`
+                : ""}
+              : {agent.supervision.entries_reason || "sem motivo registrado"}. O agente gerencia as
               posições que tem.
             </p>
           )}

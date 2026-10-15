@@ -6143,9 +6143,219 @@ fieldset.seg {
   background: var(--surface-2);
 }
 
+/* the XTrader AI at work, until its text comes: a pulsing mark, what it
+   does in a shine, three dots */
 .sup-bubble.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   color: var(--text-2);
-  font-style: italic;
+  white-space: nowrap;
+}
+
+.sup-thinking-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  animation: sup-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sup-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 7px transparent;
+    transform: scale(1.06);
+  }
+}
+
+.sup-thinking-label {
+  background: linear-gradient(90deg, var(--text-3) 20%, var(--text) 50%, var(--text-3) 80%);
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  font-weight: 500;
+  animation: sup-shine 1.8s linear infinite;
+}
+
+@keyframes sup-shine {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.sup-thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.sup-thinking-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: sup-dot 1.2s ease-in-out infinite;
+}
+
+.sup-thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.sup-thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes sup-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* an answer streaming: a caret at the end of its text */
+.md.writing > p:last-child::after,
+.md.writing > :is(ul, ol):last-child > li:last-child > p:last-child::after,
+.md.writing > .md-heading:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: sup-caret 1s steps(1) infinite;
+}
+
+@keyframes sup-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* the Markdown of the answers */
+.sup-bubble .md {
+  white-space: normal;
+}
+
+/* the space between blocks, over the margins the blocks drop below */
+.md > :not(:first-child) {
+  margin-top: 10px;
+}
+
+.md p,
+.md-heading {
+  margin: 0;
+}
+
+.md-heading {
+  font-size: var(--fs-base);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+h3.md-heading {
+  font-size: var(--fs-md);
+}
+
+.md ul,
+.md ol {
+  margin-block: 0;
+  padding-left: 1.35em;
+}
+
+.md li + li {
+  margin-top: 2px;
+}
+
+.md li > :not(:first-child) {
+  margin-top: 4px;
+}
+
+.md blockquote {
+  margin-inline: 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+}
+
+.md a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md hr {
+  margin-block: var(--sp-3);
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.md-inline-code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.md-code {
+  overflow-x: auto;
+  margin: 0;
+  padding: var(--sp-2) 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.md-table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.md-table th,
+.md-table td {
+  padding: 4px 10px 4px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.md-table th {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.md-table tr:last-child td {
+  border-bottom: 0;
 }
 
 .sup-bubble.error {

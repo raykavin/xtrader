@@ -37,6 +37,7 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Post("/supervisor/actions/{id}/reject", s.handleReject)
 	r.Get("/supervisor/messages", s.handleMessages)
 	r.Post("/supervisor/messages", s.handleAsk)
+	r.Post("/supervisor/messages/stream", s.handleAskStream)
 	r.Post("/supervisor/agents/{name}/entries", s.handleEntries)
 }
 
@@ -49,7 +50,7 @@ func (s *Supervision) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrDecided), errors.Is(err, errAnalyzing):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrExpired):
-		writeJSONError(w, http.StatusGone, "a proposta expirou: peça uma nova ao supervisor")
+		writeJSONError(w, http.StatusGone, "a proposta expirou: peça uma nova ao XTrader AI")
 	case errors.Is(err, store.ErrInvalid), errors.Is(err, errEmptyMessage), errors.Is(err, errNotConfigured):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, context.Canceled):
