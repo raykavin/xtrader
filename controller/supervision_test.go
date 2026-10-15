@@ -902,3 +902,41 @@ func TestSupervision_ProxyNeverReachesTheSupervisorChannel(t *testing.T) {
 	blocked, _ := orb.entries()
 	assert.False(t, blocked)
 }
+
+// An answer the model cut at its max tokens before any text or call, as a
+// model that reasons spends them thinking, fails the analysis and the
+// conversation telling the user the tokens spent, the limit and what to
+// change; a text cut is kept, told cut.
+func TestSupervision_CutAtMaxTokens(t *testing.T) {
+	s := newSupervised(t)
+	ctx := context.Background()
+	cut := func(content string) answer {
+		return func(string, []llm.ChatMessage, []llm.ToolSpec) (llm.ChatAnswer, error) {
+			return llm.ChatAnswer{Content: content, Truncated: true,
+				Usage: llm.Usage{Output: llm.DefaultMaxTokens, Reasoning: llm.DefaultMaxTokens}}, nil
+		}
+	}
+
+	s.chat.script(cut(""))
+	run, err := s.sup.Analyze(ctx, store.RunManual, "admin")
+	require.ErrorContains(t, err, "Máximo de tokens")
+	got, err := s.store.SupervisorRun(ctx, run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.RunFailed, got.Status)
+	assert.Contains(t, got.Error, "4096 tokens, 4096 deles raciocinando; o limite é 4096")
+	assert.Contains(t, got.Error, "Máximo de tokens")
+
+	s.chat.script(cut(""))
+	added, err := s.sup.Ask(ctx, userOfTests(t, s), "admin", "como estão os agentes?")
+	require.NoError(t, err)
+	last := added[len(added)-1]
+	assert.Equal(t, store.MessageError, last.Kind)
+	assert.Contains(t, last.Content, "Aumente o Máximo de tokens")
+
+	s.chat.script(cut("Metade da"))
+	added, err = s.sup.Ask(ctx, userOfTests(t, s), "admin", "e agora?")
+	require.NoError(t, err)
+	last = added[len(added)-1]
+	assert.Equal(t, store.MessageAnswer, last.Kind)
+	assert.Equal(t, "Metade da\n\n*(resposta cortada no limite de tokens)*", last.Content)
+}

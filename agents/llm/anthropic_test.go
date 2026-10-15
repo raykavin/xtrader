@@ -445,7 +445,7 @@ func TestAnthropic_MaxTokensOfTheThinking(t *testing.T) {
 	require.NoError(t, err)
 	_, err = provider.Analyze(context.Background(), testInput(nil, flatActions...))
 	require.NoError(t, err)
-	require.Equal(t, []int{defaultMaxTokens, anthropicAutoMaxTokens}, s.maxTokens)
+	require.Equal(t, []int{DefaultMaxTokens, anthropicAutoMaxTokens}, s.maxTokens)
 
 	s, server = newAnthropicServer(t, true, anthropicBody(longDecision))
 	provider, err = NewAnthropic("claude-test", testKey, WithBaseURL(server.URL), WithMaxTokens(2000))

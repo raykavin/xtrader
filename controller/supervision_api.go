@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/raykavin/xtrader/agents/llm"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
@@ -109,8 +110,8 @@ func (s *Supervision) settingsResponse(settings store.SupervisorSettings, found 
 			MaxActionsPerRun: settings.Autonomy.MaxActionsPerRun},
 		MinInterval: store.SupervisorMinInterval, MaxInterval: store.SupervisorMaxInterval,
 		MinTimeout: store.SupervisorMinTimeout, MaxTimeout: store.SupervisorMaxTimeout,
-		MaxActions: store.SupervisorMaxActions, Analyzing: analyzing, FailuresInRow: failures,
-		UpdatedAt: settings.UpdatedAt.Unix()}
+		MaxActions: store.SupervisorMaxActions, DefaultMaxTokens: llm.DefaultMaxTokens, Analyzing: analyzing,
+		FailuresInRow: failures, UpdatedAt: settings.UpdatedAt.Unix()}
 	if !next.IsZero() {
 		at := next.Unix()
 		response.NextRunAt = &at

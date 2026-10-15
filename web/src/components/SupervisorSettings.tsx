@@ -357,9 +357,16 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                   id="supervisor-tokens"
                   className="input"
                   inputMode="numeric"
+                  placeholder={`padrão: ${settings.default_max_tokens}`}
+                  aria-describedby="supervisor-tokens-hint"
                   {...field("maxTokens")}
                 />
                 {tokensProblem && <p className="field-error">{tokensProblem}</p>}
+                <p id="supervisor-tokens-hint" className="field-hint">
+                  O raciocínio conta no limite: um modelo que raciocina (gpt-5, o3, Claude com
+                  raciocínio) pode gastar {settings.default_max_tokens} tokens só pensando e não
+                  responder. Para eles, use 16000 ou mais, com um tempo de resposta maior.
+                </p>
               </div>
               <div className="field form-wide">
                 <label className="field-label" htmlFor="supervisor-base-url">
