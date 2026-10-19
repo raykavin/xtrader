@@ -48,6 +48,11 @@ const agent = (fields: Partial<AgentSettings>): AgentSettings => ({
   restart_pending: false,
   params: {},
   secrets: { llm_api_key: false, bridge_token: false, calendar_token: false },
+  protection: {
+    unit: "atr",
+    breakeven: { enabled: false, supervisor: false, trigger: 0, margin: 0 },
+    trailing: { enabled: false, supervisor: false, trigger: 0, distance: 0, step: 0 },
+  },
   ...fields,
 });
 

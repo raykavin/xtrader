@@ -1748,6 +1748,7 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 	}
 	input.Position = position
 	input.Rules.Actions = []Action{ActionHold, ActionExit}
+	refreshLegs(broker, df.Pair, tr)
 	if i := tr.leg(true); i >= 0 {
 		position.StopLoss = number(legLevel(tr.legs[i]))
 		if canProtect {
@@ -2405,6 +2406,15 @@ func (t *Trader) move(df *model.Dataframe, broker service.Broker, tr *trade, sto
 	log.Infof("[LLM] %s %s | %s %f -> %f | close %f", df.Pair, t.cfg.Timeframe, name, current, level,
 		df.Close.Last(0))
 	moved, err := protected.UpdateProtection(tr.legs[i], level)
+	var tighter *service.StopNotTighterError
+	if errors.As(err, &tighter) {
+		// the stop guard kept a more protective stop: followed as it is, the
+		// decision not applied
+		tr.legs[i] = tighter.Leg
+		log.Infof("[LLM] %s %s | %s kept at %f, more protective than %f", df.Pair, t.cfg.Timeframe, name,
+			tighter.Current, level)
+		return model.Order{}, false
+	}
 	if err != nil {
 		log.Error(err)
 		return model.Order{}, false
@@ -2482,6 +2492,27 @@ func (tr *trade) leg(stop bool) int {
 }
 
 // legLevel returns the level of a stop loss or take profit leg.
+// stopGuard is implemented by the brokers telling whether the stop losses of
+// the open positions of a pair only tighten, eg: order.Controller with the
+// protection of the positions on (breakeven, trailing stop).
+type stopGuard interface {
+	StopGuarded(pair string) bool
+}
+
+// refreshLegs reads the legs of the trade tr on pair again from broker when
+// its stop guard is on: the protection of the positions moves them apart from
+// the Trader, which then sees the stop loss as it is, never an older one.
+func refreshLegs(broker service.Broker, pair string, tr *trade) {
+	guard, guarded := broker.(stopGuard)
+	held, holds := broker.(service.PositionLegs)
+	if !guarded || !holds || !guard.StopGuarded(pair) {
+		return
+	}
+	if legs, _, err := held.HeldLegs(pair, tr.side); err == nil && len(legs) > 0 {
+		tr.legs = legs
+	}
+}
+
 func legLevel(leg model.Order) float64 {
 	if leg.Stop != nil && (leg.Type == model.OrderTypeStopLoss || leg.Type == model.OrderTypeStopLossLimit) {
 		return *leg.Stop

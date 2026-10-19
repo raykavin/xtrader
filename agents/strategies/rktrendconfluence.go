@@ -850,6 +850,13 @@ func (s *RKTrendConfluence) trailBroker(df *model.Dataframe, broker service.Brok
 	}
 
 	leg, err := protected.UpdateProtection(protection.leg, stop)
+	if live, ok := tighterAlready(err); ok {
+		// the stop guard kept a more protective stop: followed from it
+		protection.leg, protection.stop = live, rkLegLevel(live)
+		log.Infof("[RK TCF] %s %s | BROKER STOP kept at %f, more protective than %f", df.Pair, s.cfg.Timeframe,
+			protection.stop, stop)
+		return
+	}
 	if err != nil {
 		log.Error(err)
 		return

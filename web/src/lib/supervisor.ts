@@ -5,6 +5,7 @@ import type {
   AgentSupervisionInfo,
   SupervisorActionInfo,
   SupervisorMessageInfo,
+  SupervisorProtectionInfo,
   SupervisorResultItem,
   SupervisorStreamStage,
 } from "../api/types";
@@ -305,4 +306,38 @@ export function stageLabel(stage: SupervisorStreamStage | null): string {
       return "Consultando os dados";
   }
   return "Enviando";
+}
+
+/** How a protection the XTrader AI armed stands: its status and its last move, as the broker answered it. */
+export function protectionStatusLabel(protection: SupervisorProtectionInfo): ToneLabel {
+  switch (protection.status) {
+    case "requested":
+      return { text: "Solicitada ao agente", tone: "info" };
+    case "refused":
+      return { text: "Recusada pelo agente", tone: "off" };
+    case "ended":
+      return { text: "Encerrada: posição fechada", tone: "off" };
+    case "active":
+      return protection.move === "confirmed"
+        ? { text: "Aplicada, confirmada pela corretora", tone: "on" }
+        : { text: "Ativa", tone: "on" };
+  }
+  switch (protection.move) {
+    case "rejected":
+      return { text: "Armada; envio recusado pela corretora", tone: "error" };
+    case "unknown":
+      return { text: "Armada; resposta da corretora perdida", tone: "warn" };
+  }
+  return { text: "Armada: aguardando o gatilho", tone: "info" };
+}
+
+/** The stop losses of a protection: before, asked and confirmed by the broker, eg: 4150 → 4161 (confirmado). */
+export function protectionStops(protection: SupervisorProtectionInfo): string {
+  const level = (price: number) => (price > 0 ? String(price) : "sem stop");
+  if (!protection.requested) return `stop em ${level(protection.previous)}`;
+  const confirmed =
+    protection.move === "confirmed"
+      ? ` (confirmado ${level(protection.confirmed)})`
+      : " (não confirmado)";
+  return `${level(protection.previous)} → ${level(protection.requested)}${confirmed}`;
 }

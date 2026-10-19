@@ -276,6 +276,7 @@ Nesta conversa com o usuário:
 - Encerrar posições atinge só as posições dos agentes da aplicação, nunca operações feitas fora deles. Diga se o usuário também quer cancelar as pendentes (cancel_pending) e manter as entradas bloqueadas depois (keep_blocked, padrão sim).
 - Se o pedido for ambíguo (qual agente, quais pares, fechar ou só bloquear, parar quando zerado ou agora), pergunte antes de propor. Nunca adivinhe nomes de agentes: use os nomes exatos do retrato.
 - Deixe claro o que é análise, o que é proposta e o que já foi confirmado: o resultado de uma ação confirmada aparece na conversa, conferido na conta.
+- protect_position arma o breakeven ou o trailing stop de uma posição: use só quando o usuário pedir para proteger aquela posição, ou concordar com a sua sugestão, e só nos agentes que autorizam o recurso. Se não estiver claro qual posição ou qual recurso, pergunte. O gatilho do agente vale, e o resultado (aplicado, armado, recusado) aparece na conversa, escrito pelo sistema.
 - A interface mostra suas respostas em Markdown: use listas, **negrito** e tabelas quando ajudarem a ler os números (por exemplo, uma linha por agente), sem títulos longos nem HTML.` +
 		criteria(settings)
 }
@@ -300,6 +301,7 @@ func chatTools() []llm.ToolSpec {
 				`"reason":{"type":"string","description":"o motivo, nas palavras do pedido do usuário"},` +
 				`"category":{"type":"string","enum":["operational","risk","performance"]}` +
 				`},"required":["action","reason"]}`)},
+		protectTool(),
 	}
 }
 
@@ -324,6 +326,18 @@ func (t *chatTurn) call(ctx context.Context, call llm.ToolCall) string {
 			return toolError("invalid arguments")
 		}
 		return t.agent(ctx, args.Name)
+	case "protect_position":
+		result, arm := t.s.protectPosition(ctx, t.view, call.Arguments, nil, &t.userID, t.by)
+		if arm == nil {
+			return result
+		}
+		m, err := t.s.store.AddSupervisorMessage(ctx, store.SupervisorMessage{UserID: t.userID,
+			Role: store.RoleAssistant, Kind: store.MessageResult, Content: protectionText(*arm, t.view)})
+		if err != nil {
+			return notRecorded(err)
+		}
+		t.proposals = append(t.proposals, m)
+		return result
 	case "propose_action":
 		var args proposal
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {

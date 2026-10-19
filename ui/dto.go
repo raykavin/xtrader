@@ -101,6 +101,10 @@ type Snapshot struct {
 	// Position is the open position of the pair as the broker reports it, its
 	// profit included, see WithBrokerPositions: absent without it.
 	Position *BrokerPosition `json:"position,omitempty"`
+	// Protection is how the protection of the open position of the pair
+	// stands (breakeven, trailing stop), see Chart.SetProtection: absent
+	// without a position or without the protection.
+	Protection *PositionProtection `json:"protection,omitempty"`
 
 	// AccountCurrency is the currency of the account, see WithAccountReporter:
 	// the profits of the orders are shown in it (their AccountProfit).
@@ -368,6 +372,140 @@ type CandleEvent struct {
 	Partial    bool              `json:"partial,omitempty"`
 	Levels     []Level           `json:"levels" tstype:"Level[] | null,optional"` // of the strategy, see LevelsSource: null when it draws none
 	Position   *BrokerPosition   `json:"position,omitempty"`                      // see WithBrokerPositions: absent without it
+	// Protection is the protection of the open position of the pair, see
+	// Snapshot.Protection: absent without one
+	Protection *PositionProtection `json:"protection,omitempty"`
+}
+
+// The units of the distances of the protection of the positions, see
+// ProtectionSettings.
+const (
+	// ProtectionUnitATR is a multiple of the ATR(14) Wilder of the closed
+	// candles of the timeframe of the agent, in the price of each pair.
+	ProtectionUnitATR = "atr"
+)
+
+// The features of the protection of the positions.
+const (
+	ProtectionBreakeven = "breakeven"
+	ProtectionTrailing  = "trailing"
+)
+
+// ProtectionSettings are the protection of the open positions of an agent,
+// off unless enabled, each distance in Unit (see ProtectionUnitATR): the
+// breakeven and the trailing stop, applied by the agent on every price, and
+// whether the XTrader AI may arm each one on a position (Supervisor), its
+// trigger kept.
+type ProtectionSettings struct {
+	Unit      string            `json:"unit"`
+	Breakeven BreakevenSettings `json:"breakeven"`
+	Trailing  TrailingSettings  `json:"trailing"`
+}
+
+// BreakevenSettings move the stop loss of a position to its entry, beyond it
+// by Margin and the costs known, once the price went Trigger in its favour
+// from the entry.
+type BreakevenSettings struct {
+	Enabled    bool    `json:"enabled"`
+	Supervisor bool    `json:"supervisor"`
+	Trigger    float64 `json:"trigger"`
+	Margin     float64 `json:"margin"`
+}
+
+// TrailingSettings move the stop loss of a position Distance behind the
+// price, once the price went Trigger in its favour from the entry, every
+// time it would tighten it by Step at least.
+type TrailingSettings struct {
+	Enabled    bool    `json:"enabled"`
+	Supervisor bool    `json:"supervisor"`
+	Trigger    float64 `json:"trigger"`
+	Distance   float64 `json:"distance"`
+	Step       float64 `json:"step"`
+}
+
+// Active reports whether the protection runs, or may be armed by the
+// XTrader AI: the stop guard of the agent on (see order.Controller).
+func (s ProtectionSettings) Active() bool {
+	return s.Breakeven.Enabled || s.Breakeven.Supervisor || s.Trailing.Enabled || s.Trailing.Supervisor
+}
+
+// ProtectionArm is a protection the XTrader AI armed on the open position
+// PositionRef of Pair: the agent applies Feature (breakeven or trailing) once
+// its trigger is reached, for the reason Reason; ID its record.
+type ProtectionArm struct {
+	ID          int64  `json:"id"`
+	Pair        string `json:"pair"`
+	PositionRef string `json:"position_ref"`
+	Feature     string `json:"feature"`
+	Reason      string `json:"reason"`
+	ArmedAt     int64  `json:"armed_at"`
+}
+
+// The states of a feature of the protection of a position, see
+// ProtectionFeature.
+const (
+	ProtectionOff         = "off"         // disabled, not armed
+	ProtectionWaiting     = "waiting"     // its trigger not reached
+	ProtectionActive      = "active"      // reached: the stop loss at its level, or moved to it
+	ProtectionUnavailable = "unavailable" // can't run, eg: no ATR yet, see Detail
+)
+
+// The statuses of a move of the protection, see ProtectionMove.
+const (
+	MoveRequested = "requested" // sent to the broker, not answered yet
+	MoveConfirmed = "confirmed" // the broker took it
+	MoveRejected  = "rejected"  // the broker refused it: the stop loss kept
+	MoveUnknown   = "unknown"   // the answer lost: the stop loss read again
+)
+
+// PositionProtection is how the protection of the open position of a pair
+// stands, as the agent follows it: its side, entry (the average fill), the
+// price it would exit at now (the bid of a long, the ask of a short), its
+// stop loss at the broker (0 for none), the ATR in price, the spread, the
+// best move in its favour since its entry in ATR, the costs known as a
+// distance of the price, and its two features.
+type PositionProtection struct {
+	Pair        string            `json:"pair"`
+	PositionRef string            `json:"position_ref"`
+	Side        string            `json:"side"`
+	Entry       float64           `json:"entry"`
+	Price       float64           `json:"price"`
+	StopLoss    float64           `json:"stop_loss"`
+	ATR         float64           `json:"atr"`
+	Spread      float64           `json:"spread,omitempty"`
+	Favorable   float64           `json:"favorable"`
+	Costs       float64           `json:"costs"`
+	CostsKnown  bool              `json:"costs_known"`
+	Breakeven   ProtectionFeature `json:"breakeven"`
+	Trailing    ProtectionFeature `json:"trailing"`
+}
+
+// ProtectionFeature is a feature of the protection of a position: its State
+// (see ProtectionOff), armed by the XTrader AI (ArmID, ArmReason), what is
+// left to its trigger in ATR, the stop loss it asks for (Level), why it
+// can't run (Detail) and its last move.
+type ProtectionFeature struct {
+	State     string          `json:"state"`
+	Enabled   bool            `json:"enabled,omitempty"`
+	Armed     bool            `json:"armed,omitempty"`
+	ArmID     int64           `json:"arm_id,omitempty"`
+	ArmReason string          `json:"arm_reason,omitempty"`
+	Remaining float64         `json:"remaining,omitempty"`
+	Level     float64         `json:"level,omitempty"`
+	Detail    string          `json:"detail,omitempty"`
+	Last      *ProtectionMove `json:"last,omitempty"`
+}
+
+// ProtectionMove is a move of the stop loss a protection asked for: its
+// status (see MoveRequested), the level it was at, the one asked, the one
+// the broker confirmed, why it failed, when (Unix seconds).
+type ProtectionMove struct {
+	Status    string  `json:"status"`
+	Previous  float64 `json:"previous"`
+	Requested float64 `json:"requested"`
+	Confirmed float64 `json:"confirmed,omitempty"`
+	Detail    string  `json:"detail,omitempty"`
+	At        int64   `json:"at"`
 }
 
 // OrderEvent is sent on the SSE stream (event: order) when an order is
@@ -638,6 +776,9 @@ type AgentSettings struct {
 	PromptStatus    *AgentPromptStatus    `json:"prompt_status,omitempty"`
 	Secrets         AgentSecretsPresent   `json:"secrets"`
 	Supervision     *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
+	// Protection is the protection of its open positions (breakeven, trailing
+	// stop), all off unless set, applied live
+	Protection ProtectionSettings `json:"protection"`
 }
 
 // AgentOutbox is what the outbox of an agent holds, as it told the
@@ -739,6 +880,8 @@ type AgentSettingsRequest struct {
 	LLMAPIKey       *string              `json:"llm_api_key,omitempty"`
 	BridgeToken     *string              `json:"bridge_token,omitempty"`
 	CalendarToken   *string              `json:"calendar_token,omitempty"`
+	// Protection replaces the protection of the open positions, applied live
+	Protection *ProtectionSettings `json:"protection,omitempty"`
 }
 
 // OpenPositionsResponse is the payload of GET /api/positions/open: the open
@@ -1018,6 +1161,9 @@ type UserRequest struct {
 // controller (running or stopped), its positions as its exchange holds them,
 // and its pending orders, the entries apart from the legs of the positions.
 type SupervisionState struct {
+	// Protections are the protection of the open positions, one per pair
+	// held, see PositionProtection: absent without the protection.
+	Protections     []PositionProtection `json:"protections,omitempty"`
 	EntriesBlocked  bool                 `json:"entries_blocked"`
 	EntriesReason   string               `json:"entries_reason,omitempty"`
 	EntriesRevision int64                `json:"entries_revision"`
@@ -1104,6 +1250,40 @@ type SupervisionCancelRequest struct {
 // pending entry.
 type SupervisionCancelResponse struct {
 	Results []SupervisionCancelResult `json:"results"`
+}
+
+// SupervisionProtectRequest is the payload of POST /api/supervision/protect
+// of an agent, from the supervisor only: arm Feature (breakeven or trailing)
+// on the open position PositionRef of Pair, as the arm ArmID of the
+// controller recorded it with Reason; the agent applies it once its trigger
+// is reached, at once when it is.
+type SupervisionProtectRequest struct {
+	ArmID       int64  `json:"arm_id"`
+	Pair        string `json:"pair"`
+	PositionRef string `json:"position_ref"`
+	Feature     string `json:"feature"`
+	Reason      string `json:"reason"`
+}
+
+// The statuses of an arm of the protection, see SupervisionProtectResponse.
+const (
+	ProtectApplied = "applied" // the stop loss moved, confirmed by the broker
+	ProtectArmed   = "armed"   // armed: applied once its trigger is reached
+	ProtectRefused = "refused" // not armed, see Detail: eg: not allowed, another position
+	ProtectFailed  = "failed"  // armed, the move refused by the broker: the stop loss kept
+	ProtectUnknown = "unknown" // armed, the answer of the broker lost: the stop loss read again
+)
+
+// SupervisionProtectResponse is how the arm went: its status (see
+// ProtectApplied), the stop loss before, the one asked, the one the broker
+// confirmed, why (Detail), and the protection of the position after.
+type SupervisionProtectResponse struct {
+	Status     string              `json:"status"`
+	Previous   float64             `json:"previous"`
+	Requested  float64             `json:"requested,omitempty"`
+	Confirmed  float64             `json:"confirmed,omitempty"`
+	Detail     string              `json:"detail,omitempty"`
+	Protection *PositionProtection `json:"protection,omitempty"`
 }
 
 // SupervisionCancelResult is how the cancel of a pending entry went.
@@ -1273,6 +1453,50 @@ type SupervisorAgent struct {
 	OpenProfit     []CurrencyAmount       `json:"open_profit"`
 	Realized       []SupervisorRealized   `json:"realized"`
 	Decisions      []SupervisorDecision   `json:"decisions,omitempty"`
+	// Protection is the protection of its positions, when it runs or the
+	// XTrader AI may arm it, and Protections how it stands on each position,
+	// as the agent tells it: the reference of the position protect_position
+	// takes, its entry, price, stop loss, ATR in price, best move in ATR and
+	// the state of its breakeven and trailing stop
+	Protection  *ProtectionSettings  `json:"protection,omitempty"`
+	Protections []PositionProtection `json:"protections,omitempty"`
+}
+
+// SupervisorProtectionInfo is a protection the XTrader AI armed on a position
+// of an agent (breakeven or trailing stop): who asked (the analysis RunID,
+// the user of a conversation), why, its status (requested, armed, active,
+// refused, ended) and its last move of the stop loss, Move confirmed,
+// rejected or unknown: the stop loss before, asked and confirmed by the
+// broker, 0 for none; times in Unix seconds.
+type SupervisorProtectionInfo struct {
+	ID          int64    `json:"id"`
+	Agent       string   `json:"agent"`
+	RunID       *int64   `json:"run_id,omitempty"`
+	Pair        string   `json:"pair"`
+	PositionRef string   `json:"position_ref"`
+	Ticket      int64    `json:"ticket,omitempty"`
+	Side        string   `json:"side"`
+	Feature     string   `json:"feature"`
+	Reason      string   `json:"reason"`
+	Category    string   `json:"category,omitempty"`
+	Evidence    []string `json:"evidence"`
+	RequestedBy string   `json:"requested_by"`
+	Status      string   `json:"status"`
+	Move        string   `json:"move,omitempty"`
+	Previous    float64  `json:"previous"`
+	Requested   float64  `json:"requested"`
+	Confirmed   float64  `json:"confirmed"`
+	Detail      string   `json:"detail,omitempty"`
+	CreatedAt   int64    `json:"created_at"`
+	UpdatedAt   int64    `json:"updated_at"`
+	EndedAt     *int64   `json:"ended_at,omitempty"`
+}
+
+// SupervisorProtectionsResponse is the payload of GET
+// /api/supervisor/protections: the last arms of the XTrader AI, the newest
+// first.
+type SupervisorProtectionsResponse struct {
+	Protections []SupervisorProtectionInfo `json:"protections"`
 }
 
 // SupervisorDailyLimits are the daily limits of the prompt of an LLM agent:
@@ -1369,6 +1593,9 @@ type SupervisorRunInfo struct {
 	Findings    []SupervisorFinding `json:"findings"`
 	Error       string              `json:"error,omitempty"`
 	ActionIDs   []int64             `json:"action_ids,omitempty"`
+	// ProtectionIDs are the protections of positions the analysis armed, see
+	// SupervisorProtectionInfo
+	ProtectionIDs []int64 `json:"protection_ids,omitempty"`
 }
 
 // SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the

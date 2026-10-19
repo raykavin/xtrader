@@ -1,16 +1,19 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   fetchSupervisorActions,
+  fetchSupervisorProtections,
   fetchSupervisorRuns,
   runSupervisor,
   updateSupervisorSettings,
 } from "../api/client";
 import type {
   SupervisorActionInfo,
+  SupervisorProtectionInfo,
   SupervisorRunInfo,
   SupervisorSettingsRequest,
   SupervisorSettingsResponse,
 } from "../api/types";
+import { featureLabel } from "../lib/protection";
 import {
   actionLabel,
   actionStatusLabel,
@@ -18,6 +21,8 @@ import {
   intervalError,
   intervalOptions,
   originLabel,
+  protectionStatusLabel,
+  protectionStops,
 } from "../lib/supervisor";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
@@ -78,6 +83,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
   const [saved, setSaved] = useState(false);
   const [runs, setRuns] = useState<SupervisorRunInfo[] | null>(null);
   const [actions, setActions] = useState<SupervisorActionInfo[] | null>(null);
+  const [protections, setProtections] = useState<SupervisorProtectionInfo[] | null>(null);
   const [open, setOpen] = useState<number | null>(null);
 
   const load = useCallback(() => {
@@ -87,6 +93,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
     fetchSupervisorActions()
       .then(setActions)
       .catch(() => setActions([]));
+    fetchSupervisorProtections()
+      .then(setProtections)
+      .catch(() => setProtections([]));
   }, []);
   useEffect(() => load(), [load]);
   useEffect(() => {
@@ -500,6 +509,85 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                         )}
                       </td>
                       <td data-label="Motivo">{action.reason}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card card-flush" aria-labelledby="supervisor-protections-title">
+        <header className="card-header">
+          <div className="card-heading">
+            <span className="eyebrow">Registro</span>
+            <h3 id="supervisor-protections-title" className="card-title">
+              Proteções acionadas
+              {protections && <span className="card-count">{protections.length}</span>}
+            </h3>
+          </div>
+        </header>
+        {protections === null ? (
+          <p className="card-body">Carregando…</p>
+        ) : protections.length === 0 ? (
+          <EmptyState compact icon="shield" title="Nenhuma proteção acionada ainda">
+            O breakeven e o trailing stop que o XTrader AI armar nas posições aparecem aqui, com o
+            motivo, o stop anterior, o pedido e o confirmado pela corretora. Ele só arma onde o
+            agente autoriza, em Configurações → Agentes → Proteção.
+          </EmptyState>
+        ) : (
+          <div className="table-wrap">
+            <table className="table table-responsive">
+              <thead>
+                <tr>
+                  <th scope="col">Quando</th>
+                  <th scope="col">Posição</th>
+                  <th scope="col">Recurso</th>
+                  <th scope="col">Situação</th>
+                  <th scope="col">Stop</th>
+                  <th scope="col">Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {protections.map((protection) => {
+                  const status = protectionStatusLabel(protection);
+                  return (
+                    <tr key={protection.id}>
+                      <td data-label="Quando" className="mono">
+                        {dayClock(protection.created_at)}
+                      </td>
+                      <td data-label="Posição">
+                        {protection.agent} · {protection.pair}{" "}
+                        <span className="mono field-hint">{protection.position_ref}</span>
+                      </td>
+                      <td data-label="Recurso">
+                        #{protection.id} {featureLabel(protection.feature)}
+                        <span className="field-hint">
+                          {" "}
+                          {originLabel(
+                            protection.run_id ? "supervisor" : "user",
+                            protection.requested_by,
+                          )}
+                        </span>
+                      </td>
+                      <td data-label="Situação">
+                        <span
+                          className={toneClass(status.tone)}
+                          title={protection.detail || undefined}
+                        >
+                          {status.text}
+                        </span>
+                      </td>
+                      <td data-label="Stop" className="mono">
+                        {protectionStops(protection)}
+                      </td>
+                      <td data-label="Motivo" className="protection-reason-cell">
+                        {protection.reason}
+                        {protection.evidence.length > 0 && (
+                          <span className="field-hint"> ({protection.evidence.join("; ")})</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

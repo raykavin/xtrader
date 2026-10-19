@@ -384,3 +384,63 @@ func TestAgent_SuperviseEntries(t *testing.T) {
 	require.EqualValues(t, 3, revision)
 	require.NoError(t, a.Close())
 }
+
+// fakeProtection records the protection the agent applies.
+type fakeProtection struct {
+	mu       sync.Mutex
+	settings *ui.ProtectionSettings
+	arms     []ui.ProtectionArm
+	applied  int
+}
+
+func (p *fakeProtection) Apply(settings *ui.ProtectionSettings, arms []ui.ProtectionArm) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.settings, p.arms, p.applied = settings, arms, p.applied+1
+}
+
+func (p *fakeProtection) state() (*ui.ProtectionSettings, []ui.ProtectionArm, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.settings, p.arms, p.applied
+}
+
+// The protection of the positions follows the controller: the one of the
+// settings before the bot trades, then the one of the runtime as it changes,
+// whatever its prompt.
+func TestAgent_Protect(t *testing.T) {
+	trailing := &ui.ProtectionSettings{Unit: ui.ProtectionUnitATR,
+		Trailing: ui.TrailingSettings{Enabled: true, Trigger: 1, Distance: 0.5, Step: 0.1}}
+	f := newFakeController(t)
+	f.set(func(f *fakeController) {
+		f.cfg = testConfig()
+		f.cfg.Protection = agentapi.Protection{ProtectionSettings: trailing}
+		f.runtime = agentapi.Runtime{Version: 1, Protection: f.cfg.Protection}
+	})
+	a, err := connect(context.Background(), f.client(), "llm")
+	require.NoError(t, err)
+	require.NoError(t, a.Open(t.TempDir()))
+
+	protection := &fakeProtection{}
+	a.Protect(protection)
+	settings, _, applied := protection.state()
+	require.Equal(t, 1, applied, "before the bot trades")
+	require.Equal(t, trailing, settings)
+
+	a.Run(context.Background(), nil)
+	arm := ui.ProtectionArm{ID: 7, Pair: "XAUUSDm", PositionRef: "mt5:1", Feature: ui.ProtectionTrailing,
+		Reason: "devolução de lucro"}
+	f.setRuntime(agentapi.Runtime{Protection: agentapi.Protection{ProtectionSettings: trailing,
+		ProtectionArms: []ui.ProtectionArm{arm}}, Prompt: &agentapi.PromptRef{ID: 9, Name: "missing", Version: 1}})
+	require.Eventually(t, func() bool {
+		_, arms, _ := protection.state()
+		return len(arms) == 1 && arms[0] == arm
+	}, 5*time.Second, time.Millisecond, "the arms of the runtime, its prompt failing")
+
+	f.setRuntime(agentapi.Runtime{})
+	require.Eventually(t, func() bool {
+		settings, arms, _ := protection.state()
+		return settings == nil && len(arms) == 0
+	}, 5*time.Second, time.Millisecond, "off")
+	require.NoError(t, a.Close())
+}

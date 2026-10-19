@@ -53,6 +53,7 @@ type PaperWallet struct {
 	pendingOrders map[string][]int     // pair -> order indices for fast lookup
 	locks         map[int64]*orderLock // order (or OCO group) id -> reserved funds
 	protections   map[int64][]int      // entry id -> indices of the legs waiting for its fill
+	movedStops    map[int64]stopMove   // stop loss id -> its move within the candle in progress
 	assets        map[string]*assetInfo
 	avgShortPrice map[string]float64
 	avgLongPrice  map[string]float64
@@ -110,6 +111,7 @@ func NewPaperWallet(ctx context.Context, baseCoin string, options ...PaperWallet
 		pendingOrders: make(map[string][]int),
 		locks:         make(map[int64]*orderLock),
 		protections:   make(map[int64][]int),
+		movedStops:    make(map[int64]stopMove),
 		assets:        make(map[string]*assetInfo),
 		fistCandle:    make(map[string]model.Candle),
 		lastCandle:    make(map[string]model.Candle),
@@ -585,6 +587,9 @@ func (p *PaperWallet) OnCandle(candle model.Candle) {
 		}
 
 		price, ok := fillPrice(order, candle)
+		if ok && !p.reached(order, candle) {
+			continue // moved within the candle, past the extremes it had then
+		}
 		if !ok {
 			continue
 		}
@@ -611,6 +616,7 @@ func (p *PaperWallet) OnCandle(candle model.Candle) {
 		p.orders[i].Status = model.OrderStatusTypeFilled
 		p.orders[i].Price = price
 		p.orders[i].Fee = fee
+		delete(p.movedStops, order.ExchangeID)
 		completedIndices = append(completedIndices, i)
 
 		// the protection of the position it opened takes over from the next
@@ -1296,8 +1302,120 @@ func (p *PaperWallet) UpdateProtection(leg model.Order, level float64) (model.Or
 	p.orders[idx].UpdatedAt = p.lastCandle[order.Pair].Time
 	if order.Type == model.OrderTypeStopLoss {
 		p.orders[idx].Stop = &level
+		last := p.lastCandle[order.Pair]
+		p.movedStops[order.ExchangeID] = stopMove{at: last.Time, high: last.High, low: last.Low}
 	}
 	return p.orders[idx], nil
+}
+
+// stopMove is a stop loss moved within a candle at, its high and low then:
+// they ran before the move, so they never fill it, see reached.
+type stopMove struct {
+	at        time.Time
+	high, low float64
+}
+
+// reached reports whether candle, which touches the stop of order, filled it:
+// always, but for a stop loss moved within candle (see UpdateProtection),
+// whose extremes then ran before the move. It fills on the close beyond it, or
+// on a new extreme: a sell stop on a close at or below it, or a low below the
+// one of the move; a buy stop mirrored. The move is forgotten once another
+// candle comes.
+func (p *PaperWallet) reached(order model.Order, candle model.Candle) bool {
+	move, ok := p.movedStops[order.ExchangeID]
+	switch {
+	case !ok || order.Stop == nil:
+		return true
+	case !move.at.Equal(candle.Time):
+		delete(p.movedStops, order.ExchangeID)
+		return true
+	case order.Side == model.SideTypeSell:
+		return candle.Close <= *order.Stop || candle.Low < move.low
+	}
+	return candle.Close >= *order.Stop || candle.High > move.high
+}
+
+// LiveProtection returns leg as it is now, see service.ProtectionReader: true
+// once it protects the position held (on the book), false while it waits for
+// its entry to fill.
+func (p *PaperWallet) LiveProtection(leg model.Order) (model.Order, bool, error) {
+	p.RLock()
+	defer p.RUnlock()
+	idx, ok := p.ordersByID[leg.ExchangeID]
+	if !ok {
+		return model.Order{}, false, ErrOrderNotFound
+	}
+	order := p.orders[idx]
+	switch {
+	case order.Status != model.OrderStatusTypeNew:
+		return model.Order{}, false, ErrOrderNotOpen
+	case order.GroupID == nil:
+		return model.Order{}, false, fmt.Errorf("order %d is not a stop loss or a take profit: %w",
+			order.ExchangeID, ErrNotSupported)
+	}
+	for _, legs := range p.protections {
+		if slices.Contains(legs, idx) {
+			return order, false, nil
+		}
+	}
+	return order, true, nil
+}
+
+// SetStop puts a stop loss at stop on the position held on side of pair,
+// without one, see service.StopSetter: the legs Protect places when it has
+// none; else a stop loss joining the take profit protecting it, in its group,
+// sharing its reservation, before it on the book (a candle touching both fills
+// the stop loss). It returns the legs placed.
+func (p *PaperWallet) SetStop(side model.SideType, pair string, size, stop float64) ([]model.Order, error) {
+	p.Lock()
+	closing := model.SideTypeSell
+	if side == model.SideTypeSell {
+		closing = model.SideTypeBuy
+	}
+	profit := -1
+	for _, i := range p.pendingOrders[pair] {
+		order := p.orders[i]
+		if order.GroupID == nil || order.Side != closing || order.Status != model.OrderStatusTypeNew {
+			continue
+		}
+		if order.Type == model.OrderTypeStopLoss {
+			p.Unlock()
+			return nil, &OrderError{Err: fmt.Errorf("the %s position of %s has a stop loss already, the order %d: %w",
+				side, pair, order.ExchangeID, ErrNotSupported), Pair: pair, Quantity: size}
+		}
+		profit = i
+	}
+	if profit < 0 {
+		p.Unlock()
+		return p.Protect(side, pair, size, stop, 0)
+	}
+	defer p.Unlock()
+
+	tp := p.orders[profit]
+	if err := checkProtection(side, p.lastCandle[pair].Close, stop, tp.Price); err != nil {
+		return nil, &OrderError{Err: err, Pair: pair, Quantity: tp.Quantity}
+	}
+	level := stop
+	leg := model.Order{
+		ExchangeID: p.nextID(),
+		CreatedAt:  p.lastCandle[pair].Time,
+		UpdatedAt:  p.lastCandle[pair].Time,
+		Pair:       pair,
+		Side:       closing,
+		Type:       model.OrderTypeStopLoss,
+		Status:     model.OrderStatusTypeNew,
+		Price:      level,
+		Stop:       &level,
+		Quantity:   tp.Quantity,
+		GroupID:    tp.GroupID,
+		RefPrice:   p.lastCandle[pair].Close,
+	}
+	idx := len(p.orders)
+	p.addOrder(leg, false)
+	pending := p.pendingOrders[pair]
+	at := slices.Index(pending, profit)
+	p.pendingOrders[pair] = slices.Insert(pending, at, idx)
+	return p.legOrders([]int{idx}), nil
 }
 
 // UpdateLimit moves a pending limit order to limit, see

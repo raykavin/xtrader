@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/raykavin/xtrader/exchange"
@@ -439,6 +440,9 @@ type Controller struct {
 	finish         chan bool
 	status         Status
 	entries        entryState // under mtx, see BlockEntries
+	// stopGuard tells whether the stop losses of a pair only tighten, see
+	// SetStopGuard
+	stopGuard atomic.Pointer[func(pair string) bool]
 
 	position map[string]*Position
 	// lastFill holds the ID of the last fill of each pair settled, the place
@@ -1265,8 +1269,9 @@ func (c *Controller) updateOrders() {
 			continue
 		}
 
-		// no status change
-		if excOrder.Status == order.Status {
+		// no status change, nor a level moved at the exchange, eg: a stop
+		// loss moved by hand in the terminal
+		if excOrder.Status == order.Status && !levelMoved(order, excOrder) {
 			continue
 		}
 
@@ -2162,8 +2167,33 @@ func (c *Controller) Protect(side model.SideType, pair string, size, stop, profi
 // service.ProtectionBroker, and stores it moved; a leg that ended meanwhile,
 // eg: filled as it was moved, is returned as it ended, see record. Like
 // Cancel, it works on a stopped bot too: it only protects a position; not once
-// the controller is closed (see Close).
+// the controller is closed (see Close). While the stop guard of its pair is on
+// (see SetStopGuard), a stop loss of an open position only tightens, see
+// TightenProtection.
 func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
+	return c.moveProtection(leg, level, c.StopGuarded(leg.Pair))
+}
+
+// UpdateProtectionManual is UpdateProtection for a move by a user, eg: from
+// the trade panel: never guarded, it may loosen a stop loss.
+func (c *Controller) UpdateProtectionManual(leg model.Order, level float64) (model.Order, error) {
+	return c.moveProtection(leg, level, false)
+}
+
+// TightenProtection is UpdateProtection always guarded: a stop loss of an open
+// position moves only to a level protecting it more than the one it is at now
+// (see service.ProtectionReader), by more than half a tick; as much is no
+// move, the leg returned as it is; less is a *service.StopNotTighterError
+// with the leg as it is. The level is read again under the lock of the pair,
+// so that two movers never loosen what the other tightened. The legs of a
+// pending entry, and the take profits, move as UpdateProtection moves them.
+func (c *Controller) TightenProtection(leg model.Order, level float64) (model.Order, error) {
+	return c.moveProtection(leg, level, true)
+}
+
+// moveProtection moves leg to level, see UpdateProtection, only tighter when
+// guarded, see TightenProtection.
+func (c *Controller) moveProtection(leg model.Order, level float64, guarded bool) (model.Order, error) {
 	end, err := c.beginProtection(leg.Pair)
 	if err != nil {
 		return model.Order{}, err
@@ -2175,6 +2205,14 @@ func (c *Controller) UpdateProtection(leg model.Order, level float64) (model.Ord
 		err := fmt.Errorf("protected orders: %w", exchange.ErrNotSupported)
 		c.notifyError(err)
 		return model.Order{}, err
+	}
+	if guarded && isStopLeg(leg) {
+		if live, moves, err := c.tightens(leg, level); !moves {
+			if err != nil {
+				log.Infof("[ORDER] %v: not moved", err)
+			}
+			return live, err
+		}
 	}
 
 	log.Infof("[ORDER] Moving the %s of %s to %f", leg.Type, leg.Pair, level)

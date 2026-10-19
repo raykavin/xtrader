@@ -25,6 +25,7 @@ import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
+import { ProtectionDialog } from "./ProtectionDialog";
 import { RenameAgentDialog } from "./RenameAgentDialog";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
@@ -181,6 +182,7 @@ function AgentCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState(false);
+  const [protection, setProtection] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const state = agentState(agent);
   const status = promptStatusLabel(agent.prompt_status);
@@ -450,6 +452,16 @@ function AgentCard({
           </button>
           <button
             type="button"
+            className={agentProtected(agent) ? "btn btn-sm protection-on" : "btn btn-sm"}
+            aria-label={`Proteção de posições de ${agent.name}`}
+            title="Breakeven e trailing stop das posições, e o que o XTrader AI pode acionar"
+            onClick={() => setProtection(true)}
+          >
+            <Icon name="shield" size={14} />
+            Proteção
+          </button>
+          <button
+            type="button"
             className="btn btn-sm"
             aria-label={`Editar ${agent.name}`}
             disabled={busy}
@@ -526,6 +538,9 @@ function AgentCard({
         </p>
       )}
       {results && <AgentResultsDialog agent={agent} onClose={() => setResults(false)} />}
+      {protection && (
+        <ProtectionDialog agent={agent} onChange={onChange} onClose={() => setProtection(false)} />
+      )}
       {renaming && (
         <RenameAgentDialog
           name={agent.name}
@@ -538,4 +553,10 @@ function AgentCard({
       )}
     </article>
   );
+}
+
+/** Whether the protection of the positions of agent runs, or may be armed by the XTrader AI. */
+function agentProtected(agent: AgentSettings): boolean {
+  const { breakeven, trailing } = agent.protection;
+  return breakeven.enabled || breakeven.supervisor || trailing.enabled || trailing.supervisor;
 }

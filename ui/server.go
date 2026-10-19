@@ -33,6 +33,7 @@ func (c *Chart) router() http.Handler {
 		r.Post("/supervision/entries", c.handleSupervisionEntries)
 		r.Post("/supervision/close", c.handleSupervisionClose)
 		r.Post("/supervision/cancel", c.handleSupervisionCancel)
+		r.Post("/supervision/protect", c.handleSupervisionProtect)
 		r.Get("/decisions", c.handleDecisions)
 		r.Get("/decisions/{id}", c.handleDecision)
 		r.Get("/decisions/{id}/attachments/{index}", c.handleDecisionAttachment)

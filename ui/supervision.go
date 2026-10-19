@@ -39,6 +39,30 @@ type SupervisedController interface {
 	Cancel(order model.Order) error
 }
 
+// Protector is the protection of the positions of the bot (breakeven, trailing
+// stop), see protect.Manager: how it stands, by pair, and the arms of the
+// supervisor.
+type Protector interface {
+	Protection(pair string) *PositionProtection
+	Protections() []PositionProtection
+	Arm(request SupervisionProtectRequest) SupervisionProtectResponse
+}
+
+// SetProtection shows the protection of the positions of the bot with them,
+// in the snapshots and the events, and lets the supervisor arm it (POST
+// /api/supervision/protect). Call it before Start.
+func (c *Chart) SetProtection(protector Protector) {
+	c.protector = protector
+}
+
+// protection returns the protection of the position of pair, nil without one.
+func (c *Chart) protection(pair string) *PositionProtection {
+	if c.protector == nil {
+		return nil
+	}
+	return c.protector.Protection(pair)
+}
+
 // SetSupervision enables the routes of the supervisor of the controller,
 // /api/supervision, on the channel ChannelSupervisor only, apart from the
 // channels of the control panel (see SetChannels): the state of the entries,
@@ -149,7 +173,32 @@ func (c *Chart) handleSupervision(w http.ResponseWriter, r *http.Request) {
 		state.Pending = append(state.Pending, SupervisedOrder{ID: o.ID, Pair: o.Pair, Side: string(o.Side),
 			Type: string(o.Type), Price: o.Price, Quantity: o.Quantity, Entry: pendingEntry(o)})
 	}
+	if c.protector != nil {
+		state.Protections = c.protector.Protections()
+	}
 	writeJSON(w, state)
+}
+
+// handleSupervisionProtect arms the protection of a position for the
+// supervisor, see SupervisionProtectRequest: 404 without the protection, the
+// answer of the arm else, see SupervisionProtectResponse.
+func (c *Chart) handleSupervisionProtect(w http.ResponseWriter, r *http.Request) {
+	if _, ok := c.requireSupervisor(w, r); !ok {
+		return
+	}
+	if c.protector == nil {
+		writeJSONError(w, http.StatusNotFound, "the protection of the positions isn't run by this agent")
+		return
+	}
+	var request SupervisionProtectRequest
+	if !decodeSupervision(w, r, &request) {
+		return
+	}
+	if request.ArmID <= 0 || strings.TrimSpace(request.Reason) == "" {
+		writeJSONError(w, http.StatusBadRequest, "an arm needs its record and its reason")
+		return
+	}
+	writeJSON(w, c.protector.Arm(request))
 }
 
 // decodeSupervision decodes the payload of a request of the supervisor into v,

@@ -16,6 +16,7 @@ import (
 
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
 	"github.com/raykavin/xtrader/agents/llm"
 	"github.com/raykavin/xtrader/agents/strategies"
@@ -492,6 +493,8 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 	if agent != nil {
 		agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not
 	}
+	// the protection of its positions, the costs those of the paper wallet
+	protect.Attach(ctx, bot, wallet, trader.Timeframe(), false, agent, chart)
 
 	var apply func(agentapi.Runtime)
 	if chart != nil {
@@ -569,6 +572,8 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 		return err
 	}
 	agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not, before it trades
+	// the protection of its positions
+	protect.Attach(ctx, bot, broker, trader.Timeframe(), true, agent, chart)
 
 	apply := func(agentapi.Runtime) {}
 	if chart != nil {

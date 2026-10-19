@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/raykavin/xtrader/exchange"
+	"github.com/raykavin/xtrader/internal/recovery"
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/notification"
 	"github.com/raykavin/xtrader/order"
@@ -43,6 +44,28 @@ type CandleSubscriber interface {
 	OnCandle(model.Candle)
 }
 
+// CandleHook is told every candle the bot processes live, the ones in progress
+// and the closed ones, once the strategy ran on it and, on a closed one, the
+// orders were settled (see processCandle): never the candles of the preload
+// nor of a backtest. A panic of it is recovered and logged. It runs on the
+// goroutine of the candles, so it must not wait long: eg: the protection of
+// the positions moving a stop loss.
+type CandleHook interface {
+	OnCandle(model.Candle)
+}
+
+// WithCandleHook sets the hook of the candles, see CandleHook.
+func WithCandleHook(hook CandleHook) Option {
+	return func(bot *XTrader) {
+		bot.candleHook = hook
+	}
+}
+
+// SetCandleHook sets the hook of the candles, see CandleHook: before Run.
+func (n *XTrader) SetCandleHook(hook CandleHook) {
+	n.candleHook = hook
+}
+
 type XTrader struct {
 	storage  storage.Storage
 	settings model.Settings
@@ -59,6 +82,11 @@ type XTrader struct {
 	paperWallet           *exchange.PaperWallet
 
 	backtest bool
+
+	candleHook CandleHook // see CandleHook
+	// hooked: the candles processed go to candleHook, live after the preload;
+	// set before the goroutine of the candles starts, read on it
+	hooked bool
 }
 
 type Option func(*XTrader)
@@ -341,7 +369,21 @@ func (n *XTrader) processCandle(candle model.Candle) error {
 		err = errors.Join(err, controller.OnCandle(candle))
 		n.orderController.OnCandle(candle)
 	}
+	n.hook(candle)
 	return err
+}
+
+// hook tells candle to the hook of the candles, see CandleHook: live only,
+// after the preload, its panic recovered and logged.
+func (n *XTrader) hook(candle model.Candle) {
+	if n.candleHook == nil || !n.hooked {
+		return
+	}
+	if recovered := recovery.Call("OnCandle of the candle hook", candle.Time, func() {
+		n.candleHook.OnCandle(candle)
+	}); recovered != nil {
+		log.Error(recovered)
+	}
 }
 
 // processCandles processes the candles of the buffer as they come, from items
@@ -475,6 +517,7 @@ func (n *XTrader) Run(ctx context.Context) error {
 		return n.backtestCandles()
 	}
 
+	n.hooked = true // the preload is over: the live candles go to the hook
 	processed := make(chan struct{})
 	go func() {
 		defer close(processed)

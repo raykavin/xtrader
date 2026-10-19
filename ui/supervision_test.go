@@ -277,3 +277,76 @@ func TestSupervision_Cancel(t *testing.T) {
 	}, response.Results)
 	require.Equal(t, []int64{2}, controller.canceled, "the leg of the position stays")
 }
+
+// fakeProtector is the protection of the positions of a bot: its state, and
+// the arms asked.
+type fakeProtector struct {
+	mu    sync.Mutex
+	state PositionProtection
+	arms  []SupervisionProtectRequest
+}
+
+func (p *fakeProtector) Protection(pair string) *PositionProtection {
+	if pair != p.state.Pair {
+		return nil
+	}
+	state := p.state
+	return &state
+}
+
+func (p *fakeProtector) Protections() []PositionProtection { return []PositionProtection{p.state} }
+
+func (p *fakeProtector) Arm(request SupervisionProtectRequest) SupervisionProtectResponse {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.arms = append(p.arms, request)
+	return SupervisionProtectResponse{Status: ProtectArmed, Previous: 98, Detail: "armado: aguardando o gatilho"}
+}
+
+// The supervisor arms the protection of a position on its channel only; the
+// state tells the protection of the positions; the snapshot shows it on the
+// dashboard; without the protection the route is a 404.
+func TestSupervision_Protect(t *testing.T) {
+	controller := &fakeSupervised{status: order.StatusRunning, positions: map[string]float64{"BTCUSDT": 1}}
+	c, url := newSupervisedChart(t, controller)
+	arm := `{"arm_id":4,"pair":"BTCUSDT","position_ref":"mt5:1","feature":"trailing","reason":"devolução"}`
+
+	resp, _ := request(t, http.MethodPost, url+"/api/supervision/protect", arm, supervisorHeaders...)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "without the protection")
+
+	protector := &fakeProtector{state: PositionProtection{Pair: "BTCUSDT", PositionRef: "mt5:1", Side: "BUY",
+		Entry: 100, StopLoss: 98, Trailing: ProtectionFeature{State: ProtectionWaiting, Remaining: 0.4}}}
+	c.SetProtection(protector)
+	for _, channel := range []string{string(ChannelWeb), string(ChannelTelegram)} {
+		resp, _ := request(t, http.MethodPost, url+"/api/supervision/protect", arm, ChannelHeader, channel,
+			"Content-Type", "application/json")
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode, channel)
+	}
+	require.Empty(t, protector.arms)
+
+	resp, body := request(t, http.MethodPost, url+"/api/supervision/protect", arm, supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var armed SupervisionProtectResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &armed))
+	require.Equal(t, ProtectArmed, armed.Status)
+	require.Len(t, protector.arms, 1)
+	require.Equal(t, "mt5:1", protector.arms[0].PositionRef)
+
+	resp, _ = request(t, http.MethodPost, url+"/api/supervision/protect", `{"pair":"BTCUSDT"}`,
+		supervisorHeaders...)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "without its record nor its reason")
+
+	resp, body = request(t, http.MethodGet, url+"/api/supervision", "", supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var state SupervisionState
+	require.NoError(t, json.Unmarshal([]byte(body), &state))
+	require.Len(t, state.Protections, 1)
+	require.Equal(t, ProtectionWaiting, state.Protections[0].Trailing.State)
+
+	resp, body = request(t, http.MethodGet, url+"/api/BTCUSDT/snapshot", "", ChannelHeader, string(ChannelWeb))
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var snapshot Snapshot
+	require.NoError(t, json.Unmarshal([]byte(body), &snapshot))
+	require.NotNil(t, snapshot.Protection, "on the dashboard")
+	require.Equal(t, 98.0, snapshot.Protection.StopLoss)
+}

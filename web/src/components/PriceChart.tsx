@@ -61,6 +61,7 @@ import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
 import { candleUpdates, timeframeLabel } from "../lib/timeframes";
 import { Icon } from "./Icon";
+import { PositionProtection } from "./PositionProtection";
 import { SectionHead } from "./SectionHead";
 
 interface Props {
@@ -994,6 +995,8 @@ export function PriceChart({
           </>
         }
       />
+
+      <PositionProtection protection={snapshot.protection} />
 
       {/* the legends are drawn in the panes of the chart, see paneLegends: listed here for the screen readers */}
       {legend.length > 0 && (

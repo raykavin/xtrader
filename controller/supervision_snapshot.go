@@ -71,6 +71,9 @@ type view struct {
 	orders    map[string][]heldOrder
 	paper     map[string]ui.SupervisionState
 	gaps      map[string]string
+	// protections is how the protection of the positions of each agent
+	// stands, as the agents told it, see ui.PositionProtection
+	protections map[string][]ui.PositionProtection
 }
 
 // agentGap returns why the data of the agent of name is incomplete, "" when it
@@ -89,7 +92,8 @@ func (s *Supervision) read(ctx context.Context) (*view, error) {
 	now := s.now()
 	v := &view{at: now, agents: make(map[string]store.Agent, len(agents)),
 		positions: make(map[string][]heldPosition), orders: make(map[string][]heldOrder),
-		paper: make(map[string]ui.SupervisionState), gaps: make(map[string]string)}
+		paper: make(map[string]ui.SupervisionState), gaps: make(map[string]string),
+		protections: make(map[string][]ui.PositionProtection)}
 	v.snapshot = ui.SupervisorSnapshot{GeneratedAt: now.Format(time.RFC3339), Timezone: now.Location().String(),
 		Accounts: []ui.SupervisorAccount{}, Exposure: []ui.SupervisorExposure{}, Agents: []ui.SupervisorAgent{}}
 	for _, a := range agents {
@@ -183,6 +187,11 @@ func (s *Supervision) read(ctx context.Context) (*view, error) {
 	}
 	wg.Wait()
 	v.snapshot.Agents = summaries
+	for _, summary := range summaries {
+		if len(summary.Protections) > 0 {
+			v.protections[summary.Name] = summary.Protections
+		}
+	}
 	if hidden := len(agents) - len(shown); hidden > 0 {
 		v.snapshot.Gaps = append(v.snapshot.Gaps, fmt.Sprintf("%d agents disabled, without position nor order, "+
 			"left out", hidden))
@@ -413,6 +422,20 @@ func (s *Supervision) agentSummary(ctx context.Context, a store.Agent, v *view, 
 			summary.Pending = append(summary.Pending, ui.SupervisorPending{Ticket: o.Ticket, Pair: o.Symbol,
 				Side: o.side(), Type: pendingType(o.Type), Price: o.PriceOpen, Volume: o.VolumeCurrent,
 				StopLoss: o.SL, TakeProfit: o.TP, Entry: true})
+		}
+	}
+	// the protection of its positions, as the agent tells it
+	if settings := a.ProtectionOf(); settings.Active() {
+		summary.Protection = &settings
+		switch {
+		case paper != nil:
+			summary.Protections = paper.Protections
+		case summary.Reachable:
+			if told, err := s.supervision(ctx, a.Name); err == nil {
+				summary.Protections = told.Protections
+			} else {
+				log.Warnf("supervisor: the protection of the positions of the agent %s: %v", a.Name, err)
+			}
 		}
 	}
 	for i := range summary.OpenProfit {
