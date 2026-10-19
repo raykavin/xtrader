@@ -571,7 +571,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                           )}
                         </span>
                       </td>
-                      <td data-label="Situação">
+                      <td data-label="Situação" className="protection-status-cell">
                         <span
                           className={toneClass(status.tone)}
                           title={protection.detail || undefined}
