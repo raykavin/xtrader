@@ -420,7 +420,8 @@ function buildTradeLines(orders: Order[], candles: Candle[], palette: Palette): 
 function themeOptions(palette: Palette) {
   return {
     layout: {
-      background: { type: ColorType.Solid, color: palette.background },
+      // transparent: drawn on the glass of its card
+      background: { type: ColorType.Solid, color: "transparent" },
       textColor: palette.text,
       panes: { separatorColor: palette.border, separatorHoverColor: palette.accent },
     },
@@ -439,7 +440,8 @@ function chartOptions(palette: Palette) {
   return {
     autoSize: true,
     layout: {
-      background: { type: ColorType.Solid, color: palette.background },
+      // transparent: drawn on the glass of its card
+      background: { type: ColorType.Solid, color: "transparent" },
       textColor: palette.text,
       fontFamily: palette.fontFamily,
       fontSize: 11,
