@@ -19,6 +19,7 @@ import {
   severalCurrencies,
 } from "../lib/openPL";
 import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
+import { Icon } from "./Icon";
 import { SectionHead } from "./SectionHead";
 import { Skeleton } from "./States";
 
@@ -113,6 +114,11 @@ function localTime(unixSeconds: number): string {
   });
 }
 
+/** The color of a profit of one currency by its sign; none for several, each with its code. */
+function profitClass(amounts: CurrencyAmount[]): string {
+  return amounts.length === 1 ? signClass(amounts[0]?.amount ?? 0) : "";
+}
+
 /** Amounts set large, each in its currency, incomplete told beside them; — without any. */
 function Amounts({
   amounts,
@@ -168,7 +174,8 @@ function Amounts({
  * positions closed in the period (picked by a double click on its title:
  * today, this week, this month or custom days) and the balances of their
  * accounts, as the broker reports them, by the currency of each account (none
- * converted: a total for each currency); by agent below them (a stopped or
+ * converted: a total for each currency); by agent below them, a tile each with
+ * the profit open of each of its assets and its closed one (a stopped or
  * disabled one marked so); incomplete, and why, when an account wasn't read.
  */
 export function OpenProfitCard() {
@@ -302,28 +309,38 @@ export function OpenProfitCard() {
                   .filter(Boolean)
                   .join(", ")}
               >
+                <span className="openpl-agent-head">
+                  <span className="openpl-agent-icon">
+                    <Icon name="bot" size={15} />
+                  </span>
+                  {!line.running && <span className="openpl-stopped">parado</span>}
+                </span>
                 <span className="openpl-agent">{line.agent}</span>
-                {!line.running && <span className="openpl-stopped">parado</span>}
-                {line.open.length > 0 && (
-                  <span className="openpl-part">
-                    <small>aberto</small>
-                    <span
-                      className={`openpl-profit mono ${line.open.length === 1 ? signClass(line.open[0]?.amount ?? 0) : ""}`}
+                <dl className="openpl-assets">
+                  {line.assets.map((asset) => (
+                    <div
+                      key={asset.pair}
+                      className="openpl-asset"
+                      title={`${asset.pair}: ${asset.positions === 1 ? "1 posição aberta" : `${asset.positions} posições abertas`}`}
                     >
-                      {amountsText(line.open, several)}
-                    </span>
-                  </span>
-                )}
-                {line.closed.length > 0 && (
-                  <span className="openpl-part">
-                    <small>fechado</small>
-                    <span
-                      className={`openpl-profit mono ${line.closed.length === 1 ? signClass(line.closed[0]?.amount ?? 0) : ""}`}
+                      <dt>{asset.pair}:</dt>
+                      <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
+                        {amountsText(asset.amounts, several)}
+                      </dd>
+                    </div>
+                  ))}
+                  {line.closed.length > 0 && (
+                    <div
+                      className="openpl-asset openpl-asset-closed"
+                      title={`Fechado (${label}): ${line.closedPositions === 1 ? "1 posição" : `${line.closedPositions} posições`}`}
                     >
-                      {amountsText(line.closed, several)}
-                    </span>
-                  </span>
-                )}
+                      <dt>Fechado:</dt>
+                      <dd className={`openpl-profit mono ${profitClass(line.closed)}`}>
+                        {amountsText(line.closed, several)}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
               </li>
             ))}
           </ul>
