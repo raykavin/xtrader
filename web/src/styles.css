@@ -7057,3 +7057,11 @@ h3.md-heading {
   min-width: 260px;
   white-space: normal;
 }
+
+/* a phone: its state and its reason across the tile of the row, whole */
+@media (max-width: 767px) {
+  .table-responsive td:is(.protection-status-cell, .protection-reason-cell) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+}
