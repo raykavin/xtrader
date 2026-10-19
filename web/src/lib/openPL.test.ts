@@ -60,6 +60,25 @@ describe("the open profit of the agents", () => {
     expect(agents[1]?.amounts).toEqual([{ currency: "BRL", amount: -6.5 }]);
   });
 
+  it("sums the positions of each agent by asset, in the order of the read", () => {
+    const [agent] = openPLByAgent(
+      read({
+        positions: [
+          position("llm-smc", 1, 22.6),
+          position("llm-smc", 2, -4.1, { pair: "BTCUSDm", side: "SELL" }),
+          position("llm-smc", 3, -1),
+        ],
+      }),
+    );
+    expect(agent?.assets.map((a) => [a.pair, a.positions])).toEqual([
+      ["XAUUSDm", 2],
+      ["BTCUSDm", 1],
+    ]);
+    expect(agent?.assets[0]?.amounts[0]?.amount).toBeCloseTo(21.6, 9);
+    expect(agent?.assets[1]?.amounts).toEqual([{ currency: "BRL", amount: -4.1 }]);
+    expect(agent?.assets[1] && amountsText(agent.assets[1].amounts, false)).toBe("−4,10");
+  });
+
   it("keeps each account in its currency, none converted, its code told with several", () => {
     const single = read({ totals: [{ currency: "USD", amount: -6.5 }] });
     const [dollar] = openPLByAgent({
@@ -151,6 +170,7 @@ describe("the agents on the band", () => {
         running: true,
         positions: 1,
         open: [{ currency: "BRL", amount: 12.3 }],
+        assets: [{ pair: "XAUUSDm", positions: 1, amounts: [{ currency: "BRL", amount: 12.3 }] }],
         closedPositions: 2,
         closed: [{ currency: "BRL", amount: -8.42 }],
       },
@@ -159,6 +179,7 @@ describe("the agents on the band", () => {
         running: true,
         positions: 1,
         open: [{ currency: "BRL", amount: -1 }],
+        assets: [{ pair: "XAUUSDm", positions: 1, amounts: [{ currency: "BRL", amount: -1 }] }],
         closedPositions: 0,
         closed: [],
       },
@@ -167,6 +188,7 @@ describe("the agents on the band", () => {
         running: false,
         positions: 0,
         open: [],
+        assets: [],
         closedPositions: 1,
         closed: [{ currency: "BRL", amount: -50.05 }],
       },

@@ -9,6 +9,22 @@ export interface AgentOpenPL {
   running: boolean;
   /** The profit of its positions by the currency of their account, none converted. */
   amounts: CurrencyAmount[];
+  /** Its positions by asset, in the order of the read. */
+  assets: AssetOpenPL[];
+}
+
+/** The positions open of an agent on an asset, eg: XAUUSDm: their count and their profit by the currency of their account. */
+export interface AssetOpenPL {
+  pair: string;
+  positions: number;
+  amounts: CurrencyAmount[];
+}
+
+/** Adds profit in currency to amounts, one per currency. */
+function addAmount(amounts: CurrencyAmount[], currency: string, profit: number): void {
+  const amount = amounts.find((a) => a.currency === currency);
+  if (amount) amount.amount += profit;
+  else amounts.push({ currency, amount: profit });
 }
 
 /** The open profit of each agent with positions open, in the order of the read (of the dashboard). */
@@ -17,14 +33,19 @@ export function openPLByAgent(read: OpenPositionsResponse): AgentOpenPL[] {
   for (const position of read.positions) {
     let agent = agents.find((a) => a.agent === position.agent);
     if (!agent) {
-      agent = { agent: position.agent, positions: 0, running: false, amounts: [] };
+      agent = { agent: position.agent, positions: 0, running: false, amounts: [], assets: [] };
       agents.push(agent);
     }
     agent.positions += 1;
     agent.running ||= position.running;
-    const amount = agent.amounts.find((a) => a.currency === position.currency);
-    if (amount) amount.amount += position.profit;
-    else agent.amounts.push({ currency: position.currency, amount: position.profit });
+    addAmount(agent.amounts, position.currency, position.profit);
+    let asset = agent.assets.find((a) => a.pair === position.pair);
+    if (!asset) {
+      asset = { pair: position.pair, positions: 0, amounts: [] };
+      agent.assets.push(asset);
+    }
+    asset.positions += 1;
+    addAmount(asset.amounts, position.currency, position.profit);
   }
   return agents;
 }
@@ -72,9 +93,10 @@ export interface AgentLine {
   agent: string;
   /** Whether it runs; else stopped or disabled. */
   running: boolean;
-  /** Its positions open, and their profit; none without one. */
+  /** Its positions open, and their profit, in all and by asset; none without one. */
   positions: number;
   open: CurrencyAmount[];
+  assets: AssetOpenPL[];
   /** The positions it closed in the period, and their profit; none without one. */
   closedPositions: number;
   closed: CurrencyAmount[];
@@ -94,6 +116,7 @@ export function agentLines(
     running: agent.running,
     positions: agent.positions,
     open: agent.amounts,
+    assets: agent.assets,
     closedPositions: 0,
     closed: [],
   }));
@@ -105,6 +128,7 @@ export function agentLines(
         running: agent.running,
         positions: 0,
         open: [],
+        assets: [],
         closedPositions: 0,
         closed: [],
       };
