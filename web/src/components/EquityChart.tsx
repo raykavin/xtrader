@@ -48,7 +48,8 @@ export function EquityChart({ snapshot, theme }: Props) {
     const chart = createChart(container, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: palette.background },
+        // transparent: drawn on the glass of its card
+        background: { type: ColorType.Solid, color: "transparent" },
         textColor: palette.text,
         fontFamily: palette.fontFamily,
         fontSize: 11,
@@ -88,7 +89,8 @@ export function EquityChart({ snapshot, theme }: Props) {
     const palette = palettes[theme];
     state.chart.applyOptions({
       layout: {
-        background: { type: ColorType.Solid, color: palette.background },
+        // transparent: drawn on the glass of its card
+        background: { type: ColorType.Solid, color: "transparent" },
         textColor: palette.text,
       },
       grid: { vertLines: { color: palette.grid }, horzLines: { color: palette.grid } },

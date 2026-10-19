@@ -30,6 +30,26 @@
   /* a card: lit from its top, a hairline of light on its edge */
   --panel: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 58%);
   --panel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* the glass of a card: the panel made translucent, the page frosted behind
+     it, a hairline border and edge of light, a soft shadow; the opaque panel
+     where the browser doesn't blur (see Glass) */
+  --glass: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-2) 70%, transparent) 0%,
+    color-mix(in srgb, var(--surface) 58%, transparent) 58%
+  );
+  --glass-border: rgba(141, 170, 201, 0.14);
+  --glass-border-hover: rgba(141, 170, 201, 0.26);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 10px 32px rgba(0, 0, 0, 0.36);
+  --glass-blur: blur(18px) saturate(150%);
+  /* a surface on the glass, eg: a tile of a card, the head of a table */
+  --glass-tile: color-mix(in srgb, var(--surface-3) 48%, transparent);
+  /* the light of the page the glass frosts, and its faint grid (see Base) */
+  --ambient-1: rgba(58, 160, 220, 0.2);
+  --ambient-2: rgba(246, 139, 31, 0.13);
+  --ambient-3: rgba(58, 160, 220, 0.12);
+  --ambient-grid: rgba(141, 170, 201, 0.06);
 
   /* ink: text-2 for secondary text (AA on every surface), text-3 for
      placeholders and what is off */
@@ -123,6 +143,15 @@
   --overlay: rgba(11, 21, 36, 0.42);
   --panel: linear-gradient(180deg, #fbfcfe 0%, #ffffff 58%);
   --panel-edge: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --glass: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.58) 58%);
+  --glass-border: rgba(11, 21, 36, 0.09);
+  --glass-border-hover: rgba(11, 21, 36, 0.17);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --glass-shadow: 0 1px 2px rgba(11, 21, 36, 0.04), 0 10px 30px rgba(11, 21, 36, 0.08);
+  --ambient-1: rgba(31, 127, 191, 0.2);
+  --ambient-2: rgba(246, 139, 31, 0.15);
+  --ambient-3: rgba(31, 127, 191, 0.13);
+  --ambient-grid: rgba(11, 21, 36, 0.06);
 
   --text: #0b1524;
   --text-2: #4a5a70;
@@ -193,11 +222,42 @@ html {
   scroll-padding-top: calc(var(--appbar-h) + var(--sp-4));
 }
 
-/* a light from the top of the page, behind the bar */
-body {
+/* a light from the top of the page, behind the bar: on the root, the body
+   transparent over it, the light of the glass between them (body::before) */
+html {
   background:
     radial-gradient(1100px 420px at 50% -160px, var(--bg-glow), transparent 72%) no-repeat,
     var(--bg);
+}
+
+body {
+  background: transparent;
+}
+
+/* the light of the page the glass of the cards frosts, and a faint grid
+   fading down it: fixed under everything, never repainted by a scroll */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+body::before {
+  background:
+    radial-gradient(48vmax 40vmax at 6% 24%, var(--ambient-1), transparent 70%),
+    radial-gradient(40vmax 34vmax at 96% 4%, var(--ambient-2), transparent 70%),
+    radial-gradient(52vmax 42vmax at 72% 106%, var(--ambient-3), transparent 72%);
+}
+
+body::after {
+  background-image:
+    linear-gradient(var(--ambient-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ambient-grid) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(120% 90% at 50% 0%, #000 30%, transparent 85%);
 }
 
 h1,
@@ -1525,10 +1585,79 @@ code {
   flex-direction: column;
   min-width: 0;
   padding: var(--sp-5);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-card), var(--panel-edge);
+}
+
+/* Glass: every card of the pages, the KPIs, the context bar and the login,
+   translucent over the light of the page, frosted, a hairline border and a
+   soft shadow; what floats over them (the menus, the dialogs, the panel of
+   the XTrader AI) stays opaque */
+.card,
+.kpi,
+.context-bar,
+.login-card {
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  box-shadow: var(--glass-shadow), var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  transition: border-color 0.2s;
+}
+
+:where(.card, .kpi, .context-bar):hover {
+  border-color: var(--glass-border-hover);
+}
+
+/* a card within a card: tinted only, one blur for both */
+:is(.card, .kpi) :is(.card, .kpi) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* the blur makes each card a stacking context: one with a list open goes over
+   the next, the list kept over the cards where the browser has no top layer
+   for it (see Select) */
+:where(.card, .kpi, .context-bar):has(.select.open) {
+  z-index: 5;
+}
+
+/* a phone or a touch screen: a lighter blur, cheaper to draw */
+@media (max-width: 767px), (pointer: coarse) {
+  :root {
+    --glass-blur: blur(12px) saturate(140%);
+  }
+}
+
+/* no blur in the browser, or less transparency asked: the opaque panel */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root,
+  :root[data-theme="light"] {
+    --glass: var(--panel);
+    --glass-border: var(--border);
+    --glass-tile: var(--surface-3);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  :root[data-theme="light"] {
+    --glass: var(--panel);
+    --glass-border: var(--border);
+    --glass-tile: var(--surface-3);
+    --glass-blur: none;
+  }
+}
+
+/* more contrast asked: opaque, its edges marked */
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme="light"] {
+    --glass: var(--panel);
+    --glass-border: var(--border-strong);
+    --glass-border-hover: var(--text-3);
+    --glass-tile: var(--surface-3);
+    --glass-blur: none;
+  }
 }
 
 /* a card of a header, a body and a footer, each padded */
@@ -2349,6 +2478,34 @@ fieldset.seg {
   box-shadow: inset 1px 0 0 var(--border);
 }
 
+/* a table on the glass of a card: its rows on the glass, its head and foot
+   tinted; the actions kept in view opaque, the row scrolled under them hidden */
+.card .table-wrap,
+.card .table td {
+  background: transparent;
+}
+
+.card .table th,
+.card .table tfoot td {
+  background: var(--glass-tile);
+}
+
+.card .table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.card .table td:is(.cell-actions, .col-actions) {
+  background: var(--surface);
+}
+
+.card .table th:is(.cell-actions, .col-actions) {
+  background: var(--surface-2);
+}
+
+.card .table tbody tr:hover td:is(.cell-actions, .col-actions) {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
 /* a time over its date, of a row */
 .time-cell {
   display: inline-flex;
@@ -2712,15 +2869,13 @@ fieldset.seg {
 /* the context of the panel: the agent and the pair at the left, the state
    of the agent at the right, a label over each */
 .context-bar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--sp-4) var(--sp-8);
   padding: 14px 18px;
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-card), var(--panel-edge);
 }
 
 .context-pick {
@@ -3315,10 +3470,7 @@ fieldset.seg {
   min-width: 0;
   padding: var(--sp-4) 18px;
   container-type: inline-size;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--panel);
-  box-shadow: var(--shadow-card), var(--panel-edge);
 }
 
 .kpi-line {
@@ -3785,10 +3937,10 @@ fieldset.seg {
   display: contents;
 }
 
+/* its chart drawn on the glass, see PriceChart */
 .chart-card {
   padding: 0;
   overflow: hidden;
-  background: var(--surface);
 }
 
 /* the card filling the rest of its column: the chart of the responsive
@@ -3952,6 +4104,11 @@ fieldset.seg {
   height: 100dvh;
   border: 0;
   border-radius: 0;
+  /* over the page: opaque, nothing to frost */
+  background: var(--surface);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .chart-card.chart-fullscreen .price-chart,
@@ -4986,10 +5143,8 @@ fieldset.seg {
   align-items: center;
   width: min(420px, 100%);
   padding: 36px var(--sp-8) var(--sp-8);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-pop), var(--panel-edge);
+  box-shadow: var(--shadow-pop), var(--glass-edge);
 }
 
 .login-mark {
@@ -5495,6 +5650,18 @@ fieldset.seg {
 
   .table-responsive .inline-form {
     width: 100%;
+  }
+
+  /* on the glass of a card: the rows tiles on it */
+  .card .table-responsive tbody tr {
+    background: var(--glass-tile);
+  }
+
+  .card .table-responsive td,
+  .card .table-responsive td:is(.cell-actions, .col-actions),
+  .card .table-responsive tbody tr:hover td,
+  .card .table-responsive tbody tr:hover td:is(.cell-actions, .col-actions) {
+    background: transparent;
   }
 
   /* a dialog: a sheet from the bottom of the screen */
