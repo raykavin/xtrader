@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Get("/supervisor/runs", s.handleRuns)
 	r.Get("/supervisor/runs/{id}", s.handleRunDetail)
 	r.Get("/supervisor/actions", s.handleActions)
+	r.Get("/supervisor/protections", s.handleProtections)
 	r.Post("/supervisor/actions/{id}/confirm", s.handleConfirm)
 	r.Post("/supervisor/actions/{id}/reject", s.handleReject)
 	r.Get("/supervisor/messages", s.handleMessages)
@@ -218,9 +220,50 @@ func (s *Supervision) handleRuns(w http.ResponseWriter, r *http.Request) {
 			byRun[*action.RunID] = append(byRun[*action.RunID], action.ID)
 		}
 	}
+	protections, err := s.store.ProtectionArms(r.Context(), maxActions)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	protectedBy := make(map[int64][]int64)
+	for _, arm := range protections {
+		if arm.RunID != nil {
+			protectedBy[*arm.RunID] = append(protectedBy[*arm.RunID], arm.ID)
+		}
+	}
 	response := ui.SupervisorRunsResponse{Runs: make([]ui.SupervisorRunInfo, 0, len(runs))}
 	for _, run := range runs {
-		response.Runs = append(response.Runs, runInfo(run, byRun[run.ID]))
+		info := runInfo(run, byRun[run.ID])
+		info.ProtectionIDs = protectedBy[run.ID]
+		response.Runs = append(response.Runs, info)
+	}
+	writeJSON(w, response)
+}
+
+// handleProtections answers the last protections of positions the XTrader AI
+// armed, the newest first, see ui.SupervisorProtectionInfo.
+func (s *Supervision) handleProtections(w http.ResponseWriter, r *http.Request) {
+	arms, err := s.store.ProtectionArms(r.Context(), maxActions)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	agents, err := s.store.Agents(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	names := make(map[int64]string, len(agents))
+	for _, a := range agents {
+		names[a.ID] = a.Name
+	}
+	response := ui.SupervisorProtectionsResponse{Protections: make([]ui.SupervisorProtectionInfo, 0, len(arms))}
+	for _, arm := range arms {
+		name := names[arm.AgentID]
+		if name == "" {
+			name = fmt.Sprintf("agente %d", arm.AgentID)
+		}
+		response.Protections = append(response.Protections, protectionInfo(arm, name))
 	}
 	writeJSON(w, response)
 }

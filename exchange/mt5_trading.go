@@ -3960,11 +3960,10 @@ func (m *MT5) legState(known mt5Known, final bool) (model.Order, int) {
 	}
 	if len(open) > 0 {
 		var units float64
-		level := 0.0
 		for _, position := range open {
 			units += m.instrument(position.Symbol).units(position.Volume)
-			level = math.Max(level, mt5Level(position.SL, position.TP, known.leg))
 		}
+		level := mt5Protective(open, known.leg) // never the loosest stop loss of a short
 		mt5LegFrom(&order, known.leg, open[0].Type, units, level)
 		order.Status = model.OrderStatusTypeNew
 		if level <= 0 {

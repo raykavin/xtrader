@@ -1,6 +1,7 @@
 package strategies
 
 import (
+	"errors"
 	"math"
 	"sort"
 	"time"
@@ -239,4 +240,16 @@ func rkClosesProtected(broker service.Broker) bool {
 type rkExit struct {
 	side model.SideType
 	bare rkLevels
+}
+
+// tighterAlready returns the leg as the broker holds it, and true, when err
+// tells that the stop guard kept a stop loss more protective than the one
+// asked (see service.StopNotTighterError): the strategy follows it from
+// there, never loosening it.
+func tighterAlready(err error) (model.Order, bool) {
+	var tighter *service.StopNotTighterError
+	if errors.As(err, &tighter) {
+		return tighter.Leg, true
+	}
+	return model.Order{}, false
 }

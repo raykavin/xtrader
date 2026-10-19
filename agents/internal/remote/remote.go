@@ -25,6 +25,7 @@ import (
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/llm"
 	"github.com/raykavin/xtrader/tools/log"
+	"github.com/raykavin/xtrader/ui"
 )
 
 // flushTimeout bounds the sending of the records left as the agent stops: the
@@ -45,11 +46,12 @@ type Agent struct {
 	outbox  *Outbox
 	prompts *Prompts
 
-	mu      sync.Mutex
-	entries Entries // of the bot, see Supervise
-	orders  *Orders
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mu         sync.Mutex
+	entries    Entries    // of the bot, see Supervise
+	protection Protection // of the positions of the bot, see Protect
+	orders     *Orders
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 // Connect returns the agent launched by the controller, its settings read from
@@ -293,6 +295,23 @@ func (a *Agent) Supervise(controller Entries) {
 	applyEntries(a.Config.Name, controller, a.Config.Entries)
 }
 
+// Protection is the protection of the positions of the bot as the controller
+// sets it, see agentapi.Protection and protect.Manager.
+type Protection interface {
+	Apply(settings *ui.ProtectionSettings, arms []ui.ProtectionArm)
+}
+
+// Protect has the protection of the positions of the bot follow the one the
+// controller tells (see agentapi.Protection): the one of its settings at once,
+// before the bot trades, then the one of its runtime as it changes, with its
+// entries, before its prompt. Before Run.
+func (a *Agent) Protect(protection Protection) {
+	a.mu.Lock()
+	a.protection = protection
+	a.mu.Unlock()
+	protection.Apply(a.Config.ProtectionSettings, a.Config.ProtectionArms)
+}
+
 // applyEntries applies entries to controller, an older revision ignored.
 func applyEntries(name string, controller Entries, entries agentapi.Entries) {
 	if entries.EntriesBlocked {
@@ -316,10 +335,13 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 		runtime, changed, err := a.client.Runtime(ctx, version, runtimeWait)
 		if err == nil && changed {
 			a.mu.Lock()
-			entries := a.entries
+			entries, protection := a.entries, a.protection
 			a.mu.Unlock()
 			if entries != nil {
 				applyEntries(a.Config.Name, entries, runtime.Entries)
+			}
+			if protection != nil {
+				protection.Apply(runtime.ProtectionSettings, runtime.ProtectionArms)
 			}
 		}
 		if err == nil && changed && a.prompts != nil {

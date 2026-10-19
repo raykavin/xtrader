@@ -24,6 +24,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 - [Recursos](#recursos)
   - [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)
   - [XTrader AI, o supervisor dos agentes](#xtrader-ai-o-supervisor-dos-agentes)
+  - [Proteção de posições: breakeven e trailing stop](#proteção-de-posições-breakeven-e-trailing-stop)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Requisitos](#requisitos)
@@ -39,6 +40,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Limites diários](#limites-diários)
   - [Telegram](#telegram)
   - [XTrader AI](#xtrader-ai)
+  - [Proteção de posições](#proteção-de-posições)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Agentes iniciais](#agentes-iniciais)
 - [Desenvolvimento](#desenvolvimento)
@@ -249,7 +251,8 @@ O **XTrader AI** é um modelo de linguagem (OpenAI ou Anthropic) que acompanha t
   - **Parar o agente agora:** só com confirmação, e recusada se alguma posição estiver sem stop loss na corretora. As posições ficam com o stop loss e o take profit na corretora;
   - **Cancelar pendentes de entrada:** nunca as proteções (stop loss e take profit) de uma posição;
   - **Encerrar posições:** sempre uma proposta para o usuário confirmar, só das posições dos agentes da aplicação (pelo número mágico), nunca operações manuais;
-  - **Liberar as entradas:** só o usuário.
+  - **Liberar as entradas:** só o usuário;
+  - **Armar o breakeven ou o trailing de uma posição** (`protect_position`): só nos agentes que autorizam o recurso ("XTrader AI pode acionar"), numa posição que o agente informou, com o gatilho do agente mantido (antes dele, o recurso só fica armado e o agente aplica quando o preço chegar). O motivo é obrigatório e deve tratar a reversão como possibilidade, nunca como certeza. Sozinho, dentro do teto de ações por análise; na conversa, quando o usuário pede. O registro guarda o motivo, as evidências, a posição, o stop anterior, o pedido e o confirmado pela corretora (veja [Proteção de posições](#proteção-de-posições-breakeven-e-trailing-stop)).
 - **Autonomia** (configurável): sozinho, o supervisor pode bloquear entradas e parar quando zerado (padrão do seed) e, se ligado, cancelar pendentes de entrada, no máximo 3 ações por análise (configurável, até 10). O resto, e o que passa do teto, vira uma proposta para o usuário, que expira no intervalo seguinte. Uma ação autônoma é recusada quando o retrato tem lacuna no agente ou na conta dele, e a parada só acontece quando duas análises seguidas a pedem para o mesmo agente (o bloqueio vale já na primeira).
 - **Nunca reativa:** o supervisor não tem como ligar um agente nem liberar entradas. Reativar o agente nas configurações limpa, junto, a marca da parada e o bloqueio que ela criou; um bloqueio criado à parte só sai com **Liberar**.
 - **Conversa:** um botão flutuante, em todas as páginas, abre o painel do XTrader AI. Ele responde com o retrato (renovado a cada 30 s, no máximo) e as últimas 20 mensagens do usuário; a resposta mostra a hora dos dados. A resposta chega em streaming (SSE), escrita à medida que o modelo a escreve, em Markdown (listas, tabelas, negrito, código e links `http`/`https`, nunca HTML). Até o texto chegar, uma animação diz o que ele está fazendo: lendo os agentes, analisando, consultando um agente ou montando uma proposta. Um pedido de ação vira uma proposta, que o backend monta com a lista real de agentes, posições (tickets) e pendentes afetados, e que só é executada com **Confirmar**, em até 10 min. Pedido ambíguo (agente inexistente, mais de um agente casando, escopo vazio) volta como pergunta. O histórico é por usuário; o registro das ações é um só, visível para todos.
@@ -262,6 +265,31 @@ O **XTrader AI** é um modelo de linguagem (OpenAI ou Anthropic) que acompanha t
   - falhas parciais ficam como **Parcial**, com o resultado de cada item;
   - a parada quando zerado é conferida a cada 15 s: só desliga com o bloqueio confirmado no agente, sem posição nem pendente no agente e na conta (lida inteira), visto assim em leituras com pelo menos 10 s entre a primeira e a última, e com o outbox sem pendência.
 - **Registro:** cada análise (o retrato enviado, o resumo, os achados por agente, categoria e gravidade, o uso de tokens) e cada ação (quem pediu e confirmou, motivo, categoria, evidências, escopo e resultado) ficam no banco. O card do agente e a barra do painel mostram **Entradas bloqueadas** e **Interrompido pelo supervisor**, com o motivo.
+
+### Proteção de posições: breakeven e trailing stop
+
+Cada agente pode proteger as posições abertas com **breakeven** e **trailing stop**, desligados por padrão: sem configurar, o agente se comporta como antes. O XTrader AI pode **armar** cada recurso numa posição, quando o agente autoriza.
+
+- **Parâmetros** (todos em múltiplos do **ATR(14)** de Wilder dos candles fechados do timeframe do agente, convertidos em preço de cada ativo; um agente com XAUUSDm e BTCUSDm usa os mesmos valores nos dois):
+
+  | Recurso | Parâmetro | O que é |
+  | --- | --- | --- |
+  | Breakeven | gatilho | avanço a favor desde a entrada para ativar |
+  | | margem | quanto além da entrada fica o stop, somada aos custos conhecidos |
+  | Trailing stop | gatilho | avanço a favor desde a entrada para ativar |
+  | | distância | quanto atrás do preço fica o stop |
+  | | passo | melhora mínima do stop para enviar uma atualização à corretora |
+
+  Cada recurso tem ainda **Ligado** e **XTrader AI pode acionar**, independentes. Validação: até 50 ATR; o breakeven com gatilho acima da margem; o trailing com passo até a distância.
+- **Preços:** o avanço e o trailing usam o preço de saída: o bid numa compra, o ask numa venda (o spread dos candles do MT5). A entrada é o preço médio da posição, não o fechamento do candle.
+- **Breakeven:** com o avanço desde a entrada (o melhor preço alcançado) no gatilho, o stop vai para a entrada + margem + custos conhecidos (as comissões da entrada e da saída, esta estimada igual à da entrada, e o swap negativo, convertidos em preço; no paper, a taxa), arredondado para o lado da proteção. **Isso não garante resultado líquido zero:** spread e slippage na saída, comissão e swap futuros podem deixar o resultado negativo. Sem custo conhecido, o painel diz "custos desconhecidos".
+- **Trailing stop:** ativo com o avanço no gatilho; depois, a cada preço, o stop candidato fica a "distância" atrás do preço de saída, arredondado para longe do mercado, e só é enviado quando aperta o stop atual em pelo menos o passo (e um tick). Determinístico: nenhum modelo é consultado a cada atualização.
+- **Coordenação:** com a proteção ligada ou armada num agente, todos os que movem o stop de uma posição aberta (a estratégia, o agente LLM, o breakeven, o trailing e o XTrader AI) passam pela mesma guarda do controlador de ordens: só **apertam**, comparando com o nível vivo na corretora, relido sob o lock do par. Vale sempre o stop mais protetor: um pedido menos protetor é recusado e quem pediu passa a seguir o stop como está. O `llm-widen-stop` fica sem efeito. O ajuste manual pelo painel continua livre e pode afrouxar; o trailing aperta de novo se a regra dele mandar. As pernas de uma entrada pendente não são guardadas: elas acompanham a entrada.
+- **Falhas:** nada é removido antes de uma atualização. Recusada pela corretora, o stop fica onde estava e a próxima tentativa espera 10 s; com a resposta perdida, o MT5 volta os níveis anteriores e o stop é relido, nunca reenviado às cegas. No máximo uma atualização a cada 2 s por posição.
+- **Posição sem stop:** recebe um no nível do recurso quando o gatilho é atingido (no MT5, mantendo o take profit).
+- **Reinício:** o stop da corretora é o estado; o melhor preço desde a entrada é relido dos candles. Uma posição adotada depois de um reinício continua de onde estava, sem afrouxar.
+- **Onde aparece:** no card do gráfico, abaixo do cabeçalho, o estado de cada recurso na posição: aguardando o gatilho (quanto falta, em ATR), ativo (o stop), indisponível (ex.: sem ATR ainda), o último envio (solicitado, confirmado pela corretora ou recusado, com o stop mantido) e, quando armado pelo XTrader AI, o selo dele com o motivo. Um stop só aparece como aplicado depois da confirmação da corretora.
+- **Só com o agente rodando:** o acompanhamento roda no agente (pausado pelo painel ou com as entradas bloqueadas, ele continua); com o processo parado, a posição fica com o stop que tem na corretora.
 
 ### Painel web
 
@@ -322,6 +350,7 @@ O **XTrader AI** é um modelo de linguagem (OpenAI ou Anthropic) que acompanha t
   - a reanálise permitida de cada agente LLM (`agent_reanalysis`);
   - as posições que o núcleo descartou por terem sido fechadas fora do bot (`position_discards`);
   - períodos de apuração dos resultados de cada agente;
+  - a proteção das posições de cada agente (`agent_protection`) e as proteções que o XTrader AI armou nas posições (`position_protections`);
   - o supervisor: as configurações (`supervisor_settings`), as análises com o retrato enviado (`supervisor_runs`), as ações (`supervisor_actions`), as conversas por usuário (`supervisor_messages`) e o bloqueio e a parada de cada agente (`agent_supervision`).
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
@@ -359,6 +388,7 @@ navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegra
 - **`cmd/migrator`:** aplica as migrações e os seeds (`gobox/database/migrate`): num banco novo, o Telegram desligado, os prompts e os agentes iniciais (veja [Agentes iniciais](#agentes-iniciais)). A configuração fica só no banco, alterada pelo painel. O controller não migra: ele confere a versão do schema. Cada arquivo de seed começa com um advisory lock do Postgres (`pg_advisory_xact_lock`), então dois migrators rodando ao mesmo tempo aplicam os seeds um depois do outro, sem duplicar nem falhar.
 - **Agentes:** recebem a configuração pela API interna (`agentapi`). Os parâmetros viram as mesmas flags da linha de comando, e os segredos nunca passam por argumento. O bloqueio de entradas chega pela mesma API (na configuração e no runtime, com uma revisão que só cresce) e vale sem reiniciar o agente.
 - **XTrader AI** (`controller/supervision*.go`, o supervisor): roda dentro do controller. Monta o retrato a partir do banco, do `Manager`, das bridges e da API de cada agente, chama o modelo com ferramentas (`agents/llm/chat.go`, com streaming em `chat_stream.go`) e executa as ações pelo canal `supervisor` da API do agente, que só reduz risco, ou direto pela bridge quando o agente não está rodando.
+- **Proteção de posições** (`agents/internal/protect`): roda em cada agente, chamada pelo motor a cada candle (o gancho `xtrader.CandleHook`, depois da estratégia, fora do preload e do backtest), e move o stop pela guarda do controlador de ordens (`order.Controller.TightenProtection`, `SetStopGuard`), que só aperta o stop de uma posição aberta, comparando com o nível vivo da corretora (`service.ProtectionReader`). A configuração e os armamentos chegam pela API interna (`agentapi.Protection`, no `Config` e no `Runtime`), sem reinício.
 - **Entradas bloqueadas no núcleo** (`order.Controller`): com as entradas bloqueadas, as ordens a mercado só reduzem a posição (`CreateOrderMarketReduce` no MT5 e na paper wallet, que nunca abrem o restante) e são recusadas, com `ErrEntriesBlocked`, as entradas, as pendentes de entrada, as ordens em dinheiro e a OCO que não protege uma posição. Proteger, mover stops, cancelar e fechar seguem.
 - **`tools/mt5bridge`:** uma ponte HTTP em Python para o terminal MT5, que roda no Wine, dentro do container `mt5`. Ela atende uma requisição por vez e protege as ordens:
   - cada ordem leva um prazo de 20 s, em dois headers: `X-Bridge-Deadline` (instante em ms Unix, pelo relógio do agente) e `X-Bridge-Timeout` (ms restantes, que a bridge conta pelo próprio relógio a partir do recebimento). A bridge usa o que vencer primeiro, contado no relógio monotônico. Assim, uma bridge em outro host com o relógio atrasado não envia a ordem mais tarde. Se o terminal estiver ocupado ou reconectando além do prazo, a ordem é recusada sem ir ao terminal (`504` com `"sent": false`), e nunca é executada depois que o agente desistiu dela. Um relógio da bridge adiantado encurta o prazo: o agente avisa no log quando a diferença passa de 1 s;
@@ -657,6 +687,15 @@ Nos cards dos agentes (em **Configurações > Agentes**), **Bloquear entradas** 
 > [!NOTE]
 > O supervisor usa as migrações `000020` a `000024` e o seed `0005_supervisor.sql`: rode o `migrator` antes de subir o controller novo (no Docker, o compose já faz isso). Sem o seed, o supervisor fica desligado.
 
+### Proteção de posições
+
+Em **Configurações > Agentes**, o botão **Proteção** do card abre o breakeven e o trailing stop do agente: liga cada recurso, define o gatilho, a margem, a distância e o passo (em × ATR(14)) e autoriza ou não o XTrader AI a armá-lo. **Salvar** aplica na hora, sem reiniciar. O botão fica destacado quando a proteção está ligada ou autorizada.
+
+As proteções armadas pelo XTrader AI ficam em **Configurações > XTrader AI > Proteções acionadas**, com a posição, o recurso, a situação (armada aguardando o gatilho, aplicada e confirmada, envio recusado, encerrada), o stop anterior → pedido (confirmado ou não) e o motivo; cada análise lista as que armou.
+
+> [!NOTE]
+> A proteção usa as migrações `000025` (`agent_protection`) e `000026` (`position_protections`). O `migrator` as aplica sozinho ao subir a imagem nova, sem apagar nada.
+
 ### Backtest e dados históricos
 
 ```bash
@@ -750,12 +789,12 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - `GET /api/positions/open`: as posições abertas dos agentes nas contas MT5, lidas das bridges (a leitura vale por 2 s para todas as abas), com `totals` (um por moeda das contas lidas, na ordem delas, 0 sem posição), `balances` e `accounts` (os saldos das contas lidas, cada uma uma vez pelo login, por moeda, e quantas são), `complete`, `positions` (agente, par, lado, volume em lotes, preços, lucro com swap e a moeda da conta, ticket, se o agente roda) e `missing` (as contas não lidas, com os agentes e o motivo: `unreachable`, `refused` ou `failed`);
   - `GET /api/positions/closed?from=…&to=…`: o lucro das posições dos agentes fechadas de `from` até antes de `to` (segundos Unix, até 400 dias), lido dos deals das contas MT5 (a leitura de cada intervalo vale por 10 s; os deals são lidos desde 30 dias antes de `from`, para achar a entrada de cada posição), com `from`, `to`, `totals` (um por moeda das contas lidas, 0 sem fechamento), `agents` (agente, valor, moeda da conta, quantas posições fechou, se roda), `complete` e `missing`, como em `/api/positions/open`. `400` para um intervalo inválido;
   - `GET /api/agents/{agente}/{par}/candles?timeframe=4h&limit=1000`: os candles do par no timeframe pedido (`1m`, `5m`, `15m`, `30m`, `4h`, `1d` ou `D`, ou o de execução; sem `timeframe`, o de execução), os últimos `limit` (1000 por padrão, até 5000), o último em formação, com `execution_timeframe` e a origem (`strategy`, `broker` ou `resampled`). `400` para um timeframe fora da lista, `404` para um par desconhecido, `409` para um timeframe indisponível no modo do agente (abaixo do de execução no backtest), `502` quando a leitura na corretora falha. O snapshot traz `timeframe` (o de execução) e `timeframes` (os do seletor, com `execution` e `available`);
-  - **XTrader AI** (rotas `supervisor`): `GET`/`PATCH /api/settings/supervisor` (a chave só de escrita: `api_key_set` diz se está definida; `""` a apaga), `GET /api/supervisor/overview` (o retrato que o modelo recebe), `POST /api/supervisor/run` (`202`; `409` com outra análise em andamento), `GET /api/supervisor/runs[/{id}]` (com o retrato no detalhe), `GET /api/supervisor/actions`, `GET`/`POST /api/supervisor/messages` (a conversa do usuário da sessão), `POST /api/supervisor/messages/stream` (a mesma pergunta, com a resposta em eventos SSE: `message` para cada mensagem gravada, a pergunta e cada proposta; `stage` com a etapa, `reading`, `thinking` ou `tool`; `text` com os pedaços do texto do modelo; `error`; e por último `done`, com as mensagens como o `POST` acima responde; uma mensagem vazia é recusada com `400` em JSON antes do stream), `POST /api/supervisor/actions/{id}/confirm` e `/reject` (`409` para uma ação já decidida, `410` para uma proposta expirada) e `POST /api/supervisor/agents/{nome}/entries` com `{"blocked": true, "reason": "…"}`. `/api/agents` e `/api/settings/agents` trazem `supervision` (bloqueio e parada) em cada agente;
+  - **XTrader AI** (rotas `supervisor`): `GET`/`PATCH /api/settings/supervisor` (a chave só de escrita: `api_key_set` diz se está definida; `""` a apaga), `GET /api/supervisor/overview` (o retrato que o modelo recebe), `POST /api/supervisor/run` (`202`; `409` com outra análise em andamento), `GET /api/supervisor/runs[/{id}]` (com o retrato no detalhe), `GET /api/supervisor/actions`, `GET`/`POST /api/supervisor/messages` (a conversa do usuário da sessão), `POST /api/supervisor/messages/stream` (a mesma pergunta, com a resposta em eventos SSE: `message` para cada mensagem gravada, a pergunta e cada proposta; `stage` com a etapa, `reading`, `thinking` ou `tool`; `text` com os pedaços do texto do modelo; `error`; e por último `done`, com as mensagens como o `POST` acima responde; uma mensagem vazia é recusada com `400` em JSON antes do stream), `POST /api/supervisor/actions/{id}/confirm` e `/reject` (`409` para uma ação já decidida, `410` para uma proposta expirada) e `POST /api/supervisor/agents/{nome}/entries` com `{"blocked": true, "reason": "…"}`, `GET /api/supervisor/protections` (as proteções armadas nas posições, com o motivo, as evidências e os stops anterior, pedido e confirmado; as análises trazem `protection_ids`). `/api/agents` e `/api/settings/agents` trazem `supervision` (bloqueio e parada) em cada agente, e `/api/settings/agents` a `protection` (breakeven e trailing, unidade `atr`), alterada pelo `PATCH /api/settings/agents/{nome}` com `{"protection": {…}}` (`400` fora das regras);
   - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory`, `outbox` e `outbox/check` (responde como o `outbox`, sem gravar nada).
 - **API de cada agente** (`ui`, no `api_address` dele): só responde ao controller. Exige um host do loopback no `Host`, recusa com `403` requisições de navegador (com `Origin`, ou `Sec-Fetch-Site` `cross-site`/`same-site`) e, num agente lançado pelo controller, as que não trazem `X-Xtrader-Agent-Key` com a chave daquele start. `POST`, `PUT`, `PATCH` e `DELETE` exigem `Content-Type: application/json`, mesmo sem corpo (senão `415`).
-  - **Canal `supervisor`:** `GET /api/supervision` (bloqueio e revisão aplicada, posições e pendentes de entrada), `POST /api/supervision/entries`, `POST /api/supervision/close` (fecha os pares pedidos com ordens "só reduzir", o bloqueio aplicado antes; resultado por par: `closed`, `failed` ou `unknown`) e `POST /api/supervision/cancel` (só as pendentes de entrada). Só o controller as chama, no canal `supervisor`; o proxy do painel sempre usa o canal `web`, e as rotas respondem `404` a qualquer outro canal.
+  - **Canal `supervisor`:** `GET /api/supervision` (bloqueio e revisão aplicada, posições e pendentes de entrada), `POST /api/supervision/entries`, `POST /api/supervision/close` (fecha os pares pedidos com ordens "só reduzir", o bloqueio aplicado antes; resultado por par: `closed`, `failed` ou `unknown`) `POST /api/supervision/cancel` (só as pendentes de entrada) e `POST /api/supervision/protect` (arma o breakeven ou o trailing numa posição: `applied`, `armed`, `failed`, `unknown` ou `refused`, com os stops anterior, pedido e confirmado). O `GET` traz também `protections`, o estado da proteção de cada posição. O snapshot do painel e os eventos dos candles trazem `protection` do par. Só o controller as chama, no canal `supervisor`; o proxy do painel sempre usa o canal `web`, e as rotas respondem `404` a qualquer outro canal.
 
 ## Segurança
 

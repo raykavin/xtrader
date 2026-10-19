@@ -185,6 +185,7 @@ func (s *Supervision) tick(ctx context.Context) {
 		}()
 	}
 	s.watchStops(ctx)
+	s.syncArms(ctx)
 	if _, err := s.store.ExpireSupervisorActions(ctx); err != nil {
 		log.Warnf("supervisor: expiring the proposals: %v", err)
 	}
@@ -419,6 +420,15 @@ func (a *analysis) call(ctx context.Context, call llm.ToolCall) string {
 		return toolResult(map[string]any{"recorded": true})
 	case store.ActionBlockEntries, store.ActionStopAgent, store.ActionCancelPending:
 		return a.act(ctx, call)
+	case "protect_position":
+		if a.actions >= a.settings.Autonomy.MaxActionsPerRun {
+			return toolError("the limit of actions alone in an analysis is reached: report the finding")
+		}
+		result, arm := a.s.protectPosition(ctx, a.view, call.Arguments, &a.run.ID, nil, "supervisor")
+		if arm != nil {
+			a.actions++
+		}
+		return result
 	}
 	return toolError("unknown tool " + call.Name)
 }
@@ -456,6 +466,7 @@ Nesta análise periódica:
   - block_entries (bloquear novas entradas): %s;
   - stop_agent (parar o agente assim que ele estiver sem posição e sem ordem pendente; exige que a análise anterior também tenha pedido a parada do mesmo agente): %s;
   - cancel_pending (cancelar ordens pendentes de entrada): %s.
+- protect_position (armar o breakeven ou o trailing stop do agente numa posição aberta): só nos agentes que autorizam o recurso (protection.breakeven.supervisor, protection.trailing.supervisor); conta no limite de ações. Use quando os números de protections indicarem risco de devolver o lucro (avanço a favor em ATR, preço recuando do melhor nível, stop longe do preço); trate a reversão como possibilidade, nunca como certeza, e diga o risco e a proteção pedida. O gatilho configurado no agente vale: antes dele, o recurso só fica armado.
 - Nunca feche posições: isso só o usuário pede, pela conversa.
 - Não aja sobre agente com dados incompletos (lacunas em gaps, conta não lida, API sem resposta): registre o achado.`,
 		autonomy.MaxActionsPerRun, yes(autonomy.BlockEntries), yes(autonomy.StopWhenFlat), yes(autonomy.CancelPending)) +

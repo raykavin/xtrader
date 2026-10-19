@@ -399,7 +399,11 @@ func (s *MATrend) stopped(df *model.Dataframe, broker service.Broker, held model
 		trade.stop != rkLegLevel(*leg) && trade.sign()*trade.stop < trade.sign()*df.Close.Last(0) {
 		if protected, ok := broker.(service.ProtectionBroker); ok {
 			moved, err := protected.UpdateProtection(*leg, trade.stop)
-			if err != nil {
+			if live, ok := tighterAlready(err); ok {
+				s.legs[df.Pair] = &live // the stop guard kept a more protective stop: never loosened
+				log.Infof("[MA TREND] %s | stop kept at %f, more protective than %f", df.Pair, rkLegLevel(live),
+					trade.stop)
+			} else if err != nil {
 				log.Error(err)
 			} else {
 				s.legs[df.Pair] = &moved

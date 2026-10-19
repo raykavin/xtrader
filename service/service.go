@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/raykavin/xtrader/model"
@@ -163,6 +165,76 @@ type PositionOpenings interface {
 type PositionReporter interface {
 	HeldPosition(pair string) (side model.SideType, quantity float64, ok bool)
 }
+
+// ProtectionReader is implemented by the brokers that tell the level a leg
+// is at now and whether it protects an open position, eg: MT5, from its book,
+// and the paper wallet. LiveProtection returns leg as it is now: its level,
+// for a stop loss over several positions the most protective one; and true
+// when it protects a position held, false for a leg of a pending entry, which
+// moves with its entry. It must not block: a state polled already.
+type ProtectionReader interface {
+	LiveProtection(leg model.Order) (live model.Order, protectsPosition bool, err error)
+}
+
+// StopSetter is implemented by the brokers that put a stop loss on a position
+// held without one, eg: MT5, on the positions of its magic number, their take
+// profit kept, and the paper wallet. SetStop places it at stop on the size
+// units held on side of pair, and returns the legs it placed, the stop loss
+// among them (MT5 places the take profit anew too, its old leg ending
+// CANCELED).
+type StopSetter interface {
+	SetStop(side model.SideType, pair string, size, stop float64) ([]model.Order, error)
+}
+
+// ProtectionLimits are the constraints of the protective levels of a pair at
+// the broker: Tick the step of a price, StopsLevel the least distance of a
+// stop loss or a take profit from the market and FreezeLevel the distance
+// within which a level can't change, both in price, 0 for none.
+type ProtectionLimits struct {
+	Tick        float64
+	StopsLevel  float64
+	FreezeLevel float64
+}
+
+// ProtectionLimiter is implemented by the brokers that tell the constraints of
+// the protective levels of a pair, eg: MT5, from its symbol.
+type ProtectionLimiter interface {
+	ProtectionLimits(pair string) (ProtectionLimits, bool)
+}
+
+// PositionCosts are the costs known of a position held, as a distance of its
+// price in the quote currency: what moving its exit by that much makes up,
+// eg: the commission of its entry, the one of its exit taken as the same, and
+// its swap when negative. Known is false when the broker can't tell them.
+type PositionCosts struct {
+	Price float64
+	Known bool
+}
+
+// PositionCostReader is implemented by the brokers that tell the costs of a
+// position held, eg: MT5, from its deals and its swap.
+type PositionCostReader interface {
+	PositionCosts(pair string) PositionCosts
+}
+
+// ErrStopNotTighter is the error of a stop loss of an open position moved to
+// a level that protects it less than the one it is at, or as much, refused
+// while the stop guard of its pair is on, see StopNotTighterError.
+var ErrStopNotTighter = errors.New("the stop loss is at a more protective level already")
+
+// StopNotTighterError is ErrStopNotTighter with the leg as it is now, Current
+// its level, and the level Requested: the mover adopts Leg.
+type StopNotTighterError struct {
+	Leg       model.Order
+	Current   float64
+	Requested float64
+}
+
+func (e *StopNotTighterError) Error() string {
+	return fmt.Sprintf("%v: %s at %g, %g asked", ErrStopNotTighter, e.Leg.Pair, e.Current, e.Requested)
+}
+
+func (e *StopNotTighterError) Unwrap() error { return ErrStopNotTighter }
 
 type Notifier interface {
 	Notify(string)

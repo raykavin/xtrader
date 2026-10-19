@@ -812,6 +812,13 @@ func (s *Fimathe) trail(df *model.Dataframe, broker service.Broker, trade *fimat
 			return // the close back short of it: moved once a close is beyond it again
 		}
 		moved, err := protected.UpdateProtection(leg, level)
+		if live, ok := tighterAlready(err); ok {
+			trade.trade.legs[i] = live // the stop guard kept a more protective stop
+			trade.steps = steps
+			log.Infof("[FIMATHE] %s %s | STOP | kept at %f, more protective than %f", df.Pair, s.cfg.Timeframe,
+				rkLegLevel(live), level)
+			return
+		}
 		if err != nil {
 			log.Error(err)
 			return

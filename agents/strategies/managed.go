@@ -92,6 +92,12 @@ func (b *bracket) moveStop(df *model.Dataframe, protected service.ProtectionBrok
 			return false
 		}
 		moved, err := protected.UpdateProtection(leg, stop)
+		if live, ok := tighterAlready(err); ok {
+			trade.legs[i] = live // the stop guard kept a more protective stop: followed as it is
+			log.Infof("[%s] %s %s | %s | stop kept at %f, more protective than %f", b.name, df.Pair, b.timeframe,
+				reason, rkLegLevel(live), stop)
+			return false
+		}
 		if err != nil {
 			log.Error(err)
 			return false

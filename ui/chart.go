@@ -68,6 +68,7 @@ type Chart struct {
 	controller  OrderController
 	channels    map[Channel]bool     // where the controller is operated from
 	supervised  SupervisedController // operated by the supervisor of the controller, see SetSupervision
+	protector   Protector            // the protection of the positions, see SetProtection
 	reanalysis  bool                 // whether the language model may be asked again, see SetReanalysis
 	lastUpdate  time.Time
 
@@ -571,7 +572,8 @@ func (c *Chart) onPartialCandle(candle model.Candle) {
 	if c.events.hasSubscribers() {
 		event, ok := c.safely(candle, func() CandleEvent {
 			return CandleEvent{Pair: candle.Pair, Candle: dto, Indicators: []IndicatorUpdate{}, Partial: true,
-				Levels: c.levels(candle.Pair), Position: c.position(candle.Pair)}
+				Levels: c.levels(candle.Pair), Position: c.position(candle.Pair),
+				Protection: c.protection(candle.Pair)}
 		})
 		if ok {
 			c.events.publish("candle", event)
@@ -602,6 +604,7 @@ func (c *Chart) candleEvent(pair string, candle Candle) CandleEvent {
 		Indicators: make([]IndicatorUpdate, 0),
 		Levels:     c.levels(pair),
 		Position:   c.position(pair),
+		Protection: c.protection(pair),
 	}
 
 	for _, indicator := range c.indicatorsByPair(pair) {
@@ -662,6 +665,7 @@ func (c *Chart) snapshot(pair string) Snapshot {
 		MaxDrawdown:     c.maxDrawdown(),
 		Levels:          c.levels(pair),
 		Position:        c.position(pair),
+		Protection:      c.protection(pair),
 		AccountCurrency: c.accountCurrency(),
 		LLM:             c.llm(),
 		Analysis:        c.analysis(pair),

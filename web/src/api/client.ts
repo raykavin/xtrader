@@ -42,6 +42,8 @@ import type {
   SupervisorMessageInfo,
   SupervisorMessageRequest,
   SupervisorMessagesResponse,
+  SupervisorProtectionInfo,
+  SupervisorProtectionsResponse,
   SupervisorRunResponse,
   SupervisorRunsResponse,
   SupervisorSettingsRequest,
@@ -475,6 +477,15 @@ export function fetchSupervisorRun(
 /** The last actions of the supervision on the agents, the newest first. */
 export function fetchSupervisorActions(signal?: AbortSignal): Promise<SupervisorActionInfo[]> {
   return getJSON<SupervisorActionsResponse>("/supervisor/actions", signal).then((r) => r.actions);
+}
+
+/** The protections of positions the XTrader AI armed, the newest first. */
+export function fetchSupervisorProtections(
+  signal?: AbortSignal,
+): Promise<SupervisorProtectionInfo[]> {
+  return getJSON<SupervisorProtectionsResponse>("/supervisor/protections", signal).then(
+    (r) => r.protections,
+  );
 }
 
 /** The answer of a confirmation or a rejection: the action and the message telling it. */

@@ -69,6 +69,12 @@ export function SupervisorRuns({
                 Ações desta análise: {run.action_ids.map((id) => `#${id}`).join(", ")}
               </p>
             )}
+            {run.protection_ids && run.protection_ids.length > 0 && (
+              <p className="sup-run-actions">
+                Proteções armadas: {run.protection_ids.map((id) => `#${id}`).join(", ")} (veja
+                Proteções acionadas)
+              </p>
+            )}
           </li>
         );
       })}

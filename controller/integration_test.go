@@ -570,7 +570,8 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		LLM: &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low"),
 			CalendarURL: secret("http://127.0.0.1:22346/mcp")},
 		Model: "openai gpt-5", PromptID: &prompt.ID,
-		Secrets: ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true, CalendarToken: true}},
+		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true, CalendarToken: true},
+		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR}},
 		agentSettingsOf(t, body))
 	stored, err := c.store.AgentByName(ctx, "gold")
 	require.NoError(t, err)

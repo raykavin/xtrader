@@ -130,6 +130,9 @@ type fakeAgent struct {
 	pending     []ui.SupervisedOrder
 	closeStatus map[string]string
 	requests    []string
+	protections []ui.PositionProtection
+	protect     ui.SupervisionProtectResponse // the answer to an arm
+	armed       []ui.SupervisionProtectRequest
 }
 
 func newFakeAgent(t *testing.T, bridge *fakeBridge, magic int64) *fakeAgent {
@@ -184,11 +187,17 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			state.Positions = append(state.Positions, ui.SupervisedPosition{Pair: pair, Side: side, Quantity: asset})
 		}
+		state.Protections = append([]ui.PositionProtection(nil), a.protections...)
 		return state
 	}
 	switch r.URL.Path {
 	case "/api/supervision":
 		_ = json.NewEncoder(w).Encode(state())
+	case "/api/supervision/protect":
+		var request ui.SupervisionProtectRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		a.armed = append(a.armed, request)
+		_ = json.NewEncoder(w).Encode(a.protect)
 	case "/api/supervision/entries":
 		var request ui.SupervisionEntriesRequest
 		_ = json.NewDecoder(r.Body).Decode(&request)

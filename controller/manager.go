@@ -502,6 +502,7 @@ func (m *Manager) launchedAs(current store.Agent) store.Agent {
 	a := withSecretsOf(l.agent, current)
 	a.TradePanel, a.TelegramControl, a.Reanalysis = current.TradePanel, current.TelegramControl, current.Reanalysis
 	a.Supervision = current.Supervision // its entries apply while it runs
+	a.Protection = current.Protection   // and the protection of its positions
 	if a.LLM != nil && current.LLM != nil {
 		model := *a.LLM
 		model.PromptID, model.PromptStatus = current.LLM.PromptID, current.LLM.PromptStatus
@@ -677,6 +678,12 @@ func (m *Manager) State(name string) AgentState {
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
 	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl,
 		Reanalysis: a.ReanalysisAllowed(), Entries: entriesOf(a)}
+	protection, err := protectionOf(ctx, s, a)
+	if err != nil {
+		log.Warnf("controller: the protection of the positions of the agent %s: %v", a.Name, err)
+		return doc, false
+	}
+	doc.Protection = protection
 	if a.LLM != nil && a.LLM.PromptID != nil {
 		prompt, err := s.Prompt(ctx, *a.LLM.PromptID)
 		if err != nil {
@@ -718,6 +725,24 @@ func launchHash(a store.Agent) [32]byte {
 }
 
 // entriesOf returns the entries of the agent a, as its supervision tells them.
+// protectionOf returns the protection of the positions of the agent a: its
+// settings when it runs or may be armed (see ui.ProtectionSettings.Active),
+// and the arms of the XTrader AI in force on its positions.
+func protectionOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Protection, error) {
+	var protection agentapi.Protection
+	if settings := a.ProtectionOf(); settings.Active() {
+		protection.ProtectionSettings = &settings
+	}
+	arms, err := s.ProtectionArmsInForce(ctx, a.ID)
+	if err != nil {
+		return protection, err
+	}
+	for _, arm := range arms {
+		protection.ProtectionArms = append(protection.ProtectionArms, arm.Arm())
+	}
+	return protection, nil
+}
+
 func entriesOf(a store.Agent) agentapi.Entries {
 	supervision := a.SupervisionOf()
 	return agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked, EntriesReason: supervision.EntriesReason,

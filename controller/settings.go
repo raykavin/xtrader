@@ -143,7 +143,7 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 		TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(), Running: state.Running,
 		RestartPending: state.RestartPending, Restarts: state.Restarts, Restarting: state.Restarting,
 		Exited: state.Exited, LastExit: state.LastExit, LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID),
-		Params: a.AllParams(), Supervision: supervisionInfo(a)}
+		Params: a.AllParams(), Supervision: supervisionInfo(a), Protection: a.ProtectionOf()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
@@ -229,6 +229,11 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 	err = s.store.Transaction(ctx, func(ctx context.Context) error {
 		if _, err := s.store.UpdateAgent(ctx, a.ID, update); err != nil {
 			return err
+		}
+		if request.Protection != nil {
+			if _, err := s.store.SetAgentProtection(ctx, a.ID, *request.Protection, userOf(ctx)); err != nil {
+				return err
+			}
 		}
 		switch {
 		case request.DefaultPrompt:

@@ -6695,3 +6695,160 @@ h3.md-heading {
     animation: none;
   }
 }
+
+/* the protection of the positions: the dialog of an agent */
+.protection-body .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.protection-feature {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.protection-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+}
+
+.protection-input {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+}
+
+.protection-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.protection-input .input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.protection-unit {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 10px;
+  border-left: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.protection-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.btn.protection-on {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent-text);
+}
+
+/* the protection of the open position, on the chart that draws its stop */
+.position-protection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--sp-4);
+  margin: 0;
+  padding: 0 var(--sp-5) var(--sp-2);
+  list-style: none;
+  font-size: var(--fs-xs);
+}
+
+.position-protection-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.protection-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  color: var(--text-2);
+}
+
+.protection-chip {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.protection-chip.on {
+  border-color: color-mix(in srgb, var(--pos) 40%, transparent);
+  background: var(--pos-soft);
+  color: var(--pos);
+}
+
+.protection-chip.info {
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.protection-chip.warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.protection-ai {
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.protection-move.on {
+  color: var(--pos);
+}
+
+.protection-move.error {
+  color: var(--neg);
+}
+
+.protection-move.warn {
+  color: var(--warn);
+}
+
+.protection-reason {
+  flex-basis: 100%;
+  color: var(--text);
+}
+
+/* the reason of a protection of the XTrader AI, wrapped, never cut */
+.table td.protection-reason-cell {
+  min-width: 260px;
+  white-space: normal;
+}

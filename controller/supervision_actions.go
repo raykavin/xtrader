@@ -776,6 +776,7 @@ func analysisTools(autonomy store.Autonomy) []llm.ToolSpec {
 		{Name: store.ActionCancelPending, Description: "Cancela as ordens pendentes de entrada do agente, nunca as " +
 			"proteções das posições." + alone(autonomy.CancelPending),
 			Parameters: action(`,"pairs":{"type":"array","items":{"type":"string"},"description":"os pares, todos sem nenhum"}`)},
+		protectTool(),
 	}
 }
 

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"reflect"
 	"sync"
 
 	"github.com/raykavin/xtrader/agentapi"
@@ -58,7 +59,7 @@ func (r *runtimes) get(id int64) (agentapi.Runtime, <-chan struct{}, bool) {
 func sameRuntime(a, b agentapi.Runtime) bool {
 	switch {
 	case a.TradePanel != b.TradePanel || a.TelegramControl != b.TelegramControl || a.Reanalysis != b.Reanalysis,
-		a.Entries != b.Entries:
+		a.Entries != b.Entries, !reflect.DeepEqual(a.Protection, b.Protection):
 		return false
 	case a.Prompt == nil || b.Prompt == nil:
 		return a.Prompt == b.Prompt

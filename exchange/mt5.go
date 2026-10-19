@@ -413,6 +413,9 @@ type MT5 struct {
 	loadedMtx sync.Mutex
 	loaded    map[string]time.Time // last complete candle returned by CandlesByLimit, by pair and period
 
+	costRatesMtx sync.Mutex
+	costRates    map[string]mt5CostRate // the account currency in the quote one, see PositionCosts
+
 	book *mt5Book // the account, see mt5_trading.go
 }
 

@@ -109,6 +109,12 @@ export interface Snapshot {
    */
   position?: BrokerPosition;
   /**
+   * Protection is how the protection of the open position of the pair
+   * stands (breakeven, trailing stop), see Chart.SetProtection: absent
+   * without a position or without the protection.
+   */
+  protection?: PositionProtection;
+  /**
    * AccountCurrency is the currency of the account, see WithAccountReporter:
    * the profits of the orders are shown in it (their AccountProfit).
    */
@@ -436,6 +442,165 @@ export interface CandleEvent {
   partial?: boolean;
   levels: Level[] | null; // of the strategy, see LevelsSource: null when it draws none
   position?: BrokerPosition; // see WithBrokerPositions: absent without it
+  /**
+   * Protection is the protection of the open position of the pair, see
+   * Snapshot.Protection: absent without one
+   */
+  protection?: PositionProtection;
+}
+/**
+ * The units of the distances of the protection of the positions, see
+ * ProtectionSettings.
+ */
+/**
+ * ProtectionUnitATR is a multiple of the ATR(14) Wilder of the closed
+ * candles of the timeframe of the agent, in the price of each pair.
+ */
+export const ProtectionUnitATR = "atr";
+/**
+ * The features of the protection of the positions.
+ */
+export const ProtectionBreakeven = "breakeven";
+/**
+ * The features of the protection of the positions.
+ */
+export const ProtectionTrailing = "trailing";
+/**
+ * ProtectionSettings are the protection of the open positions of an agent,
+ * off unless enabled, each distance in Unit (see ProtectionUnitATR): the
+ * breakeven and the trailing stop, applied by the agent on every price, and
+ * whether the XTrader AI may arm each one on a position (Supervisor), its
+ * trigger kept.
+ */
+export interface ProtectionSettings {
+  unit: string;
+  breakeven: BreakevenSettings;
+  trailing: TrailingSettings;
+}
+/**
+ * BreakevenSettings move the stop loss of a position to its entry, beyond it
+ * by Margin and the costs known, once the price went Trigger in its favour
+ * from the entry.
+ */
+export interface BreakevenSettings {
+  enabled: boolean;
+  supervisor: boolean;
+  trigger: number /* float64 */;
+  margin: number /* float64 */;
+}
+/**
+ * TrailingSettings move the stop loss of a position Distance behind the
+ * price, once the price went Trigger in its favour from the entry, every
+ * time it would tighten it by Step at least.
+ */
+export interface TrailingSettings {
+  enabled: boolean;
+  supervisor: boolean;
+  trigger: number /* float64 */;
+  distance: number /* float64 */;
+  step: number /* float64 */;
+}
+/**
+ * ProtectionArm is a protection the XTrader AI armed on the open position
+ * PositionRef of Pair: the agent applies Feature (breakeven or trailing) once
+ * its trigger is reached, for the reason Reason; ID its record.
+ */
+export interface ProtectionArm {
+  id: number /* int64 */;
+  pair: string;
+  position_ref: string;
+  feature: string;
+  reason: string;
+  armed_at: number /* int64 */;
+}
+/**
+ * The states of a feature of the protection of a position, see
+ * ProtectionFeature.
+ */
+export const ProtectionOff = "off"; // disabled, not armed
+/**
+ * The states of a feature of the protection of a position, see
+ * ProtectionFeature.
+ */
+export const ProtectionWaiting = "waiting"; // its trigger not reached
+/**
+ * The states of a feature of the protection of a position, see
+ * ProtectionFeature.
+ */
+export const ProtectionActive = "active"; // reached: the stop loss at its level, or moved to it
+/**
+ * The states of a feature of the protection of a position, see
+ * ProtectionFeature.
+ */
+export const ProtectionUnavailable = "unavailable"; // can't run, eg: no ATR yet, see Detail
+/**
+ * The statuses of a move of the protection, see ProtectionMove.
+ */
+export const MoveRequested = "requested"; // sent to the broker, not answered yet
+/**
+ * The statuses of a move of the protection, see ProtectionMove.
+ */
+export const MoveConfirmed = "confirmed"; // the broker took it
+/**
+ * The statuses of a move of the protection, see ProtectionMove.
+ */
+export const MoveRejected = "rejected"; // the broker refused it: the stop loss kept
+/**
+ * The statuses of a move of the protection, see ProtectionMove.
+ */
+export const MoveUnknown = "unknown"; // the answer lost: the stop loss read again
+/**
+ * PositionProtection is how the protection of the open position of a pair
+ * stands, as the agent follows it: its side, entry (the average fill), the
+ * price it would exit at now (the bid of a long, the ask of a short), its
+ * stop loss at the broker (0 for none), the ATR in price, the spread, the
+ * best move in its favour since its entry in ATR, the costs known as a
+ * distance of the price, and its two features.
+ */
+export interface PositionProtection {
+  pair: string;
+  position_ref: string;
+  side: string;
+  entry: number /* float64 */;
+  price: number /* float64 */;
+  stop_loss: number /* float64 */;
+  atr: number /* float64 */;
+  spread?: number /* float64 */;
+  favorable: number /* float64 */;
+  costs: number /* float64 */;
+  costs_known: boolean;
+  breakeven: ProtectionFeature;
+  trailing: ProtectionFeature;
+}
+/**
+ * ProtectionFeature is a feature of the protection of a position: its State
+ * (see ProtectionOff), armed by the XTrader AI (ArmID, ArmReason), what is
+ * left to its trigger in ATR, the stop loss it asks for (Level), why it
+ * can't run (Detail) and its last move.
+ */
+export interface ProtectionFeature {
+  state: string;
+  enabled?: boolean;
+  armed?: boolean;
+  arm_id?: number /* int64 */;
+  arm_reason?: string;
+  remaining?: number /* float64 */;
+  level?: number /* float64 */;
+  detail?: string;
+  last?: ProtectionMove;
+}
+/**
+ * ProtectionMove is a move of the stop loss a protection asked for: its
+ * status (see MoveRequested), the level it was at, the one asked, the one
+ * the broker confirmed, why it failed, when (Unix seconds).
+ */
+export interface ProtectionMove {
+  status: string;
+  previous: number /* float64 */;
+  requested: number /* float64 */;
+  confirmed?: number /* float64 */;
+  detail?: string;
+  at: number /* int64 */;
 }
 /**
  * OrderEvent is sent on the SSE stream (event: order) when an order is
@@ -728,6 +893,11 @@ export interface AgentSettings {
   prompt_status?: AgentPromptStatus;
   secrets: AgentSecretsPresent;
   supervision?: AgentSupervisionInfo; // absent for an agent never supervised
+  /**
+   * Protection is the protection of its open positions (breakeven, trailing
+   * stop), all off unless set, applied live
+   */
+  protection: ProtectionSettings;
 }
 /**
  * AgentOutbox is what the outbox of an agent holds, as it told the
@@ -837,6 +1007,10 @@ export interface AgentSettingsRequest {
   llm_api_key?: string;
   bridge_token?: string;
   calendar_token?: string;
+  /**
+   * Protection replaces the protection of the open positions, applied live
+   */
+  protection?: ProtectionSettings;
 }
 /**
  * OpenPositionsResponse is the payload of GET /api/positions/open: the open
@@ -1141,6 +1315,11 @@ export interface UserRequest {
  * and its pending orders, the entries apart from the legs of the positions.
  */
 export interface SupervisionState {
+  /**
+   * Protections are the protection of the open positions, one per pair
+   * held, see PositionProtection: absent without the protection.
+   */
+  protections?: PositionProtection[];
   entries_blocked: boolean;
   entries_reason?: string;
   entries_revision: number /* int64 */;
@@ -1249,6 +1428,53 @@ export interface SupervisionCancelRequest {
  */
 export interface SupervisionCancelResponse {
   results: SupervisionCancelResult[];
+}
+/**
+ * SupervisionProtectRequest is the payload of POST /api/supervision/protect
+ * of an agent, from the supervisor only: arm Feature (breakeven or trailing)
+ * on the open position PositionRef of Pair, as the arm ArmID of the
+ * controller recorded it with Reason; the agent applies it once its trigger
+ * is reached, at once when it is.
+ */
+export interface SupervisionProtectRequest {
+  arm_id: number /* int64 */;
+  pair: string;
+  position_ref: string;
+  feature: string;
+  reason: string;
+}
+/**
+ * The statuses of an arm of the protection, see SupervisionProtectResponse.
+ */
+export const ProtectApplied = "applied"; // the stop loss moved, confirmed by the broker
+/**
+ * The statuses of an arm of the protection, see SupervisionProtectResponse.
+ */
+export const ProtectArmed = "armed"; // armed: applied once its trigger is reached
+/**
+ * The statuses of an arm of the protection, see SupervisionProtectResponse.
+ */
+export const ProtectRefused = "refused"; // not armed, see Detail: eg: not allowed, another position
+/**
+ * The statuses of an arm of the protection, see SupervisionProtectResponse.
+ */
+export const ProtectFailed = "failed"; // armed, the move refused by the broker: the stop loss kept
+/**
+ * The statuses of an arm of the protection, see SupervisionProtectResponse.
+ */
+export const ProtectUnknown = "unknown"; // armed, the answer of the broker lost: the stop loss read again
+/**
+ * SupervisionProtectResponse is how the arm went: its status (see
+ * ProtectApplied), the stop loss before, the one asked, the one the broker
+ * confirmed, why (Detail), and the protection of the position after.
+ */
+export interface SupervisionProtectResponse {
+  status: string;
+  previous: number /* float64 */;
+  requested?: number /* float64 */;
+  confirmed?: number /* float64 */;
+  detail?: string;
+  protection?: PositionProtection;
 }
 /**
  * SupervisionCancelResult is how the cancel of a pending entry went.
@@ -1430,6 +1656,54 @@ export interface SupervisorAgent {
   open_profit: CurrencyAmount[];
   realized: SupervisorRealized[];
   decisions?: SupervisorDecision[];
+  /**
+   * Protection is the protection of its positions, when it runs or the
+   * XTrader AI may arm it, and Protections how it stands on each position,
+   * as the agent tells it: the reference of the position protect_position
+   * takes, its entry, price, stop loss, ATR in price, best move in ATR and
+   * the state of its breakeven and trailing stop
+   */
+  protection?: ProtectionSettings;
+  protections?: PositionProtection[];
+}
+/**
+ * SupervisorProtectionInfo is a protection the XTrader AI armed on a position
+ * of an agent (breakeven or trailing stop): who asked (the analysis RunID,
+ * the user of a conversation), why, its status (requested, armed, active,
+ * refused, ended) and its last move of the stop loss, Move confirmed,
+ * rejected or unknown: the stop loss before, asked and confirmed by the
+ * broker, 0 for none; times in Unix seconds.
+ */
+export interface SupervisorProtectionInfo {
+  id: number /* int64 */;
+  agent: string;
+  run_id?: number /* int64 */;
+  pair: string;
+  position_ref: string;
+  ticket?: number /* int64 */;
+  side: string;
+  feature: string;
+  reason: string;
+  category?: string;
+  evidence: string[];
+  requested_by: string;
+  status: string;
+  move?: string;
+  previous: number /* float64 */;
+  requested: number /* float64 */;
+  confirmed: number /* float64 */;
+  detail?: string;
+  created_at: number /* int64 */;
+  updated_at: number /* int64 */;
+  ended_at?: number /* int64 */;
+}
+/**
+ * SupervisorProtectionsResponse is the payload of GET
+ * /api/supervisor/protections: the last arms of the XTrader AI, the newest
+ * first.
+ */
+export interface SupervisorProtectionsResponse {
+  protections: SupervisorProtectionInfo[];
 }
 /**
  * SupervisorDailyLimits are the daily limits of the prompt of an LLM agent:
@@ -1533,6 +1807,11 @@ export interface SupervisorRunInfo {
   findings: SupervisorFinding[];
   error?: string;
   action_ids?: number /* int64 */[];
+  /**
+   * ProtectionIDs are the protections of positions the analysis armed, see
+   * SupervisorProtectionInfo
+   */
+  protection_ids?: number /* int64 */[];
 }
 /**
  * SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the

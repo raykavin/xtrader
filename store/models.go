@@ -66,6 +66,7 @@ type Agent struct {
 	Account         *Account          `gorm:"foreignKey:AgentID" json:"account,omitempty"`
 	LLM             *LLMSettings      `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
 	Supervision     *AgentSupervision `gorm:"foreignKey:AgentID" json:"supervision,omitempty"` // see SupervisionOf
+	Protection      *AgentProtection  `gorm:"foreignKey:AgentID" json:"protection,omitempty"`  // see ProtectionOf
 }
 
 // AgentReanalysis is the switch of the reanalysis of an LLM agent, "Permitir

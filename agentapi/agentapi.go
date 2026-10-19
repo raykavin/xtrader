@@ -55,6 +55,7 @@ type Config struct {
 	TelegramControl bool              `json:"telegram_control"`
 	Reanalysis      bool              `json:"reanalysis"`
 	Entries                           // the entries blocked by the supervisor or the dashboard, if any
+	Protection                        // the protection of the positions, see Protection
 	Params          map[string]string `json:"params"`
 	Account         *Account          `json:"account,omitempty"`
 	LLM             *LLM              `json:"llm,omitempty"`
@@ -111,7 +112,17 @@ type Runtime struct {
 	TelegramControl bool       `json:"telegram_control"`
 	Reanalysis      bool       `json:"reanalysis"`
 	Entries                    // the entries blocked by the supervisor or the dashboard, if any
+	Protection                 // the protection of the positions, see Protection
 	Prompt          *PromptRef `json:"prompt,omitempty"`
+}
+
+// Protection is the protection of the open positions of an agent (breakeven,
+// trailing stop), applied live, without a restart: its settings, nil when
+// off, and the arms of the XTrader AI on its open positions, see
+// ui.ProtectionArm.
+type Protection struct {
+	ProtectionSettings *ui.ProtectionSettings `json:"protection_settings,omitempty"`
+	ProtectionArms     []ui.ProtectionArm     `json:"protection_arms,omitempty"`
 }
 
 // Entries tells whether the entries of an agent are blocked, by the

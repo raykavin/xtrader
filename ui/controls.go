@@ -295,6 +295,21 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ControlOrderResponse{Order: dto, Warning: warning})
 }
 
+// manualMover is implemented by the controllers that move a leg for a user
+// apart from the strategies, eg: order.Controller, whose stop guard never
+// refuses a user: the trade panel may loosen a stop loss.
+type manualMover interface {
+	UpdateProtectionManual(leg model.Order, level float64) (model.Order, error)
+}
+
+// moveManually moves leg to level for a user, see manualMover.
+func moveManually(controller OrderController, leg model.Order, level float64) (model.Order, error) {
+	if manual, ok := controller.(manualMover); ok {
+		return manual.UpdateProtectionManual(leg, level)
+	}
+	return controller.UpdateProtection(leg, level)
+}
+
 // writeControlError replies the error of an order of the control panel: 409
 // when the bot or the order can't take it now, 400 for invalid levels or sizes,
 // 422 when the broker doesn't support it.
@@ -512,7 +527,7 @@ func (c *Chart) handleControlMove(w http.ResponseWriter, r *http.Request) {
 	case model.OrderTypeLimit:
 		moved, err = controller.UpdateLimit(pending, request.Price)
 	case model.OrderTypeLimitMaker, model.OrderTypeStopLoss:
-		moved, err = controller.UpdateProtection(pending, request.Price)
+		moved, err = moveManually(controller, pending, request.Price)
 	default:
 		writeJSONError(w, http.StatusUnprocessableEntity, "only limit orders, stop losses and take profits move")
 		return
