@@ -98,7 +98,9 @@ func (p *openPositions) read(ctx context.Context) (ui.OpenPositionsResponse, err
 		p.mu.Unlock()
 
 		// the read goes on for the others when the request ends
-		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*bridgeTimeout+time.Second)
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx),
+			2*bridgeTimeout+time.Second,
+		)
 		response, err := p.readAll(readCtx)
 		cancel()
 		p.mu.Lock()
