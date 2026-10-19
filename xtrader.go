@@ -91,9 +91,13 @@ type XTrader struct {
 
 type Option func(*XTrader)
 
-func NewBot(ctx context.Context, settings model.Settings, exch service.Exchange, str strategy.Strategy,
-	options ...Option) (*XTrader, error) {
-
+func NewBot(
+	ctx context.Context,
+	settings model.Settings,
+	exch service.Exchange,
+	str strategy.Strategy,
+	options ...Option,
+) (*XTrader, error) {
 	bot := &XTrader{
 		settings:              settings,
 		exchange:              exch,
