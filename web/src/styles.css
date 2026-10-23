@@ -3150,8 +3150,10 @@ fieldset.seg {
 
 /* the evolution of the closed profit: its label and what it sums, the line
    of the running total like the one of the quote card, the ends of its time */
+/* growing with the room the card leaves it, eg: as tall as the agents beside */
 .openpl-chart {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -3172,7 +3174,8 @@ fieldset.seg {
 
 .openpl-chart-plot {
   position: relative;
-  height: 72px;
+  flex: 1 1 72px;
+  min-height: 72px;
   margin: 0;
   border-bottom: 1px solid var(--glass-border);
   color: var(--text-3);
@@ -3206,6 +3209,7 @@ fieldset.seg {
 
 .openpl-chart-empty {
   display: grid;
+  flex: 1 1 auto;
   place-items: center;
   min-height: 72px;
   margin: 0;
@@ -3222,6 +3226,7 @@ fieldset.seg {
 }
 
 .openpl-chart-skeleton {
+  flex: 1 1 auto;
   min-height: 72px;
 }
 
@@ -3427,23 +3432,36 @@ fieldset.seg {
   }
 }
 
-/* across a wide row: the agents beside the figures, past a vertical hairline */
+/* across a wide row: a few agents beside the figures, past a vertical
+   hairline, the chart as tall as they are; more of them (see
+   OpenProfitCard), the figures and the chart side by side on top, the agents
+   under them across the card, more of them a row */
 @container (min-width: 1300px) {
-  .openpl-layout:has(> .openpl-people) {
+  .openpl-layout:not(.is-crowded):has(> .openpl-people) {
     display: grid;
     grid-template-columns: minmax(0, 3fr) auto minmax(0, 2fr);
     gap: var(--sp-3) var(--sp-5);
-    align-items: start;
   }
 
-  .openpl-separator {
-    align-self: stretch;
+  .openpl-layout:not(.is-crowded) > .openpl-separator {
     border-top: 0;
     border-left: 1px solid var(--glass-border);
   }
 
   .openpl-notes {
     grid-column: 1 / -1;
+  }
+
+  .openpl-layout.is-crowded .openpl-finance {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: var(--sp-3) var(--sp-6);
+  }
+
+  .openpl-layout.is-crowded .openpl-chart {
+    grid-row: 1 / -1;
+    grid-column: 2;
   }
 }
 
