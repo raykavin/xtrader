@@ -3,7 +3,7 @@
 // clock of the browser; kept in the browser (localStorage), today without a
 // valid one saved.
 
-import type { AgentClosedProfit, ClosedProfitResponse, CurrencyAmount } from "../api/types";
+import type { AgentClosedProfit, ClosedProfitResponse, CurrencyAmount, Point } from "../api/types";
 import { browserStorage } from "./layout";
 
 /** The kinds of the periods of the closed profit. */
@@ -164,4 +164,64 @@ export function closedAmountsOf(agent: string, read: ClosedProfitResponse): Curr
   return read.agents
     .filter((a: AgentClosedProfit) => a.agent === agent)
     .map((a) => ({ currency: a.currency, amount: a.amount }));
+}
+
+/** The evolution of the closed profit of a currency, as the chart of the card draws it. */
+export interface ClosedChart {
+  currency: string;
+  /** From 0 at the start of the range, the running total after each second with an exit, held until now or the end of the range. */
+  points: Point[];
+  /** The seconds with an exit, the points of the series. */
+  exits: number;
+  /** The total of the currency, the last running total. */
+  total: number;
+}
+
+/**
+ * The evolution of the closed profit of each currency of a read, its series
+ * (see ClosedProfitResponse), as the chart of the card draws it: from 0 at the
+ * start of its range, the running total after each exit, held until now (at
+ * now, in Unix seconds) or the end of the range; none for a currency without
+ * an exit.
+ */
+export function closedCharts(read: ClosedProfitResponse, now: number): ClosedChart[] {
+  const charts: ClosedChart[] = [];
+  for (const series of read.series ?? []) {
+    const last = series.points[series.points.length - 1];
+    if (!last) continue;
+    const points: Point[] = [{ time: read.from, value: 0 }];
+    for (const point of series.points) points.push({ time: point.at, value: point.amount });
+    const end = Math.max(Math.min(now, read.to), last.at);
+    if (end > last.at) points.push({ time: end, value: last.amount });
+    charts.push({
+      currency: series.currency,
+      points,
+      exits: series.points.length,
+      total: last.amount,
+    });
+  }
+  return charts;
+}
+
+/** A time of the browser, eg: 14:05. */
+function clockOf(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * The ends of the axis of time of the chart of a range at now (Unix seconds),
+ * by the clock of the browser: the hours of a day, eg: 00:00 to agora (or
+ * 24:00 of a day gone), the days of a longer one, eg: 13/10 to hoje (or its
+ * last day).
+ */
+export function closedAxis(range: ClosedRange, now: number): { start: string; end: string } {
+  const from = new Date(range.from * 1000);
+  const last = new Date((range.to - 1) * 1000); // the last second of the range
+  const ongoing = now < range.to;
+  if (from.toDateString() === last.toDateString()) {
+    return { start: clockOf(from), end: ongoing ? "agora" : "24:00" };
+  }
+  const year = from.getFullYear() !== last.getFullYear();
+  return { start: shortDay(from, year), end: ongoing ? "hoje" : shortDay(last, year) };
 }

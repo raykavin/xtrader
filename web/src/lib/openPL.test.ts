@@ -3,10 +3,12 @@ import type { ClosedProfitResponse, OpenPosition, OpenPositionsResponse } from "
 import {
   accountsSummary,
   agentLines,
+  agentOpenState,
   amountsText,
   openPLByAgent,
   openPLGaps,
   openPLSummary,
+  profitTone,
   severalCurrencies,
 } from "./openPL";
 
@@ -148,6 +150,7 @@ const closedRead = (fields: Partial<ClosedProfitResponse> = {}): ClosedProfitRes
   to: 86_400,
   totals: [{ currency: "BRL", amount: 0 }],
   agents: [],
+  series: [{ currency: "BRL", points: [] }],
   complete: true,
   at: 1_760_000_000,
   ...fields,
@@ -206,5 +209,44 @@ describe("the agents on the band", () => {
       true,
     );
     expect(severalCurrencies(null, null)).toBe(false);
+  });
+});
+
+describe("the tone of an agent on the band", () => {
+  it("takes the sign of the profit by its cents", () => {
+    const amounts = (...values: number[]) => values.map((amount) => ({ currency: "BRL", amount }));
+    expect(profitTone(amounts(12.3))).toBe("pos");
+    expect(profitTone(amounts(-0.006))).toBe("neg");
+    expect(profitTone(amounts(0.004))).toBe("zero");
+    expect(profitTone(amounts(-0.004))).toBe("zero");
+    expect(profitTone([])).toBe("zero");
+    expect(profitTone(amounts(5, 0))).toBe("pos");
+    expect(profitTone(amounts(5, -1))).toBe("mixed");
+  });
+
+  it("tells an agent flat, or its account not read, never as zero", () => {
+    const open = read({
+      positions: [position("up", 1, 12.3), position("down", 2, -4), position("even", 3, 0)],
+      missing: [{ agents: ["unread"], reason: "unreachable" }],
+    });
+    const closed = closedRead({
+      agents: [
+        { agent: "flat", amount: 5, currency: "BRL", positions: 1, running: true },
+        { agent: "unread", amount: -2, currency: "BRL", positions: 1, running: true },
+      ],
+    });
+    const states = Object.fromEntries(
+      agentLines(open, closed).map((line) => [line.agent, agentOpenState(line, open)]),
+    );
+    expect(states).toEqual({
+      up: "pos",
+      down: "neg",
+      even: "zero",
+      flat: "flat",
+      unread: "unknown",
+    });
+    // the positions not read at all: every agent unknown
+    const [line] = agentLines(null, closed);
+    expect(line && agentOpenState(line, null)).toBe("unknown");
   });
 });

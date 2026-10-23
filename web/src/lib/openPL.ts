@@ -153,3 +153,31 @@ export function severalCurrencies(
   );
   return currencies.size > 1;
 }
+
+/** The sign of amounts by their cents, as their values tell it: positive, negative, zero, or mixed in several currencies. */
+export type ProfitTone = "pos" | "neg" | "zero" | "mixed";
+
+export function profitTone(amounts: CurrencyAmount[]): ProfitTone {
+  const cents = amounts.map((a) => Math.round(a.amount * 100));
+  const up = cents.some((c) => c > 0);
+  const down = cents.some((c) => c < 0);
+  if (up && down) return "mixed";
+  if (up) return "pos";
+  if (down) return "neg";
+  return "zero";
+}
+
+/**
+ * The open profit of an agent on the band: its sign; flat without a position
+ * open; unknown when its account wasn't read, or the positions weren't, never
+ * taken as 0.
+ */
+export type OpenState = ProfitTone | "flat" | "unknown";
+
+export function agentOpenState(line: AgentLine, open: OpenPositionsResponse | null): OpenState {
+  if (!open || (open.missing ?? []).some((gap) => gap.agents.includes(line.agent))) {
+    return "unknown";
+  }
+  if (line.positions === 0) return "flat";
+  return profitTone(line.open);
+}

@@ -944,16 +944,36 @@ type OpenPositionsGap struct {
 // outside it (by hand, by a stop out); of every agent trading live, running or
 // not, each deal once by its ticket on its account. Totals sum them by the
 // currency of their account, none converted, as OpenPositionsResponse does,
-// and Agents by agent, the ones that closed positions then. Complete and
-// Missing as OpenPositionsResponse; At is when the deals were read.
+// and Agents by agent, the ones that closed positions then; Series the same
+// exits summed one after another in the order of their times, a series for
+// each currency of Totals. Complete and Missing as OpenPositionsResponse; At is
+// when the deals were read.
 type ClosedProfitResponse struct {
-	From     int64               `json:"from"`
-	To       int64               `json:"to"`
-	Totals   []CurrencyAmount    `json:"totals"`
-	Agents   []AgentClosedProfit `json:"agents"`
-	Complete bool                `json:"complete"`
-	Missing  []OpenPositionsGap  `json:"missing,omitempty"`
-	At       int64               `json:"at"`
+	From     int64                `json:"from"`
+	To       int64                `json:"to"`
+	Totals   []CurrencyAmount     `json:"totals"`
+	Agents   []AgentClosedProfit  `json:"agents"`
+	Series   []ClosedProfitSeries `json:"series"`
+	Complete bool                 `json:"complete"`
+	Missing  []OpenPositionsGap   `json:"missing,omitempty"`
+	At       int64                `json:"at"`
+}
+
+// ClosedProfitSeries is the evolution of the closed profit of the agents in
+// Currency over the range of a ClosedProfitResponse: Points the running total
+// after the exits of each second with one, in the order of their times, the
+// last one the total of the currency; none without an exit.
+type ClosedProfitSeries struct {
+	Currency string              `json:"currency"`
+	Points   []ClosedProfitPoint `json:"points"`
+}
+
+// ClosedProfitPoint is the closed profit summed from the start of the range
+// until the exits of At (Unix seconds) included, in the currency of its
+// series.
+type ClosedProfitPoint struct {
+	At     int64   `json:"at"`
+	Amount float64 `json:"amount"`
 }
 
 // AgentClosedProfit is the closed profit of an agent, see
