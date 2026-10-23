@@ -3,6 +3,8 @@ import type { ClosedProfitResponse } from "../api/types";
 import {
   CLOSED_PERIOD_KEY,
   closedAmountsOf,
+  closedAxis,
+  closedCharts,
   closedPeriodLabel,
   closedPLSummary,
   closedRange,
@@ -37,6 +39,7 @@ const read = (fields: Partial<ClosedProfitResponse> = {}): ClosedProfitResponse 
   to: 86_400,
   totals: [{ currency: "BRL", amount: 0 }],
   agents: [],
+  series: [{ currency: "BRL", points: [] }],
   complete: true,
   at: 1_760_000_000,
   ...fields,
@@ -174,5 +177,64 @@ describe("the closed profit of the agents", () => {
       { currency: "USD", amount: 3.2 },
     ]);
     expect(closedAmountsOf("other", several)).toEqual([]);
+  });
+});
+
+describe("the evolution of the closed profit", () => {
+  const series = read({
+    from: 0,
+    to: 86_400,
+    totals: [
+      { currency: "BRL", amount: 10 },
+      { currency: "USD", amount: 0 },
+    ],
+    series: [
+      {
+        currency: "BRL",
+        points: [
+          { at: 3_600, amount: -30 },
+          { at: 7_200, amount: 10 },
+        ],
+      },
+      { currency: "USD", points: [] },
+    ],
+  });
+
+  it("starts at 0, steps at each exit and holds the total until now", () => {
+    expect(closedCharts(series, 10_000)).toEqual([
+      {
+        currency: "BRL",
+        points: [
+          { time: 0, value: 0 },
+          { time: 3_600, value: -30 },
+          { time: 7_200, value: 10 },
+          { time: 10_000, value: 10 },
+        ],
+        exits: 2,
+        total: 10,
+      },
+    ]);
+  });
+
+  it("holds it until the end of a period gone, never past its last exit", () => {
+    expect(closedCharts(series, 90_000)[0]?.points.at(-1)).toEqual({ time: 86_400, value: 10 });
+    // a clock behind the one of the broker: the last exit ends the line
+    expect(closedCharts(series, 5_000)[0]?.points.at(-1)).toEqual({ time: 7_200, value: 10 });
+  });
+
+  it("draws no line without an exit", () => {
+    expect(closedCharts(read(), 10_000)).toEqual([]);
+    expect(closedCharts({ ...read(), series: undefined } as never, 10_000)).toEqual([]);
+  });
+
+  it("tells the ends of its time: the hours of a day, the days of a longer period", () => {
+    const today = { from: at(2026, 10, 14), to: at(2026, 10, 15) };
+    expect(closedAxis(today, at(2026, 10, 14, 15))).toEqual({ start: "00:00", end: "agora" });
+    expect(closedAxis(today, at(2026, 10, 16))).toEqual({ start: "00:00", end: "24:00" });
+    const week = { from: at(2026, 10, 13), to: at(2026, 10, 20) };
+    expect(closedAxis(week, at(2026, 10, 14, 15))).toEqual({ start: "13/10", end: "hoje" });
+    expect(closedAxis(week, at(2026, 10, 21))).toEqual({ start: "13/10", end: "19/10" });
+    const years = { from: at(2025, 12, 29), to: at(2026, 1, 3) };
+    expect(closedAxis(years, at(2026, 2, 1))).toEqual({ start: "29/12/2025", end: "02/01/2026" });
   });
 });

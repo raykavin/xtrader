@@ -2973,11 +2973,12 @@ fieldset.seg {
   grid-template-columns: minmax(300px, 4fr) minmax(0, 6fr);
 }
 
-/* the accounts of all the agents: the profit of their positions open, the one
-   their positions closed in the period and their balances, each large,
-   incomplete told beside it; by agent (a stopped one marked), and the gaps;
-   stacked in a narrow card, side by side across a row of its own (the
-   default layout) */
+/* the accounts of all the agents: the figures (the profit of their positions
+   open, the one their positions closed in the period, their balances), each
+   labelled, and the evolution of the closed profit under them; apart, past a
+   hairline, a tile by agent; the gaps last. Stacked in a narrow card, the
+   figures side by side in a wider one, the agents beside them across a row of
+   its own (the default layout) */
 .openpl-card {
   padding: 18px var(--sp-5);
   container-type: inline-size;
@@ -2987,26 +2988,74 @@ fieldset.seg {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
   min-height: 0;
 }
 
-.openpl-metric,
-.openpl-main {
+.openpl-finance,
+.openpl-people {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-3);
   min-width: 0;
 }
 
-.openpl-metric {
+.openpl-people {
   gap: var(--sp-2);
 }
 
-.openpl-main {
-  gap: 4px;
+/* the labels of the card: of the figures, of the chart and of the agents */
+.openpl-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-/* the title of the closed profit, its period picked by a double click */
+/* the figures: a label, a value and a note each, stacked, the values aligned
+   on their left whatever is told beside them (eg: incomplete); marked apart on
+   their left (blue the open profit, live; orange the closed one, of the period
+   chosen; the balance neutral) */
+.openpl-stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-3);
+  margin: 0;
+}
+
+.openpl-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px var(--sp-3);
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border);
+}
+
+.openpl-open {
+  border-left-color: color-mix(in srgb, var(--primary) 65%, transparent);
+}
+
+.openpl-closed {
+  border-left-color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+.openpl-stat dd {
+  min-width: 0;
+  margin: 0;
+}
+
+/* the label of the closed profit, its period picked by a double click, the
+   period beside it */
 .openpl-period {
   padding: 0;
   border: 0;
@@ -3015,6 +3064,7 @@ fieldset.seg {
   color: inherit;
   font: inherit;
   letter-spacing: inherit;
+  text-transform: inherit;
   cursor: pointer;
   touch-action: manipulation;
   user-select: none;
@@ -3030,6 +3080,15 @@ fieldset.seg {
   outline-offset: 2px;
 }
 
+.openpl-period-name {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  letter-spacing: 0.08em;
+}
+
 .openpl-total {
   display: flex;
   flex-wrap: wrap;
@@ -3040,7 +3099,7 @@ fieldset.seg {
 .openpl-value {
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: clamp(20px, 13cqi, 30px);
+  font-size: clamp(20px, 7cqi, 24px);
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -3063,7 +3122,9 @@ fieldset.seg {
   margin: 0;
 }
 
+/* the note of a figure, under its label and its value */
 .openpl-summary {
+  grid-column: 1 / -1;
   color: var(--text-2);
   font-size: var(--fs-sm);
 }
@@ -3074,21 +3135,122 @@ fieldset.seg {
   white-space: nowrap;
 }
 
-/* the agents: a tile each, its icon (stopped told beside it), its name, then
-   the profit open of each of its assets and the closed one of the period, a
-   line each */
+.openpl-note {
+  font-size: var(--fs-sm);
+}
+
+.openpl-note.error {
+  color: var(--neg);
+}
+
+.openpl-skeleton {
+  width: 140px;
+  min-height: 26px;
+}
+
+/* the evolution of the closed profit: its label and what it sums, the line
+   of the running total like the one of the quote card, the ends of its time */
+.openpl-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.openpl-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px var(--sp-3);
+}
+
+.openpl-chart-note {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.openpl-chart-plot {
+  position: relative;
+  height: 72px;
+  margin: 0;
+  border-bottom: 1px solid var(--glass-border);
+  color: var(--text-3);
+}
+
+.openpl-chart-plot svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.openpl-chart-plot figcaption {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.openpl-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.openpl-chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 72px;
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.openpl-chart-empty.error {
+  color: var(--neg);
+}
+
+.openpl-chart-skeleton {
+  min-height: 72px;
+}
+
+/* the hairline between the figures and the agents */
+.openpl-separator {
+  flex: none;
+  align-self: stretch;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--glass-border);
+}
+
+/* the agents: a tile each, its icon (the sum of its assets beside it, with
+   several), its name (stopped told beside it), then the profit open of each of
+   its assets and the closed one of the period, a line each; tinted by the
+   sign of its open profit, neutral at zero or without a position, dashed when
+   its account wasn't read */
 .openpl-agents {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: var(--sp-2);
-  max-height: 248px;
+  max-height: 268px;
   margin: 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
 }
 
-.openpl-agents li {
+.openpl-tile {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -3100,11 +3262,40 @@ fieldset.seg {
   font-size: var(--fs-sm);
 }
 
-.openpl-agent-head {
+.openpl-tile.is-pos {
+  border-color: color-mix(in srgb, var(--pos) 32%, transparent);
+  background: color-mix(in srgb, var(--pos) 8%, var(--glass-tile));
+}
+
+.openpl-tile.is-neg {
+  border-color: color-mix(in srgb, var(--neg) 32%, transparent);
+  background: color-mix(in srgb, var(--neg) 8%, var(--glass-tile));
+}
+
+.openpl-tile.is-unknown {
+  border-style: dashed;
+}
+
+/* the light theme: a fainter tint, as subtle as on the dark one */
+:root[data-theme="light"] .openpl-tile.is-pos {
+  background: color-mix(in srgb, var(--pos) 5%, var(--glass-tile));
+}
+
+:root[data-theme="light"] .openpl-tile.is-neg {
+  background: color-mix(in srgb, var(--neg) 4%, var(--glass-tile));
+}
+
+.openpl-agent-head,
+.openpl-agent-name {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
+  min-width: 0;
+}
+
+.openpl-agent-name {
+  justify-content: flex-start;
 }
 
 .openpl-agent-icon {
@@ -3117,6 +3308,14 @@ fieldset.seg {
   border-radius: 8px;
   background: var(--accent-soft);
   color: var(--accent-text);
+}
+
+.openpl-agent-total {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .openpl-agent {
@@ -3135,6 +3334,12 @@ fieldset.seg {
   color: var(--text-2);
   font-size: 10.5px;
   line-height: 16px;
+}
+
+.openpl-tile-note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
 }
 
 .openpl-assets {
@@ -3184,6 +3389,12 @@ fieldset.seg {
   white-space: nowrap;
 }
 
+.openpl-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
 .openpl-gaps {
   margin: 0;
   padding-left: var(--sp-4);
@@ -3192,58 +3403,47 @@ fieldset.seg {
   line-height: 1.45;
 }
 
-.openpl-note {
-  font-size: var(--fs-sm);
-}
-
-.openpl-note.error {
-  color: var(--neg);
-}
-
-.openpl-skeleton {
-  flex: 1;
-  min-height: 56px;
-}
-
-/* side by side: the open profit, the closed one and the balances in a row,
-   the agents under them */
+/* wider: the figures side by side, their labels, values and notes aligned
+   along rows; the agents in full */
 @container (min-width: 560px) {
-  .openpl-layout {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, max-content));
-    align-items: start;
-    gap: var(--sp-2) var(--sp-6);
+  .openpl-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(3, auto);
+    column-gap: var(--sp-5);
+    row-gap: 4px;
   }
 
-  .openpl-skeleton {
-    width: 180px;
+  .openpl-stat {
+    grid-template-rows: subgrid;
+    grid-row: span 3;
+  }
+
+  .openpl-value {
+    font-size: clamp(20px, 3.4cqi, 30px);
   }
 
   .openpl-agents {
-    grid-column: 1 / -1;
     max-height: none;
   }
-
-  .openpl-gaps,
-  .openpl-layout > .openpl-note {
-    grid-column: 1 / -1;
-  }
 }
 
-/* across a wide row: the agents at the right of them */
+/* across a wide row: the agents beside the figures, past a vertical hairline */
 @container (min-width: 1300px) {
-  .openpl-layout {
-    grid-template-columns: repeat(3, minmax(0, max-content)) minmax(0, 1fr);
-    align-items: center;
+  .openpl-layout:has(> .openpl-people) {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) auto minmax(0, 2fr);
+    gap: var(--sp-3) var(--sp-5);
+    align-items: start;
   }
 
-  .openpl-summary {
-    white-space: nowrap;
+  .openpl-separator {
+    align-self: stretch;
+    border-top: 0;
+    border-left: 1px solid var(--glass-border);
   }
 
-  .openpl-agents {
-    grid-row: 1;
-    grid-column: 4;
+  .openpl-notes {
+    grid-column: 1 / -1;
   }
 }
 

@@ -623,7 +623,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                   />
                 ) : undefined,
                 // of all the agents, whichever is shown
-                openpl: <OpenProfitCard />,
+                openpl: <OpenProfitCard theme={theme} />,
                 results: (
                   <StatsBar
                     stats={stats}

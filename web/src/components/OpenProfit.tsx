@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { fetchClosedProfit, fetchOpenPositions } from "../api/client";
 import type { ClosedProfitResponse, CurrencyAmount, OpenPositionsResponse } from "../api/types";
 import {
   type ClosedPeriod,
+  type ClosedRange,
+  closedAxis,
+  closedCharts,
   closedPeriodLabel,
   closedPLSummary,
   closedRange,
@@ -11,16 +14,21 @@ import {
 } from "../lib/closedPL";
 import { formatMoney, formatProfit, signClass } from "../lib/format";
 import {
+  type AgentLine,
   accountsSummary,
   agentLines,
+  agentOpenState,
   amountsText,
+  type OpenState,
   openPLGaps,
   openPLSummary,
+  profitTone,
   severalCurrencies,
 } from "../lib/openPL";
+import { palettes, type Theme } from "../lib/theme";
 import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
 import { Icon } from "./Icon";
-import { SectionHead } from "./SectionHead";
+import { Sparkline } from "./Sparkline";
 import { Skeleton } from "./States";
 
 /** How often the open profit and the balances of the agents are read again, in ms, as the market moves them. */
@@ -114,9 +122,10 @@ function localTime(unixSeconds: number): string {
   });
 }
 
-/** The color of a profit of one currency by its sign; none for several, each with its code. */
+/** The color of a profit by its sign in cents, as its value tells it; none for zero or signs mixed in several currencies. */
 function profitClass(amounts: CurrencyAmount[]): string {
-  return amounts.length === 1 ? signClass(amounts[0]?.amount ?? 0) : "";
+  const tone = profitTone(amounts);
+  return tone === "pos" || tone === "neg" ? tone : "";
 }
 
 /** Amounts set large, each in its currency, incomplete told beside them; — without any. */
@@ -168,17 +177,190 @@ function Amounts({
   );
 }
 
+/** What the tile of an agent tells of its open profit beside its assets, by its state. */
+const openNotes: Partial<Record<OpenState, { text: string; title: string }>> = {
+  flat: { text: "Sem posição aberta", title: "O agente não tem posição aberta agora" },
+  unknown: {
+    text: "Em aberto: sem dados",
+    title: "As posições abertas da conta do agente não puderam ser lidas: nada é contado como zero",
+  },
+};
+
+/** The tile of an agent: its icon, its name, the profit open of each of its assets and its closed one, its background by the sign of its open profit. */
+function AgentTile({
+  line,
+  open,
+  several,
+  label,
+}: {
+  line: AgentLine;
+  open: OpenPositionsResponse | null;
+  several: boolean;
+  label: string;
+}) {
+  const state = agentOpenState(line, open);
+  const note = openNotes[state];
+  return (
+    <li
+      className={`openpl-tile is-${state}`}
+      title={[
+        line.agent,
+        line.positions > 0 &&
+          (line.positions === 1 ? "1 posição aberta" : `${line.positions} posições abertas`),
+        line.closedPositions > 0 &&
+          `${line.closedPositions === 1 ? "1 posição fechada" : `${line.closedPositions} posições fechadas`} (${label})`,
+        !line.running && "o agente parado",
+      ]
+        .filter(Boolean)
+        .join(", ")}
+    >
+      <span className="openpl-agent-head">
+        <span className="openpl-agent-icon">
+          <Icon name="bot" size={15} />
+        </span>
+        {line.assets.length > 1 && (
+          <span
+            className={`openpl-agent-total mono ${profitClass(line.open)}`}
+            title="Em aberto, a soma dos ativos"
+          >
+            <span className="sr-only">Em aberto, a soma dos ativos: </span>
+            {amountsText(line.open, several)}
+          </span>
+        )}
+      </span>
+      <span className="openpl-agent-name">
+        <span className="openpl-agent">{line.agent}</span>
+        {!line.running && <span className="openpl-stopped">parado</span>}
+      </span>
+      {note && (
+        <p className="openpl-tile-note" title={note.title}>
+          {note.text}
+        </p>
+      )}
+      <dl className="openpl-assets">
+        {line.assets.map((asset) => (
+          <div
+            key={asset.pair}
+            className="openpl-asset"
+            title={`${asset.pair}: ${asset.positions === 1 ? "1 posição aberta" : `${asset.positions} posições abertas`}`}
+          >
+            <dt>{asset.pair}:</dt>
+            <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
+              {amountsText(asset.amounts, several)}
+            </dd>
+          </div>
+        ))}
+        {line.closed.length > 0 && (
+          <div
+            className="openpl-asset openpl-asset-closed"
+            title={`Fechado (${label}): ${line.closedPositions === 1 ? "1 posição" : `${line.closedPositions} posições`}`}
+          >
+            <dt>Fechado:</dt>
+            <dd className={`openpl-profit mono ${profitClass(line.closed)}`}>
+              {amountsText(line.closed, several)}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </li>
+  );
+}
+
+/**
+ * The evolution of the closed profit of all the agents in the period, as its
+ * card tells it: the running total from 0 at the start of the period, exit
+ * after exit, held until now, a line in steps along the time of the period
+ * like the line of the quote card; a chart for each currency, none
+ * converted. While the period is read, a placeholder; without an exit, or on
+ * a failure, said so: never the read of another period.
+ */
+function ClosedEvolution({
+  read,
+  error,
+  range,
+  label,
+  theme,
+}: {
+  read: ClosedProfitResponse | null;
+  error: string | null;
+  range: ClosedRange;
+  label: string;
+  theme: Theme;
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const charts = read ? closedCharts(read, now) : [];
+  const axis = closedAxis(range, now);
+  const palette = palettes[theme];
+  let body: ReactNode;
+  if (!read) {
+    body = error ? (
+      <p className="openpl-chart-empty error">Não foi possível ler o P/L fechado deste período.</p>
+    ) : (
+      <Skeleton className="openpl-chart-skeleton" />
+    );
+  } else if (charts.length === 0) {
+    body = <p className="openpl-chart-empty">Nenhuma posição fechada no período.</p>;
+  } else {
+    body = (
+      <>
+        {charts.map((chart) => {
+          const tone = profitTone([{ currency: chart.currency, amount: chart.total }]);
+          const color = tone === "pos" ? palette.up : tone === "neg" ? palette.down : palette.muted;
+          const first = chart.points[0]?.time ?? range.from;
+          const last = chart.points[chart.points.length - 1]?.time ?? first;
+          return (
+            <figure
+              key={chart.currency}
+              className="openpl-chart-plot"
+              aria-label={`P/L fechado acumulado, ${label}: de 0 a ${formatProfit(chart.total)} ${chart.currency} em ${chart.exits === 1 ? "1 saída" : `${chart.exits} saídas`}`}
+            >
+              <Sparkline
+                points={chart.points}
+                color={color}
+                width={400}
+                height={72}
+                domain={[first, last]}
+                step
+                zero
+              />
+              {charts.length > 1 && <figcaption>{chart.currency}</figcaption>}
+            </figure>
+          );
+        })}
+        <div className="openpl-chart-axis" aria-hidden="true">
+          <span>{axis.start}</span>
+          <span>{axis.end}</span>
+        </div>
+      </>
+    );
+  }
+  return (
+    <div className="openpl-chart">
+      <div className="openpl-chart-head">
+        <span className="openpl-label">P/L fechado acumulado</span>
+        <span className="openpl-chart-note">
+          {label} · saída a saída, de todos os agentes
+          {read && !read.complete && " · incompleto"}
+        </span>
+      </div>
+      {body}
+    </div>
+  );
+}
+
 /**
  * The accounts of all the agents, whichever the dashboard shows: the profit
  * and the swap of the positions they hold open now, the profit their
- * positions closed in the period (picked by a double click on its title:
+ * positions closed in the period (picked by a double click on its label:
  * today, this week, this month or custom days) and the balances of their
  * accounts, as the broker reports them, by the currency of each account (none
- * converted: a total for each currency); by agent below them, a tile each with
- * the profit open of each of its assets and its closed one (a stopped or
- * disabled one marked so); incomplete, and why, when an account wasn't read.
+ * converted: a total for each currency), each labelled, their values aligned;
+ * the evolution of the closed profit in the period under them; apart, by
+ * agent, a tile each with the profit open of each of its assets and its closed
+ * one, tinted by the sign of its open profit (a stopped or disabled one marked
+ * so); incomplete, and why, when an account wasn't read.
  */
-export function OpenProfitCard() {
+export function OpenProfitCard({ theme }: { theme: Theme }) {
   const { read, error } = useOpenPositions();
   const [period, setPeriod] = useState<ClosedPeriod>(loadClosedPeriod);
   const [picking, setPicking] = useState(false);
@@ -202,168 +384,175 @@ export function OpenProfitCard() {
   return (
     <section className="card openpl-card" aria-labelledby="openpl-title">
       <div className="openpl-layout">
-        <div className="openpl-metric openpl-open">
-          <SectionHead id="openpl-title" eyebrow="Todos os agentes" title="P/L em aberto" />
-          {read ? (
-            <div className="openpl-main">
-              <Amounts
-                amounts={read.totals}
-                complete={read.complete}
-                gaps={openPLGaps(read)}
-                signed
-                empty="Nenhuma conta de agente em live lida"
-                what="Em aberto"
-              />
-              <p className="openpl-summary">
-                {openPLSummary(read)} ·{" "}
-                <time
-                  dateTime={new Date(read.at * 1000).toISOString()}
-                  title="Lido da corretora neste horário (UTC)"
+        <div className="openpl-finance">
+          <span className="eyebrow">Todos os agentes</span>
+          <dl className="openpl-stats">
+            <div className="openpl-stat openpl-open">
+              <dt className="openpl-label" id="openpl-title">
+                P/L em aberto
+              </dt>
+              <dd className="openpl-stat-value">
+                {read ? (
+                  <Amounts
+                    amounts={read.totals}
+                    complete={read.complete}
+                    gaps={openPLGaps(read)}
+                    signed
+                    empty="Nenhuma conta de agente em live lida"
+                    what="Em aberto"
+                  />
+                ) : error ? (
+                  <span className="openpl-value" title="Não lido">
+                    —
+                  </span>
+                ) : (
+                  <Skeleton className="openpl-skeleton" />
+                )}
+              </dd>
+              <dd className="openpl-summary">
+                {read ? (
+                  <>
+                    {openPLSummary(read)} ·{" "}
+                    <time
+                      dateTime={new Date(read.at * 1000).toISOString()}
+                      title="Lido da corretora neste horário (UTC)"
+                    >
+                      {readTime(read.at)} UTC
+                    </time>
+                  </>
+                ) : (
+                  error && (
+                    <span className="openpl-note error">
+                      Não foi possível ler as posições abertas: {error}
+                    </span>
+                  )
+                )}
+              </dd>
+            </div>
+
+            <div className="openpl-stat openpl-closed">
+              <dt className="openpl-label">
+                <button
+                  type="button"
+                  className="openpl-period"
+                  title={`De ${localTime(range.from)} até antes de ${localTime(range.to)} (horário deste navegador). Clique duas vezes para escolher o período.`}
+                  aria-haspopup="dialog"
+                  aria-label={`P/L fechado, ${label}: clique duas vezes para escolher o período`}
+                  onDoubleClick={() => setPicking(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setPicking(true);
+                    }
+                  }}
                 >
-                  {readTime(read.at)} UTC
-                </time>
-              </p>
+                  P/L fechado
+                </button>
+                <span className="openpl-period-name">{label}</span>
+              </dt>
+              <dd className="openpl-stat-value">
+                {closed.read ? (
+                  <Amounts
+                    amounts={closed.read.totals}
+                    complete={closed.read.complete}
+                    gaps={openPLGaps(closed.read)}
+                    signed
+                    empty="Nenhuma conta de agente em live lida"
+                    what={`Fechado (${label})`}
+                  />
+                ) : closed.error ? (
+                  <span className="openpl-value" title="Não lido">
+                    —
+                  </span>
+                ) : (
+                  <Skeleton className="openpl-skeleton" />
+                )}
+              </dd>
+              <dd className="openpl-summary">
+                {closed.read
+                  ? closedPLSummary(closed.read)
+                  : closed.error && (
+                      <span className="openpl-note error">
+                        Não foi possível ler o P/L fechado: {closed.error}
+                      </span>
+                    )}
+              </dd>
             </div>
-          ) : error ? (
-            <p className="openpl-note error">Não foi possível ler as posições abertas: {error}</p>
-          ) : (
-            <Skeleton className="openpl-skeleton" />
-          )}
-        </div>
 
-        <div className="openpl-metric openpl-closed">
-          <SectionHead
-            eyebrow={label}
-            title={
-              <button
-                type="button"
-                className="openpl-period"
-                title={`De ${localTime(range.from)} até antes de ${localTime(range.to)} (horário deste navegador). Clique duas vezes para escolher o período.`}
-                aria-haspopup="dialog"
-                aria-label={`P/L fechado, ${label}: clique duas vezes para escolher o período`}
-                onDoubleClick={() => setPicking(true)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setPicking(true);
-                  }
-                }}
-              >
-                P/L fechado
-              </button>
-            }
+            <div className="openpl-stat openpl-balance">
+              <dt className="openpl-label">Saldo</dt>
+              <dd className="openpl-stat-value">
+                {read ? (
+                  <Amounts
+                    amounts={read.balances}
+                    complete={read.complete}
+                    gaps={openPLGaps(read)}
+                    signed={false}
+                    empty="Nenhuma conta de agente em live lida"
+                    what="Saldo"
+                  />
+                ) : error ? (
+                  <span className="openpl-value" title="Não lido">
+                    —
+                  </span>
+                ) : (
+                  <Skeleton className="openpl-skeleton" />
+                )}
+              </dd>
+              <dd className="openpl-summary">{read && accountsSummary(read)}</dd>
+            </div>
+          </dl>
+
+          <ClosedEvolution
+            read={closed.read}
+            error={closed.error}
+            range={range}
+            label={label}
+            theme={theme}
           />
-          {closed.read ? (
-            <div className="openpl-main">
-              <Amounts
-                amounts={closed.read.totals}
-                complete={closed.read.complete}
-                gaps={openPLGaps(closed.read)}
-                signed
-                empty="Nenhuma conta de agente em live lida"
-                what={`Fechado (${label})`}
-              />
-              <p className="openpl-summary">{closedPLSummary(closed.read)}</p>
-            </div>
-          ) : closed.error ? (
-            <p className="openpl-note error">Não foi possível ler o P/L fechado: {closed.error}</p>
-          ) : (
-            <Skeleton className="openpl-skeleton" />
-          )}
-        </div>
-
-        <div className="openpl-metric openpl-balance">
-          <SectionHead eyebrow="Contas" title="Saldo" />
-          {read ? (
-            <div className="openpl-main">
-              <Amounts
-                amounts={read.balances}
-                complete={read.complete}
-                gaps={openPLGaps(read)}
-                signed={false}
-                empty="Nenhuma conta de agente em live lida"
-                what="Saldo"
-              />
-              <p className="openpl-summary">{accountsSummary(read)}</p>
-            </div>
-          ) : error ? null : (
-            <Skeleton className="openpl-skeleton" />
-          )}
         </div>
 
         {lines.length > 0 && (
-          <ul className="openpl-agents" aria-label="Por agente">
-            {lines.map((line) => (
-              <li
-                key={line.agent}
-                title={[
-                  line.agent,
-                  line.positions > 0 &&
-                    (line.positions === 1
-                      ? "1 posição aberta"
-                      : `${line.positions} posições abertas`),
-                  line.closedPositions > 0 &&
-                    `${line.closedPositions === 1 ? "1 posição fechada" : `${line.closedPositions} posições fechadas`} (${label})`,
-                  !line.running && "o agente parado",
-                ]
-                  .filter(Boolean)
-                  .join(", ")}
-              >
-                <span className="openpl-agent-head">
-                  <span className="openpl-agent-icon">
-                    <Icon name="bot" size={15} />
-                  </span>
-                  {!line.running && <span className="openpl-stopped">parado</span>}
-                </span>
-                <span className="openpl-agent">{line.agent}</span>
-                <dl className="openpl-assets">
-                  {line.assets.map((asset) => (
-                    <div
-                      key={asset.pair}
-                      className="openpl-asset"
-                      title={`${asset.pair}: ${asset.positions === 1 ? "1 posição aberta" : `${asset.positions} posições abertas`}`}
-                    >
-                      <dt>{asset.pair}:</dt>
-                      <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
-                        {amountsText(asset.amounts, several)}
-                      </dd>
-                    </div>
-                  ))}
-                  {line.closed.length > 0 && (
-                    <div
-                      className="openpl-asset openpl-asset-closed"
-                      title={`Fechado (${label}): ${line.closedPositions === 1 ? "1 posição" : `${line.closedPositions} posições`}`}
-                    >
-                      <dt>Fechado:</dt>
-                      <dd className={`openpl-profit mono ${profitClass(line.closed)}`}>
-                        {amountsText(line.closed, several)}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-              </li>
-            ))}
-          </ul>
-        )}
-        {(read || closed.read) && (
           <>
-            {gaps.length > 0 && (
-              <ul className="openpl-gaps">
-                {gaps.map((gap) => (
-                  <li key={gap}>{gap}</li>
+            <hr className="openpl-separator" />
+            <div className="openpl-people">
+              <span className="openpl-label" id="openpl-agents-title">
+                Por agente
+              </span>
+              <ul className="openpl-agents" aria-labelledby="openpl-agents-title">
+                {lines.map((line) => (
+                  <AgentTile
+                    key={line.agent}
+                    line={line}
+                    open={read}
+                    several={several}
+                    label={label}
+                  />
                 ))}
               </ul>
-            )}
-            {read && error && (
-              <p className="openpl-note error">Não foi possível atualizar: {error}</p>
-            )}
-            {closed.read && closed.error && (
-              <p className="openpl-note error">
-                Não foi possível atualizar o P/L fechado: {closed.error}
-              </p>
-            )}
+            </div>
           </>
         )}
+        {(read || closed.read) &&
+          (gaps.length > 0 || (read && error) || (closed.read && closed.error)) && (
+            <div className="openpl-notes">
+              {gaps.length > 0 && (
+                <ul className="openpl-gaps">
+                  {gaps.map((gap) => (
+                    <li key={gap}>{gap}</li>
+                  ))}
+                </ul>
+              )}
+              {read && error && (
+                <p className="openpl-note error">Não foi possível atualizar: {error}</p>
+              )}
+              {closed.read && closed.error && (
+                <p className="openpl-note error">
+                  Não foi possível atualizar o P/L fechado: {closed.error}
+                </p>
+              )}
+            </div>
+          )}
       </div>
       {picking && (
         <ClosedPeriodDialog period={period} onApply={apply} onClose={() => setPicking(false)} />

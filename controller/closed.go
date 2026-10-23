@@ -269,7 +269,8 @@ func (c *closedProfits) readDeals(ctx context.Context, window closedRange) ([]li
 // its position (see ownerOf), else of its own, eg: an entry older than the
 // deals read; the profit, swap, commission and fee of each exit, as the net
 // profit of an agent counts a close. Every account read has a total in its
-// currency, 0 without an exit; one not read makes the sum incomplete.
+// currency, 0 without an exit, and a series of the same exits (see
+// closedSeries); one not read makes the sum incomplete.
 func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []dealsRead) ui.ClosedProfitResponse {
 	response := ui.ClosedProfitResponse{From: window.from.Unix(), To: window.to.Unix(), Totals: []ui.CurrencyAmount{},
 		Agents: []ui.AgentClosedProfit{}, Complete: true, At: time.Now().Unix()}
@@ -277,6 +278,7 @@ func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []
 	seen := make(map[string]bool)
 	closed := make(map[string]map[string]bool)  // the positions of each agent closed in window
 	results := make(map[int]map[string]float64) // the profit of each position closed, by agent of the response
+	var exits []closedExit                      // the exits counted, for the series
 	for i, account := range accounts {
 		for _, a := range account.agents {
 			order[a.agent.Name] = a.agent.Position
@@ -317,6 +319,7 @@ func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []
 			seen[key] = true
 			profit := deal.Profit + deal.Swap + deal.Commission + deal.Fee
 			total.Amount += profit
+			exits = append(exits, closedExit{currency: currency, at: at, profit: profit})
 			i := slices.IndexFunc(response.Agents, func(a ui.AgentClosedProfit) bool {
 				return a.Agent == owner.Name && a.Currency == currency
 			})
@@ -357,5 +360,44 @@ func (c *closedProfits) sum(window closedRange, accounts []liveAccount, reads []
 		return cmp.Or(cmp.Compare(order[a.Agent], order[b.Agent]), strings.Compare(a.Agent, b.Agent),
 			strings.Compare(a.Currency, b.Currency))
 	})
+	response.Series = closedSeries(response.Totals, exits)
 	return response
+}
+
+// closedExit is an exit counted by sum: its time and its profit in the
+// currency of its account.
+type closedExit struct {
+	currency string
+	at       time.Time
+	profit   float64
+}
+
+// closedSeries returns the evolution of each total of totals, see
+// ui.ClosedProfitSeries: the exits of its currency summed one after another in
+// the order of their times, a point a second with an exit (its last running
+// total), the last point the total itself.
+func closedSeries(totals []ui.CurrencyAmount, exits []closedExit) []ui.ClosedProfitSeries {
+	slices.SortStableFunc(exits, func(a, b closedExit) int { return a.at.Compare(b.at) })
+	series := make([]ui.ClosedProfitSeries, 0, len(totals))
+	for _, total := range totals {
+		s := ui.ClosedProfitSeries{Currency: total.Currency, Points: []ui.ClosedProfitPoint{}}
+		running := 0.0
+		for _, exit := range exits {
+			if exit.currency != total.Currency {
+				continue
+			}
+			running += exit.profit
+			at := exit.at.Unix()
+			if n := len(s.Points); n > 0 && s.Points[n-1].At == at {
+				s.Points[n-1].Amount = running
+				continue
+			}
+			s.Points = append(s.Points, ui.ClosedProfitPoint{At: at, Amount: running})
+		}
+		if n := len(s.Points); n > 0 {
+			s.Points[n-1].Amount = total.Amount // the same sum, whatever the order of the additions
+		}
+		series = append(series, s)
+	}
+	return series
 }

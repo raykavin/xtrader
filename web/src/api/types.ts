@@ -1076,17 +1076,39 @@ export interface OpenPositionsGap {
  * outside it (by hand, by a stop out); of every agent trading live, running or
  * not, each deal once by its ticket on its account. Totals sum them by the
  * currency of their account, none converted, as OpenPositionsResponse does,
- * and Agents by agent, the ones that closed positions then. Complete and
- * Missing as OpenPositionsResponse; At is when the deals were read.
+ * and Agents by agent, the ones that closed positions then; Series the same
+ * exits summed one after another in the order of their times, a series for
+ * each currency of Totals. Complete and Missing as OpenPositionsResponse; At is
+ * when the deals were read.
  */
 export interface ClosedProfitResponse {
   from: number /* int64 */;
   to: number /* int64 */;
   totals: CurrencyAmount[];
   agents: AgentClosedProfit[];
+  series: ClosedProfitSeries[];
   complete: boolean;
   missing?: OpenPositionsGap[];
   at: number /* int64 */;
+}
+/**
+ * ClosedProfitSeries is the evolution of the closed profit of the agents in
+ * Currency over the range of a ClosedProfitResponse: Points the running total
+ * after the exits of each second with one, in the order of their times, the
+ * last one the total of the currency; none without an exit.
+ */
+export interface ClosedProfitSeries {
+  currency: string;
+  points: ClosedProfitPoint[];
+}
+/**
+ * ClosedProfitPoint is the closed profit summed from the start of the range
+ * until the exits of At (Unix seconds) included, in the currency of its
+ * series.
+ */
+export interface ClosedProfitPoint {
+  at: number /* int64 */;
+  amount: number /* float64 */;
 }
 /**
  * AgentClosedProfit is the closed profit of an agent, see

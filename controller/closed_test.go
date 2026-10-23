@@ -76,6 +76,8 @@ func TestClosedProfit_TheAgentsOnTheirAccounts(t *testing.T) {
 	got := closedPL(t, call, day, next)
 	assert.Equal(t, []ui.CurrencyAmount{{Currency: "BRL"}}, got.Totals, "the account read, its currency, 0")
 	assert.Empty(t, got.Agents)
+	assert.Equal(t, []ui.ClosedProfitSeries{{Currency: "BRL", Points: []ui.ClosedProfitPoint{}}}, got.Series,
+		"its series, without a point")
 	assert.True(t, got.Complete)
 	assert.Equal(t, day.Unix(), got.From)
 	assert.Equal(t, next.Unix(), got.To)
@@ -121,6 +123,26 @@ func TestClosedProfit_TheAgentsOnTheirAccounts(t *testing.T) {
 	assert.InDelta(t, fibonacciProfit, got.Agents[1].Amount, 1e-9)
 	assert.Equal(t, 1, got.Agents[1].Positions)
 	assert.False(t, got.Agents[1].Running)
+
+	// the evolution: the same exits summed in the order of their times, the
+	// last point the total
+	require.Len(t, got.Series, 1)
+	assert.Equal(t, "BRL", got.Series[0].Currency)
+	points := got.Series[0].Points
+	require.Len(t, points, 4)
+	for i, want := range []struct {
+		at     time.Time
+		amount float64
+	}{
+		{day.Add(2 * time.Hour), -30.8},
+		{day.Add(3 * time.Hour), -50.8},
+		{day.Add(4 * time.Hour), -50.8 + fibonacciProfit},
+		{day.Add(8 * time.Hour), llmProfit + fibonacciProfit},
+	} {
+		assert.Equal(t, want.at.Unix(), points[i].At, "point %d", i)
+		assert.InDelta(t, want.amount, points[i].Amount, 1e-9, "point %d", i)
+	}
+	assert.Equal(t, got.Totals[0].Amount, points[3].Amount, "the last point the total")
 
 	demo.mu.Lock()
 	queries := append([]string(nil), demo.dealsRead...)
@@ -176,6 +198,34 @@ func TestClosedProfit_EachInItsCurrencyAndIncomplete(t *testing.T) {
 	assert.Equal(t, ui.OpenPositionsGap{Agents: []string{"wrong"}, Reason: "refused"}, got.Missing[0])
 	require.Len(t, got.Agents, 2)
 	assert.Equal(t, "USD", got.Agents[1].Currency)
+	require.Len(t, got.Series, 2, "a series a currency read, the account not read in none")
+	for i, currency := range []string{"BRL", "USD"} {
+		assert.Equal(t, currency, got.Series[i].Currency)
+		require.Len(t, got.Series[i].Points, 1)
+		assert.Equal(t, got.Totals[i].Amount, got.Series[i].Points[0].Amount)
+	}
+}
+
+// The series of a currency sums its exits one after another in the order of
+// their times, whatever the order of the accounts read: the exits of a second
+// one point, the last point the total, the other currencies apart.
+func TestClosedProfit_Series(t *testing.T) {
+	at := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	exits := []closedExit{
+		{currency: "BRL", at: at.Add(3 * time.Hour), profit: 10},
+		{currency: "USD", at: at.Add(time.Hour), profit: 1.5},
+		{currency: "BRL", at: at.Add(time.Hour), profit: -4},
+		{currency: "BRL", at: at.Add(time.Hour + 400*time.Millisecond), profit: -1}, // the same second
+		{currency: "BRL", at: at.Add(2 * time.Hour), profit: 2.25},
+	}
+	got := closedSeries([]ui.CurrencyAmount{{Currency: "BRL", Amount: 7.25}, {Currency: "USD", Amount: 1.5},
+		{Currency: "KWD"}}, exits)
+	assert.Equal(t, []ui.ClosedProfitSeries{
+		{Currency: "BRL", Points: []ui.ClosedProfitPoint{{At: at.Add(time.Hour).Unix(), Amount: -5},
+			{At: at.Add(2 * time.Hour).Unix(), Amount: -2.75}, {At: at.Add(3 * time.Hour).Unix(), Amount: 7.25}}},
+		{Currency: "USD", Points: []ui.ClosedProfitPoint{{At: at.Add(time.Hour).Unix(), Amount: 1.5}}},
+		{Currency: "KWD", Points: []ui.ClosedProfitPoint{}},
+	}, got)
 }
 
 // A range is from before to, in Unix seconds, 400 days apart at most.
