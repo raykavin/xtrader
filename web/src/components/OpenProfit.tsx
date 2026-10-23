@@ -34,6 +34,12 @@ import { Skeleton } from "./States";
 /** How often the open profit and the balances of the agents are read again, in ms, as the market moves them. */
 const OPEN_PL_REFRESH = 5000;
 
+/**
+ * The agents a wide card shows beside its figures; with more, they go under
+ * the figures and the chart, across the card, more of them a row.
+ */
+const AGENTS_BESIDE = 8;
+
 /** How often the closed profit of the period is read again, in ms: it changes as a position closes. */
 const CLOSED_PL_REFRESH = 15000;
 
@@ -356,7 +362,8 @@ function ClosedEvolution({
  * accounts, as the broker reports them, by the currency of each account (none
  * converted: a total for each currency), each labelled, their values aligned;
  * the evolution of the closed profit in the period under them; apart, by
- * agent, a tile each with the profit open of each of its assets and its closed
+ * agent (beside them up to AGENTS_BESIDE on a wide card, under them across it
+ * with more), a tile each with the profit open of each of its assets and its closed
  * one, tinted by the sign of its open profit (a stopped or disabled one marked
  * so); incomplete, and why, when an account wasn't read.
  */
@@ -383,7 +390,7 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
 
   return (
     <section className="card openpl-card" aria-labelledby="openpl-title">
-      <div className="openpl-layout">
+      <div className={lines.length > AGENTS_BESIDE ? "openpl-layout is-crowded" : "openpl-layout"}>
         <div className="openpl-finance">
           <span className="eyebrow">Todos os agentes</span>
           <dl className="openpl-stats">
