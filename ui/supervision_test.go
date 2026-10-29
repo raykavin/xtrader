@@ -31,6 +31,14 @@ type fakeSupervised struct {
 	closed    []string
 	canceled  []int64
 	cancelErr map[int64]error
+	drained   int // the waits for the orders being sent
+}
+
+func (f *fakeSupervised) WaitIdle(time.Duration) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.drained++
+	return true
 }
 
 func (f *fakeSupervised) Status() order.Status { return f.status }
@@ -349,4 +357,19 @@ func TestSupervision_Protect(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(body), &snapshot))
 	require.NotNil(t, snapshot.Protection, "on the dashboard")
 	require.Equal(t, 98.0, snapshot.Protection.StopLoss)
+}
+
+// Blocked with drain, the entries wait for the orders being sent to end before
+// answering; without it, or allowed, they don't.
+func TestSupervision_EntriesDrain(t *testing.T) {
+	controller := &fakeSupervised{status: order.StatusRunning}
+	_, url := newSupervisedChart(t, controller)
+	for _, body := range []string{`{"blocked":true,"revision":1,"reason":"limite diário"}`,
+		`{"blocked":true,"revision":2,"reason":"limite diário","drain":true}`, `{"blocked":false,"revision":3,"drain":true}`} {
+		resp, answer := request(t, http.MethodPost, url+"/api/supervision/entries", body, supervisorHeaders...)
+		require.Equal(t, http.StatusOK, resp.StatusCode, answer)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	require.Equal(t, 1, controller.drained)
 }

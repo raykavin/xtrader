@@ -1,0 +1,202 @@
+import { useCallback, useEffect, useState } from "react";
+import { fetchDailyLimits } from "../api/client";
+import type { DailyLimitsResponse, DailyScopeStatus } from "../api/types";
+import { dailyStateLabel, flattenLabel, limitsLabel, resultAmount } from "../lib/dailyLimits";
+import { DailyLimitFields } from "./DailyLimitFields";
+import { PageHeader } from "./PageHeader";
+import type { SectionIntro } from "./SettingsPage";
+import { Alert, Loading, Skeleton } from "./States";
+
+/** How often the state of the daily limits is read again, in ms. */
+const POLL = 5000;
+
+interface Props {
+  intro: SectionIntro;
+}
+
+/** A scope of the daily limits now: its state, its result of the day, and the guard blocking it. */
+function ScopeState({ scope }: { scope: DailyScopeStatus }) {
+  const state = dailyStateLabel(scope);
+  const flatten = flattenLabel(scope.guard?.flatten_status);
+  const result = scope.result;
+  return (
+    <div className="daily-state">
+      <span className={`status-chip ${state.tone}`}>{state.text}</span>
+      {result && (
+        <span className="daily-result">
+          <strong className="mono">{resultAmount(result.total, result.currency)}</strong>
+          <span className="field-hint">
+            realizado {resultAmount(result.realized, result.currency)} · aberto{" "}
+            {resultAmount(result.open, result.currency)}
+            {!result.complete && " · incompleto"}
+          </span>
+        </span>
+      )}
+      {scope.guard && <p className="daily-reason">{scope.guard.reason}</p>}
+      {flatten && <span className={`status-chip ${flatten.tone}`}>{flatten.text}</span>}
+      {result && !result.complete && (result.missing?.length ?? 0) > 0 && (
+        <p className="field-hint">Falta: {result.missing?.join("; ")}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The daily limits of the application: the loss and the gain of the day of
+ * all the agents together (their result realized plus open, every account
+ * converted to the currency of the limits), how they stand now, the agents
+ * with limits of their own, and how the limits act: reached, the positions
+ * zeroed, the pending entries canceled and the entries blocked until 00:00.
+ */
+export function DailyLimitsSettings({ intro }: Props) {
+  const [data, setData] = useState<DailyLimitsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0); // the form remounted with the limits saved
+
+  const load = useCallback((signal?: AbortSignal) => {
+    fetchDailyLimits(signal)
+      .then((response) => {
+        setData(response);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!signal?.aborted) setError(e instanceof Error ? e.message : String(e));
+      });
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    const timer = window.setInterval(() => load(controller.signal), POLL);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [load]);
+
+  if (!data) {
+    return (
+      <>
+        <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
+        {error ? (
+          <Alert tone="error">{error}</Alert>
+        ) : (
+          <Loading label="Carregando os limites diários">
+            <Skeleton height={220} />
+          </Loading>
+        )}
+      </>
+    );
+  }
+  const status = data.status;
+  return (
+    <>
+      <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
+      {error && <Alert tone="error">Não foi possível atualizar: {error}</Alert>}
+
+      <section className="card card-flush" aria-labelledby="daily-global-title">
+        <header className="card-header">
+          <div className="card-heading">
+            <span className="eyebrow">Todos os agentes somados</span>
+            <h2 id="daily-global-title" className="card-title">
+              Limite diário global
+            </h2>
+          </div>
+          <span className="field-hint">
+            Dia de {status.day} ({status.zone})
+          </span>
+        </header>
+        <div className="card-body daily-body">
+          <ScopeState scope={status.global} />
+          <DailyLimitFields
+            key={version}
+            settings={data.settings}
+            onSaved={(_, response) => {
+              setData({ settings: response.settings, status: response.status });
+              setVersion((v) => v + 1);
+            }}
+          />
+        </div>
+      </section>
+
+      <section className="card card-flush" aria-labelledby="daily-agents-title">
+        <header className="card-header">
+          <div className="card-heading">
+            <span className="eyebrow">Cada agente</span>
+            <h2 id="daily-agents-title" className="card-title">
+              Limites por agente
+            </h2>
+          </div>
+          <span className="field-hint">
+            Configure em Agentes › Limite diário, no card do agente.
+          </span>
+        </header>
+        {status.agents.length === 0 ? (
+          <p className="card-body field-hint">Nenhum agente com limite diário próprio.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table table-responsive">
+              <thead>
+                <tr>
+                  <th scope="col">Agente</th>
+                  <th scope="col">Limites</th>
+                  <th scope="col">Hoje</th>
+                </tr>
+              </thead>
+              <tbody>
+                {status.agents.map((scope) => (
+                  <tr key={scope.agent}>
+                    <td data-label="Agente">{scope.agent}</td>
+                    <td data-label="Limites">
+                      {limitsLabel(scope.limits, scope.result?.currency)}
+                    </td>
+                    <td data-label="Hoje" className="daily-cell">
+                      <ScopeState scope={scope} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card" aria-labelledby="daily-how-title">
+        <h2 id="daily-how-title" className="card-title">
+          Como funciona
+        </h2>
+        <ul className="daily-notes">
+          <li>
+            O resultado do dia é o realizado desde 00:00 ({status.zone}), com swap, comissão e
+            taxas, mais o P/L das posições abertas agora, lido das contas MT5 a cada 5 segundos.
+            Cada operação conta uma vez, mesmo com vários agentes na mesma conta; posições manuais
+            ficam de fora.
+          </li>
+          <li>
+            Atingida a perda ou o ganho (em duas leituras seguidas), todas as posições do escopo são
+            zeradas, as ordens pendentes de entrada canceladas e as entradas bloqueadas até 00:00.
+            Stop loss, trailing e breakeven continuam valendo.
+          </li>
+          <li>
+            Reiniciar a aplicação, religar ou liberar um agente, ou redefinir o saldo dele não
+            contorna o bloqueio. Só a virada do dia ou uma mudança explícita do limite o libera.
+          </li>
+          <li>
+            Sem conseguir ler uma conta ou a cotação, as entradas ficam bloqueadas (sem zerar nada)
+            até a leitura voltar.
+          </li>
+          {(status.paper?.length ?? 0) > 0 && (
+            <li>
+              Os agentes em paper ({status.paper?.length}) não contam no resultado, mas são
+              bloqueados e zerados junto com todos.
+            </li>
+          )}
+          <li>
+            Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em
+            seguida); o histórico do MT5 atrasa alguns segundos; entre a leitura e o fechamento o
+            preço anda, então o resultado final pode passar um pouco do limite.
+          </li>
+        </ul>
+      </section>
+    </>
+  );
+}

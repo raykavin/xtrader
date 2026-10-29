@@ -898,6 +898,11 @@ export interface AgentSettings {
    * stop), all off unless set, applied live
    */
   protection: ProtectionSettings;
+  /**
+   * DailyLimit is its daily limits, in the currency of its account, off
+   * unless set, see DailyLimitSettings
+   */
+  daily_limit: DailyLimitSettings;
 }
 /**
  * AgentOutbox is what the outbox of an agent holds, as it told the
@@ -1380,6 +1385,12 @@ export interface SupervisionEntriesRequest {
   blocked: boolean;
   revision: number /* int64 */;
   reason?: string;
+  /**
+   * Drain, with Blocked, waits for the orders being sent to end (a few
+   * seconds at most) before answering, eg: before the pending entries are
+   * canceled, so that none sent just before the block is left
+   */
+  drain?: boolean;
 }
 /**
  * SupervisionCloseRequest is the payload of POST /api/supervision/close: the
@@ -1523,6 +1534,12 @@ export interface AgentSupervisionInfo {
   stop_category?: string;
   stop_by?: string;
   stop_at?: number /* int64 */;
+  /**
+   * DailyBlocked tells its entries blocked by a daily guard, its own or the
+   * one of all the agents, until the next day, DailyReason why
+   */
+  daily_blocked?: boolean;
+  daily_reason?: string;
 }
 /**
  * SupervisorAutonomy is what the supervisor does alone in its analyses, see
@@ -1602,6 +1619,11 @@ export interface SupervisorSnapshot {
   exposure: SupervisorExposure[];
   agents: SupervisorAgent[];
   gaps?: string[];
+  /**
+   * DailyGuard is how the daily limits stand: the result of the day
+   * considered, the limits and the guards, see DailyLimitsStatus
+   */
+  daily_guard?: DailyLimitsStatus;
 }
 /**
  * SupervisorWindow is a window of the realized results, its start and end.
@@ -1885,6 +1907,11 @@ export interface SupervisorScopeOrder extends SupervisorPending {
 export interface SupervisorOptions {
   cancel_pending: boolean;
   keep_blocked: boolean;
+  /**
+   * Whole closes every position of the agents read when executed, the ones
+   * opened after the action was built included (eg: by a daily limit)
+   */
+  whole?: boolean;
 }
 /**
  * SupervisorResultItem is how an action went on an agent, a position or an
@@ -2055,4 +2082,159 @@ export interface SupervisorStreamError {
 export interface SupervisorEntriesRequest {
   blocked: boolean;
   reason?: string;
+}
+/**
+ * DailyLimitSettings are daily limits: of all the agents together (Currency
+ * theirs, each account converted to it) or of an agent (in the currency of its
+ * account, Currency empty). Enabled, at MaxLoss lost or MaxGain won in the
+ * result of the day (realized plus open, see DailyResult) the application
+ * closes their positions, cancels their pending entries and blocks their
+ * entries until the next day; absent, no limit of that side.
+ */
+export interface DailyLimitSettings {
+  enabled: boolean;
+  currency?: string;
+  max_loss?: number /* float64 */;
+  max_gain?: number /* float64 */;
+  updated_by?: string;
+  updated_at?: number /* int64 */;
+}
+/**
+ * DailyResult is the result of the day of agents in Currency: Realized, the
+ * exits of the day with their swap, commission and fee and the commission and
+ * fee of the entries of the day; Open, the profit and swap of their positions
+ * open now; Total, both. Complete false when an account wasn't read or a rate
+ * was missing, Missing telling which: never counted as 0.
+ */
+export interface DailyResult {
+  currency: string;
+  realized: number /* float64 */;
+  open: number /* float64 */;
+  total: number /* float64 */;
+  complete: boolean;
+  missing?: string[];
+}
+/**
+ * The states of a scope of the daily limits: off (no limit), free (under its
+ * limits), blocked (a limit reached: its positions closed, its entries
+ * blocked until the next day) or incomplete (its result unknown: its entries
+ * blocked until it is read again).
+ */
+export const DailyOff = "off";
+/**
+ * The states of a scope of the daily limits: off (no limit), free (under its
+ * limits), blocked (a limit reached: its positions closed, its entries
+ * blocked until the next day) or incomplete (its result unknown: its entries
+ * blocked until it is read again).
+ */
+export const DailyFree = "free";
+/**
+ * The states of a scope of the daily limits: off (no limit), free (under its
+ * limits), blocked (a limit reached: its positions closed, its entries
+ * blocked until the next day) or incomplete (its result unknown: its entries
+ * blocked until it is read again).
+ */
+export const DailyBlocked = "blocked";
+/**
+ * The states of a scope of the daily limits: off (no limit), free (under its
+ * limits), blocked (a limit reached: its positions closed, its entries
+ * blocked until the next day) or incomplete (its result unknown: its entries
+ * blocked until it is read again).
+ */
+export const DailyIncomplete = "incomplete";
+/**
+ * DailyGuardInfo is a daily guard tripped: Kind limit (Trigger loss or gain,
+ * Result and Limit in Currency) or incomplete; how its positions were closed
+ * (FlattenStatus running, done, partial or failed, FlattenActionID the
+ * action); times in Unix seconds.
+ */
+export interface DailyGuardInfo {
+  id: number /* int64 */;
+  kind: string;
+  trigger?: string;
+  result: number /* float64 */;
+  limit: number /* float64 */;
+  currency: string;
+  reason: string;
+  trips: number /* int */;
+  tripped_at: number /* int64 */;
+  flatten_status?: string;
+  flatten_action_id?: number /* int64 */;
+}
+/**
+ * DailyScopeStatus is a scope of the daily limits now: all the agents (Agent
+ * empty) or one; its limits, its result of the day, its state (see DailyOff)
+ * and the guard blocking it, if any.
+ */
+export interface DailyScopeStatus {
+  agent?: string;
+  limits: DailyLimitSettings;
+  result?: DailyResult;
+  state: string;
+  guard?: DailyGuardInfo;
+}
+/**
+ * DailyLimitsStatus is the payload of GET /api/daily-guard: the day (eg:
+ * 2026-10-29) in Zone, from its midnight, when it was evaluated (Unix
+ * seconds, 0 not yet), all the agents together, the agents with their own
+ * limits or guards, and the agents in paper, never counted (no money of an
+ * account) though blocked and closed with all the agents.
+ */
+export interface DailyLimitsStatus {
+  day: string;
+  zone: string;
+  evaluated_at: number /* int64 */;
+  global: DailyScopeStatus;
+  agents: DailyScopeStatus[];
+  paper?: string[];
+}
+/**
+ * DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the
+ * limits of all the agents together) and of PUT
+ * /api/settings/agents/{name}/daily-limit (of an agent): the limits, why
+ * (Reason, recorded), and Confirm to apply a change that trips or releases
+ * the guard at once (else refused, 409, a DailyLimitPreview).
+ */
+export interface DailyLimitsRequest {
+  settings: DailyLimitSettings;
+  reason?: string;
+  confirm?: boolean;
+}
+/**
+ * The effects of a change of daily limits on their guard now, see
+ * DailyLimitPreview.
+ */
+export const DailyEffectNone = "none";
+/**
+ * The effects of a change of daily limits on their guard now, see
+ * DailyLimitPreview.
+ */
+export const DailyEffectTrip = "trip";
+/**
+ * The effects of a change of daily limits on their guard now, see
+ * DailyLimitPreview.
+ */
+export const DailyEffectRelease = "release";
+/**
+ * DailyLimitPreview is what a change of daily limits would do now (Effect,
+ * see DailyEffectNone), against Result; the answer (409) of a change of an
+ * effect not confirmed.
+ */
+export interface DailyLimitPreview {
+  effect: string;
+  result?: DailyResult;
+  message: string;
+}
+/**
+ * DailyLimitsResponse is the payload of GET and PUT
+ * /api/settings/daily-limits and of PUT /api/settings/agents/{name}/daily-limit:
+ * the limits of all the agents together, and how the daily limits stand.
+ */
+export interface DailyLimitsResponse {
+  settings: DailyLimitSettings;
+  status: DailyLimitsStatus;
+  /**
+   * Effect of the change just applied, see DailyEffectNone
+   */
+  effect?: string;
 }

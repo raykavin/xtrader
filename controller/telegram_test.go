@@ -365,6 +365,11 @@ func TestTelegram_Orders(t *testing.T) {
 	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
 	assert.Equal(t, "[eth] Bot is stopped, no order was created. Send /start to resume.", server.last(t).Text)
 
+	controller.orderErr = fmt.Errorf("%w: perda diária de todos os agentes atingida", order.ErrEntriesBlocked)
+	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
+	assert.Contains(t, server.last(t).Text, "[eth] Entradas bloqueadas, nenhuma ordem criada:")
+	assert.Contains(t, server.last(t).Text, "perda diária de todos os agentes atingida")
+
 	controller.orderErr = errors.New("insufficient funds")
 	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
 	assert.Equal(t, "[eth] insufficient funds", server.last(t).Text)

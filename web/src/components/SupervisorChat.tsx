@@ -22,6 +22,7 @@ import type {
 } from "../api/types";
 import { settingsHref } from "../lib/nav";
 import { awaitingDecision, mergeMessages, stageLabel, withAction } from "../lib/supervisor";
+import { DailyGuardStrip, useDailyGuard } from "./DailyGuardStrip";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { Alert } from "./States";
@@ -46,6 +47,7 @@ const MAX_MESSAGE = 4000;
  * checked on the account.
  */
 export function SupervisorChat() {
+  const dailyGuard = useDailyGuard();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<PanelTab>("conversa");
   const [settings, setSettings] = useState<SupervisorSettingsResponse | null>(null);
@@ -266,6 +268,7 @@ export function SupervisorChat() {
               <Icon name="close" size={16} />
             </button>
           </header>
+          <DailyGuardStrip status={dailyGuard} compact />
           <div className="supervisor-tabs" role="tablist" aria-label="Seções do XTrader AI">
             {(
               [

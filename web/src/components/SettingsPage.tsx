@@ -18,6 +18,7 @@ import { type SettingsTab, settingsTabFromHash } from "../lib/settings";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
+import { DailyLimitsSettings } from "./DailyLimitsSettings";
 import { LayoutSettings } from "./LayoutSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
@@ -40,6 +41,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
     title: "Agentes",
     description:
       "Ligue, configure e reinicie cada agente. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt mudam na hora; o resto vale depois de reiniciar.",
+  },
+  limites: {
+    title: "Limites diários",
+    description:
+      "A perda e o ganho máximos do dia, de todos os agentes somados e de cada agente. Atingido um limite, a aplicação zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00.",
   },
   prompts: {
     title: "Prompts",
@@ -221,6 +227,9 @@ export function SettingsPage() {
             onReload={loadAgents}
           />
         )}
+      </Panel>
+      <Panel tab="limites" shown={tab}>
+        <DailyLimitsSettings intro={intros.limites} />
       </Panel>
       <Panel tab="prompts" shown={tab}>
         {prompts === null ? (

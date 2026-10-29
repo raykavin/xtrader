@@ -133,6 +133,7 @@ type fakeAgent struct {
 	protections []ui.PositionProtection
 	protect     ui.SupervisionProtectResponse // the answer to an arm
 	armed       []ui.SupervisionProtectRequest
+	drains      int // the blocks asking to wait for the orders being sent
 }
 
 func newFakeAgent(t *testing.T, bridge *fakeBridge, magic int64) *fakeAgent {
@@ -203,6 +204,9 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		if request.Revision >= a.revision {
 			a.blocked, a.reason, a.revision = request.Blocked, request.Reason, request.Revision
+		}
+		if request.Drain {
+			a.drains++
 		}
 		_ = json.NewEncoder(w).Encode(state())
 	case "/api/supervision/close":

@@ -211,6 +211,16 @@ func decodeSupervision(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// supervisionDrain bounds the wait for the orders being sent once the entries
+// are blocked, see SupervisionEntriesRequest.Drain.
+const supervisionDrain = 5 * time.Second
+
+// idleWaiter waits for the orders being sent to end, see
+// order.Controller.WaitIdle.
+type idleWaiter interface {
+	WaitIdle(d time.Duration) bool
+}
+
 // handleSupervisionEntries blocks the entries of the bot or allows them again,
 // see SupervisionEntriesRequest, and answers the state of the entries.
 func (c *Chart) handleSupervisionEntries(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +235,10 @@ func (c *Chart) handleSupervisionEntries(w http.ResponseWriter, r *http.Request)
 	if request.Blocked {
 		controller.BlockEntries(request.Revision, strings.TrimSpace(request.Reason))
 		log.Warnf("[SUPERVISOR] the entries blocked (revision %d): %s", request.Revision, request.Reason)
+		// the orders being sent ended, eg: before the pending entries are canceled
+		if drainer, ok := controller.(idleWaiter); ok && request.Drain && !drainer.WaitIdle(supervisionDrain) {
+			log.Warnf("[SUPERVISOR] orders still being sent after %s", supervisionDrain)
+		}
 	} else if controller.AllowEntries(request.Revision) {
 		log.Infof("[SUPERVISOR] the entries allowed again (revision %d)", request.Revision)
 	}

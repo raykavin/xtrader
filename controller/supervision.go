@@ -56,6 +56,7 @@ type Supervision struct {
 	closed    *closedProfits
 	client    *http.Client // of the calls to the agents, see callAgent
 	bridges   *bridgeTrader
+	daily     *dailyLimiter // the daily limits, see dailyLimiter
 
 	// newChat creates the chat of the language model of settings, see
 	// llm.NewChat, and stateOf tells the state of an agent, see Manager.State:
@@ -93,6 +94,7 @@ func (d *Dashboard) ServeSupervision(s *store.Store, manager *Manager) *Supervis
 		closed: d.settings.closed, client: &http.Client{Timeout: supervisorCallTimeout},
 		bridges: newBridgeTrader(), newChat: chatOf, stateOf: manager.State, now: time.Now, wake: make(chan struct{}, 1),
 		locks: make(map[string]*sync.Mutex), flat: make(map[int64]time.Time), stopping: make(map[int64]stopTarget)}
+	sup.daily = newDailyLimiter(sup)
 	d.supervision = sup
 	return sup
 }
@@ -141,6 +143,7 @@ func (s *Supervision) Run(ctx context.Context) {
 	} else if n > 0 {
 		log.Warnf("supervisor: %d actions left executing by the controller before, their outcome unknown", n)
 	}
+	go s.daily.Run(ctx) // whatever the settings of the supervisor
 	ticker := time.NewTicker(supervisionEvery)
 	defer ticker.Stop()
 	for {
@@ -489,7 +492,7 @@ Regras:
 - Use somente os dados do retrato. Nunca invente números, limites ou fatos. Se um dado falta (veja gaps), diga que falta e não conclua nada a partir dele, como dizer que um agente está zerado.
 - Todo valor em dinheiro vem com a moeda da conta. Nunca some nem compare valores de moedas diferentes. Cite a janela e o horário dos dados (generated_at).
 - Os volumes estão em lotes. As contas aparecem por apelido (conta 1, conta 2...). Vários agentes podem operar a mesma conta: a exposição por conta e par já está somada em exposure.
-- Não existem limites financeiros fixos: compare com os limites configurados no próprio agente (em risk e daily_limits) e com o saldo da conta.
+- Os limites diários da aplicação (daily_guard: de todos os agentes somados e de cada agente, sobre o resultado do dia, realizado + aberto) são aplicados pelo sistema, que zera as posições, cancela as pendentes de entrada e bloqueia as entradas sozinho até 00:00: informe o estado, não repita a ação. Fora deles, compare com os limites configurados no próprio agente (em risk e daily_limits) e com o saldo da conta.
 - Classifique cada problema como operational (operacional), risk (risco) ou performance (desempenho). Julgue desempenho só com amostra suficiente de posições fechadas.
 - Bloquear novas entradas não fecha posições nem cancela pendentes: o agente continua gerenciando o que tem. Parar um agente nunca liquida posições.
 - Escreva em português do Brasil, direto e curto.`

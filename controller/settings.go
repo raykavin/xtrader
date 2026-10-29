@@ -143,7 +143,8 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 		TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(), Running: state.Running,
 		RestartPending: state.RestartPending, Restarts: state.Restarts, Restarting: state.Restarting,
 		Exited: state.Exited, LastExit: state.LastExit, LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID),
-		Params: a.AllParams(), Supervision: supervisionInfo(a), Protection: a.ProtectionOf()}
+		Params: a.AllParams(), Supervision: supervisionInfo(a), Protection: a.ProtectionOf(),
+		DailyLimit: a.DailyLimitOf()}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

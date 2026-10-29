@@ -42,6 +42,86 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Post("/supervisor/messages", s.handleAsk)
 	r.Post("/supervisor/messages/stream", s.handleAskStream)
 	r.Post("/supervisor/agents/{name}/entries", s.handleEntries)
+	r.Get("/settings/daily-limits", s.handleDailyLimits)
+	r.Put("/settings/daily-limits", s.handleSetDailyLimits)
+	r.Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
+	r.Get("/daily-guard", s.handleDailyGuard)
+}
+
+// dailyLimitsResponse returns the limits of all the agents together and how
+// the daily limits stand.
+func (s *Supervision) dailyLimitsResponse(ctx context.Context, effect string) (ui.DailyLimitsResponse, error) {
+	limit, _, err := s.store.GlobalDailyLimit(ctx)
+	if err != nil {
+		return ui.DailyLimitsResponse{}, err
+	}
+	return ui.DailyLimitsResponse{Settings: limit.Settings(), Status: s.daily.Status(), Effect: effect}, nil
+}
+
+// handleDailyLimits answers the limits of all the agents together and how the
+// daily limits stand, see ui.DailyLimitsResponse.
+func (s *Supervision) handleDailyLimits(w http.ResponseWriter, r *http.Request) {
+	response, err := s.dailyLimitsResponse(r.Context(), "")
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, response)
+}
+
+// handleDailyGuard answers how the daily limits stand, see
+// ui.DailyLimitsStatus.
+func (s *Supervision) handleDailyGuard(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, s.daily.Status())
+}
+
+// handleSetDailyLimits sets the limits of all the agents together, see
+// setDailyLimit.
+func (s *Supervision) handleSetDailyLimits(w http.ResponseWriter, r *http.Request) {
+	s.setDailyLimit(w, r, nil)
+}
+
+// handleSetAgentDailyLimit sets the limits of an agent, see setDailyLimit.
+func (s *Supervision) handleSetAgentDailyLimit(w http.ResponseWriter, r *http.Request) {
+	a, err := s.store.AgentByName(r.Context(), chi.URLParam(r, "name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.setDailyLimit(w, r, &a)
+}
+
+// setDailyLimit sets the daily limits of the agent a (of all the agents
+// together when nil) as the request asks, by the user of the session (see
+// dailyLimiter.change): a change tripping or releasing the guard now refused,
+// 409 and its preview, unless confirmed.
+func (s *Supervision) setDailyLimit(w http.ResponseWriter, r *http.Request, a *store.Agent) {
+	var request ui.DailyLimitsRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	change := store.DailyChange{Via: store.ViaSettings, By: userOf(r.Context()), Reason: strings.TrimSpace(request.Reason)}
+	if id := userIDOf(r.Context()); id != 0 {
+		change.UserID = &id
+	}
+	preview, applied, err := s.daily.change(r.Context(), a, request.Settings, change, request.Confirm)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !applied {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, preview)
+		return
+	}
+	response, err := s.dailyLimitsResponse(r.Context(), preview.Effect)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, response)
 }
 
 // fail answers an error of the supervisor: 404, 409, 410 or 400 for the ones
@@ -96,6 +176,25 @@ func supervisionInfo(a store.Agent) *ui.AgentSupervisionInfo {
 		info.StopReason, info.StopBy, info.StopAt = sv.StopReason, sv.StopBy, unix(sv.StopAt)
 		info.StopCategory = deref(sv.StopCategory)
 	}
+	return info
+}
+
+// withDaily returns info of the agent a with its entries blocked by a daily
+// guard, if they are (info created for an agent never supervised).
+func withDaily(ctx context.Context, s *store.Store, a store.Agent,
+	info *ui.AgentSupervisionInfo) *ui.AgentSupervisionInfo {
+	blocked, reason, _, err := s.DailyEntries(ctx, a.ID)
+	if err != nil {
+		log.Warnf("ui: the daily guards of the agent %s: %v", a.Name, err)
+		return info
+	}
+	if !blocked {
+		return info
+	}
+	if info == nil {
+		info = &ui.AgentSupervisionInfo{StopState: store.StopNone}
+	}
+	info.DailyBlocked, info.DailyReason = true, reason
 	return info
 }
 
