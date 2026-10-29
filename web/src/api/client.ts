@@ -48,6 +48,7 @@ import type {
   Snapshot,
   SupervisorActionInfo,
   SupervisorActionsResponse,
+  SupervisorCloseRequest,
   SupervisorEntriesRequest,
   SupervisorMessageInfo,
   SupervisorMessageRequest,
@@ -698,6 +699,17 @@ export async function streamSupervisorMessage(
 }
 
 /** Blocks the entries of an agent, or allows them again, by the user. */
+/** Closes every open position of an agent, asked by the user: its result, checked on the account; 409 without one. */
+export function closeAgentPositions(
+  name: string,
+  request: SupervisorCloseRequest = {},
+): Promise<SupervisorDecision> {
+  return postJSON<SupervisorDecision>(
+    `/supervisor/agents/${encodeURIComponent(name)}/close`,
+    request,
+  );
+}
+
 export function setAgentEntries(
   name: string,
   request: SupervisorEntriesRequest,

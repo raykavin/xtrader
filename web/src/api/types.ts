@@ -2359,6 +2359,14 @@ export interface SupervisorEntriesRequest {
   reason?: string;
 }
 /**
+ * SupervisorCloseRequest is the payload of POST
+ * /api/supervisor/agents/{name}/close: every open position of the agent
+ * closed by the user, for Reason (a default naming the user without one).
+ */
+export interface SupervisorCloseRequest {
+  reason?: string;
+}
+/**
  * DailyLimitSettings are daily limits: of all the agents together (their
  * amounts applying to the result in each currency of the accounts apart, none
  * converted) or of an agent (in the currency of its account); Currency is

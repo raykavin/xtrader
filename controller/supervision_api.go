@@ -42,6 +42,7 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Post("/supervisor/messages", s.handleAsk)
 	r.Post("/supervisor/messages/stream", s.handleAskStream)
 	r.Post("/supervisor/agents/{name}/entries", s.handleEntries)
+	r.Post("/supervisor/agents/{name}/close", s.handleClose)
 	r.Get("/settings/daily-limits", s.handleDailyLimits)
 	r.Put("/settings/daily-limits", s.handleSetDailyLimits)
 	r.Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
@@ -585,5 +586,54 @@ func (s *Supervision) handleEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Infof("ui: the entries of the agent %s %s by %s", a.Name, created.Action, by)
+	writeJSON(w, confirmResponse{Action: actionInfo(created)})
+}
+
+// handleClose closes every open position of an agent, asked by the user (see
+// ui.SupervisorCloseRequest): a close_positions of the agent, its entries held
+// a candle and not blocked, its pending entries left; answers the action with
+// its result, checked on the account, 409 without a position open.
+func (s *Supervision) handleClose(w http.ResponseWriter, r *http.Request) {
+	var request ui.SupervisorCloseRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	a, err := s.store.AgentByName(r.Context(), chi.URLParam(r, "name"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	v, err := s.read(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if len(v.positions[a.Name]) == 0 {
+		writeJSONError(w, http.StatusConflict, "o agente não tem posição aberta")
+		return
+	}
+	by := userOf(r.Context())
+	action := store.SupervisorAction{Source: store.SourceUser, Action: store.ActionClosePositions,
+		Reason: strings.TrimSpace(request.Reason), Status: store.ActionExecuting, RequestedBy: by, ConfirmedBy: by}
+	if action.Reason == "" {
+		action.Reason = "posições encerradas por " + by
+	}
+	if userID := userIDOf(r.Context()); userID != 0 {
+		action.UserID = &userID
+	}
+	action.Scope, _ = json.Marshal(ui.SupervisorScope{Agents: []string{a.Name}})
+	action.Options, _ = json.Marshal(ui.SupervisorOptions{Whole: true})
+	created, err := s.store.CreateSupervisorAction(r.Context(), action)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	status, _ := s.execute(r.Context(), created)
+	created, err = s.store.SupervisorAction(r.Context(), created.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	log.Infof("ui: the positions of the agent %s closed by %s: %s", a.Name, by, status)
 	writeJSON(w, confirmResponse{Action: actionInfo(created)})
 }
