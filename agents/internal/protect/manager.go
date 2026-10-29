@@ -73,6 +73,7 @@ type Manager struct {
 	settings *ui.ProtectionSettings
 	arms     map[string]map[string]ui.ProtectionArm // by position, by feature
 	pairs    map[string]*pairState
+	sync     bool // see Synchronous
 
 	sends sync.WaitGroup
 }
@@ -104,6 +105,17 @@ type pairState struct {
 func New(ctx context.Context, broker Broker, market Market, timeframe, refPrefix string) *Manager {
 	return &Manager{ctx: ctx, broker: broker, market: market, timeframe: timeframe, refPrefix: refPrefix,
 		now: time.Now, arms: make(map[string]map[string]ui.ProtectionArm), pairs: make(map[string]*pairState)}
+}
+
+// Synchronous makes m protect on the clock of a backtest: now read from now
+// (the candle being processed), the candles of a position loaded and its
+// moves applied before OnCandle returns, so that the backtest is the same
+// whatever the speed of the machine.
+func (m *Manager) Synchronous(now func() time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now = now
+	m.sync = true
 }
 
 // Guarded reports whether the stop guard of the order controller is on: the
@@ -167,7 +179,17 @@ func (m *Manager) OnCandle(candle model.Candle) {
 		ps.loading = true
 	}
 	p := m.evaluateLocked(candle.Pair, ps)
+	sync := m.sync
 	m.mu.Unlock()
+	if sync {
+		if load {
+			m.bootstrap(candle.Pair)
+		}
+		if p != nil {
+			m.apply(*p)
+		}
+		return
+	}
 	if load {
 		go m.bootstrap(candle.Pair)
 	}

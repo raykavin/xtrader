@@ -17,8 +17,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -88,74 +86,9 @@ func connect(ctx context.Context, client *Client, name string) (*Agent, error) {
 	return a, nil
 }
 
-// Args returns the flags of the settings of the agent, the ones set only, as
-// its command line gave them: its params, then its columns, which the
-// controller keeps apart. Its secrets are never among them, see Config.
+// Args returns the flags of the settings of the agent, see agentapi.Config.Args.
 func (a *Agent) Args() []string {
-	cfg := a.Config
-	var args []string
-	add := func(name, value string) {
-		args = append(args, "-"+name+"="+value)
-	}
-	params := func(values map[string]string) {
-		names := make([]string, 0, len(values))
-		for name := range values {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			add(name, values[name])
-		}
-	}
-
-	params(cfg.Params)
-	if l := cfg.LLM; l != nil {
-		params(l.Params)
-	}
-	add("mode", cfg.Mode)
-	if cfg.APIAddress != "" {
-		add("api", cfg.APIAddress)
-	}
-	if cfg.TradePanel {
-		add("trade-panel", "true")
-	}
-	if cfg.TelegramControl {
-		add("telegram-control", "true")
-	}
-	if cfg.Reanalysis && cfg.Kind == "llm" { // a flag of the LLM agent only
-		add("reanalysis", "true")
-	}
-	if acc := cfg.Account; acc != nil {
-		if acc.BridgeURL != "" {
-			add("mt5-bridge", acc.BridgeURL)
-		}
-		if acc.Magic != nil {
-			add("mt5-magic", strconv.FormatInt(*acc.Magic, 10))
-		}
-		if acc.Comment != nil {
-			add("mt5-comment", *acc.Comment)
-		}
-		if acc.RealAllowed {
-			add("mt5-live", "true")
-		}
-	}
-	if l := cfg.LLM; l != nil {
-		add("llm-provider", l.Provider)
-		add("llm-model", l.Model)
-		if l.BaseURL != "" {
-			add("llm-base-url", l.BaseURL)
-		}
-		if l.ReasoningEffort != "" {
-			add("llm-reasoning", l.ReasoningEffort)
-		}
-		if l.MaxTokens > 0 {
-			add("llm-max-tokens", strconv.Itoa(l.MaxTokens))
-		}
-		if l.CalendarURL != "" {
-			add("calendar-mcp", l.CalendarURL)
-		}
-	}
-	return args
+	return a.Config.Args()
 }
 
 // Open opens the outbox of the agent in dir, eg: data/outbox, a file named

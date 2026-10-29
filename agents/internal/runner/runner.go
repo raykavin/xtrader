@@ -17,6 +17,7 @@ import (
 
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/internal/backtest"
 	"github.com/raykavin/xtrader/agents/internal/flaglist"
 	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
@@ -260,6 +261,7 @@ func run(agent Agent) error {
 		maxRisk      = flag.Float64("max-risk-pct", 0, "skip an entry losing more than that % of the free balance at its stop loss, both in the currency of the account (0: no limit; trendconfluence needs a stop: -stop-atr, -trailing-atr, -broker-stop-atr, -broker-trailing-atr or -stop-value)")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
+		btConfig     = flag.String("backtest-config", "", "backtest: the JSON file of a backtest as the controller asks for it (period, balance, costs, symbols, protection, daily limits, report): the run writes its report there and exits (see agents/internal/backtest)")
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")
 		tradePanel   = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot without it)")
 		telegramCtl  = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller (/start, /stop, /buy, /sell, /status, /balance)")
@@ -306,6 +308,8 @@ func run(agent Agent) error {
 			"of the agent")
 	case remoteAgent != nil && *mode == "backtest":
 		return errors.New("the controller runs the agents in paper and live modes only")
+	case *btConfig != "" && *mode != "backtest":
+		return errors.New("-backtest-config is for -mode backtest")
 	}
 
 	// the inputs of each strategy are refused with the others
@@ -369,7 +373,7 @@ func run(agent Agent) error {
 	settings := xtrader.Settings{
 		Pairs: pairs,
 	}
-	if err := checkVenue(*exchangeName, *mode, set, *leverage); err != nil {
+	if err := checkVenue(*exchangeName, *mode, set, *leverage, *btConfig != ""); err != nil {
 		return err
 	}
 	dash := dashboard{addr: *api, tradePanel: *tradePanel, telegram: *telegramCtl}
@@ -411,7 +415,18 @@ func run(agent Agent) error {
 				log.Infof("[SETUP] %s: positions of %s", pair, describeSize(pair, lots[pair], contracts[pair]))
 			}
 		}
-		return backtest(ctx, settings, trader, dash, list(*csvFiles), *csvTimeframe, *fee)
+		if *btConfig != "" {
+			cfg, err := backtest.ReadConfig(*btConfig)
+			if err != nil {
+				return err
+			}
+			cfg.Leverage = max(*leverage, 1) // the margin of the leverage the strategy sizes with
+			// canceled by the controller: the report of what ran, then the exit
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return backtest.Run(ctx, settings, trader, list(*csvFiles), *csvTimeframe, cfg, backtest.Hooks{})
+		}
+		return backtestRun(ctx, settings, trader, dash, list(*csvFiles), *csvTimeframe, *fee)
 	case "paper":
 		return paper(ctx, settings, trader, dash, venue, *fee, remoteAgent)
 	case "live":
@@ -454,7 +469,7 @@ func checkInputs(list []Strategy, name string, set map[string]bool) error {
 	return nil
 }
 
-func backtest(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
+func backtestRun(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
 	dash dashboard, files []string, fileTimeframe string, fee float64) error {
 
 	if len(files) != len(settings.Pairs) {

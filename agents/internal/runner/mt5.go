@@ -98,7 +98,7 @@ func parseMT5Size(value string) (inLots bool, err error) {
 
 // checkVenue checks the flags of the exchange against the mode: the contract
 // sizes of MT5 in backtests only, the leverage of its margin live only.
-func checkVenue(exchangeName, mode string, set map[string]bool, leverage float64) error {
+func checkVenue(exchangeName, mode string, set map[string]bool, leverage float64, backtestConfig bool) error {
 	if !slices.Contains(exchanges, exchangeName) {
 		return fmt.Errorf("invalid exchange %q: %s", exchangeName, strings.Join(exchanges, ", "))
 	}
@@ -106,8 +106,9 @@ func checkVenue(exchangeName, mode string, set map[string]bool, leverage float64
 	case set["mt5-contract-size"] && mode != "backtest":
 		return errors.New("-mt5-contract-size is for backtests: the paper and live modes read the contract " +
 			"sizes of the account")
-	case leverage > 1 && mode != "live":
-		return errors.New("-leverage needs the margin of the MT5 account: -mode live")
+	case leverage > 1 && mode != "live" && !(mode == "backtest" && backtestConfig):
+		return errors.New("-leverage needs the margin of the MT5 account (-mode live), or the margin a backtest " +
+			"simulates (-backtest-config)")
 	}
 	return nil
 }
