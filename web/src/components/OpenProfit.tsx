@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { fetchClosedProfit, fetchOpenPositions } from "../api/client";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { closeAgentPositions, fetchClosedProfit, fetchOpenPositions } from "../api/client";
 import type { ClosedProfitResponse, CurrencyAmount, OpenPositionsResponse } from "../api/types";
 import {
   type ClosedPeriod,
@@ -25,6 +25,7 @@ import {
   profitTone,
   severalCurrencies,
 } from "../lib/openPL";
+import { actionStatusLabel } from "../lib/supervisor";
 import { palettes, type Theme } from "../lib/theme";
 import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
 import { DailyGuardStrip, useDailyGuard } from "./DailyGuardStrip";
@@ -194,6 +195,52 @@ const openNotes: Partial<Record<OpenState, { text: string; title: string }>> = {
 };
 
 /** The tile of an agent: its icon, its name, the profit open of each of its assets and its closed one, its background by the sign of its open profit. */
+/** What closing the positions of an agent told: its outcome, and its tone. */
+interface CloseFeedback {
+  tone: "ok" | "warn" | "error";
+  text: string;
+}
+
+/**
+ * The close of every open position of an agent, from its tile: asked, then
+ * confirmed in place; its outcome, checked on the account, told a while.
+ */
+function useCloseAgent(agent: string) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<CloseFeedback | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const tell = (next: CloseFeedback) => {
+    setFeedback(next);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setFeedback(null), 10_000);
+  };
+  const close = () => {
+    setBusy(true);
+    closeAgentPositions(agent)
+      .then(({ action }) => {
+        const failed = action.result?.items.find(
+          (i) => i.status === "failed" || i.status === "unknown",
+        );
+        const status = actionStatusLabel(action.status);
+        if (action.status === "succeeded") tell({ tone: "ok", text: "Posições encerradas." });
+        else
+          tell({
+            tone: action.status === "failed" ? "error" : "warn",
+            text: `${status.text}${failed?.detail ? `: ${failed.detail}` : ""}. Confira na conta.`,
+          });
+      })
+      .catch((e) => tell({ tone: "error", text: e instanceof Error ? e.message : String(e) }))
+      .finally(() => {
+        setBusy(false);
+        setConfirming(false);
+      });
+  };
+  return { confirming, setConfirming, busy, feedback, close };
+}
+
 function AgentTile({
   line,
   open,
@@ -207,6 +254,8 @@ function AgentTile({
 }) {
   const state = agentOpenState(line, open);
   const note = openNotes[state];
+  const closing = useCloseAgent(line.agent);
+  const positions = line.positions === 1 ? "1 posição" : `${line.positions} posições`;
   return (
     <li
       className={`openpl-tile is-${state}`}
@@ -225,15 +274,29 @@ function AgentTile({
         <span className="openpl-agent-icon">
           <Icon name="bot" size={15} />
         </span>
-        {line.assets.length > 1 && (
-          <span
-            className={`openpl-agent-total mono ${profitClass(line.open)}`}
-            title="Em aberto, a soma dos ativos"
-          >
-            <span className="sr-only">Em aberto, a soma dos ativos: </span>
-            {amountsText(line.open, several)}
-          </span>
-        )}
+        <span className="openpl-agent-end">
+          {line.assets.length > 1 && (
+            <span
+              className={`openpl-agent-total mono ${profitClass(line.open)}`}
+              title="Em aberto, a soma dos ativos"
+            >
+              <span className="sr-only">Em aberto, a soma dos ativos: </span>
+              {amountsText(line.open, several)}
+            </span>
+          )}
+          {line.positions > 0 && !closing.confirming && (
+            <button
+              type="button"
+              className="openpl-close"
+              disabled={closing.busy}
+              title={`Encerrar ${line.positions === 1 ? "a posição" : `as ${positions}`} de ${line.agent}`}
+              aria-label={`Encerrar as posições de ${line.agent}`}
+              onClick={() => closing.setConfirming(true)}
+            >
+              <Icon name="close" size={12} />
+            </button>
+          )}
+        </span>
       </span>
       <span className="openpl-agent-name">
         <span className="openpl-agent">{line.agent}</span>
@@ -242,6 +305,37 @@ function AgentTile({
       {note && (
         <p className="openpl-tile-note" title={note.title}>
           {note.text}
+        </p>
+      )}
+      {closing.confirming && (
+        <fieldset
+          className="openpl-close-confirm"
+          aria-label={`Encerrar as posições de ${line.agent}`}
+        >
+          <span>Encerrar {positions} a mercado?</span>
+          <span className="openpl-close-actions">
+            <button
+              type="button"
+              className="btn btn-xs btn-danger"
+              disabled={closing.busy}
+              onClick={closing.close}
+            >
+              {closing.busy ? "Encerrando…" : "Encerrar"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              disabled={closing.busy}
+              onClick={() => closing.setConfirming(false)}
+            >
+              Voltar
+            </button>
+          </span>
+        </fieldset>
+      )}
+      {closing.feedback && (
+        <p className={`openpl-close-note ${closing.feedback.tone}`} role="status">
+          {closing.feedback.text}
         </p>
       )}
       <dl className="openpl-assets">

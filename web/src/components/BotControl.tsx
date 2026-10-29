@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { startBot, stopBot } from "../api/client";
 import type { ControlsResponse } from "../api/types";
-import { botStatusLabel } from "../lib/labels";
 import { StatusIcon } from "./StatusIcon";
 
 interface Props {
@@ -15,10 +14,10 @@ interface Props {
 type Feedback = { tone: "ok" | "error"; text: string };
 
 /**
- * The bot of the agent, an item of the state atop the panel: whether it
- * runs, and its start, or its stop confirmed in place, whatever the trade
- * panel, which gates the orders only. Without a bot to control, eg: of a
- * backtest, only that it is off.
+ * The bot of the agent, an item of the state atop the panel: its stop,
+ * confirmed in place, while it runs, its start while it is stopped, the
+ * button telling the state, whatever the trade panel, which gates the orders
+ * only. Without a bot to control, eg: of a backtest, only that it is off.
  */
 export function BotControl({ agent, controls, onControlsChange }: Props) {
   const [confirming, setConfirming] = useState(false);
@@ -77,10 +76,12 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
     <div className="status-item bot-control">
       <dt className="status-label">Bot</dt>
       <dd className="status-value">
-        <span className={`status-chip ${!enabled ? "" : running ? "running" : "stopped"}`}>
-          <StatusIcon mark={!enabled ? undefined : running ? "play" : "stop"} />
-          {controls === null ? "…" : enabled ? botStatusLabel(controls.status) : "desativado"}
-        </span>
+        {!enabled && (
+          <span className="status-chip">
+            <StatusIcon />
+            {controls === null ? "…" : "desativado"}
+          </span>
+        )}
         {!enabled ? null : running ? (
           confirming ? (
             <fieldset className="confirm" aria-label="Confirmar a parada do bot">

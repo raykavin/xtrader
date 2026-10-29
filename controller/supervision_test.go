@@ -792,6 +792,62 @@ func TestSupervisionAPI_Entries(t *testing.T) {
 	assert.Len(t, actions.Actions, 2)
 }
 
+// Every position of an agent closed by a user from the dashboard, through a
+// close_positions recorded: the ones of an agent running through it, of one
+// stopped on its bridge; the other agents and the positions by hand
+// untouched, the entries left free; refused without a position open.
+func TestSupervisionAPI_ClosePositions(t *testing.T) {
+	s := newSupervised(t)
+	ctx := context.Background()
+	s.liveAgent(t, "fibonacci", 101, true)
+	s.liveAgent(t, "vwap", 102, true)
+	s.liveAgent(t, "emacross", 103, false)
+	byHand := position(9, 0, "EURUSDm", false, 0.1, 50, 0)
+	s.bridge.set(protected(1, 101), protected(2, 102), protected(3, 103), byHand)
+	call, _ := settingsSession(t, s.managed)
+
+	resp, body := call(http.MethodPost, "/api/supervisor/agents/fibonacci/close", ui.SupervisorCloseRequest{})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var result confirmResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &result))
+	assert.Equal(t, store.ActionClosePositions, result.Action.Action)
+	assert.Equal(t, store.ActionSucceeded, result.Action.Status)
+	assert.Equal(t, "admin", result.Action.RequestedBy)
+	assert.Equal(t, "posições encerradas por admin", result.Action.Reason)
+	assert.True(t, result.Action.Options.Whole)
+	assert.False(t, result.Action.Options.KeepBlocked)
+	require.NotNil(t, result.Action.Result)
+	var closed []int64
+	for _, item := range result.Action.Result.Items {
+		if item.Kind == "position" && item.Status == itemDone {
+			closed = append(closed, item.Ticket)
+		}
+	}
+	assert.Equal(t, []int64{1}, closed)
+	assert.Equal(t, []bridgePosition{protected(2, 102), protected(3, 103), byHand}, s.bridge.held())
+	assert.Empty(t, s.bridge.tradeRequests(), "closed through the agent running")
+	a, err := s.store.AgentByName(ctx, "fibonacci")
+	require.NoError(t, err)
+	assert.False(t, a.SupervisionOf().EntriesBlocked, "the entries left free")
+
+	resp, body = call(http.MethodPost, "/api/supervisor/agents/fibonacci/close", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "o agente não tem posição aberta")
+	resp, _ = call(http.MethodPost, "/api/supervisor/agents/nobody/close", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, body = call(http.MethodPost, "/api/supervisor/agents/emacross/close",
+		ui.SupervisorCloseRequest{Reason: "zerar o emacross"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &result))
+	assert.Equal(t, store.ActionSucceeded, result.Action.Status)
+	assert.Equal(t, "zerar o emacross", result.Action.Reason)
+	trades := s.bridge.tradeRequests()
+	require.Len(t, trades, 1, "the agent stopped: on its bridge")
+	assert.EqualValues(t, 3, trades[0]["position"])
+	assert.Equal(t, []bridgePosition{protected(2, 102), byHand}, s.bridge.held())
+}
+
 // itoa returns the decimal of id.
 func itoa(id int64) string { return strconv.FormatInt(id, 10) }
 
