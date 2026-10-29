@@ -7635,6 +7635,24 @@ rect.perf-down {
   fill: var(--neg);
 }
 
+.perf-range {
+  fill: var(--text-3);
+  opacity: 0.45;
+}
+
+.perf-mark {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+circle.perf-up {
+  fill: var(--pos);
+}
+
+circle.perf-down {
+  fill: var(--neg);
+}
+
 .perf-tooltip {
   position: absolute;
   top: 8px;

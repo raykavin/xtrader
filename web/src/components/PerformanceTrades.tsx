@@ -1,9 +1,16 @@
 import { useMemo, useState } from "react";
-import type { PerformanceTrade } from "../api/types";
-import { formatMoney, formatPrice, formatProfit, formatQuantity, signClass } from "../lib/format";
+import type { PerformanceExcursion, PerformanceTrade } from "../api/types";
+import {
+  formatMoney,
+  formatPercent,
+  formatPrice,
+  formatProfit,
+  formatQuantity,
+  signClass,
+} from "../lib/format";
 import { sideLabel } from "../lib/labels";
 import { clampPage, pageRows } from "../lib/pagination";
-import { formatDuration, listTrades, tradesCSV } from "../lib/performance";
+import { efficiencyOf, formatDuration, listTrades, tradeKey, tradesCSV } from "../lib/performance";
 import { Icon } from "./Icon";
 import { Paginator } from "./Paginator";
 import { TimeCell } from "./TimeCell";
@@ -13,6 +20,8 @@ interface Props {
   currency: string;
   /** Names the file of the CSV, eg: the period and the filters. */
   fileName: string;
+  /** The excursions of the trades read, by their key, see tradeKey. */
+  excursions: Map<string, PerformanceExcursion>;
 }
 
 /** Downloads text as a CSV file named name. */
@@ -30,7 +39,7 @@ function download(text: string, name: string) {
  * and after the costs and the net results summed until it; downloaded as a
  * CSV with the filters applied.
  */
-export function PerformanceTrades({ trades, currency, fileName }: Props) {
+export function PerformanceTrades({ trades, currency, fileName, excursions }: Props) {
   const listed = useMemo(() => listTrades(trades), [trades]);
   const [page, setPage] = useState(0);
   const visible = pageRows(listed, clampPage(page, listed.length));
@@ -46,7 +55,7 @@ export function PerformanceTrades({ trades, currency, fileName }: Props) {
           type="button"
           className="btn btn-sm"
           disabled={listed.length === 0}
-          onClick={() => download(tradesCSV(trades), fileName)}
+          onClick={() => download(tradesCSV(trades, excursions), fileName)}
         >
           <Icon name="download" size={14} />
           Baixar CSV
@@ -83,52 +92,77 @@ export function PerformanceTrades({ trades, currency, fileName }: Props) {
               <th scope="col" className="num">
                 Acumulado
               </th>
+              <th scope="col" className="num" title="Máximo a favor durante a operação">
+                MFE
+              </th>
+              <th scope="col" className="num" title="Máximo contra durante a operação">
+                MAE
+              </th>
+              <th scope="col" className="num" title="O resultado sobre a amplitude do preço">
+                Ef. total
+              </th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((t) => (
-              <tr key={`${t.account}/${t.position}`}>
-                <td className="strong" data-label="Ativo">
-                  {t.symbol}
-                </td>
-                <td data-label="Agente">{t.agent}</td>
-                <td className="mono" data-label="Abertura (UTC)">
-                  {t.opened_at ? <TimeCell unix={t.opened_at} /> : "—"}
-                </td>
-                <td className="mono" data-label="Fechamento (UTC)">
-                  <TimeCell unix={t.closed_at} />
-                </td>
-                <td className="mono" data-label="Duração">
-                  {formatDuration(t.opened_at ? t.closed_at - t.opened_at : null)}
-                </td>
-                <td data-label="Lado">
-                  <span className={`side-chip ${t.side === "BUY" ? "buy" : "sell"}`}>
-                    {sideLabel(t.side)}
-                  </span>
-                </td>
-                <td className="num mono" data-label="Lotes">
-                  {formatQuantity(t.volume)}
-                </td>
-                <td className="num mono" data-label="Entrada">
-                  {t.entry ? formatPrice(t.entry) : "—"}
-                </td>
-                <td className="num mono" data-label="Saída">
-                  {formatPrice(t.exit)}
-                </td>
-                <td className={`num mono ${signClass(t.gross)}`} data-label="Bruto">
-                  {formatProfit(t.gross)}
-                </td>
-                <td className="num mono" data-label="Custos">
-                  {t.costs ? formatMoney(t.costs) : "—"}
-                </td>
-                <td className={`num mono strong ${signClass(t.net)}`} data-label="Líquido">
-                  {formatProfit(t.net)}
-                </td>
-                <td className={`num mono ${signClass(t.cumulative)}`} data-label="Acumulado">
-                  {formatProfit(t.cumulative)}
-                </td>
-              </tr>
-            ))}
+            {visible.map((t) => {
+              const x = excursions.get(tradeKey(t));
+              const total = efficiencyOf(t, x).total;
+              return (
+                <tr key={tradeKey(t)}>
+                  <td className="strong" data-label="Ativo">
+                    {t.symbol}
+                  </td>
+                  <td data-label="Agente">{t.agent}</td>
+                  <td className="mono" data-label="Abertura (UTC)">
+                    {t.opened_at ? <TimeCell unix={t.opened_at} /> : "—"}
+                  </td>
+                  <td className="mono" data-label="Fechamento (UTC)">
+                    <TimeCell unix={t.closed_at} />
+                  </td>
+                  <td className="mono" data-label="Duração">
+                    {formatDuration(t.opened_at ? t.closed_at - t.opened_at : null)}
+                  </td>
+                  <td data-label="Lado">
+                    <span className={`side-chip ${t.side === "BUY" ? "buy" : "sell"}`}>
+                      {sideLabel(t.side)}
+                    </span>
+                  </td>
+                  <td className="num mono" data-label="Lotes">
+                    {formatQuantity(t.volume)}
+                  </td>
+                  <td className="num mono" data-label="Entrada">
+                    {t.entry ? formatPrice(t.entry) : "—"}
+                  </td>
+                  <td className="num mono" data-label="Saída">
+                    {formatPrice(t.exit)}
+                  </td>
+                  <td className={`num mono ${signClass(t.gross)}`} data-label="Bruto">
+                    {formatProfit(t.gross)}
+                  </td>
+                  <td className="num mono" data-label="Custos">
+                    {t.costs ? formatMoney(t.costs) : "—"}
+                  </td>
+                  <td className={`num mono strong ${signClass(t.net)}`} data-label="Líquido">
+                    {formatProfit(t.net)}
+                  </td>
+                  <td className={`num mono ${signClass(t.cumulative)}`} data-label="Acumulado">
+                    {formatProfit(t.cumulative)}
+                  </td>
+                  <td className="num mono" data-label="MFE">
+                    {x ? formatMoney(x.mfe) : "—"}
+                  </td>
+                  <td className="num mono" data-label="MAE">
+                    {x ? formatMoney(-x.mae) : "—"}
+                  </td>
+                  <td
+                    className={`num mono ${total === null ? "" : signClass(total)}`}
+                    data-label="Ef. total"
+                  >
+                    {total === null ? "—" : formatPercent(total, 0).replace("+", "")}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

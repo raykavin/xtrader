@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import { formatMoney, formatNumber, formatPercent, formatQuantity, signClass } from "../lib/format";
-import { formatDuration, type PerformanceSummary as Summary } from "../lib/performance";
+import {
+  type EfficiencyState,
+  formatDuration,
+  type PerformanceSummary as Summary,
+} from "../lib/performance";
 
 /** A line of the summary: its label and its value, in the color of its sign when it has one. */
 interface Line {
@@ -143,6 +147,58 @@ function groupsOf(s: Summary): { title?: string; left: Line[]; right: Line[] }[]
   ];
 }
 
+/** A share, eg: 62,50%, — without one. */
+function share(value: number | null): string {
+  return value === null ? "—" : formatPercent(value).replace("+", "");
+}
+
+/** The group of the efficiency, see EfficiencySummary: its averages, what the wins gave back, the worst of them. */
+function efficiencyGroup(state: EfficiencyState, currency: string) {
+  const e = state.summary;
+  const amount = (value: number | null) => (value === null ? "—" : money(value, currency));
+  if (!e) return null;
+  return {
+    title: "Eficiência (caminho do preço)",
+    left: [
+      { label: "MFE médio", value: amount(e.averageMFE), hint: "o máximo a favor, em média" },
+      {
+        label: "Eficiência de entrada",
+        value: share(e.entry),
+        hint: "quão perto do melhor preço entrou",
+      },
+      {
+        label: "Eficiência total",
+        value: share(e.total),
+        hint: "o resultado sobre a amplitude do preço",
+      },
+      {
+        label: "Deixado na mesa",
+        value: money(-e.leftOnTable, currency),
+        tone: signClass(-e.leftOnTable),
+        hint: "o que as vencedoras devolveram do melhor ponto",
+      },
+    ],
+    right: [
+      { label: "MAE médio", value: amount(e.averageMAE), hint: "o máximo contra, em média" },
+      {
+        label: "Eficiência de saída",
+        value: share(e.exit),
+        hint: "quão perto do melhor preço saiu",
+      },
+      {
+        label: "Maior MAE de uma vencedora",
+        value: amount(e.largestWinMAE),
+        hint: "quanto um ganho chegou a andar contra",
+      },
+      {
+        label: "Operações com o caminho lido",
+        value: `${e.trades} de ${e.trades + e.missing}`,
+        hint: e.missing ? "sem abertura conhecida ou candles não lidos" : undefined,
+      },
+    ],
+  };
+}
+
 function Lines({ lines }: { lines: Line[] }) {
   return (
     <dl className="perf-lines">
@@ -165,10 +221,17 @@ function Lines({ lines }: { lines: Line[] }) {
  * averages and extremes, the capital, the drawdown; in two columns, one on a
  * phone.
  */
-export function PerformanceSummary({ summary }: { summary: Summary }) {
+export function PerformanceSummary({
+  summary,
+  efficiency,
+}: {
+  summary: Summary;
+  efficiency: EfficiencyState;
+}) {
+  const path = efficiencyGroup(efficiency, summary.currency);
   return (
     <div className="perf-summary">
-      {groupsOf(summary).map((group, i) => (
+      {[...groupsOf(summary), ...(path ? [path] : [])].map((group, i) => (
         <section key={group.title ?? i} className="perf-group" aria-label={group.title}>
           {group.title && <h3 className="perf-group-title">{group.title}</h3>}
           <div className="perf-columns">
@@ -177,6 +240,13 @@ export function PerformanceSummary({ summary }: { summary: Summary }) {
           </div>
         </section>
       ))}
+      {!path && (
+        <p className="field-hint perf-note">
+          {efficiency.error
+            ? `Eficiência: os candles das operações não puderam ser lidos (${efficiency.error}).`
+            : "Eficiência: lendo os candles de cada operação na corretora…"}
+        </p>
+      )}
       <p className="field-hint perf-note">
         Operações vencedoras, perdedoras, lucro e prejuízo bruto contam o resultado antes dos
         custos; o saldo líquido, a média por operação, o patrimônio e o drawdown, o resultado

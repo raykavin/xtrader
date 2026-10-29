@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchPerformance } from "../api/client";
-import type { PerformanceResponse } from "../api/types";
+import { fetchExcursions, fetchPerformance } from "../api/client";
+import type { PerformanceExcursionsResponse, PerformanceResponse } from "../api/types";
 import {
   type ClosedPeriod,
   closedPeriodLabel,
@@ -14,9 +14,11 @@ import { openPLGaps } from "../lib/openPL";
 import {
   capitalOf,
   currenciesOf,
+  excursionsByTrade,
   filterTrades,
   type PerformanceFilter,
   summarize,
+  summarizeEfficiency,
 } from "../lib/performance";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { AppShell } from "./AppShell";
@@ -84,6 +86,39 @@ function usePerformance(period: ClosedPeriod) {
 }
 
 /**
+ * The excursions of the trades of read (see PerformanceExcursionsResponse),
+ * read again with each new read of the trades: the first read of a range is
+ * slow, the candles of each trade read at the bridges; then kept.
+ */
+function useExcursions(read: PerformanceResponse | null) {
+  const [excursions, setExcursions] = useState<PerformanceExcursionsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const from = read?.from;
+  const to = read?.to;
+  const at = read?.at;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: at reads them again with the trades
+  useEffect(() => {
+    if (from === undefined || to === undefined) return;
+    const controller = new AbortController();
+    setExcursions((current) =>
+      current && current.from === from && current.to === to ? current : null,
+    );
+    fetchExcursions(from, to, controller.signal)
+      .then((response) => {
+        setExcursions(response);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => controller.abort();
+  }, [from, to, at]);
+
+  return { excursions, error };
+}
+
+/**
  * The page Performance: the trades of the agents trading live closed in a
  * period, as their MT5 accounts booked them, filtered by agent and asset,
  * summed apart by the currency of the accounts (none converted): the
@@ -97,6 +132,11 @@ export function PerformancePage() {
   const [currency, setCurrency] = useState<string | null>(null);
   const [view, setView] = useState<View>("summary");
   const { read, error, loading, refresh } = usePerformance(period);
+  const paths = useExcursions(read);
+  const byTrade = useMemo(
+    () => excursionsByTrade(paths.excursions?.excursions ?? []),
+    [paths.excursions],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -120,6 +160,13 @@ export function PerformancePage() {
     ? summarize(filtered, shown, capitalOf(accounts, shown, filter.agent), range, Date.now() / 1000)
     : null;
   const gaps = read ? openPLGaps(read) : [];
+  const efficiency = paths.excursions ? summarizeEfficiency(filtered, byTrade) : null;
+  const efficiencyState = {
+    summary: efficiency,
+    excursions: byTrade,
+    loading: paths.excursions === null && paths.error === null,
+    error: paths.error,
+  };
 
   const apply = (next: ClosedPeriod) => {
     saveClosedPeriod(next, undefined, PERIOD_KEY);
@@ -268,11 +315,22 @@ export function PerformancePage() {
                   Escolha outro período ou tire os filtros.
                 </EmptyState>
               ) : view === "summary" ? (
-                <PerformanceSummary summary={summary} />
+                <PerformanceSummary summary={summary} efficiency={efficiencyState} />
               ) : view === "charts" ? (
-                <PerformanceCharts trades={filtered} currency={shown} range={range} theme={theme} />
+                <PerformanceCharts
+                  trades={filtered}
+                  currency={shown}
+                  range={range}
+                  theme={theme}
+                  efficiency={efficiencyState}
+                />
               ) : (
-                <PerformanceTrades trades={filtered} currency={shown} fileName={fileName} />
+                <PerformanceTrades
+                  trades={filtered}
+                  currency={shown}
+                  fileName={fileName}
+                  excursions={byTrade}
+                />
               )}
             </div>
           </section>

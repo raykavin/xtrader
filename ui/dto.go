@@ -1015,6 +1015,39 @@ type PerformanceTrade struct {
 	Currency string  `json:"currency"`
 }
 
+// PerformanceExcursionsResponse is the payload of GET
+// /api/performance/excursions: how far the price went for and against each
+// trade of the range of a PerformanceResponse while it was open, see
+// PerformanceExcursion; Complete and Missing as OpenPositionsResponse; At is
+// when they were read.
+type PerformanceExcursionsResponse struct {
+	From       int64                  `json:"from"`
+	To         int64                  `json:"to"`
+	Excursions []PerformanceExcursion `json:"excursions"`
+	Complete   bool                   `json:"complete"`
+	Missing    []OpenPositionsGap     `json:"missing,omitempty"`
+	At         int64                  `json:"at"`
+}
+
+// PerformanceExcursion is the path of the price of a trade (its Position on
+// its Account) from its opening to its closing, read from the candles of
+// Timeframe of its symbol at the broker: High and Low the extremes of the
+// price it could close at (the bid, and the ask of a short at its high),
+// widened to its entry and exit; MFE and MAE the most it was up and down,
+// positive, in the currency of its account, valued as the trade itself
+// (its gross over its move). Error tells why a trade has none, eg: its
+// opening unknown, its candles unread.
+type PerformanceExcursion struct {
+	Account   string  `json:"account"`
+	Position  int64   `json:"position"`
+	Timeframe string  `json:"timeframe,omitempty"`
+	High      float64 `json:"high,omitempty"`
+	Low       float64 `json:"low,omitempty"`
+	MFE       float64 `json:"mfe"`
+	MAE       float64 `json:"mae"`
+	Error     string  `json:"error,omitempty"`
+}
+
 // PerformanceAccount is an account of the agents read for a
 // PerformanceResponse: its key (its login), its currency, the agents trading
 // on it, its balance now and at From (the balance less every deal booked

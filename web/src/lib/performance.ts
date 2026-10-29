@@ -5,7 +5,12 @@
 // them: the results before the costs, the costs, the net results; the
 // averages, the extremes and the streaks; the capital and the drawdown.
 
-import type { PerformanceAccount, PerformanceTrade, Point } from "../api/types";
+import type {
+  PerformanceAccount,
+  PerformanceExcursion,
+  PerformanceTrade,
+  Point,
+} from "../api/types";
 
 /** The trades shown: of an agent and of an asset, all of them when absent. */
 export interface PerformanceFilter {
@@ -343,6 +348,105 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${rest}s`;
 }
 
+/** The key of a trade, and of its excursion: its account and its position. */
+export function tradeKey(t: { account: string; position: number }): string {
+  return `${t.account}/${t.position}`;
+}
+
+/** The excursions read, by the key of their trade, the ones without one (an error) left out. */
+export function excursionsByTrade(list: PerformanceExcursion[]): Map<string, PerformanceExcursion> {
+  return new Map(list.filter((x) => !x.error).map((x) => [tradeKey(x), x]));
+}
+
+/**
+ * The efficiencies of a trade along its excursion, 0..1, as TradeStation and
+ * the Profit count them over the range of the price while it was open (from
+ * its low to its high): of its entry, how close to the best price it entered
+ * (the low of a long); of its exit, how close to the best price it left (the
+ * high of a long); total, its move over the range, negative for a loss. Null
+ * without a range.
+ */
+export interface Efficiency {
+  entry: number | null;
+  exit: number | null;
+  total: number | null;
+}
+
+/** The efficiencies of trade along x, see Efficiency. */
+export function efficiencyOf(
+  trade: PerformanceTrade,
+  x: PerformanceExcursion | undefined,
+): Efficiency {
+  const high = x?.high ?? 0;
+  const low = x?.low ?? 0;
+  const range = high - low;
+  if (!x || !(range > 0) || !trade.entry) return { entry: null, exit: null, total: null };
+  if (trade.side === "SELL") {
+    return {
+      entry: (trade.entry - low) / range,
+      exit: (high - trade.exit) / range,
+      total: (trade.entry - trade.exit) / range,
+    };
+  }
+  return {
+    entry: (high - trade.entry) / range,
+    exit: (trade.exit - low) / range,
+    total: (trade.exit - trade.entry) / range,
+  };
+}
+
+/** The efficiency the page passes to its views: its summary, the excursions by trade, how their read stands. */
+export interface EfficiencyState {
+  /** Null while the excursions aren't read. */
+  summary: EfficiencySummary | null;
+  excursions: Map<string, PerformanceExcursion>;
+  loading: boolean;
+  error: string | null;
+}
+
+/** The efficiency of the trades of a currency, see summarizeEfficiency. */
+export interface EfficiencySummary {
+  /** The trades with their excursion, and the ones without (their opening unknown, their candles unread). */
+  trades: number;
+  missing: number;
+  /** The average most up and down, positive. */
+  averageMFE: number | null;
+  averageMAE: number | null;
+  /** The average efficiencies, see Efficiency, of the trades with one. */
+  entry: number | null;
+  exit: number | null;
+  total: number | null;
+  /** What the trades won gave back from their best: the sum of their MFE less their gross. */
+  leftOnTable: number;
+  /** The most a trade won was down before, its MAE: how far a stop must be not to lose it. */
+  largestWinMAE: number | null;
+}
+
+/** The efficiency of trades along their excursions, see EfficiencySummary. */
+export function summarizeEfficiency(
+  trades: PerformanceTrade[],
+  excursions: Map<string, PerformanceExcursion>,
+): EfficiencySummary {
+  const paired = trades
+    .map((t) => ({ t, x: excursions.get(tradeKey(t)) }))
+    .filter((p): p is { t: PerformanceTrade; x: PerformanceExcursion } => p.x !== undefined);
+  const efficiencies = paired.map((p) => efficiencyOf(p.t, p.x));
+  const mean = (values: (number | null)[]) =>
+    average(values.filter((v): v is number => v !== null && Number.isFinite(v)));
+  const won = paired.filter((p) => p.t.gross > 0);
+  return {
+    trades: paired.length,
+    missing: trades.length - paired.length,
+    averageMFE: average(paired.map((p) => p.x.mfe)),
+    averageMAE: average(paired.map((p) => p.x.mae)),
+    entry: mean(efficiencies.map((e) => e.entry)),
+    exit: mean(efficiencies.map((e) => e.exit)),
+    total: mean(efficiencies.map((e) => e.total)),
+    leftOnTable: won.reduce((sum, p) => sum + Math.max(0, p.x.mfe - p.t.gross), 0),
+    largestWinMAE: won.length ? Math.max(...won.map((p) => p.x.mae)) : null,
+  };
+}
+
 /** A time for the CSV, eg: 2026-10-29 15:04:05, in UTC. */
 function csvTime(unix: number | undefined): string {
   if (!unix) return "";
@@ -359,7 +463,10 @@ function csvField(value: string | number): string {
  * The trades as a CSV, as a spreadsheet in Portuguese opens it: separated by
  * semicolons, the decimals with a dot, the times in UTC, the oldest first.
  */
-export function tradesCSV(trades: PerformanceTrade[]): string {
+export function tradesCSV(
+  trades: PerformanceTrade[],
+  excursions: Map<string, PerformanceExcursion> = new Map(),
+): string {
   const header = [
     "ativo",
     "agente",
@@ -377,30 +484,41 @@ export function tradesCSV(trades: PerformanceTrade[]): string {
     "resultado_liquido",
     "acumulado",
     "moeda",
+    "mfe",
+    "mae",
+    "eficiencia_entrada",
+    "eficiencia_saida",
+    "eficiencia_total",
   ];
-  const rows = [...listTrades(trades)]
-    .reverse()
-    .map((t) =>
-      [
-        t.symbol,
-        t.agent,
-        t.account,
-        t.position,
-        t.side,
-        t.volume,
-        csvTime(t.opened_at),
-        csvTime(t.closed_at),
-        t.opened_at ? t.closed_at - t.opened_at : "",
-        t.entry || "",
-        t.exit,
-        t.gross,
-        t.costs,
-        t.net,
-        Math.round(t.cumulative * 100) / 100,
-        t.currency,
-      ]
-        .map(csvField)
-        .join(";"),
-    );
+  const ratio = (v: number | null) => (v === null ? "" : Math.round(v * 10000) / 10000);
+  const rows = [...listTrades(trades)].reverse().map((t) => {
+    const x = excursions.get(tradeKey(t));
+    const e = efficiencyOf(t, x);
+    return [
+      t.symbol,
+      t.agent,
+      t.account,
+      t.position,
+      t.side,
+      t.volume,
+      csvTime(t.opened_at),
+      csvTime(t.closed_at),
+      t.opened_at ? t.closed_at - t.opened_at : "",
+      t.entry || "",
+      t.exit,
+      t.gross,
+      t.costs,
+      t.net,
+      Math.round(t.cumulative * 100) / 100,
+      t.currency,
+      x ? x.mfe : "",
+      x ? x.mae : "",
+      ratio(e.entry),
+      ratio(e.exit),
+      ratio(e.total),
+    ]
+      .map(csvField)
+      .join(";");
+  });
   return `${[header.join(";"), ...rows].join("\n")}\n`;
 }
