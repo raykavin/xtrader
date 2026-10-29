@@ -86,6 +86,9 @@ func (m *usageMeter) Today() (Usage, int) {
 // record logs the usage of the answer to the context of in, with the one of
 // the day, and adds it to the meter of the provider.
 func (c client) record(in Input, usage Usage) {
+	if c.onUsage != nil {
+		c.onUsage(usage)
+	}
 	if c.usage == nil {
 		return
 	}

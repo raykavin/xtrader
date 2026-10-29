@@ -79,19 +79,32 @@ func (v venue) connect(ctx context.Context, pairs []string, trading bool) (servi
 // backtestPairs registers the symbols of a backtest, which the adapter
 // registers when connecting, and converts the MT5 lots into units with the
 // contract sizes the package knows.
-func (v venue) backtestPairs(pairs []string, currency string) error {
+func (v venue) backtestPairs(pairs []string, currency string, sizes []string) error {
 	for _, pair := range pairs {
 		exchange.RegisterMT5Pair(pair, "", currency)
 	}
 	if v.lots == nil || !v.mt5.inLots {
 		return nil
 	}
+	if len(sizes) != 0 && len(sizes) != 1 && len(sizes) != len(pairs) {
+		return fmt.Errorf("-mt5-contract-size: one for all the pairs or one per pair, %d for %d pairs", len(sizes),
+			len(pairs))
+	}
 	contracts := make(map[string]float64, len(pairs))
-	for _, pair := range pairs {
+	for i, pair := range pairs {
+		if len(sizes) > 0 {
+			value := sizes[min(i, len(sizes)-1)]
+			size, err := strconv.ParseFloat(value, 64)
+			if err != nil || !(size > 0) {
+				return fmt.Errorf("-mt5-contract-size: %q is no contract size", value)
+			}
+			contracts[pair] = size
+			continue
+		}
 		size, ok := exchange.MT5ContractSize(pair)
 		if !ok {
-			return fmt.Errorf("-lot: the contract size of %s is unknown, pass -lot in units with "+
-				"-mt5-size unit", pair)
+			return fmt.Errorf("-lot: the contract size of %s is unknown, pass -mt5-contract-size or -lot in units "+
+				"with -mt5-size unit", pair)
 		}
 		contracts[pair] = size
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/internal/backtest"
 	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
 	"github.com/raykavin/xtrader/agents/llm"
@@ -129,6 +131,8 @@ func run() error {
 		fee           = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value")
 		csvFiles      = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe  = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
+		mt5CSize      = flag.String("mt5-contract-size", "", "backtest: the contract sizes of the pairs, the units of the asset in a lot, one for all of them or one per pair in the order of -pair, separated by ; (default: the ones the package knows)")
+		btConfig      = flag.String("backtest-config", "", "backtest: the JSON file of a backtest as the controller asks for it (period, balance, costs, symbols, ceilings of the model, report): the run writes its report there and exits (see agents/internal/backtest)")
 		api           = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5564 (default: off)")
 		tradePanel    = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot and asks the model again without it)")
 		telegramCtl   = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller")
@@ -196,6 +200,16 @@ func run() error {
 		return errors.New("the controller runs the agents in paper and live modes only")
 	case agent != nil && set["prompt-path"]:
 		return errors.New("-prompt-path: the prompt of an agent of the controller is the one of its settings")
+	case *btConfig != "" && *mode != "backtest":
+		return errors.New("-backtest-config is for -mode backtest")
+	}
+	var btCfg backtest.Config
+	var recorder *llm.Recorder // the calls of the model of a backtest, see -backtest-config
+	if *btConfig != "" {
+		var err error
+		if btCfg, err = backtest.ReadConfig(*btConfig); err != nil {
+			return err
+		}
 	}
 
 	// the provider first: a wrong key or model fails before any connection
@@ -208,6 +222,9 @@ func run() error {
 	}
 	if *reasoning != "" {
 		options = append(options, llm.WithReasoningEffort(*reasoning))
+	}
+	if *btConfig != "" {
+		options = append(options, llm.WithUsageHook(func(usage llm.Usage) { recorder.Usage(usage) }))
 	}
 	prompt := llm.DefaultPrompt()
 	switch {
@@ -237,6 +254,21 @@ func run() error {
 	provider, err := llm.NewProvider(*providerName, *modelName, keys.provider, options...)
 	if err != nil {
 		return err
+	}
+	// a backtest of the controller: the calls recorded and bounded, the run
+	// stopped at its budget, on the clock of its candles (see backtestClock)
+	var stopBudget context.CancelFunc
+	var backtestClock = time.Now
+	if *btConfig != "" {
+		ctx, stopBudget = context.WithCancel(ctx)
+		defer stopBudget()
+		var stopSignals context.CancelFunc
+		ctx, stopSignals = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM) // canceled by the controller
+		defer stopSignals()
+		recorder = llm.NewRecorder(provider, func() time.Time { return backtestClock() }, stopBudget)
+		recorder.MaxCalls, recorder.MaxCost = btCfg.LLMMaxCalls, btCfg.LLMMaxCost
+		recorder.PriceInput, recorder.PriceOutput = btCfg.LLMPriceInput, btCfg.LLMPriceOutput
+		provider = recorder
 	}
 
 	pairs := list(*pairList)
@@ -313,7 +345,7 @@ func run() error {
 		}
 	}
 
-	if err := checkVenue(*exchangeName, *mode, *leverage); err != nil {
+	if err := checkVenue(*exchangeName, *mode, *leverage, *btConfig != ""); err != nil {
 		return err
 	}
 	cadence := "a decision per " + cfg.Timeframe + " candle close"
@@ -346,11 +378,30 @@ func run() error {
 
 	switch *mode {
 	case "backtest":
-		if err := venue.backtestPairs(pairs, *currency); err != nil {
+		if err := venue.backtestPairs(pairs, *currency, list(*mt5CSize)); err != nil {
 			return err
 		}
 		log.Warnf("[SETUP] backtest: %v is asked on every candle of the files, each request paid", provider)
-		return backtest(ctx, settings, trader, dash, list(*csvFiles), *csvTimeframe, *fee)
+		if *btConfig != "" {
+			btCfg.Leverage = max(*leverage, 1)
+			model := *providerName + " " + *modelName
+			hooks := backtest.Hooks{
+				Prepare: func(feed *exchange.BacktestFeed) {
+					backtestClock = feed.Now
+					trader.SetClock(feed.Now)
+				},
+				Extra: func() (json.RawMessage, string) {
+					report := recorder.Report(model, backtestContext)
+					data, _ := json.Marshal(report)
+					if report.Exhausted {
+						return data, backtest.StatusBudgetExhausted
+					}
+					return data, ""
+				},
+			}
+			return backtest.Run(ctx, settings, trader, list(*csvFiles), *csvTimeframe, btCfg, hooks)
+		}
+		return backtestRun(ctx, settings, trader, dash, list(*csvFiles), *csvTimeframe, *fee)
 	case "paper":
 		return paper(ctx, settings, trader, dash, venue, *fee, agent)
 	case "live":
@@ -392,7 +443,17 @@ func describePrompt(p llm.Prompt) string {
 	return p.Ref.Name
 }
 
-func backtest(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
+// backtestContext tells what of the context of the model a backtest of the
+// controller sends: the data of the pair as it was then, without what can't
+// be rebuilt without the future or isn't there.
+var backtestContext = []string{
+	"enviados: candles fechados, indicadores, estrutura/SMC, sessão, desenhos e memória de decisões do próprio par",
+	"desligados: timeframes superiores, níveis de referência e mercados correlacionados (sem feed histórico no instante)",
+	"desligados: calendário econômico e bloqueio de notícias (previsões e revisões só existem depois da divulgação)",
+	"ausentes: memória de operações fechadas e histórico do dia da conta (sem a corretora)",
+}
+
+func backtestRun(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
 	dash dashboard, files []string, fileTimeframe string, fee float64) error {
 
 	if len(files) != len(settings.Pairs) {
@@ -743,12 +804,13 @@ func newPaperWallet(ctx context.Context, pairs []string, feed service.Feeder,
 
 // checkVenue checks the exchange, MT5 only, and the leverage against the mode:
 // live only, whose margin it needs.
-func checkVenue(exchangeName, mode string, leverage float64) error {
+func checkVenue(exchangeName, mode string, leverage float64, backtestConfig bool) error {
 	if exchangeName != "mt5" {
 		return fmt.Errorf("invalid exchange %q: mt5", exchangeName)
 	}
-	if leverage > 1 && mode != "live" {
-		return errors.New("-leverage needs the margin of the MT5 account: -mode live")
+	if leverage > 1 && mode != "live" && !(mode == "backtest" && backtestConfig) {
+		return errors.New("-leverage needs the margin of the MT5 account (-mode live), or the margin a backtest " +
+			"simulates (-backtest-config)")
 	}
 	return nil
 }
