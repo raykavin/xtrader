@@ -1114,6 +1114,61 @@ export interface ClosedProfitResponse {
   at: number /* int64 */;
 }
 /**
+ * PerformanceResponse is the payload of GET /api/performance: the trades of
+ * the agents trading live closed from From until before To (Unix seconds),
+ * read from the deals of their MT5 accounts as the accounts booked them, in
+ * the currency of each account, none converted, see PerformanceTrade; the
+ * accounts read, see PerformanceAccount. Complete and Missing as
+ * OpenPositionsResponse; At is when the deals were read.
+ */
+export interface PerformanceResponse {
+  from: number /* int64 */;
+  to: number /* int64 */;
+  trades: PerformanceTrade[];
+  accounts: PerformanceAccount[];
+  complete: boolean;
+  missing?: OpenPositionsGap[];
+  at: number /* int64 */;
+}
+/**
+ * PerformanceTrade is a position of an agent closed during the range of a
+ * PerformanceResponse (its last exit then, nothing of it left open), on the
+ * account Account: its side, its volume in lots, its opening (Unix seconds,
+ * absent when its entry is older than the deals read, Entry then 0) and its
+ * closing, its entry price and the average price of its exits; Gross the
+ * profit of its exits, Costs the commission, fee and swap of its entry and
+ * exits (negative for a cost), Net both, in Currency.
+ */
+export interface PerformanceTrade {
+  position: number /* int64 */;
+  account: string;
+  agent: string;
+  symbol: string;
+  side: string;
+  volume: number /* float64 */;
+  opened_at?: number /* int64 */;
+  closed_at: number /* int64 */;
+  entry: number /* float64 */;
+  exit: number /* float64 */;
+  gross: number /* float64 */;
+  costs: number /* float64 */;
+  net: number /* float64 */;
+  currency: string;
+}
+/**
+ * PerformanceAccount is an account of the agents read for a
+ * PerformanceResponse: its key (its login), its currency, the agents trading
+ * on it, its balance now and at From (the balance less every deal booked
+ * since, deposits included): the capital of the return of the period.
+ */
+export interface PerformanceAccount {
+  account: string;
+  currency: string;
+  agents: string[];
+  balance: number /* float64 */;
+  start_balance: number /* float64 */;
+}
+/**
  * ClosedProfitSeries is the evolution of the closed profit of the agents in
  * Currency over the range of a ClosedProfitResponse: Points the running total
  * after the exits of each second with one, in the order of their times, the

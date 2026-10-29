@@ -7421,3 +7421,333 @@ h3.md-heading {
 .table td.daily-cell {
   white-space: normal;
 }
+
+/* ---- Performance: the trades of the agents in a period, see PerformancePage ---- */
+
+.perf-filters {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  margin-bottom: var(--sp-4);
+}
+
+.perf-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perf-refresh {
+  margin-left: auto;
+}
+
+.perf-highlights {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.perf-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--glass-tile);
+}
+
+.perf-highlight-label {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.perf-highlight strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-highlight strong.pos {
+  color: var(--pos);
+}
+
+.perf-highlight strong.neg {
+  color: var(--neg);
+}
+
+.perf-highlight small {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.perf-card {
+  gap: var(--sp-4);
+}
+
+.perf-panel {
+  min-width: 0;
+}
+
+.perf-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.perf-group + .perf-group {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.perf-group-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+.perf-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--sp-8);
+}
+
+.perf-lines {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.perf-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 5px 0;
+}
+
+.perf-line dt {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.perf-line dt small {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.perf-line dd {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.perf-line dd.pos {
+  color: var(--pos);
+}
+
+.perf-line dd.neg {
+  color: var(--neg);
+}
+
+.perf-note {
+  margin: 0;
+}
+
+.perf-charts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.perf-chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.perf-chart-panel > .field-hint {
+  margin: 0;
+}
+
+.perf-equity {
+  height: 340px;
+}
+
+.perf-columns-chart {
+  position: relative;
+  margin: 0;
+}
+
+.perf-columns-chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.perf-axis {
+  fill: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.perf-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.perf-zero {
+  stroke: var(--text-3);
+  stroke-width: 1;
+}
+
+.perf-hit {
+  fill: transparent;
+}
+
+.perf-bar.is-hover .perf-hit {
+  fill: var(--hover);
+}
+
+rect.perf-up {
+  fill: var(--pos);
+}
+
+rect.perf-down {
+  fill: var(--neg);
+}
+
+.perf-tooltip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  pointer-events: none;
+}
+
+.perf-tooltip strong {
+  color: var(--text);
+}
+
+.perf-ranking {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.perf-rank {
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) minmax(0, 1fr) minmax(130px, auto);
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.perf-rank-label {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-rank-track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--seg-bg);
+}
+
+.perf-rank-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+}
+
+.perf-rank-bar.perf-up {
+  background: var(--pos);
+}
+
+.perf-rank-bar.perf-down {
+  background: var(--neg);
+}
+
+.perf-rank-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.perf-rank-value small {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.perf-table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .perf-highlights {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .perf-highlights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perf-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .perf-refresh {
+    margin-left: 0;
+  }
+
+  .perf-rank {
+    grid-template-columns: minmax(0, 1fr) minmax(110px, auto);
+  }
+
+  .perf-rank-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .perf-equity {
+    height: 260px;
+  }
+}

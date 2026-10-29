@@ -13,6 +13,8 @@ interface Props {
   period: ClosedPeriod;
   onApply: (period: ClosedPeriod) => void;
   onClose: () => void;
+  /** The title of the dialog, of the closed profit by default. */
+  title?: string;
 }
 
 /** What each kind of period counts, by the clock of the browser. */
@@ -30,7 +32,12 @@ const kinds: ClosedPeriodKind[] = ["today", "week", "month", "custom"];
  * today, this week, this month, or the days the user chooses, by the clock of
  * the browser.
  */
-export function ClosedPeriodDialog({ period, onApply, onClose }: Props) {
+export function ClosedPeriodDialog({
+  period,
+  onApply,
+  onClose,
+  title = "Período do P/L fechado",
+}: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const today = dayOf(new Date());
   const [kind, setKind] = useState<ClosedPeriodKind>(period.kind);
@@ -63,7 +70,7 @@ export function ClosedPeriodDialog({ period, onApply, onClose }: Props) {
         if (e.target === dialog.current) close(); // the backdrop
       }}
     >
-      <DialogHeader id="closed-period-title" title="Período do P/L fechado" onClose={close} />
+      <DialogHeader id="closed-period-title" title={title} onClose={close} />
       <form className="dialog-form" onSubmit={submit} noValidate>
         <div className="dialog-body">
           <fieldset className="period-options">

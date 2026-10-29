@@ -277,6 +277,8 @@ func TestAuth_BlocksWithoutSession(t *testing.T) {
 	assert.Equal(t, "/login?next=%2F%3Fagent%3Dllm%26pair%3DXAUUSDm", resp.Header.Get("Location"), "back there")
 	resp, _ = do(t, http.MethodGet, srv.URL+"/settings", "", nil)
 	assert.Equal(t, "/login?next=%2Fsettings", resp.Header.Get("Location"))
+	resp, _ = do(t, http.MethodGet, srv.URL+"/performance", "", nil)
+	assert.Equal(t, "/login?next=%2Fperformance", resp.Header.Get("Location"))
 
 	for _, request := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/agents", ""},

@@ -32,6 +32,7 @@ import type {
   Order,
   OrderEvent,
   PairsResponse,
+  PerformanceResponse,
   PromptDetail,
   PromptInfo,
   PromptRequest,
@@ -176,6 +177,18 @@ export function fetchClosedProfit(
   signal?: AbortSignal,
 ): Promise<ClosedProfitResponse> {
   return getJSON<ClosedProfitResponse>(`/positions/closed?from=${from}&to=${to}`, signal);
+}
+
+/**
+ * The trades of the agents trading live closed from from until before to
+ * (Unix seconds), as their MT5 accounts booked them, see PerformanceResponse.
+ */
+export function fetchPerformance(
+  from: number,
+  to: number,
+  signal?: AbortSignal,
+): Promise<PerformanceResponse> {
+  return getJSON<PerformanceResponse>(`/performance?from=${from}&to=${to}`, signal);
 }
 
 /** The path of the API of an agent, which the dashboard proxies. */
