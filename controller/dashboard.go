@@ -75,6 +75,7 @@ type Dashboard struct {
 	auth        *auth
 	settings    *settings
 	supervision *Supervision // see ServeSupervision
+	backtests   *Backtests   // see ServeBacktests
 }
 
 // DashboardOption configures a Dashboard.
@@ -205,6 +206,9 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		if d.supervision != nil {
 			d.supervision.routes(r)
 		}
+		if d.backtests != nil {
+			d.backtests.routes(r)
+		}
 	})
 
 	var page []byte
@@ -230,6 +234,7 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		r.Get("/login", index)       // the app shows its login
 		r.Get("/settings", index)    // and the settings
 		r.Get("/performance", index) // and the performance
+		r.Get("/backtesting", index) // and the backtests
 	} else {
 		// the reason is in the log of Handler, never on this page, which the
 		// login is too
@@ -248,6 +253,7 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		r.Get("/login", unavailable)
 		r.Get("/settings", unavailable)
 		r.Get("/performance", unavailable)
+		r.Get("/backtesting", unavailable)
 	}
 
 	return r

@@ -1114,6 +1114,171 @@ export interface ClosedProfitResponse {
   at: number /* int64 */;
 }
 /**
+ * BacktestRequest is the body of POST /api/backtests: a batch of backtests
+ * of Agents (by name) on their pairs (Pairs a subset, empty for all of each)
+ * from From until before To (Unix seconds), its last ValidationShare (0 for
+ * none, else up to 0.5) run apart as the validation of the rest; Timeframe
+ * replacing the one of the agents ("" for theirs); the money (Balance, in the
+ * quote of the pairs: a simulation) and the costs (Fee, a share of the
+ * notional of each fill; SpreadPoints, for the candles without their spread;
+ * SlippagePoints); DailyLoss and DailyGain, the daily limits of every run in
+ * the quote currency (0 for none: the ones of the agents are in the currency
+ * of their account, never converted); the ceilings of the runs of a language
+ * model (0 for the defaults of the controller).
+ */
+export interface BacktestRequest {
+  name: string;
+  agents: string[];
+  pairs?: string[];
+  from: number /* int64 */;
+  to: number /* int64 */;
+  validation_share: number /* float64 */;
+  timeframe?: string;
+  balance: number /* float64 */;
+  fee: number /* float64 */;
+  spread_points: number /* float64 */;
+  slippage_points: number /* float64 */;
+  daily_loss?: number /* float64 */;
+  daily_gain?: number /* float64 */;
+  llm_max_calls?: number /* int */;
+  llm_max_cost?: number /* float64 */;
+}
+/**
+ * BacktestAssumptions are the assumptions of the runs of a batch, the same
+ * for all of them: the money and the costs asked (see BacktestRequest), and
+ * the execution, the same for all the backtests: the fills of the candles of
+ * ExecutionTimeframe (the finest the period allows), the stops filled at the
+ * open of a candle opening beyond them (GapFills), the worst assumed of a
+ * candle reaching both the stop and the target or the entry and the stop
+ * (Conservative), the positions open at the end valued at the market apart
+ * from the realized result (EndPolicy).
+ */
+export interface BacktestAssumptions {
+  balance: number /* float64 */;
+  currency: string;
+  fee: number /* float64 */;
+  spread_points: number /* float64 */;
+  slippage_points: number /* float64 */;
+  daily_loss?: number /* float64 */;
+  daily_gain?: number /* float64 */;
+  timeframe?: string;
+  execution_timeframe: string;
+  gap_fills: boolean;
+  conservative: boolean;
+  end_policy: string;
+  llm_max_calls: number /* int */;
+  llm_max_cost: number /* float64 */;
+}
+/**
+ * BacktestBatchInfo is a batch of backtests and its runs, see
+ * GET /api/backtests.
+ */
+export interface BacktestBatchInfo {
+  id: number /* int64 */;
+  name: string;
+  from: number /* int64 */;
+  to: number /* int64 */;
+  validation_share: number /* float64 */;
+  assumptions: BacktestAssumptions;
+  created_by: string;
+  created_at: number /* int64 */;
+  runs: BacktestRunInfo[];
+}
+/**
+ * BacktestRunInfo is a run of a batch: its agent, its segment (fit, or
+ * validation), its period, its status (queued, running, succeeded, failed,
+ * canceled, interrupted, budget_exhausted), its progress (candles processed
+ * of Total), its error, when it ran, what it traded, whether a language model
+ * decided (LLM: not deterministic), and its summary once ended.
+ */
+export interface BacktestRunInfo {
+  id: number /* int64 */;
+  agent: string;
+  kind: string;
+  strategy?: string;
+  segment: string;
+  from: number /* int64 */;
+  to: number /* int64 */;
+  status: string;
+  processed: number /* int64 */;
+  total: number /* int64 */;
+  error?: string;
+  started_at?: number /* int64 */;
+  finished_at?: number /* int64 */;
+  pairs: string[];
+  timeframe?: string;
+  llm?: boolean;
+  summary?: BacktestSummary;
+}
+/**
+ * BacktestSummary is the summary of a run ended, the metrics of the
+ * comparison, in Currency: the result of the trades closed (Net, after their
+ * fees, and its share of the balance, Return), the positions open at the end
+ * (OpenProfit, apart), the trades, won and lost, the win rate, the profit
+ * factor and the payoff (nil when undefined: no loss, no win), the average
+ * win and loss, the fees, the largest fall of the equity (and its share),
+ * Net over it (nil without a fall), the months with trades and the positive
+ * ones, the warnings and gaps of the data, the orders refused, and the calls
+ * and the cost of a language model.
+ */
+export interface BacktestSummary {
+  currency: string;
+  initial_balance: number /* float64 */;
+  final_equity: number /* float64 */;
+  net: number /* float64 */;
+  return: number /* float64 */;
+  open_profit: number /* float64 */;
+  open_positions: number /* int */;
+  trades: number /* int */;
+  wins: number /* int */;
+  losses: number /* int */;
+  win_rate: number /* float64 */;
+  profit_factor?: number /* float64 */;
+  payoff?: number /* float64 */;
+  average_win: number /* float64 */;
+  average_loss: number /* float64 */;
+  fees: number /* float64 */;
+  max_drawdown: number /* float64 */;
+  max_drawdown_pct: number /* float64 */;
+  return_over_drawdown?: number /* float64 */;
+  months: number /* int */;
+  positive_months: number /* int */;
+  warnings: number /* int */;
+  gaps: number /* int */;
+  refused: number /* int */;
+  llm_calls?: number /* int */;
+  llm_cost?: number /* float64 */;
+}
+/**
+ * BacktestCompatibility tells whether an agent can be backtested, why not
+ * (Reason), and what it trades.
+ */
+export interface BacktestCompatibility {
+  agent: string;
+  kind: string;
+  mode: string;
+  enabled: boolean;
+  strategy?: string;
+  pairs: string[];
+  timeframe?: string;
+  llm?: boolean;
+  compatible: boolean;
+  reason?: string;
+}
+/**
+ * BacktestsResponse is the payload of GET /api/backtests: the last batches,
+ * the newest first, the agents with their compatibility, and the limits of
+ * a batch.
+ */
+export interface BacktestsResponse {
+  batches: BacktestBatchInfo[];
+  agents: BacktestCompatibility[];
+  max_period_days: number /* int */;
+  max_runs: number /* int */;
+  llm_max_calls: number /* int */;
+  llm_max_cost: number /* float64 */;
+}
+/**
  * PerformanceResponse is the payload of GET /api/performance: the trades of
  * the agents trading live closed from From until before To (Unix seconds),
  * read from the deals of their MT5 accounts as the accounts booked them, in

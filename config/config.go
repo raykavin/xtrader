@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -51,6 +52,7 @@ type Config struct {
 	Agents    Agents    `mapstructure:"agents"`
 	Services  []Service `mapstructure:"services"`
 	Log       Log       `mapstructure:"log"`
+	Backtest  Backtest  `mapstructure:"backtest"`
 
 	// ShutdownTimeout is the whole stop of the controller, from the signal
 	// to its exit: the agents stopped (agents.stop_timeout), then the
@@ -155,6 +157,32 @@ type Agents struct {
 
 	// StopTimeout is how long an agent stopped has before it is killed.
 	StopTimeout time.Duration `mapstructure:"stop_timeout"`
+}
+
+// Backtest is how the controller runs the backtests of the dashboard: each
+// run a process of the command of the kind of its agent (see Agents), apart
+// from the agents trading, never a broker. Concurrency runs at once at most
+// (2 by default); Dir keeps their candles and files (data/backtests by
+// default, under Agents.Dir when relative); MaxPeriodDays bounds the period of
+// a batch (366 by default) and MaxRuns its runs (40). For the agents of a
+// language model, the defaults of the ceilings of a run: LLMMaxCalls calls of
+// the model (300) and LLMMaxCost dollars (5, see LLMPrices: unknown without
+// the price of the model, the calls bound it then).
+type Backtest struct {
+	Concurrency   int                 `mapstructure:"concurrency"`
+	Dir           string              `mapstructure:"dir"`
+	MaxPeriodDays int                 `mapstructure:"max_period_days"`
+	MaxRuns       int                 `mapstructure:"max_runs"`
+	LLMMaxCalls   int                 `mapstructure:"llm_max_calls"`
+	LLMMaxCost    float64             `mapstructure:"llm_max_cost"`
+	LLMPrices     map[string]LLMPrice `mapstructure:"llm_prices"`
+}
+
+// LLMPrice is the price of a model, by its name, in dollars per million
+// tokens of its input and of its output, to estimate the cost of a backtest.
+type LLMPrice struct {
+	Input  float64 `mapstructure:"input" json:"input"`
+	Output float64 `mapstructure:"output" json:"output"`
 }
 
 // Service is a process the agents need, eg: tools/mt5bridge on the host,
@@ -307,6 +335,24 @@ func (c *Config) defaults() {
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
+	if c.Backtest.Concurrency == 0 {
+		c.Backtest.Concurrency = 2
+	}
+	if c.Backtest.Dir == "" {
+		c.Backtest.Dir = "data/backtests"
+	}
+	if c.Backtest.MaxPeriodDays == 0 {
+		c.Backtest.MaxPeriodDays = 366
+	}
+	if c.Backtest.MaxRuns == 0 {
+		c.Backtest.MaxRuns = 40
+	}
+	if c.Backtest.LLMMaxCalls == 0 {
+		c.Backtest.LLMMaxCalls = 300
+	}
+	if c.Backtest.LLMMaxCost == 0 {
+		c.Backtest.LLMMaxCost = 5
+	}
 	if len(c.UI.TrustedProxies) == 0 {
 		c.UI.TrustedProxies = slices.Clone(defaultTrustedProxies)
 	}
@@ -381,6 +427,22 @@ func (c *Config) Validate() error {
 	}
 	if _, err := c.UI.Proxies(); err != nil {
 		errs = append(errs, err)
+	}
+	b := c.Backtest
+	switch {
+	case b.Concurrency < 1 || b.Concurrency > 16:
+		errs = append(errs, fmt.Errorf("backtest.concurrency %d: from 1 to 16", b.Concurrency))
+	case b.MaxPeriodDays < 1 || b.MaxPeriodDays > 3660:
+		errs = append(errs, fmt.Errorf("backtest.max_period_days %d: from 1 to 3660", b.MaxPeriodDays))
+	case b.MaxRuns < 1 || b.MaxRuns > 500:
+		errs = append(errs, fmt.Errorf("backtest.max_runs %d: from 1 to 500", b.MaxRuns))
+	case b.LLMMaxCalls < 1 || math.IsNaN(b.LLMMaxCost) || b.LLMMaxCost <= 0:
+		errs = append(errs, errors.New("backtest.llm_max_calls and llm_max_cost: above 0"))
+	}
+	for model, price := range b.LLMPrices {
+		if price.Input < 0 || price.Output < 0 || math.IsNaN(price.Input) || math.IsNaN(price.Output) {
+			errs = append(errs, fmt.Errorf("backtest.llm_prices %s: the prices must be 0 or more", model))
+		}
 	}
 	if (c.Bootstrap.Username == "") != (c.Bootstrap.Password == "") {
 		errs = append(errs, errors.New("bootstrap: the username and the password go together"))
