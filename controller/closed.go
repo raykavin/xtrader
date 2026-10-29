@@ -45,7 +45,7 @@ const (
 )
 
 // bridgeDeal is a deal of an account, of GET /deals: its profit, swap,
-// commission and fee in the currency of the account.
+// commission and fee in the currency of the account, its volume and price.
 type bridgeDeal struct {
 	Ticket     int64   `json:"ticket"`
 	Time       int64   `json:"time"`
@@ -59,7 +59,13 @@ type bridgeDeal struct {
 	Profit     float64 `json:"profit"`
 	Fee        float64 `json:"fee"`
 	Symbol     string  `json:"symbol"`
+	Volume     float64 `json:"volume"` // in lots
+	Price      float64 `json:"price"`
 }
+
+// amount returns what the deal booked on the balance of the account: its
+// profit, swap, commission and fee.
+func (d bridgeDeal) amount() float64 { return d.Profit + d.Swap + d.Commission + d.Fee }
 
 // at returns the time of the deal, the one of the server of the account,
 // UTC.
@@ -73,13 +79,6 @@ func (d bridgeDeal) at() time.Time {
 // closedRange is a range of the closed profit: from, until before to.
 type closedRange struct{ from, to time.Time }
 
-// closedRead is a read of the closed profit of a range, see closedProfits.
-type closedRead struct {
-	response *ui.ClosedProfitResponse
-	at       time.Time
-	reading  chan struct{} // closed when the read in progress ends, nil without one
-}
-
 // closedProfits reads the closed profit of the agents in a range from the
 // deals of their MT5 accounts, from the bridges the open positions are read
 // from (see openPositions), for the card of the dashboard: of every agent
@@ -87,13 +86,11 @@ type closedRead struct {
 // each account.
 type closedProfits struct {
 	positions *openPositions
-
-	mu    sync.Mutex
-	reads map[closedRange]*closedRead
+	reads     rangeReads[ui.ClosedProfitResponse]
 }
 
 func newClosedProfits(positions *openPositions) *closedProfits {
-	return &closedProfits{positions: positions, reads: make(map[closedRange]*closedRead)}
+	return &closedProfits{positions: positions}
 }
 
 // handle answers the closed profit of the agents from the query from until
@@ -134,52 +131,9 @@ func closedRangeOf(query url.Values) (closedRange, error) {
 }
 
 // read returns the closed profit of the agents in window, read again once the
-// last read of it is closedProfitTTL old, a read of it at a time for all the
-// requests; the reads of the other ranges, older, dropped.
+// last read of it is closedProfitTTL old, see rangeReads.
 func (c *closedProfits) read(ctx context.Context, window closedRange) (ui.ClosedProfitResponse, error) {
-	for {
-		c.mu.Lock()
-		for key, read := range c.reads {
-			if read.reading == nil && time.Since(read.at) > time.Minute {
-				delete(c.reads, key)
-			}
-		}
-		read := c.reads[window]
-		if read == nil {
-			read = &closedRead{}
-			c.reads[window] = read
-		}
-		if read.response != nil && time.Since(read.at) < closedProfitTTL {
-			response := *read.response
-			c.mu.Unlock()
-			return response, nil
-		}
-		if wait := read.reading; wait != nil {
-			c.mu.Unlock()
-			select {
-			case <-wait:
-				continue
-			case <-ctx.Done():
-				return ui.ClosedProfitResponse{}, ctx.Err()
-			}
-		}
-		done := make(chan struct{})
-		read.reading = done
-		c.mu.Unlock()
-
-		// the read goes on for the others when the request ends
-		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*bridgeTimeout+time.Second)
-		response, err := c.readAll(readCtx, window)
-		cancel()
-		c.mu.Lock()
-		if err == nil {
-			read.response, read.at = &response, time.Now()
-		}
-		read.reading = nil
-		close(done)
-		c.mu.Unlock()
-		return response, err
-	}
+	return c.reads.read(ctx, window, closedProfitTTL, c.readAll)
 }
 
 // dealsRead is what came of reading the deals of an account: the account and

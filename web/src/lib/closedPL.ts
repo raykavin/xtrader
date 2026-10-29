@@ -131,20 +131,27 @@ export function normalizeClosedPeriod(value: unknown): ClosedPeriod | null {
   return null;
 }
 
-/** The period saved in storage, today without a valid one. */
-export function loadClosedPeriod(storage: Storage | null = browserStorage()): ClosedPeriod {
+/** The period saved in storage under key, today without a valid one. */
+export function loadClosedPeriod(
+  storage: Storage | null = browserStorage(),
+  key = CLOSED_PERIOD_KEY,
+): ClosedPeriod {
   try {
-    const saved = storage?.getItem(CLOSED_PERIOD_KEY);
+    const saved = storage?.getItem(key);
     return (saved && normalizeClosedPeriod(JSON.parse(saved))) || { kind: "today" };
   } catch {
     return { kind: "today" }; // unreadable, or not JSON
   }
 }
 
-/** Saves the period in storage, when it can be reached. */
-export function saveClosedPeriod(period: ClosedPeriod, storage: Storage | null = browserStorage()) {
+/** Saves the period in storage under key, when it can be reached. */
+export function saveClosedPeriod(
+  period: ClosedPeriod,
+  storage: Storage | null = browserStorage(),
+  key = CLOSED_PERIOD_KEY,
+) {
   try {
-    storage?.setItem(CLOSED_PERIOD_KEY, JSON.stringify(period));
+    storage?.setItem(key, JSON.stringify(period));
   } catch {
     // full or blocked: the period lasts while the page is open
   }

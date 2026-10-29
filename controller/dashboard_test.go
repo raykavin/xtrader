@@ -264,7 +264,7 @@ func TestDashboard_ErrorPageWhenBundleMissing(t *testing.T) {
 	srv := newDashboardServer(t, []Agent{{Name: "bot", Address: offlineAddress(t)}},
 		errors.New("boom: open /home/op/.cache/xtrader/ui/v1.0.0/app.js: no network"))
 
-	for _, path := range []string{"/", "/login", "/settings"} {
+	for _, path := range []string{"/", "/login", "/settings", "/performance"} {
 		resp, body := get(t, srv.URL+path)
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, path)
 		assert.NotContains(t, body, "boom", "the reason in the log only, the login being public")

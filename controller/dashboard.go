@@ -227,8 +227,9 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 			}
 		}
 		r.Get("/", index)
-		r.Get("/login", index)    // the app shows its login
-		r.Get("/settings", index) // and the settings
+		r.Get("/login", index)       // the app shows its login
+		r.Get("/settings", index)    // and the settings
+		r.Get("/performance", index) // and the performance
 	} else {
 		// the reason is in the log of Handler, never on this page, which the
 		// login is too
@@ -246,6 +247,7 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 		r.Get("/", unavailable)
 		r.Get("/login", unavailable)
 		r.Get("/settings", unavailable)
+		r.Get("/performance", unavailable)
 	}
 
 	return r

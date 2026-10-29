@@ -975,6 +975,58 @@ type ClosedProfitResponse struct {
 	At       int64                `json:"at"`
 }
 
+// PerformanceResponse is the payload of GET /api/performance: the trades of
+// the agents trading live closed from From until before To (Unix seconds),
+// read from the deals of their MT5 accounts as the accounts booked them, in
+// the currency of each account, none converted, see PerformanceTrade; the
+// accounts read, see PerformanceAccount. Complete and Missing as
+// OpenPositionsResponse; At is when the deals were read.
+type PerformanceResponse struct {
+	From     int64                `json:"from"`
+	To       int64                `json:"to"`
+	Trades   []PerformanceTrade   `json:"trades"`
+	Accounts []PerformanceAccount `json:"accounts"`
+	Complete bool                 `json:"complete"`
+	Missing  []OpenPositionsGap   `json:"missing,omitempty"`
+	At       int64                `json:"at"`
+}
+
+// PerformanceTrade is a position of an agent closed during the range of a
+// PerformanceResponse (its last exit then, nothing of it left open), on the
+// account Account: its side, its volume in lots, its opening (Unix seconds,
+// absent when its entry is older than the deals read, Entry then 0) and its
+// closing, its entry price and the average price of its exits; Gross the
+// profit of its exits, Costs the commission, fee and swap of its entry and
+// exits (negative for a cost), Net both, in Currency.
+type PerformanceTrade struct {
+	Position int64   `json:"position"`
+	Account  string  `json:"account"`
+	Agent    string  `json:"agent"`
+	Symbol   string  `json:"symbol"`
+	Side     string  `json:"side"`
+	Volume   float64 `json:"volume"`
+	OpenedAt int64   `json:"opened_at,omitempty"`
+	ClosedAt int64   `json:"closed_at"`
+	Entry    float64 `json:"entry"`
+	Exit     float64 `json:"exit"`
+	Gross    float64 `json:"gross"`
+	Costs    float64 `json:"costs"`
+	Net      float64 `json:"net"`
+	Currency string  `json:"currency"`
+}
+
+// PerformanceAccount is an account of the agents read for a
+// PerformanceResponse: its key (its login), its currency, the agents trading
+// on it, its balance now and at From (the balance less every deal booked
+// since, deposits included): the capital of the return of the period.
+type PerformanceAccount struct {
+	Account      string   `json:"account"`
+	Currency     string   `json:"currency"`
+	Agents       []string `json:"agents"`
+	Balance      float64  `json:"balance"`
+	StartBalance float64  `json:"start_balance"`
+}
+
 // ClosedProfitSeries is the evolution of the closed profit of the agents in
 // Currency over the range of a ClosedProfitResponse: Points the running total
 // after the exits of each second with one, in the order of their times, the
