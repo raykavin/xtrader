@@ -16,7 +16,7 @@ export interface NavHint {
 }
 
 interface Props {
-  page: "dashboard" | "performance" | "settings";
+  page: "dashboard" | "performance" | "backtesting" | "settings";
   /** The section of the settings shown. */
   section?: SettingsTab;
   /** On the settings: shows another section without loading the page again. */
@@ -205,6 +205,17 @@ function Navigation({
       <span className="nav-label">Performance</span>
     </a>
   );
+  const backtesting = (
+    <a
+      className="nav-link"
+      href="/backtesting"
+      aria-current={page === "backtesting" ? "page" : undefined}
+      onClick={(e) => onNavigate(null, e)}
+    >
+      <Icon name="trend" size={where === "bar" ? 15 : 18} className="nav-icon" />
+      <span className="nav-label">Backtesting</span>
+    </a>
+  );
   const links = sections.map(({ tab, label, icon }) => {
     const hint = hints?.[tab];
     return (
@@ -229,6 +240,7 @@ function Navigation({
       <nav className="appnav" aria-label="Páginas">
         {dashboard}
         {performance}
+        {backtesting}
         <span className="appnav-divider" aria-hidden="true" />
         {links}
       </nav>
@@ -240,6 +252,7 @@ function Navigation({
         <span className="nav-heading">Operação</span>
         {dashboard}
         {performance}
+        {backtesting}
       </div>
       <div className="nav-group">
         <span className="nav-heading">Configurações</span>
