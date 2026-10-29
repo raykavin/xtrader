@@ -178,6 +178,22 @@ func (c *Chart) readCurrency() {
 	c.mu.Unlock()
 }
 
+// pointValue returns the value in the currency of the account of a move of 1
+// of the price of pair for 1 unit, see service.PointValuer, 0 without
+// WithAccountReporter, or when the broker can't tell it. It may ask the broker
+// on the network: the caller doesn't hold c.mu.
+func (c *Chart) pointValue(pair string) float64 {
+	valuer, ok := c.reporter.(service.PointValuer)
+	if !ok {
+		return 0
+	}
+	point, err := valuer.PointValue(pair)
+	if err != nil || !finite(point) || point <= 0 {
+		return 0
+	}
+	return point
+}
+
 // accountProfit returns the profit the account booked for o, a close (a
 // profit computed by the core), from the fill that opened the position it
 // closes (see closeEntries, entries when computed already for its pair); nil
@@ -667,6 +683,7 @@ func (c *Chart) snapshot(pair string) Snapshot {
 		Position:        c.position(pair),
 		Protection:      c.protection(pair),
 		AccountCurrency: c.accountCurrency(),
+		Simulated:       c.paperWallet != nil,
 		LLM:             c.llm(),
 		Analysis:        c.analysis(pair),
 		Timeframe:       c.executionTimeframe(),

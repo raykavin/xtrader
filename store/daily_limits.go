@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
@@ -62,7 +61,10 @@ const (
 )
 
 // DailyLimit is the daily limits of all the agents together, a single record,
-// see ui.DailyLimitSettings: none while never set (no limit).
+// see ui.DailyLimitSettings: none while never set (no limit). Its amounts
+// apply to the result of the agents in each currency of their accounts apart,
+// none converted: Currency is unused, NoCurrency once set (the column, of
+// migration 27, needs one while enabled).
 type DailyLimit struct {
 	ID        int16     `gorm:"primaryKey;autoIncrement:false" json:"-"`
 	Enabled   bool      `json:"enabled"`
@@ -75,10 +77,15 @@ type DailyLimit struct {
 
 func (DailyLimit) TableName() string { return "daily_limit_settings" }
 
-// Settings returns the limits as the dashboard takes them.
+// NoCurrency is the ISO 4217 code of no currency, kept in the unused currency
+// of the daily limits of all the agents, see DailyLimit.
+const NoCurrency = "XXX"
+
+// Settings returns the limits as the dashboard takes them, without a currency:
+// they apply in the one of each account.
 func (l DailyLimit) Settings() ui.DailyLimitSettings {
-	settings := ui.DailyLimitSettings{Enabled: l.Enabled, Currency: l.Currency, MaxLoss: l.MaxLoss,
-		MaxGain: l.MaxGain, UpdatedBy: l.UpdatedBy}
+	settings := ui.DailyLimitSettings{Enabled: l.Enabled, MaxLoss: l.MaxLoss, MaxGain: l.MaxGain,
+		UpdatedBy: l.UpdatedBy}
 	if !l.UpdatedAt.IsZero() {
 		settings.UpdatedAt = l.UpdatedAt.Unix()
 	}
@@ -198,13 +205,10 @@ func (g DailyGuard) Info() ui.DailyGuardInfo {
 		FlattenStatus: g.FlattenStatus, FlattenActionID: g.FlattenActionID}
 }
 
-// currencyCode is a currency, eg: BRL.
-var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
-
 // validateDailyLimit returns why settings are refused, as the database checks
 // them: each limit set above 0 and up to DailyLimitMax; enabled, a limit at
-// least; of all the agents (global), a currency when enabled; of an agent,
-// none (the one of its account).
+// least; no currency, of all the agents (their amounts apply in the currency of
+// each account apart) as of an agent (the one of its account).
 func validateDailyLimit(settings ui.DailyLimitSettings, global bool) error {
 	invalid := func(format string, args ...any) error {
 		return fmt.Errorf("%w: the daily limits: %s", ErrInvalid, fmt.Sprintf(format, args...))
@@ -218,10 +222,8 @@ func validateDailyLimit(settings ui.DailyLimitSettings, global bool) error {
 		return invalid("enabled, a loss or a gain at least")
 	}
 	switch {
-	case global && settings.Currency != "" && !currencyCode.MatchString(settings.Currency):
-		return invalid("the currency %q: a code of 3 letters, eg: BRL", settings.Currency)
-	case global && settings.Enabled && settings.Currency == "":
-		return invalid("enabled, a currency")
+	case global && settings.Currency != "":
+		return invalid("the limits of all the agents apply in the currency of each account, none to set")
 	case !global && settings.Currency != "":
 		return invalid("the limits of an agent are in the currency of its account")
 	}
@@ -264,7 +266,7 @@ func (s *Store) GlobalDailyLimit(ctx context.Context) (DailyLimit, bool, error) 
 // DailyLimitEvent), and returns both.
 func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitSettings,
 	change DailyChange) (previous, next DailyLimit, err error) {
-	settings.Currency = strings.ToUpper(strings.TrimSpace(settings.Currency))
+	settings.Currency = strings.TrimSpace(settings.Currency)
 	if err = validateDailyLimit(settings, true); err != nil {
 		return previous, next, err
 	}
@@ -278,7 +280,7 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 			previous = rows[0]
 			before = previous.Settings()
 		}
-		next = DailyLimit{ID: 1, Enabled: settings.Enabled, Currency: settings.Currency, MaxLoss: settings.MaxLoss,
+		next = DailyLimit{ID: 1, Enabled: settings.Enabled, Currency: NoCurrency, MaxLoss: settings.MaxLoss,
 			MaxGain: settings.MaxGain, UpdatedBy: change.By, UpdatedAt: time.Now()}
 		if err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
 			Create(&next).Error; err != nil {

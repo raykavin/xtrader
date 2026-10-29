@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/model"
+	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/storage"
 )
 
@@ -175,3 +177,91 @@ type notices struct{ messages []string }
 func (n *notices) Notify(message string) { n.messages = append(n.messages, message) }
 func (n *notices) OnOrder(model.Order)   {}
 func (n *notices) OnError(error)         {}
+
+// bookingWallet is a paper wallet reporting an account in BRL whose profits
+// are booked once booked is set.
+type bookingWallet struct {
+	*exchange.PaperWallet
+	mtx    sync.Mutex
+	booked *float64
+}
+
+func (w *bookingWallet) AccountSummary() (service.AccountSummary, bool) {
+	return service.AccountSummary{Currency: "BRL"}, true
+}
+
+func (w *bookingWallet) ClosedProfit(model.Order, model.Order) (float64, bool) {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+	if w.booked == nil {
+		return 0, false
+	}
+	return *w.booked, true
+}
+
+// The profit of a trade closed on an account is notified as the account books
+// it, in its currency, and as awaited when it isn't booked in time: never the
+// one computed from the prices, in the quote.
+func TestController_ProfitInTheAccountCurrency(t *testing.T) {
+	wait, poll := profitWait, profitPoll
+	profitWait, profitPoll = 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { profitWait, profitPoll = wait, poll })
+
+	profit := 51.8
+	for name, booked := range map[string]*float64{"booked": &profit, "awaited": nil} {
+		t.Run(name, func(t *testing.T) {
+			memory, err := storage.FromMemory()
+			require.NoError(t, err)
+			ctx := context.Background()
+			wallet := &bookingWallet{PaperWallet: exchange.NewPaperWallet(ctx, "USDT",
+				exchange.WithPaperAsset("USDT", 3000)), booked: booked}
+			controller := NewController(ctx, wallet, memory, NewOrderFeed())
+			notified := &lockedNotices{}
+			controller.SetNotifier(notified)
+
+			base := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+			entry := model.Order{ExchangeID: 1, Pair: "BTCUSDT", Side: model.SideTypeBuy, Type: model.OrderTypeMarket,
+				Status: model.OrderStatusTypeFilled, Quantity: 1, Price: 1000, CreatedAt: base, UpdatedAt: base}
+			closing := model.Order{ExchangeID: 2, Pair: "BTCUSDT", Side: model.SideTypeSell,
+				Type: model.OrderTypeMarket, Status: model.OrderStatusTypeFilled, Quantity: 1, Price: 1010,
+				CreatedAt: base, UpdatedAt: base.Add(time.Minute)}
+			controller.mtx.Lock()
+			for _, o := range []*model.Order{&entry, &closing} {
+				controller.create(o)
+				controller.processTrade(o)
+			}
+			controller.mtx.Unlock()
+
+			require.Eventually(t, func() bool { return len(notified.all()) == 1 }, time.Second, time.Millisecond)
+			message := notified.all()[0]
+			assert.NotContains(t, message, "10.000000 USDT", "never in the quote")
+			if booked != nil {
+				assert.Contains(t, message, "[PROFIT] 51.80 BRL (1.0000 %)")
+			} else {
+				assert.Contains(t, message, "[PROFIT] awaiting the broker: the result in BRL isn't booked yet")
+			}
+			assert.Contains(t, message, "BTCUSDT | trades 1 | win 1 | loss 0")
+		})
+	}
+}
+
+// lockedNotices records the notifications sent from any goroutine.
+type lockedNotices struct {
+	mtx      sync.Mutex
+	messages []string
+}
+
+func (n *lockedNotices) Notify(message string) {
+	n.mtx.Lock()
+	defer n.mtx.Unlock()
+	n.messages = append(n.messages, message)
+}
+
+func (n *lockedNotices) OnOrder(model.Order) {}
+func (n *lockedNotices) OnError(error)       {}
+
+func (n *lockedNotices) all() []string {
+	n.mtx.Lock()
+	defer n.mtx.Unlock()
+	return append([]string(nil), n.messages...)
+}

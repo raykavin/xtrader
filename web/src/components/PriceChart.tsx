@@ -639,10 +639,14 @@ export function PriceChart({
     const open = pnl;
     if (open) {
       const side = open.side === "BUY" ? "C" : "V";
+      const profit =
+        open.profit === null
+          ? "—"
+          : `${formatProfit(open.profit)} ${open.currency}${open.simulated ? " (sim.)" : ""}`;
       specs.set("position", {
         price: open.entry,
-        color: open.profit >= 0 ? palette.up : palette.down,
-        title: `${side} ${formatCompact(open.quantity)} P&L Aberto: ${formatProfit(open.profit)} ${open.currency}`,
+        color: (open.profit ?? 0) >= 0 ? palette.up : palette.down,
+        title: `${side} ${formatCompact(open.quantity)} P&L Aberto: ${profit}`,
         dashed: false,
       });
     }

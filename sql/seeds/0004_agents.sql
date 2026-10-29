@@ -51,15 +51,16 @@ SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
          "llm-higher-trend-filter": "true", "llm-higher-trend-required": "false"}'::jsonb
 FROM agent;
 
--- matrend: the strategy matrend (agents/trendagent) on 5m, a stop of 1 and a
--- take profit of 2 in price, operated from Telegram; its comment the default
--- of its strategy, nb:matrend.
+-- matrend: the strategy matrend (agents/trendagent) on 5m, a stop of 5.4 and a
+-- take profit of 10.8 in the currency of the account (BRL: about 1 and 2 in
+-- price for a unit of XAUUSDm, its point value 5.39 BRL on 2026-10-29),
+-- operated from Telegram; its comment the default of its strategy, nb:matrend.
 WITH agent AS (
     INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
                         params, position)
     SELECT 'matrend', 'trend', FALSE, 'live', 'localhost:5570', TRUE, TRUE, FALSE, TRUE,
            '{"strategy": "matrend", "pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.01",
-             "timeframe": "5m", "leverage": "400", "stop-value": "1", "take-profit-value": "2",
+             "timeframe": "5m", "leverage": "400", "stop-value": "5.4", "take-profit-value": "10.8",
              "max-distance": "0.5"}'::jsonb,
            (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
     WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'matrend')

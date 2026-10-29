@@ -913,9 +913,15 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 		log.Error(err)
 		return skipped(skip{SkipPosition, "the position: " + err.Error()})
 	}
+	point, err := pointValue(broker, df.Pair)
+	if err != nil {
+		log.Error(err)
+		return skipped(skip{SkipPosition, err.Error()})
+	}
+	cash := money{free: quote, point: point}
 
 	at := t.dayClock(df)
-	held := heldSide(asset*price, t.cfg.MinPositionValue)
+	held := heldSide(asset*price*point, t.cfg.MinPositionValue)
 	t.refreshPending(df, broker, st, held, at, ev) // filled, it is the position followed
 	trade = t.follow(df, held, at)
 	if trade != nil && trade.exiting {
@@ -932,7 +938,7 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 	if trade != nil {
 		pending = nil // a position held: its cancel is retried, see refreshPending
 	}
-	input, why := t.context(df, run.market, broker, st, trade, pending, asset, quote, price)
+	input, why := t.context(df, run.market, broker, st, trade, pending, asset, cash, price)
 	enriched, kept := false, false
 	if pending != nil {
 		// kept while an entry of its type is allowed now, as if flat without
@@ -951,7 +957,7 @@ func (t *Trader) prepare(df *model.Dataframe, broker service.Broker, run analysi
 			input.Rules.Actions = []Action{ActionWait, ActionModifyPending, ActionCancelPending}
 		} else {
 			// canceled: the analysis goes on flat, afresh
-			input, why = t.context(df, run.market, broker, st, nil, nil, asset, quote, price)
+			input, why = t.context(df, run.market, broker, st, nil, nil, asset, cash, price)
 			enriched = false
 		}
 	}
@@ -1546,7 +1552,7 @@ func (t *Trader) recheck(df *model.Dataframe, broker service.Broker, input Input
 	if err != nil {
 		return "the position unread: " + err.Error()
 	}
-	if held := heldSide(asset*float64(now.Price), t.cfg.MinPositionValue); held != "" {
+	if held := heldSide(worth(broker, df.Pair, asset, float64(now.Price)), t.cfg.MinPositionValue); held != "" {
 		return fmt.Sprintf("a %s position of %g is held on the pair now, opened since the context was read",
 			describeSide(held), math.Abs(asset))
 	}
@@ -1615,7 +1621,7 @@ func reducesRisk(in Input, d Decision) bool {
 // waiting, the entries are the ones allowed as if without it, the size its
 // own: see checkPending.
 func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st *promptState, tr *trade,
-	p *pendingOrder, asset, quote, closePrice float64) (Input, skip) {
+	p *pendingOrder, asset float64, cash money, closePrice float64) (Input, skip) {
 
 	nan := number(math.NaN())
 	candles := t.candles(df)
@@ -1630,7 +1636,8 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 		Indicators: make(map[string][]number, len(t.series)),
 		Summary:    t.summary(df, candles),
 		EntrySize:  nan,
-		Balance:    number(quote),
+		Balance:    number(cash.free),
+		point:      cash.point,
 		Rules: Rules{
 			MinConfidence:    number(t.cfg.MinConfidence),
 			MaxEntryDistance: nan,
@@ -1702,7 +1709,7 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 			return input, skip{SkipNews, "no entry around the release " + blocked}
 		}
 		if p == nil {
-			size, ok := t.size(df.Pair, quote, closePrice)
+			size, ok := t.size(df.Pair, cash, closePrice)
 			if !ok {
 				return input, skip{SkipSize, "no position fits the balance and the sizing"}
 			}
@@ -1732,7 +1739,7 @@ func (t *Trader) context(df, market *model.Dataframe, broker service.Broker, st 
 		PnL: nan, Candles: tr.bars}
 	if tr.entry > 0 {
 		position.Entry = number(tr.entry)
-		position.PnL = number(sideSign(tr.side) * (closePrice - tr.entry) * math.Abs(asset))
+		position.PnL = number(sideSign(tr.side) * (closePrice - tr.entry) * math.Abs(asset) * cash.point)
 	}
 	position.InitialStop, position.RMultiple = nan, nan
 	if tr.stop > 0 {
@@ -2052,7 +2059,12 @@ func (t *Trader) enrich(df *model.Dataframe, input *Input, st *promptState, at t
 		size = float64(input.Position.Size)
 	}
 	_, quote := exchange.SplitAssetQuote(df.Pair)
-	input.Instrument = &Instrument{Volume: tradedVolume, ValuePerPriceUnit: number(size), QuoteCurrency: quote}
+	currency := t.accountCurrency()
+	if currency == "" {
+		currency = quote // the paper wallet, simulated in the quote
+	}
+	input.Instrument = &Instrument{Volume: tradedVolume, ValuePerPriceUnit: number(size * input.point),
+		QuoteCurrency: quote, Currency: currency}
 	if t.cfg.TickVolume {
 		input.Instrument.Volume = tickVolume
 	}
@@ -2159,7 +2171,7 @@ func (t *Trader) open(df *model.Dataframe, broker service.Broker, side model.Sid
 		log.Error(err)
 		return orders
 	}
-	if heldSide(asset*closePrice, t.cfg.MinPositionValue) != side {
+	if heldSide(worth(broker, df.Pair, asset, closePrice), t.cfg.MinPositionValue) != side {
 		return orders
 	}
 	tr := &trade{side: side, entry: closePrice, stop: stop, since: t.dayClock(df)}
@@ -2255,7 +2267,7 @@ func (t *Trader) held(df *model.Dataframe, broker service.Broker) (float64, mode
 	if err != nil {
 		return 0, "", err
 	}
-	return asset, heldSide(asset*df.Close.Last(0), t.cfg.MinPositionValue), nil
+	return asset, heldSide(worth(broker, df.Pair, asset, df.Close.Last(0)), t.cfg.MinPositionValue), nil
 }
 
 // unprotect cancels the legs of tr before its close, as they reserve its
@@ -2423,33 +2435,67 @@ func (t *Trader) move(df *model.Dataframe, broker service.Broker, tr *trade, sto
 	return moved, true
 }
 
+// money is the cash available for a new position on a pair and the point
+// value of the pair: the value of a move of 1 of its price for 1 unit, both in
+// the currency of the account (see service.PointValuer), in the quote in the
+// paper wallet, its point value 1.
+type money struct {
+	free, point float64
+}
+
+// pointValue returns the point value of pair at broker, see money, an error
+// when it isn't positive.
+func pointValue(broker service.Broker, pair string) (float64, error) {
+	point, err := service.PointValue(broker, pair)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("the point value: %w", err)
+	case !known(point) || point <= 0:
+		return 0, fmt.Errorf("no point value of %s, %g", pair, point)
+	}
+	return point, nil
+}
+
+// worth returns the value of asset units of pair at price in the currency of
+// the account, to tell dust apart: by the point value of the pair, or 1 while
+// it can't be read.
+func worth(broker service.Broker, pair string, asset, price float64) float64 {
+	point, err := pointValue(broker, pair)
+	if err != nil {
+		log.Debug(err)
+		point = 1
+	}
+	return asset * price * point
+}
+
 // size returns the size of the position an entry opens on pair at price, with
-// quote available, sized as the intraday strategies size theirs: PositionSize,
-// or else PositionFraction of quote times Leverage. ok is false when there is
-// none: a share of the balance worth less than MinPositionValue, or a fixed
-// size missing, worth less than MinPositionValue, it would be taken for dust,
-// or more than quote times the leverage, all the balance can take.
-func (t *Trader) size(pair string, quote, price float64) (float64, bool) {
+// cash available, sized as the intraday strategies size theirs: PositionSize,
+// or else PositionFraction of the cash times Leverage, in the currency of the
+// account. ok is false when there is none: a share of the balance worth less
+// than MinPositionValue, or a fixed size missing, worth less than
+// MinPositionValue, it would be taken for dust, or more than the cash times the
+// leverage, all the balance can take.
+func (t *Trader) size(pair string, cash money, price float64) (float64, bool) {
 	c := t.cfg
 	if price <= 0 || !known(price) {
 		return 0, false
 	}
 	if len(c.PositionSize) == 0 {
-		value := quote * c.PositionFraction * c.Leverage
-		return value / price, value >= c.MinPositionValue
+		value := cash.free * c.PositionFraction * c.Leverage
+		return value / (price * cash.point), value >= c.MinPositionValue
 	}
 
 	size, ok := c.PositionSize[pair]
-	value := size * price
+	value := size * price * cash.point
 	switch {
 	case !ok:
 		log.Errorf("%s: no position size set for the pair", pair)
 	case value < c.MinPositionValue:
 		log.Errorf("%s: a position of %g is worth %f, under the min position value of %g: it would be taken "+
 			"for dust", pair, size, value, c.MinPositionValue)
-	case value > quote*c.Leverage:
+	case value > cash.free*c.Leverage:
 		log.Errorf("%s: a position of %g is worth %f, more than the %f available times the leverage of %g",
-			pair, size, value, quote, c.Leverage)
+			pair, size, value, cash.free, c.Leverage)
 	default:
 		return size, true
 	}

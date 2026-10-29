@@ -55,7 +55,7 @@ export function StatsBar({ stats, snapshot, theme, since, pnl }: Props) {
             label: "Retorno da estratégia",
             value: formatPercent(stats.returnPct),
             tone: signClass(stats.returnPct),
-            hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}`,
+            hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}${snapshot.simulated ? " (simulação)" : ""}`,
             curve: snapshot.equity_values,
           },
           {
@@ -86,11 +86,13 @@ export function StatsBar({ stats, snapshot, theme, since, pnl }: Props) {
       unit: stats.profitCurrency,
       tone: signClass(stats.totalProfit),
       hint:
-        stats.unbooked > 0
-          ? `Em ${stats.profitCurrency}, pelos preços: ${stats.unbooked === 1 ? "1 operação" : `${stats.unbooked} operações`} sem o valor registrado pela corretora`
-          : stats.trades
-            ? `Média de ${formatPercent(stats.avgReturn)} por operação`
-            : undefined,
+        stats.awaiting > 0
+          ? `${stats.awaiting === 1 ? "1 operação aguardando" : `${stats.awaiting} operações aguardando`} o valor da corretora, fora da soma`
+          : stats.simulated
+            ? "Simulação, na moeda de cotação"
+            : stats.trades
+              ? `Média de ${formatPercent(stats.avgReturn)} por operação`
+              : undefined,
       curve: curve(stats.curves.profit),
       footer: <Position pnl={pnl} />,
     },
@@ -155,10 +157,19 @@ function Position({ pnl }: { pnl: PositionPnL | null }) {
           <span className="position-size">
             {formatQuantity(pnl.quantity)} a {formatPrice(pnl.entry)}
           </span>
-          <strong className={`position-pnl ${signClass(pnl.profit)}`}>
-            {formatProfit(pnl.profit)}
-            <small>{pnl.currency}</small>
-          </strong>
+          {pnl.profit === null ? (
+            <strong className="position-pnl" title="Lucro aberto não informado pela corretora">
+              —
+            </strong>
+          ) : (
+            <strong
+              className={`position-pnl ${signClass(pnl.profit)}`}
+              title={pnl.simulated ? "Simulação" : undefined}
+            >
+              {formatProfit(pnl.profit)}
+              <small>{pnl.simulated ? `${pnl.currency} sim.` : pnl.currency}</small>
+            </strong>
+          )}
         </>
       )}
     </p>

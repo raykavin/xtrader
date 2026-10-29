@@ -884,6 +884,25 @@ func TestRKTrendConfluence_Backtest(t *testing.T) {
 
 // sizingBroker has quote available, records the value of the orders at the
 // market in quote and the size of the others, and counts every order created.
+// pointedWallet is a paper wallet whose cash is in the currency of an account
+// valuing a move of 1 of the price of a unit at point, as MT5 on a BRL account.
+type pointedWallet struct {
+	*exchange.PaperWallet
+	point float64
+}
+
+func (w *pointedWallet) PointValue(string) (float64, error) { return w.point, nil }
+
+// CreateOrderMarketQuote buys the units worth quote, in the account currency.
+func (w *pointedWallet) CreateOrderMarketQuote(side model.SideType, pair string, quote float64) (model.Order,
+	error) {
+	price, err := w.LastQuote(context.Background(), pair)
+	if err != nil {
+		return model.Order{}, err
+	}
+	return w.CreateOrderMarket(side, pair, quote/(price*w.point))
+}
+
 type sizingBroker struct {
 	flatBroker
 	quote  float64
@@ -1011,12 +1030,33 @@ func TestRKTrendConfluence_MaxRisk(t *testing.T) {
 		}
 	})
 
+	t.Run("in the account currency, by the point value", func(t *testing.T) {
+		// a BRL account: 2 BRL a unit for 1 of the price; half the units, the
+		// same 50 BRL lost at the stop loss
+		for maxRisk, want := range map[float64]float64{1: 50, 0.4: 0} {
+			wallet := exchange.NewPaperWallet(context.Background(), "USDT", exchange.WithPaperAsset("USDT", 10000))
+			wallet.OnCandle(model.Candle{Pair: "BTCUSDT", Time: time.Now(), Low: 100, High: 100, Close: 100,
+				Complete: true})
+			broker := &pointedWallet{PaperWallet: wallet, point: 2}
+			s := newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopValue, c.MaxRiskPct = 50, maxRisk })
+			s.OnCandle(candle(), broker)
+			asset, _, err := wallet.Position("BTCUSDT")
+			require.NoError(t, err)
+			require.InDelta(t, want, asset, 1e-9, "max risk %g%%", maxRisk)
+			if want > 0 {
+				leg := s.protection["BTCUSDT"].leg
+				require.Equal(t, model.OrderTypeStopLoss, leg.Type)
+				require.InDelta(t, 99.5, *leg.Stop, 1e-9, "50 BRL / (50 units x 2 BRL)")
+			}
+		}
+	})
+
 	t.Run("the tightest of the stops", func(t *testing.T) {
 		s := newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopATR, c.BrokerStopATR = 3, 1.5 })
-		require.InDelta(t, 98.5, s.entryStop(candle(), model.SideTypeBuy, 100), 1e-9)
+		require.InDelta(t, 98.5, s.entryStop(candle(), model.SideTypeBuy, 100, 1), 1e-9)
 		s = newRKTrendConfluence(t, func(c *RKTrendConfluenceConfig) { c.StopATR, c.BrokerTrailingATR = 1, 2 })
-		require.InDelta(t, 99, s.entryStop(candle(), model.SideTypeBuy, 100), 1e-9)
-		require.InDelta(t, 101, s.entryStop(candle(), model.SideTypeSell, 100), 1e-9)
+		require.InDelta(t, 99, s.entryStop(candle(), model.SideTypeBuy, 100, 1), 1e-9)
+		require.InDelta(t, 101, s.entryStop(candle(), model.SideTypeSell, 100, 1), 1e-9)
 	})
 
 	t.Run("a stop loss needed", func(t *testing.T) {
@@ -1037,23 +1077,35 @@ func TestRKSizing(t *testing.T) {
 		sizing      rkSizing
 		quote       float64 // available, at a price of 100
 		size, value float64 // 0 when no position opens
+		point       float64 // the point value, 1 when 0
 	}{
-		{"a share of the balance", rkSizing{fraction: 0.5, leverage: 1, minValue: 10}, 10000, 50, 5000},
-		{"a share of the balance, leveraged", rkSizing{fraction: 0.1, leverage: 20, minValue: 10}, 10000, 200, 20000},
-		{"a share worth less than the minimum", rkSizing{fraction: 0.5, leverage: 1, minValue: 10}, 10, 0, 0},
-		{"a lot", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 10000, 0.5, 50},
-		{"a lot with little balance", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 50, 0.5, 50},
-		{"a lot worth more than the balance", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 49, 0, 0},
+		{"a share of the balance", rkSizing{fraction: 0.5, leverage: 1, minValue: 10}, 10000, 50, 5000, 0},
+		{"a share of the balance, leveraged", rkSizing{fraction: 0.1, leverage: 20, minValue: 10}, 10000, 200, 20000, 0},
+		{"a share worth less than the minimum", rkSizing{fraction: 0.5, leverage: 1, minValue: 10}, 10, 0, 0, 0},
+		{"a lot", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 10000, 0.5, 50, 0},
+		{"a lot with little balance", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 50, 0.5, 50, 0},
+		{"a lot worth more than the balance", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 49, 0, 0, 0},
 		{"a lot within the leveraged balance", rkSizing{sizes: lot, fraction: 1, leverage: 2, minValue: 10}, 25, 0.5,
-			50},
-		{"a lot taken for dust", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 51}, 10000, 0, 0},
+			50, 0},
+		{"a lot taken for dust", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 51}, 10000, 0, 0, 0},
 		{"no lot for the pair", rkSizing{sizes: map[string]float64{"ETHUSDT": 1}, fraction: 1, leverage: 1,
-			minValue: 10}, 10000, 0, 0},
+			minValue: 10}, 10000, 0, 0, 0},
+		// a BRL account: 5 BRL a unit for 1 of the price
+		{"a share of a BRL balance", rkSizing{fraction: 0.5, leverage: 1, minValue: 10}, 10000, 10, 5000, 5},
+		{"a lot in BRL", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10}, 10000, 0.5, 250, 5},
+		{"a lot in BRL worth more than the balance", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 10},
+			249, 0, 0, 5},
+		{"a lot in BRL taken for dust", rkSizing{sizes: lot, fraction: 1, leverage: 1, minValue: 251}, 10000, 0, 0,
+			5},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			size, value, ok := tt.sizing.position("BTCUSDT", tt.quote, 100)
+			point := tt.point
+			if point == 0 {
+				point = 1
+			}
+			size, value, ok := tt.sizing.position("BTCUSDT", rkCash{free: tt.quote, point: point}, 100)
 			require.Equal(t, tt.size > 0, ok)
 			if ok {
 				require.InDelta(t, tt.size, size, 1e-9)
@@ -1061,6 +1113,19 @@ func TestRKSizing(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("the money of the stops and of the risk in the account currency", func(t *testing.T) {
+		// 5.5 BRL a unit for 1 of the price: 55 BRL lost 10 below for 1 unit
+		require.InDelta(t, 90, rkLossLevel(model.SideTypeBuy, 100, 1, 5.5, 55), 1e-9)
+		require.InDelta(t, 120, rkProfitLevel(model.SideTypeBuy, 100, 1, 5.5, 110), 1e-9)
+		require.InDelta(t, 110, rkLossLevel(model.SideTypeSell, 100, 1, 5.5, 55), 1e-9)
+		// 55 BRL at the stop: over 0.5% of 10000 BRL, within 1%
+		cash := rkCash{free: 10000, point: 5.5}
+		require.True(t, rkSizing{maxRisk: 0.5}.risky("BTCUSDT", 100, 90, 1, cash))
+		require.False(t, rkSizing{maxRisk: 1}.risky("BTCUSDT", 100, 90, 1, cash))
+		// the point value of the quote (1) gives the levels of before
+		require.InDelta(t, 99.5, rkLossLevel(model.SideTypeBuy, 100, 100, 1, 50), 1e-9)
+	})
 
 	t.Run("a share of the balance is ordered by its value, a lot by its size", func(t *testing.T) {
 		broker := &sizingBroker{}

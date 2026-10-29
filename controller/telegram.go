@@ -26,8 +26,9 @@ import (
 )
 
 // orderRegexp parses /buy and /sell as the Telegram of the bots does: an amount
-// in quote, in % of the balance, or a size in lots, eg: 0.1 lot, with nothing
-// after it, so a typo in the unit isn't taken for an amount in quote.
+// in the currency of the account (the quote in a paper wallet), in % of the
+// balance, or a size in lots, eg: 0.1 lot, with nothing after it, so a typo in
+// the unit isn't taken for an amount.
 var orderRegexp = regexp.MustCompile(`^/(?P<side>buy|sell)(?:@\w+)?\s+(?P<pair>\w+)\s+` +
 	`(?P<amount>\d+(?:\.\d+)?)(?:(?P<percent>%)|\s*(?P<lot>(?i:lot(?:s|es?)?)))?\s*$`)
 
@@ -506,12 +507,13 @@ func closedAt(o ui.Order) int64 {
 
 // profitSummary sums up the trades closed on the pair of the snapshot, the
 // orders filled with a profit, from since (the start of the current period of
-// the agent, zero for all of them), as the dashboard does: as the account
-// booked them, in its currency, when it did for all (eg: MT5), else the ones
-// of the core, in the quote. It reports false without any.
+// the agent, zero for all of them), as the dashboard does: on an account, as
+// it booked them, in its currency, the ones it didn't book yet counted apart
+// as awaited, never converted nor taken from the core; elsewhere, eg: in a
+// simulation (the paper wallet, told), the ones of the core, in the quote. It
+// reports false without any.
 func profitSummary(snapshot ui.Snapshot, since time.Time) (string, bool) {
 	var closed []ui.Order
-	booked := true
 	for _, o := range snapshot.Orders {
 		if o.Status != string(model.OrderStatusTypeFilled) || (o.Profit == 0 && o.ProfitValue == 0) {
 			continue
@@ -520,24 +522,35 @@ func profitSummary(snapshot ui.Snapshot, since time.Time) (string, bool) {
 			continue // closed before the current period
 		}
 		closed = append(closed, o)
-		booked = booked && o.AccountProfit != nil
 	}
-	trades := len(closed)
-	if trades == 0 {
+	if len(closed) == 0 {
 		return "", false
 	}
 
-	currency := snapshot.Quote
-	if booked {
-		currency = cmp.Or(closed[0].AccountCurrency, snapshot.AccountCurrency, snapshot.Quote)
+	account := snapshot.AccountCurrency != "" || slices.ContainsFunc(closed, func(o ui.Order) bool {
+		return o.AccountProfit != nil
+	})
+	currency := snapshot.AccountCurrency
+	switch {
+	case account:
+	case snapshot.Simulated:
+		currency = snapshot.Quote + " (simulated)"
+	default:
+		currency = snapshot.Quote // an exchange without an account reported
 	}
-	var wins, losses int
+	var trades, wins, losses, awaited int
 	var profit, grossProfit, grossLoss float64
 	for _, o := range closed {
 		value := o.ProfitValue
-		if booked {
+		if account {
+			if o.AccountProfit == nil {
+				awaited++
+				continue
+			}
 			value = *o.AccountProfit
+			currency = cmp.Or(o.AccountCurrency, currency)
 		}
+		trades++
 		profit += value
 		if value > 0 || (value == 0 && o.Profit > 0) {
 			wins++
@@ -554,8 +567,16 @@ func profitSummary(snapshot ui.Snapshot, since time.Time) (string, bool) {
 	} else if grossProfit == 0 {
 		factor = "0.00"
 	}
-	summary := fmt.Sprintf("PAIR: %s\nTrades: %d (%d wins, %d losses, %.1f%%)\nProfit: %.2f %s\nProfit factor: %s",
-		snapshot.Pair, trades, wins, losses, float64(wins)/float64(trades)*100, profit, currency, factor)
+	rate := 0.0
+	if trades > 0 {
+		rate = float64(wins) / float64(trades) * 100
+	}
+	summary := fmt.Sprintf("PAIR: %s\nTrades: %d (%d wins, %d losses, %.1f%%)\nProfit: %s\nProfit factor: %s",
+		snapshot.Pair, trades, wins, losses, rate, strings.TrimSpace(fmt.Sprintf("%.2f %s", profit, currency)),
+		factor)
+	if awaited > 0 {
+		summary += fmt.Sprintf("\nAwaiting the broker: %d trade(s), their result not booked yet", awaited)
+	}
 	if !since.IsZero() {
 		summary += "\nSince: " + since.UTC().Format("2006-01-02 15:04") + " UTC"
 	}

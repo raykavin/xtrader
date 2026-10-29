@@ -406,7 +406,7 @@ func (t *Trader) guardPending(df *model.Dataframe, broker service.Broker) {
 	if err != nil {
 		return // read again on the next tick
 	}
-	held := heldSide(asset*df.Close.Last(0), t.cfg.MinPositionValue)
+	held := heldSide(worth(broker, df.Pair, asset, df.Close.Last(0)), t.cfg.MinPositionValue)
 	ev := &pendingEvent{}
 	t.refreshPending(df, broker, t.state.Load(), held, t.dayClock(df), ev)
 	if p = t.pendings[df.Pair]; p != nil && !p.blockAt.IsZero() && !t.now().Before(p.blockAt) {

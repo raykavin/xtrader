@@ -40,9 +40,10 @@ type ScalpConfig struct {
 
 	// StopValue and TakeProfitValue, above 0, place the stop loss and the take
 	// profit at a fixed value instead: what the position loses, or earns, when
-	// the price reaches them, in quote currency, eg: 1 and 2 for a dollar and
-	// two on a pair quoted in USD. The level is that value over the size of
-	// the position from the entry close, whatever the ATR. 0 keeps the ATR.
+	// the price reaches them, in the currency of the account (in the paper
+	// wallet, the quote), eg: 5 and 10 for five and ten reais on a BRL account.
+	// The level is that value over the size of the position times its point
+	// value from the entry close, whatever the ATR. 0 keeps the ATR.
 	StopValue       float64
 	TakeProfitValue float64
 
@@ -333,12 +334,12 @@ func (s *Scalp) OnCandle(df *model.Dataframe, broker service.Broker) {
 		return
 	}
 
-	_, quote, err := broker.Position(df.Pair)
+	cash, err := rkCashOf(broker, df.Pair)
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	size, _, ok := s.sizing.position(df.Pair, quote, closePrice)
+	size, _, ok := s.sizing.position(df.Pair, cash, closePrice)
 	if !ok {
 		return
 	}
@@ -346,11 +347,11 @@ func (s *Scalp) OnCandle(df *model.Dataframe, broker service.Broker) {
 	atr, sign := df.Metadata["sc_atr"].Last(0), rkSign(entry)
 	stop := closePrice - sign*s.cfg.StopATR*atr
 	if s.cfg.StopValue > 0 {
-		stop = rkLossLevel(entry, closePrice, size, s.cfg.StopValue)
+		stop = rkLossLevel(entry, closePrice, size, cash.point, s.cfg.StopValue)
 	}
 	profit := closePrice + sign*s.cfg.TakeProfitATR*atr
 	if s.cfg.TakeProfitValue > 0 {
-		profit = rkProfitLevel(entry, closePrice, size, s.cfg.TakeProfitValue)
+		profit = rkProfitLevel(entry, closePrice, size, cash.point, s.cfg.TakeProfitValue)
 	}
 	log.Infof("[SCALP] %s %s | %s | close %f | stop %f | take profit %f", df.Pair, s.cfg.Timeframe, entry,
 		closePrice, stop, profit)
@@ -378,7 +379,7 @@ func (s *Scalp) position(df *model.Dataframe, broker service.Broker) (float64, m
 	if err != nil {
 		return 0, "", err
 	}
-	return asset, rkHeld(asset*df.Close.Last(0), s.cfg.MinPositionValue), nil
+	return asset, rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), s.cfg.MinPositionValue), nil
 }
 
 // close closes the position of trade at the market, and reports whether the

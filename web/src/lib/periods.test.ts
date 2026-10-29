@@ -126,12 +126,15 @@ describe("periodResults", () => {
   });
 
   it("leaves the sums out when the pairs count in different currencies", () => {
-    const mixed: Snapshot[] = [
-      snapshot("BTCUSDm", [close("BTCUSDm", 400, 20)]),
-      snapshot("ETHUSDT", [
+    // a simulation beside the account: its profits in its quote
+    const simulated: Snapshot = {
+      ...snapshot("ETHUSDT", [
         order({ pair: "ETHUSDT", created_at: 350, profit: 0.01, profit_value: 4 }),
       ]),
-    ];
+      account_currency: undefined,
+      simulated: true,
+    };
+    const mixed: Snapshot[] = [snapshot("BTCUSDm", [close("BTCUSDm", 400, 20)]), simulated];
     const [current] = results(periods, mixed, 2) as [PeriodResult];
     expect(current.pairs.map((p) => p.stats.profitCurrency)).toEqual(["BRL", "USD"]);
     expect(current.trades).toBe(2);

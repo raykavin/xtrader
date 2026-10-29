@@ -30,13 +30,15 @@ const (
 const dailyBy = "limite diário"
 
 // dailyScope is a scope of the daily limits: all the agents together (key
-// empty, agentID nil) or an agent; its limits, its agents, its currency (of
-// the limits, or of the account of the agent).
+// empty, agentID nil, its results one by currency of the accounts, the limits
+// applying to each apart) or an agent (in the currency of its account); its
+// limits, its agents.
 type dailyScope struct {
 	key     string
 	agentID *int64
 	limits  ui.DailyLimitSettings
-	names   []string // its agents, paper ones included (blocked and closed with all the agents)
+	names   []string         // its agents, paper ones included (blocked and closed with all the agents)
+	results []ui.DailyResult // of all the agents, by currency
 }
 
 // dailyLimiter applies the daily limits: every dailyLimitEvery, and at once
@@ -49,7 +51,6 @@ type dailyScope struct {
 // llm.LocalZone), and tells how they stand (see Status).
 type dailyLimiter struct {
 	s     *Supervision
-	fx    *fxRates
 	every time.Duration
 	zone  *time.Location
 	wake  chan struct{}
@@ -68,7 +69,7 @@ type dailyLimiter struct {
 }
 
 func newDailyLimiter(s *Supervision) *dailyLimiter {
-	return &dailyLimiter{s: s, fx: newFXRates(s.now), every: dailyLimitEvery, zone: llm.LocalZone(),
+	return &dailyLimiter{s: s, every: dailyLimitEvery, zone: llm.LocalZone(),
 		wake: make(chan struct{}, 1), owners: make(map[string]dailyOwner), carry: make(map[string]dailyCarry),
 		breaches: make(map[string]int), failures: make(map[string]int), held: make(map[int64]int),
 		flattenAt: make(map[int64]time.Time), triedAt: make(map[int64]time.Time)}
@@ -122,7 +123,8 @@ func (l *dailyLimiter) midnight(t time.Time) time.Time {
 }
 
 // dailyMeasure is the result of the day read: the agents, the limits, the
-// accounts and the metric, and the result of each scope (see resultOf).
+// accounts and the metric, the result of each scope and the ones of all the
+// agents by currency (see globalResults).
 type dailyMeasure struct {
 	at       time.Time
 	day      string
@@ -131,7 +133,8 @@ type dailyMeasure struct {
 	accounts []liveAccount
 	reads    []dailyRead
 	metric   dailyMetric
-	results  map[string]*ui.DailyResult // by scope key
+	results  map[string]*ui.DailyResult // by scope key: of all the agents, the one their limits weigh
+	globals  []ui.DailyResult           // of all the agents, by currency
 }
 
 // measure reads the result of the day of the agents of the accounts trading
@@ -182,9 +185,8 @@ func (l *dailyLimiter) measure(ctx context.Context) (*dailyMeasure, error) {
 			m.results[a.Name] = m.agentResult(a.Name)
 		}
 	}
-	if m.global.Currency != "" {
-		m.results[""] = l.globalResult(ctx, m)
-	}
+	m.globals = m.globalResults()
+	m.results[""] = weighed(m.globals, m.global, m.metric.missing)
 	return m, nil
 }
 
@@ -242,62 +244,69 @@ func (m *dailyMeasure) agentResult(name string) *ui.DailyResult {
 	return result
 }
 
-// globalResult returns the result of the day of all the agents together, in
-// the currency of the limits, each account converted (see fxRates):
-// incomplete with an account not read or a rate missing.
-func (l *dailyLimiter) globalResult(ctx context.Context, m *dailyMeasure) *ui.DailyResult {
-	to := m.global.Currency
-	result := &ui.DailyResult{Currency: to, Complete: len(m.metric.missing) == 0,
-		Missing: slices.Clone(m.metric.missing)}
-	rates := map[string]float64{to: 1}
-	for _, byCurrency := range m.metric.byAgent {
-		for currency, amounts := range byCurrency {
-			rate, ok := rates[currency]
-			if !ok {
-				var err error
-				rate, err = l.rate(ctx, m, currency, to)
-				if err != nil {
-					rate = math.NaN()
-					result.Complete = false
-					result.Missing = append(result.Missing, fmt.Sprintf("sem cotação de %s para %s (%v)", currency,
-						to, err))
-				}
-				rates[currency] = rate
-			}
-			if math.IsNaN(rate) {
-				continue
-			}
-			result.Realized += amounts.realized * rate
-			result.Open += amounts.open * rate
+// globalResults returns the results of the day of all the agents together,
+// one by currency of their accounts, none converted, by currency: each
+// incomplete (Missing telling why) with an account not read.
+func (m *dailyMeasure) globalResults() []ui.DailyResult {
+	byCurrency := make(map[string]*ui.DailyResult)
+	add := func(currency string) *ui.DailyResult {
+		if byCurrency[currency] == nil {
+			byCurrency[currency] = &ui.DailyResult{Currency: currency}
+		}
+		return byCurrency[currency]
+	}
+	for i := range m.accounts {
+		if currency := m.reads[i].account.currency(); m.reads[i].gap == "" && currency != "" {
+			add(currency) // read, its result 0 without any trade
 		}
 	}
-	result.Total = result.Realized + result.Open
-	return result
+	for _, amounts := range m.metric.byAgent {
+		for currency, a := range amounts {
+			result := add(currency)
+			result.Realized += a.realized
+			result.Open += a.open
+		}
+	}
+	results := make([]ui.DailyResult, 0, len(byCurrency))
+	for _, result := range byCurrency {
+		result.Total = result.Realized + result.Open
+		result.Complete, result.Missing = len(m.metric.missing) == 0, slices.Clone(m.metric.missing)
+		results = append(results, *result)
+	}
+	slices.SortFunc(results, func(a, b ui.DailyResult) int { return strings.Compare(a.Currency, b.Currency) })
+	return results
 }
 
-// rate returns the value in to of a unit of from, read on the bridge of an
-// account in from.
-func (l *dailyLimiter) rate(ctx context.Context, m *dailyMeasure, from, to string) (float64, error) {
-	for i, account := range m.accounts {
-		if m.reads[i].gap != "" || m.reads[i].account.currency() != from {
-			continue
-		}
-		var pairs []string
-		for _, a := range account.agents {
-			pairs = append(pairs, a.book.Pairs...)
-		}
-		var rate float64
-		p := l.s.positions
-		_, err := p.readBridge(ctx, account, "the rates", func(token string) error {
-			var err error
-			rate, err = l.fx.rate(ctx, account.bridge, pairs, from, to, func(path string, out any) error {
-				return p.get(ctx, account.bridge, path, token, out)
-			})
-			return err
-		})
-		return rate, err
+// weighed returns the result of results the limits weigh, of all the agents
+// together, their amounts applying in each currency apart: the first one
+// reaching a limit, else the one closest to one; without any (no account
+// read), one of no currency, incomplete with missing.
+func weighed(results []ui.DailyResult, limits ui.DailyLimitSettings, missing []string) *ui.DailyResult {
+	if len(results) == 0 {
+		return &ui.DailyResult{Complete: len(missing) == 0, Missing: slices.Clone(missing)}
 	}
-	return 0, fmt.Errorf("no account in %s read", from)
+	closeness := func(r ui.DailyResult) float64 {
+		near := math.Inf(-1)
+		if limits.MaxLoss != nil {
+			near = max(near, -r.Total / *limits.MaxLoss)
+		}
+		if limits.MaxGain != nil {
+			near = max(near, r.Total / *limits.MaxGain)
+		}
+		return near
+	}
+	best := 0
+	for i, r := range results {
+		if trigger, _ := breach(r.Total, limits); trigger != "" {
+			best = i
+			break
+		}
+		if closeness(r) > closeness(results[best]) {
+			best = i
+		}
+	}
+	result := results[best]
+	return &result
 }
 
 // scopes returns the scopes of the daily limits of m: all the agents together
@@ -309,7 +318,7 @@ func (m *dailyMeasure) scopes() []dailyScope {
 		all = append(all, a.Name)
 	}
 	if m.global.Enabled {
-		scopes = append(scopes, dailyScope{limits: m.global, names: all})
+		scopes = append(scopes, dailyScope{limits: m.global, names: all, results: m.globals})
 	}
 	for _, a := range m.agents {
 		if limits := a.DailyLimitOf(); limits.Enabled && a.Mode == "live" {
@@ -456,6 +465,9 @@ func (l *dailyLimiter) decide(ctx context.Context, m *dailyMeasure, scope dailyS
 	failures := l.failures[scope.key]
 	l.mu.Unlock()
 	metric := map[string]any{"scope": scopeName(scope.key), "result": result, "limits": scope.limits}
+	if scope.key == "" {
+		metric["results"] = scope.results // every currency, the result above the one weighed
+	}
 
 	if !result.Complete {
 		if failures < dailyConfirmReads || incomplete != nil || limit != nil {
@@ -667,6 +679,9 @@ func (l *dailyLimiter) setStatus(m *dailyMeasure, tripped []store.DailyGuard) {
 		Agents: []ui.DailyScopeStatus{}}
 	stateOf := func(key string, limits ui.DailyLimitSettings) ui.DailyScopeStatus {
 		scope := ui.DailyScopeStatus{Agent: key, Limits: limits, Result: m.results[key], State: ui.DailyOff}
+		if key == "" {
+			scope.Results = m.globals
+		}
 		if limits.Enabled {
 			scope.State = ui.DailyFree
 		}
@@ -735,11 +750,7 @@ func (l *dailyLimiter) preview(ctx context.Context, a *store.Agent,
 			return ui.DailyLimitPreview{}, nil, err
 		}
 		if a == nil {
-			if limits.Currency == "" {
-				limits.Currency = m.global.Currency
-			}
-			m.global = limits
-			preview.Result = l.globalResult(ctx, m)
+			preview.Result, preview.Results = weighed(m.globals, limits, m.metric.missing), m.globals
 		} else {
 			preview.Result = m.results[key]
 		}

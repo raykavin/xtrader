@@ -594,3 +594,34 @@ func TestChart_CloseEntries(t *testing.T) {
 	}
 	assert.Equal(t, map[int64]int64{3: 1, 4: 1, 5: 4, 7: 6}, ids)
 }
+
+// pointedReporter is the reporter of an account valuing a move of 1 of the
+// price of a unit at point in its currency, as MT5 on a BRL account.
+type pointedReporter struct {
+	fakeReporter
+	point float64
+}
+
+func (r *pointedReporter) PointValue(string) (float64, error) { return r.point, nil }
+
+// The snapshot of a pair tells the money of the account: its currency and the
+// point value of the pair; a paper wallet tells its money simulated.
+func TestChart_SnapshotMoney(t *testing.T) {
+	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
+	c := newTestChart(t, WithAccountReporter(&pointedReporter{point: 5.18}))
+	c.OnCandle(candleAt("BTCUSDT", base, 20000))
+	snapshot, ok := c.snapshotOf("BTCUSDT")
+	require.True(t, ok)
+	require.Equal(t, "BRL", snapshot.AccountCurrency)
+	require.Equal(t, 5.18, snapshot.PointValue)
+	require.False(t, snapshot.Simulated)
+
+	paper := newTestChart(t, WithPaperWallet(exchange.NewPaperWallet(context.Background(), "USDT",
+		exchange.WithPaperAsset("USDT", 1000))))
+	paper.OnCandle(candleAt("BTCUSDT", base, 20000))
+	snapshot, ok = paper.snapshotOf("BTCUSDT")
+	require.True(t, ok)
+	require.True(t, snapshot.Simulated)
+	require.Zero(t, snapshot.PointValue)
+	require.Empty(t, snapshot.AccountCurrency)
+}

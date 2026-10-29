@@ -2,7 +2,6 @@ package exchange
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
@@ -11,17 +10,6 @@ import (
 // This file tells how the positions of the bot are protected now, and puts a
 // stop loss on one without, see service.ProtectionReader, service.StopSetter,
 // service.ProtectionLimiter and service.PositionCostReader.
-
-// mt5CostRateFor is how long a rate converting the account currency into the
-// quote currency of a symbol is used before it is read again.
-const mt5CostRateFor = time.Minute
-
-// mt5CostRate is the value of one unit of the account currency in the quote
-// currency of a symbol, read at.
-type mt5CostRate struct {
-	rate float64
-	at   time.Time
-}
 
 // mt5Protective returns the level of leg protecting positions the most: for a
 // stop loss the highest of a long position, the lowest of a short one; for a
@@ -111,11 +99,11 @@ func (m *MT5) ProtectionLimits(pair string) (service.ProtectionLimits, bool) {
 
 // PositionCosts returns the costs known of the position of the bot on pair,
 // see service.PositionCostReader: its negative swap, and the commission and
-// the fee of its entry deals twice (the exit taken as the same), converted
-// into a distance of the price by the units held and the rate of the account
-// currency in the quote one. Known is false when an entry deal isn't in the
-// history read yet (its commission unknown), or the rate can't be read; the
-// swap counts all the same.
+// the fee of its entry deals twice (the exit taken as the same), in the
+// account currency, turned into a distance of the price by the units held and
+// the point value of the symbol. Known is false when an entry deal isn't in
+// the history read yet (its commission unknown); the swap counts all the same.
+// Nothing when the point value can't be read.
 func (m *MT5) PositionCosts(pair string) service.PositionCosts {
 	if m.dataOnly || m.book == nil {
 		return service.PositionCosts{}
@@ -150,36 +138,11 @@ func (m *MT5) PositionCosts(pair string) service.PositionCosts {
 	if units <= 0 {
 		return service.PositionCosts{}
 	}
-	rate, ok := m.costRate(symbol)
-	if !ok {
+	value, err := m.pointValue(m.ctx, symbol.Name)
+	if err != nil {
 		return service.PositionCosts{}
 	}
-	return service.PositionCosts{Price: money * rate / units, Known: known}
-}
-
-// costRate returns the value of one unit of the account currency in the quote
-// currency of symbol, read again every mt5CostRateFor.
-func (m *MT5) costRate(symbol mt5Symbol) (float64, bool) {
-	if symbol.CurrencyProfit == "" || symbol.CurrencyProfit == m.currency {
-		return 1, true
-	}
-	m.costRatesMtx.Lock()
-	cached, ok := m.costRates[symbol.Name]
-	m.costRatesMtx.Unlock()
-	if ok && time.Since(cached.at) < mt5CostRateFor {
-		return cached.rate, true
-	}
-	rate, err := m.rate(m.ctx, m.currency, symbol.CurrencyProfit)
-	if err != nil || rate <= 0 {
-		return 0, false
-	}
-	m.costRatesMtx.Lock()
-	if m.costRates == nil {
-		m.costRates = make(map[string]mt5CostRate)
-	}
-	m.costRates[symbol.Name] = mt5CostRate{rate: rate, at: time.Now()}
-	m.costRatesMtx.Unlock()
-	return rate, true
+	return service.PositionCosts{Price: money / (units * value), Known: known}
 }
 
 // SetStop puts a stop loss at stop on the positions of the bot held on side of

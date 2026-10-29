@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchDailyLimits } from "../api/client";
 import type { DailyLimitsResponse, DailyScopeStatus } from "../api/types";
-import { dailyStateLabel, flattenLabel, limitsLabel, resultAmount } from "../lib/dailyLimits";
+import {
+  dailyStateLabel,
+  flattenLabel,
+  globalUnit,
+  limitsLabel,
+  resultAmount,
+  scopeResults,
+} from "../lib/dailyLimits";
 import { DailyLimitFields } from "./DailyLimitFields";
 import { PageHeader } from "./PageHeader";
 import type { SectionIntro } from "./SettingsPage";
@@ -14,16 +21,20 @@ interface Props {
   intro: SectionIntro;
 }
 
-/** A scope of the daily limits now: its state, its result of the day, and the guard blocking it. */
+/**
+ * A scope of the daily limits now: its state, its result of the day (of all
+ * the agents, one by currency of the accounts), and the guard blocking it.
+ */
 function ScopeState({ scope }: { scope: DailyScopeStatus }) {
   const state = dailyStateLabel(scope);
   const flatten = flattenLabel(scope.guard?.flatten_status);
-  const result = scope.result;
+  const results = scopeResults(scope);
+  const missing = results.find((r) => !r.complete && (r.missing?.length ?? 0) > 0)?.missing;
   return (
     <div className="daily-state">
       <span className={`status-chip ${state.tone}`}>{state.text}</span>
-      {result && (
-        <span className="daily-result">
+      {results.map((result) => (
+        <span key={result.currency || "none"} className="daily-result">
           <strong className="mono">{resultAmount(result.total, result.currency)}</strong>
           <span className="field-hint">
             realizado {resultAmount(result.realized, result.currency)} · aberto{" "}
@@ -31,20 +42,19 @@ function ScopeState({ scope }: { scope: DailyScopeStatus }) {
             {!result.complete && " · incompleto"}
           </span>
         </span>
-      )}
+      ))}
       {scope.guard && <p className="daily-reason">{scope.guard.reason}</p>}
       {flatten && <span className={`status-chip ${flatten.tone}`}>{flatten.text}</span>}
-      {result && !result.complete && (result.missing?.length ?? 0) > 0 && (
-        <p className="field-hint">Falta: {result.missing?.join("; ")}</p>
-      )}
+      {missing && <p className="field-hint">Falta: {missing.join("; ")}</p>}
     </div>
   );
 }
 
 /**
  * The daily limits of the application: the loss and the gain of the day of
- * all the agents together (their result realized plus open, every account
- * converted to the currency of the limits), how they stand now, the agents
+ * all the agents together (their result realized plus open, in the currency of
+ * the accounts, the limits applying to each currency apart, none converted),
+ * how they stand now, the agents
  * with limits of their own, and how the limits act: reached, the positions
  * zeroed, the pending entries canceled and the entries blocked until 00:00.
  */
@@ -109,6 +119,7 @@ export function DailyLimitsSettings({ intro }: Props) {
           <ScopeState scope={status.global} />
           <DailyLimitFields
             key={version}
+            unit={globalUnit(scopeResults(status.global))}
             settings={data.settings}
             onSaved={(_, response) => {
               setData({ settings: response.settings, status: response.status });
@@ -181,8 +192,13 @@ export function DailyLimitsSettings({ intro }: Props) {
             contorna o bloqueio. Só a virada do dia ou uma mudança explícita do limite o libera.
           </li>
           <li>
-            Sem conseguir ler uma conta ou a cotação, as entradas ficam bloqueadas (sem zerar nada)
-            até a leitura voltar.
+            Tudo na moeda de cada conta, sem conversão de câmbio: com contas em moedas diferentes, o
+            limite global vale para o resultado de cada moeda separadamente, e atingido em qualquer
+            uma, zera e bloqueia todos.
+          </li>
+          <li>
+            Sem conseguir ler uma conta, as entradas ficam bloqueadas (sem zerar nada) até a leitura
+            voltar.
           </li>
           {(status.paper?.length ?? 0) > 0 && (
             <li>

@@ -195,23 +195,24 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
     return () => controller.abort();
   }, [agent.name]);
 
-  // the currency of the deposit: the one of the current period, else the one
-  // the agent counts its profits in (the account's, eg: BRL on MT5)
+  // the currency of the deposit: the one the agent counts its profits in, the
+  // account's (eg: BRL on MT5), or the quote of a simulation, fixed; typed only
+  // while unknown (the agent offline), from the one of the current period
+  const fixed =
+    snapshots?.find((s) => s.account_currency)?.account_currency ??
+    (snapshots?.[0]?.simulated ? snapshots[0].quote : undefined);
   useEffect(() => {
-    if (currency !== "") return;
-    const known =
-      periods?.[0]?.currency ??
-      snapshots?.find((s) => s.account_currency)?.account_currency ??
-      snapshots?.[0]?.quote;
+    if (currency !== "" || fixed !== undefined) return;
+    const known = periods?.[0]?.currency ?? snapshots?.[0]?.quote;
     if (known) setCurrency(known);
-  }, [periods, snapshots, currency]);
+  }, [periods, snapshots, currency, fixed]);
 
   const results = useMemo(
     () => (periods ? periodResults(periods, snapshots ?? []) : null),
     [periods, snapshots],
   );
   const amount = parseAmount(deposit);
-  const code = currency.trim().toUpperCase();
+  const code = (fixed ?? currency).trim().toUpperCase();
   const invalid =
     amount === null
       ? "Informe o depósito: um valor a partir de 0, por exemplo 1.000,00."
@@ -320,7 +321,15 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
                 className="input mono"
                 maxLength={3}
                 placeholder="BRL"
-                value={currency}
+                value={fixed ?? currency}
+                readOnly={fixed !== undefined}
+                title={
+                  fixed === undefined
+                    ? undefined
+                    : snapshots?.some((s) => s.account_currency)
+                      ? "A moeda da conta do agente"
+                      : "A moeda da simulação"
+                }
                 disabled={busy}
                 aria-invalid={currency !== "" && !/^[A-Z]{3}$/.test(code)}
                 onChange={(e) => setCurrency(e.target.value.toUpperCase())}

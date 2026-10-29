@@ -114,7 +114,8 @@ export function EquityChart({ snapshot, theme }: Props) {
     <div className="panel-body">
       <div className="panel-toolbar">
         <p className="panel-summary">
-          Patrimônio da carteira em {snapshot.quote} e a posição em {snapshot.asset}
+          Patrimônio da carteira {snapshot.simulated ? "simulada " : ""}em {snapshot.quote} e a
+          posição em {snapshot.asset}
         </p>
         <ul className="legend" aria-label="Séries">
           <li className="legend-chip">

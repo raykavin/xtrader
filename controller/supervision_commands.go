@@ -43,7 +43,8 @@ func dailyTools() []llm.ToolSpec {
 			"e de cada agente), o resultado do dia considerado (realizado + aberto), e o estado das travas.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{}}`)},
 		{Name: "set_daily_limits", Description: "Configura limites diários de perda e ganho, só quando o usuário " +
-			"pedir. scope aggregate_all: UM limite para o resultado somado de todos os agentes; each_agent: o " +
+			"pedir. scope aggregate_all: UM limite para o resultado somado de todos os agentes (na moeda das " +
+			"contas, sem conversão: com contas em moedas diferentes, o mesmo valor vale em cada moeda); each_agent: o " +
 			"mesmo limite para CADA agente, individualmente. Se o pedido não deixar claro qual dos dois, pergunte. " +
 			"Ao atingir um limite, o sistema zera as posições do escopo, cancela as pendentes de entrada e bloqueia " +
 			"as entradas até 00:00. Uma mudança que dispararia ou liberaria a trava agora só é aplicada com " +
@@ -55,7 +56,6 @@ func dailyTools() []llm.ToolSpec {
 				`"enabled":{"type":"boolean","description":"ligar (padrão, com um limite) ou desligar"},` +
 				`"max_loss":{"type":["number","null"],"description":"a perda máxima do dia, positiva; null para nenhuma"},` +
 				`"max_gain":{"type":["number","null"],"description":"o ganho máximo do dia; null para nenhum"},` +
-				`"currency":{"type":"string","description":"de aggregate_all: a moeda do limite, ex.: BRL; cada agente usa a da sua conta"},` +
 				`"reason":{"type":"string","description":"o motivo, nas palavras do usuário"},` +
 				`"confirm_immediate_effect":{"type":"boolean","description":"o usuário concordou com o efeito imediato devolvido antes"}` +
 				`},"required":["scope","reason"]}`)},
@@ -132,15 +132,14 @@ func (t *chatTurn) dailyLimits(ctx context.Context) string {
 
 // dailyArgs are the arguments of set_daily_limits, see dailyTools.
 type dailyArgs struct {
-	Scope    string   `json:"scope"`
-	Agents   []string `json:"agents"`
-	All      bool     `json:"all"`
-	Enabled  *bool    `json:"enabled"`
-	MaxLoss  *float64 `json:"max_loss"`
-	MaxGain  *float64 `json:"max_gain"`
-	Currency string   `json:"currency"`
-	Reason   string   `json:"reason"`
-	Confirm  bool     `json:"confirm_immediate_effect"`
+	Scope   string   `json:"scope"`
+	Agents  []string `json:"agents"`
+	All     bool     `json:"all"`
+	Enabled *bool    `json:"enabled"`
+	MaxLoss *float64 `json:"max_loss"`
+	MaxGain *float64 `json:"max_gain"`
+	Reason  string   `json:"reason"`
+	Confirm bool     `json:"confirm_immediate_effect"`
 }
 
 // The scopes of set_daily_limits.
@@ -174,27 +173,18 @@ func (t *chatTurn) setDailyLimits(ctx context.Context, arguments json.RawMessage
 			"ask the user whether they want it, or a limit for each agent")
 	case args.Scope == scopeEach && args.All == (len(args.Agents) > 0):
 		return toolError("ambiguous: each_agent needs the agents named, or all, not both nor none: ask the user")
-	case args.Scope == scopeEach && args.Currency != "":
-		return toolError("the limits of each agent are in the currency of its account: leave the currency out")
 	case args.Scope != scopeAggregate && args.Scope != scopeEach:
 		return toolError("scope: aggregate_all (one limit of all the agents together) or each_agent (the same " +
 			"limit for each agent): ask the user which")
 	}
 	change := store.DailyChange{Via: store.ViaChat, By: t.by, UserID: &t.userID, Reason: args.Reason}
 	if args.Scope == scopeAggregate {
-		limits.Currency = strings.ToUpper(strings.TrimSpace(args.Currency))
-		if limits.Currency == "" {
-			current, _, err := t.s.store.GlobalDailyLimit(ctx)
-			if err != nil {
-				return toolError(err.Error())
-			}
-			limits.Currency = current.Currency
-		}
 		preview, applied, err := t.s.daily.change(ctx, nil, limits, change, args.Confirm)
 		if err != nil {
 			return toolError(err.Error())
 		}
-		return t.dailyResult([]dailyOutcome{{Scope: "todos os agentes somados", Applied: applied, Preview: preview,
+		return t.dailyResult([]dailyOutcome{{Scope: "todos os agentes somados, na moeda de cada conta",
+			Applied: applied, Preview: preview,
 			Limits: limits}})
 	}
 

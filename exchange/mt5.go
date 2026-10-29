@@ -23,7 +23,7 @@ import (
 )
 
 // The MT5 adapter is split in three files: this one (the options, NewMT5, the
-// HTTP client of the bridge, the symbols, the sizes and the conversions),
+// HTTP client of the bridge, the symbols, the sizes and the point values),
 // mt5_market.go (the candles and the quotes) and mt5_trading.go (the book of
 // the account, the netting and every order method).
 
@@ -117,7 +117,7 @@ const (
 
 	// mt5HistoryLookback is how far back the deals and the orders of the
 	// history are read on startup; OrderSince reads further back when asked.
-	mt5HistoryLookback = 7 * 24 * time.Hour
+	mt5HistoryLookback = 60 * 24 * time.Hour
 	// mt5HistoryOverlap is how much each history read overlaps the previous
 	// one, as the records of the last moments may come late.
 	mt5HistoryOverlap = time.Minute
@@ -139,7 +139,11 @@ const (
 	mt5SettleRetry = 30 * time.Second
 	// mt5HistoryKept is how long the book keeps the history, pruned every
 	// mt5PruneInterval.
-	mt5HistoryKept   = 30 * 24 * time.Hour
+	mt5HistoryKept = 60 * 24 * time.Hour
+
+	// mt5PointValueFor is how long the point value of a symbol is used before
+	// it is read again, see pointValue.
+	mt5PointValueFor = time.Minute
 	mt5PruneInterval = time.Hour
 
 	// mt5UnlimitedLeverage is the leverage an "unlimited" account reports; it
@@ -392,15 +396,11 @@ type MT5 struct {
 	currency    string
 	demo        bool
 	accountLv   float64
-	suffixes    []string             // of the symbol names, eg: "m" for XAUUSDm
 	instruments map[string]mt5Symbol // the symbols traded
 	assetsInfo  map[string]model.AssetInfo
 
 	catalogMtx sync.Mutex
 	catalog    map[string]*mt5Symbol // every symbol looked up, nil when missing, by name
-
-	conversionsMtx sync.Mutex
-	conversions    map[string]mt5Conversion // symbols converting currencies, by from + to
 
 	quotesMtx sync.Mutex
 	quotes    map[string]mt5Quote // last ticks read, by symbol
@@ -413,8 +413,8 @@ type MT5 struct {
 	loadedMtx sync.Mutex
 	loaded    map[string]time.Time // last complete candle returned by CandlesByLimit, by pair and period
 
-	costRatesMtx sync.Mutex
-	costRates    map[string]mt5CostRate // the account currency in the quote one, see PositionCosts
+	pointValuesMtx sync.Mutex
+	pointValues    map[string]mt5PointValue // the money of a move of the price, see PointValue
 
 	book *mt5Book // the account, see mt5_trading.go
 }
@@ -600,6 +600,7 @@ type mt5Symbol struct {
 	StopsLevel     int     `json:"trade_stops_level"`  // points between the market and a new level or pending price
 	FreezeLevel    int     `json:"trade_freeze_level"` // points from the market within which nothing is modified
 	TickSize       float64 `json:"trade_tick_size"`    // the step of the prices, a multiple of point
+	TickValue      float64 `json:"trade_tick_value"`   // a tick of a lot, in the account currency
 	CurrencyBase   string  `json:"currency_base"`
 	CurrencyProfit string  `json:"currency_profit"`
 	CurrencyMargin string  `json:"currency_margin"`
@@ -644,7 +645,7 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		instruments:  make(map[string]mt5Symbol),
 		assetsInfo:   make(map[string]model.AssetInfo),
 		catalog:      make(map[string]*mt5Symbol),
-		conversions:  make(map[string]mt5Conversion),
+		pointValues:  make(map[string]mt5PointValue),
 		quotes:       make(map[string]mt5Quote),
 		loaded:       make(map[string]time.Time),
 	}
@@ -748,9 +749,6 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		base := RegisterMT5Pair(name, symbol.CurrencyBase, symbol.CurrencyProfit)
 		RegisterMT5Contract(name, symbol.ContractSize)
 		m.assetsInfo[name] = symbol.assetInfo(base)
-		if suffix := mt5Suffix(*symbol); !mt5Contains(m.suffixes, suffix) {
-			m.suffixes = append(m.suffixes, suffix)
-		}
 	}
 
 	mode := "demo"
@@ -763,11 +761,6 @@ func NewMT5(ctx context.Context, options ...MT5Option) (*MT5, error) {
 		return m, nil
 	}
 
-	for _, name := range m.symbols {
-		if _, err := m.conversion(ctx, m.currency, m.instruments[name].CurrencyProfit); err != nil {
-			return nil, err
-		}
-	}
 	if err := m.startTrading(ctx); err != nil {
 		return nil, err
 	}
@@ -924,6 +917,16 @@ func (s mt5Symbol) tick() float64 {
 	return s.Point
 }
 
+// pointValue returns the value in the account currency of a move of 1 of the
+// price for 1 unit: the tick value over the tick size and the contract size,
+// 0 when the symbol doesn't tell its tick value.
+func (s mt5Symbol) pointValue() float64 {
+	if s.TickValue <= 0 || s.tick() <= 0 {
+		return 0
+	}
+	return s.TickValue / s.tick() / s.contract()
+}
+
 // price rounds a price to the tick size of the symbol, when it has one coarser
 // than its point (eg: 0.25 for an index), and to its digits, as MT5 takes
 // them; 0 stays 0.
@@ -963,16 +966,6 @@ func mt5Round(value float64, digits int) float64 {
 	}
 	scale := math.Pow10(digits)
 	return math.Round(value*scale) / scale
-}
-
-// mt5Suffix returns the suffix of the name of a symbol after its currencies,
-// eg: "m" for XAUUSDm, "" when unknown.
-func mt5Suffix(s mt5Symbol) string {
-	prefix := s.CurrencyBase + s.CurrencyProfit
-	if prefix != "" && strings.HasPrefix(s.Name, prefix) {
-		return s.Name[len(prefix):]
-	}
-	return ""
 }
 
 func mt5Contains(values []string, value string) bool {
@@ -1038,70 +1031,48 @@ func (m *MT5) instrument(name string) mt5Symbol {
 	return mt5Symbol{}
 }
 
-// mt5Conversion is the symbol converting one currency into another: its price
-// is the second currency per unit of the first, or the inverse.
-type mt5Conversion struct {
-	symbol  string // empty for the same currency
-	inverse bool
+// mt5PointValue is the point value of a symbol, read at.
+type mt5PointValue struct {
+	value float64
+	at    time.Time
 }
 
-// conversion finds the symbol converting from into to: from+to or to+from
-// (inverted), with the suffixes of the symbols traded, eg: USDBRLm inverted for
-// BRL into USD.
-func (m *MT5) conversion(ctx context.Context, from, to string) (mt5Conversion, error) {
-	if from == to || from == "" || to == "" {
-		return mt5Conversion{}, nil
+// pointValue returns the value in the account currency of a move of 1 of the
+// price of name for 1 unit, see mt5Symbol.pointValue, as GET /symbol tells it
+// now: the tick value of a symbol quoted in another currency than the
+// account's follows its rate, at the terminal. Read again every
+// mt5PointValueFor.
+func (m *MT5) pointValue(ctx context.Context, name string) (float64, error) {
+	m.pointValuesMtx.Lock()
+	cached, ok := m.pointValues[name]
+	m.pointValuesMtx.Unlock()
+	if ok && time.Since(cached.at) < mt5PointValueFor {
+		return cached.value, nil
 	}
-	m.conversionsMtx.Lock()
-	conversion, ok := m.conversions[from+to]
-	m.conversionsMtx.Unlock()
-	if ok {
-		return conversion, nil
+	var info mt5Symbol
+	if err := m.get(ctx, "/symbol", url.Values{"symbol": {name}}, &info); err != nil {
+		return 0, fmt.Errorf("mt5: reading the symbol %s: %w", name, err)
 	}
-
-	suffixes := append(append([]string{}, m.suffixes...), "")
-	var tried []string
-	for _, suffix := range mt5Unique(suffixes) {
-		for _, candidate := range []mt5Conversion{{symbol: from + to + suffix}, {symbol: to + from + suffix,
-			inverse: true}} {
-			tried = append(tried, candidate.symbol)
-			symbol, err := m.symbol(ctx, candidate.symbol)
-			if err != nil {
-				return mt5Conversion{}, err
-			}
-			if symbol == nil {
-				continue
-			}
-			m.conversionsMtx.Lock()
-			m.conversions[from+to] = candidate
-			m.conversions[to+from] = mt5Conversion{symbol: candidate.symbol, inverse: !candidate.inverse}
-			m.conversionsMtx.Unlock()
-			return candidate, nil
-		}
+	if info.ContractSize <= 0 {
+		info.ContractSize = m.instrument(name).ContractSize
 	}
-	return mt5Conversion{}, fmt.Errorf("mt5: no symbol converts %s into %s, tried %s", from, to,
-		strings.Join(tried, ", "))
+	value := info.pointValue()
+	if value <= 0 || math.IsInf(value, 0) || math.IsNaN(value) {
+		return 0, fmt.Errorf("mt5: no tick value for %s", name)
+	}
+	m.pointValuesMtx.Lock()
+	m.pointValues[name] = mt5PointValue{value: value, at: time.Now()}
+	m.pointValuesMtx.Unlock()
+	return value, nil
 }
 
-// rate returns the value in to of one unit of from, at the mid price of the
-// symbol converting them.
-func (m *MT5) rate(ctx context.Context, from, to string) (float64, error) {
-	conversion, err := m.conversion(ctx, from, to)
-	if err != nil || conversion.symbol == "" {
-		return 1, err
+// PointValue returns the value in the account currency of a move of 1 of the
+// price of pair for 1 unit of its asset, see service.PointValuer.
+func (m *MT5) PointValue(pair string) (float64, error) {
+	if _, ok := m.instruments[pair]; !ok {
+		return 0, fmt.Errorf("mt5: %s isn't traded", pair)
 	}
-	tick, err := m.quote(ctx, conversion.symbol)
-	if err != nil {
-		return 0, err
-	}
-	price := mid(tick.Bid, tick.Ask)
-	if price <= 0 {
-		return 0, fmt.Errorf("mt5: no price for %s, converting %s into %s", conversion.symbol, from, to)
-	}
-	if conversion.inverse {
-		return 1 / price, nil
-	}
-	return price, nil
+	return m.pointValue(m.ctx, pair)
 }
 
 // mt5Tick is the answer of GET /tick (symbol_info_tick).
