@@ -975,6 +975,164 @@ type ClosedProfitResponse struct {
 	At       int64                `json:"at"`
 }
 
+// BacktestRequest is the body of POST /api/backtests: a batch of backtests
+// of Agents (by name) on their pairs (Pairs a subset, empty for all of each)
+// from From until before To (Unix seconds), its last ValidationShare (0 for
+// none, else up to 0.5) run apart as the validation of the rest; Timeframe
+// replacing the one of the agents ("" for theirs); the money (Balance, in the
+// quote of the pairs: a simulation) and the costs (Fee, a share of the
+// notional of each fill; SpreadPoints, for the candles without their spread;
+// SlippagePoints); DailyLoss and DailyGain, the daily limits of every run in
+// the quote currency (0 for none: the ones of the agents are in the currency
+// of their account, never converted); the ceilings of the runs of a language
+// model (0 for the defaults of the controller).
+type BacktestRequest struct {
+	Name            string   `json:"name"`
+	Agents          []string `json:"agents"`
+	Pairs           []string `json:"pairs,omitempty"`
+	From            int64    `json:"from"`
+	To              int64    `json:"to"`
+	ValidationShare float64  `json:"validation_share"`
+	Timeframe       string   `json:"timeframe,omitempty"`
+	Balance         float64  `json:"balance"`
+	Fee             float64  `json:"fee"`
+	SpreadPoints    float64  `json:"spread_points"`
+	SlippagePoints  float64  `json:"slippage_points"`
+	DailyLoss       float64  `json:"daily_loss,omitempty"`
+	DailyGain       float64  `json:"daily_gain,omitempty"`
+	LLMMaxCalls     int      `json:"llm_max_calls,omitempty"`
+	LLMMaxCost      float64  `json:"llm_max_cost,omitempty"`
+}
+
+// BacktestAssumptions are the assumptions of the runs of a batch, the same
+// for all of them: the money and the costs asked (see BacktestRequest), and
+// the execution, the same for all the backtests: the fills of the candles of
+// ExecutionTimeframe (the finest the period allows), the stops filled at the
+// open of a candle opening beyond them (GapFills), the worst assumed of a
+// candle reaching both the stop and the target or the entry and the stop
+// (Conservative), the positions open at the end valued at the market apart
+// from the realized result (EndPolicy).
+type BacktestAssumptions struct {
+	Balance            float64 `json:"balance"`
+	Currency           string  `json:"currency"`
+	Fee                float64 `json:"fee"`
+	SpreadPoints       float64 `json:"spread_points"`
+	SlippagePoints     float64 `json:"slippage_points"`
+	DailyLoss          float64 `json:"daily_loss,omitempty"`
+	DailyGain          float64 `json:"daily_gain,omitempty"`
+	Timeframe          string  `json:"timeframe,omitempty"`
+	ExecutionTimeframe string  `json:"execution_timeframe"`
+	GapFills           bool    `json:"gap_fills"`
+	Conservative       bool    `json:"conservative"`
+	EndPolicy          string  `json:"end_policy"`
+	LLMMaxCalls        int     `json:"llm_max_calls"`
+	LLMMaxCost         float64 `json:"llm_max_cost"`
+}
+
+// BacktestBatchInfo is a batch of backtests and its runs, see
+// GET /api/backtests.
+type BacktestBatchInfo struct {
+	ID              int64               `json:"id"`
+	Name            string              `json:"name"`
+	From            int64               `json:"from"`
+	To              int64               `json:"to"`
+	ValidationShare float64             `json:"validation_share"`
+	Assumptions     BacktestAssumptions `json:"assumptions"`
+	CreatedBy       string              `json:"created_by"`
+	CreatedAt       int64               `json:"created_at"`
+	Runs            []BacktestRunInfo   `json:"runs"`
+}
+
+// BacktestRunInfo is a run of a batch: its agent, its segment (fit, or
+// validation), its period, its status (queued, running, succeeded, failed,
+// canceled, interrupted, budget_exhausted), its progress (candles processed
+// of Total), its error, when it ran, what it traded, whether a language model
+// decided (LLM: not deterministic), and its summary once ended.
+type BacktestRunInfo struct {
+	ID         int64            `json:"id"`
+	Agent      string           `json:"agent"`
+	Kind       string           `json:"kind"`
+	Strategy   string           `json:"strategy,omitempty"`
+	Segment    string           `json:"segment"`
+	From       int64            `json:"from"`
+	To         int64            `json:"to"`
+	Status     string           `json:"status"`
+	Processed  int64            `json:"processed"`
+	Total      int64            `json:"total"`
+	Error      string           `json:"error,omitempty"`
+	StartedAt  int64            `json:"started_at,omitempty"`
+	FinishedAt int64            `json:"finished_at,omitempty"`
+	Pairs      []string         `json:"pairs"`
+	Timeframe  string           `json:"timeframe,omitempty"`
+	LLM        bool             `json:"llm,omitempty"`
+	Summary    *BacktestSummary `json:"summary,omitempty"`
+}
+
+// BacktestSummary is the summary of a run ended, the metrics of the
+// comparison, in Currency: the result of the trades closed (Net, after their
+// fees, and its share of the balance, Return), the positions open at the end
+// (OpenProfit, apart), the trades, won and lost, the win rate, the profit
+// factor and the payoff (nil when undefined: no loss, no win), the average
+// win and loss, the fees, the largest fall of the equity (and its share),
+// Net over it (nil without a fall), the months with trades and the positive
+// ones, the warnings and gaps of the data, the orders refused, and the calls
+// and the cost of a language model.
+type BacktestSummary struct {
+	Currency           string   `json:"currency"`
+	InitialBalance     float64  `json:"initial_balance"`
+	FinalEquity        float64  `json:"final_equity"`
+	Net                float64  `json:"net"`
+	Return             float64  `json:"return"`
+	OpenProfit         float64  `json:"open_profit"`
+	OpenPositions      int      `json:"open_positions"`
+	Trades             int      `json:"trades"`
+	Wins               int      `json:"wins"`
+	Losses             int      `json:"losses"`
+	WinRate            float64  `json:"win_rate"`
+	ProfitFactor       *float64 `json:"profit_factor,omitempty"`
+	Payoff             *float64 `json:"payoff,omitempty"`
+	AverageWin         float64  `json:"average_win"`
+	AverageLoss        float64  `json:"average_loss"`
+	Fees               float64  `json:"fees"`
+	MaxDrawdown        float64  `json:"max_drawdown"`
+	MaxDrawdownPct     float64  `json:"max_drawdown_pct"`
+	ReturnOverDrawdown *float64 `json:"return_over_drawdown,omitempty"`
+	Months             int      `json:"months"`
+	PositiveMonths     int      `json:"positive_months"`
+	Warnings           int      `json:"warnings"`
+	Gaps               int      `json:"gaps"`
+	Refused            int      `json:"refused"`
+	LLMCalls           int      `json:"llm_calls,omitempty"`
+	LLMCost            *float64 `json:"llm_cost,omitempty"`
+}
+
+// BacktestCompatibility tells whether an agent can be backtested, why not
+// (Reason), and what it trades.
+type BacktestCompatibility struct {
+	Agent      string   `json:"agent"`
+	Kind       string   `json:"kind"`
+	Mode       string   `json:"mode"`
+	Enabled    bool     `json:"enabled"`
+	Strategy   string   `json:"strategy,omitempty"`
+	Pairs      []string `json:"pairs"`
+	Timeframe  string   `json:"timeframe,omitempty"`
+	LLM        bool     `json:"llm,omitempty"`
+	Compatible bool     `json:"compatible"`
+	Reason     string   `json:"reason,omitempty"`
+}
+
+// BacktestsResponse is the payload of GET /api/backtests: the last batches,
+// the newest first, the agents with their compatibility, and the limits of
+// a batch.
+type BacktestsResponse struct {
+	Batches       []BacktestBatchInfo     `json:"batches"`
+	Agents        []BacktestCompatibility `json:"agents"`
+	MaxPeriodDays int                     `json:"max_period_days"`
+	MaxRuns       int                     `json:"max_runs"`
+	LLMMaxCalls   int                     `json:"llm_max_calls"`
+	LLMMaxCost    float64                 `json:"llm_max_cost"`
+}
+
 // PerformanceResponse is the payload of GET /api/performance: the trades of
 // the agents trading live closed from From until before To (Unix seconds),
 // read from the deals of their MT5 accounts as the accounts booked them, in

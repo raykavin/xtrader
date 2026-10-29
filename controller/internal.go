@@ -91,21 +91,36 @@ func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := m.launchedAs(current)
-	secrets, err := m.store.SecretsOf(a)
+	cfg, err := configOf(ctx, m.store, a)
 	if err != nil {
 		m.fail(w, err)
 		return
 	}
-	protection, err := protectionOf(ctx, m.store, a)
-	if err != nil {
-		m.fail(w, err)
+	// what it trades, kept apart from the positions of the agents running
+	if err := m.admit(a, cfg.MT5Book()); err != nil {
+		log.Errorf("controller: agent %s: %v", a.Name, err)
+		writeJSONError(w, http.StatusConflict, err.Error())
 		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, cfg)
+}
+
+// configOf returns the settings of the agent a, its secrets included, as it
+// takes them from the controller: see agentapi.Config.
+func configOf(ctx context.Context, st *store.Store, a store.Agent) (agentapi.Config, error) {
+	secrets, err := st.SecretsOf(a)
+	if err != nil {
+		return agentapi.Config{}, err
+	}
+	protection, err := protectionOf(ctx, st, a)
+	if err != nil {
+		return agentapi.Config{}, err
 	}
 	// unknown, the agent doesn't start: it would trade a day its guard blocks
-	entries, err := entriesOf(ctx, m.store, a)
+	entries, err := entriesOf(ctx, st, a)
 	if err != nil {
-		m.fail(w, err)
-		return
+		return agentapi.Config{}, err
 	}
 	cfg := agentapi.Config{ID: a.ID, Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
 		TradePanel: a.TradePanel, TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(),
@@ -122,23 +137,15 @@ func (m *Manager) handleConfig(w http.ResponseWriter, r *http.Request) {
 			cfg.LLM.MaxTokens = *l.MaxTokens
 		}
 		if l.PromptID != nil {
-			prompt, err := m.store.Prompt(ctx, *l.PromptID)
+			prompt, err := st.Prompt(ctx, *l.PromptID)
 			if err != nil {
-				m.fail(w, err)
-				return
+				return agentapi.Config{}, err
 			}
 			cfg.Prompt = &agentapi.Prompt{PromptRef: agentapi.PromptRef{ID: prompt.ID, Name: prompt.Name,
 				Version: prompt.Version}, Content: prompt.Content}
 		}
 	}
-	// what it trades, kept apart from the positions of the agents running
-	if err := m.admit(a, cfg.MT5Book()); err != nil {
-		log.Errorf("controller: agent %s: %v", a.Name, err)
-		writeJSONError(w, http.StatusConflict, err.Error())
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, cfg)
+	return cfg, nil
 }
 
 // handleRuntime answers the runtime of the agent: with If-None-Match, its

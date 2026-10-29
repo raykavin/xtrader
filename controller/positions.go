@@ -349,6 +349,13 @@ func (e *bridgeFailure) Error() string { return e.message }
 
 // get reads path of the bridge at base into out, with token, if any.
 func (p *openPositions) get(ctx context.Context, base, path, token string, out any) error {
+	return bridgeGet(ctx, p.client, 16<<20, base, path, token, out)
+}
+
+// bridgeGet reads path of the bridge at base into out with client, with token,
+// if any, its answer limit bytes at most: refusedToken for a token refused,
+// bridgeFailure for an answer that isn't the one asked for.
+func bridgeGet(ctx context.Context, client *http.Client, limit int64, base, path, token string, out any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+path, nil)
 	if err != nil {
 		return err
@@ -357,12 +364,12 @@ func (p *openPositions) get(ctx context.Context, base, path, token string, out a
 	if token != "" {
 		request.Header.Set(exchange.MT5TokenHeader, token)
 	}
-	response, err := p.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit))
 	switch {
 	case err != nil:
 		return err
