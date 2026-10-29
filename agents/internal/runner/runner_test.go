@@ -251,10 +251,11 @@ func TestMT5Token(t *testing.T) {
 
 func TestCheckVenue(t *testing.T) {
 	none := map[string]bool{}
-	require.NoError(t, checkVenue("mt5", "backtest", map[string]bool{"mt5-contract-size": true}, 1))
-	require.NoError(t, checkVenue("mt5", "live", map[string]bool{"mt5-magic": true, "mt5-live": true}, 20),
+	require.NoError(t, checkVenue("mt5", "backtest", map[string]bool{"mt5-contract-size": true}, 1, false))
+	require.NoError(t, checkVenue("mt5", "live", map[string]bool{"mt5-magic": true, "mt5-live": true}, 20, false),
 		"the leverage of the margin live")
-	require.NoError(t, checkVenue("mt5", "paper", map[string]bool{"mt5-bridge": true}, 1))
+	require.NoError(t, checkVenue("mt5", "paper", map[string]bool{"mt5-bridge": true}, 1, false))
+	require.NoError(t, checkVenue("mt5", "backtest", none, 20, true), "the margin a backtest simulates")
 
 	for _, c := range []struct {
 		exchange, mode string
@@ -269,7 +270,7 @@ func TestCheckVenue(t *testing.T) {
 		{"mt5", "paper", none, 20, "-leverage"},
 		{"mt5", "backtest", none, 20, "-leverage"},
 	} {
-		err := checkVenue(c.exchange, c.mode, c.set, c.leverage)
+		err := checkVenue(c.exchange, c.mode, c.set, c.leverage, false)
 		require.ErrorContains(t, err, c.err, c)
 	}
 }

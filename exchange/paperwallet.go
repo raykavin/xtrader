@@ -62,6 +62,50 @@ type PaperWallet struct {
 	fistCandle    map[string]model.Candle
 	assetValues   map[string][]AssetValue
 	equityValues  []AssetValue
+
+	execution *PaperExecution // see WithPaperExecution, nil for the plain fills
+}
+
+// PaperExecution models the costs and the uncertainties of the fills of a
+// backtest, see WithPaperExecution. The candles are of the bid, as MT5's:
+//   - Spread returns the spread of a candle, in price: a buy fills at the ask
+//     (the bid plus the spread), a buy limit or stop is reached by the ask;
+//   - Slippage returns the slippage of a candle, in price: it worsens the
+//     fills at the market and of the stops;
+//   - GapFills fills a stop on the book before a candle opening beyond it at
+//     the open, not at its stop;
+//   - Conservative assumes the worst of what a candle can't tell: the stop
+//     loss of a legacy OCO before its take profit, and an entry filled within
+//     a candle that also crossed its stop loss stopped on it.
+type PaperExecution struct {
+	Spread       func(model.Candle) float64
+	Slippage     func(model.Candle) float64
+	GapFills     bool
+	Conservative bool
+}
+
+// WithPaperExecution sets the model of the fills of a backtest, see
+// PaperExecution.
+func WithPaperExecution(execution PaperExecution) PaperWalletOption {
+	return func(wallet *PaperWallet) {
+		wallet.execution = &execution
+	}
+}
+
+// spread returns the spread of candle, in price: 0 without an execution model.
+func (p *PaperWallet) spread(candle model.Candle) float64 {
+	if p.execution == nil || p.execution.Spread == nil {
+		return 0
+	}
+	return math.Max(p.execution.Spread(candle), 0)
+}
+
+// slippage returns the slippage of the fills on candle, in price.
+func (p *PaperWallet) slippage(candle model.Candle) float64 {
+	if p.execution == nil || p.execution.Slippage == nil {
+		return 0
+	}
+	return math.Max(p.execution.Slippage(candle), 0)
 }
 
 func (p *PaperWallet) AssetsInfo(pair string) model.AssetInfo {
@@ -154,6 +198,15 @@ func (p *PaperWallet) Pairs() []string {
 		pairs = append(pairs, pair)
 	}
 	return pairs
+}
+
+// LastClose returns the close of the last candle of pair the wallet took,
+// false before any.
+func (p *PaperWallet) LastClose(pair string) (float64, bool) {
+	p.RLock()
+	defer p.RUnlock()
+	candle, ok := p.lastCandle[pair]
+	return candle.Close, ok && candle.Close > 0
 }
 
 func (p *PaperWallet) LastQuote(ctx context.Context, pair string) (float64, error) {
@@ -586,7 +639,7 @@ func (p *PaperWallet) OnCandle(candle model.Candle) {
 			continue
 		}
 
-		price, ok := fillPrice(order, candle)
+		price, ok := p.fillPrice(order, candle)
 		if ok && !p.reached(order, candle) {
 			continue // moved within the candle, past the extremes it had then
 		}
@@ -620,10 +673,14 @@ func (p *PaperWallet) OnCandle(candle model.Candle) {
 		completedIndices = append(completedIndices, i)
 
 		// the protection of the position it opened takes over from the next
-		// candle
+		// candle; conservative, its stop loss is filled at once when the
+		// candle crossed it too, the order of the two unknown
 		if legs, ok := p.protections[order.ExchangeID]; ok {
 			delete(p.protections, order.ExchangeID)
 			p.activate(order.Pair, legs)
+			if p.execution != nil && p.execution.Conservative {
+				p.stopAtOnce(legs, candle)
+			}
 		}
 	}
 
@@ -633,6 +690,83 @@ func (p *PaperWallet) OnCandle(candle model.Candle) {
 	}
 
 	p.updateEquityValues(candle)
+}
+
+// fillPrice reports whether a pending order is filled by the candle and at
+// which price: see the function fillPrice, or with an execution model (see
+// PaperExecution) the ask reaching the buy orders, the stops worsened by the
+// slippage and, with GapFills, filled at the open of a candle opening beyond
+// them, the order on the book before it.
+func (p *PaperWallet) fillPrice(order model.Order, candle model.Candle) (float64, bool) {
+	if p.execution == nil {
+		return fillPrice(order, candle)
+	}
+	ask := p.spread(candle)
+	switch order.Type {
+	case model.OrderTypeLimit, model.OrderTypeLimitMaker,
+		model.OrderTypeTakeProfit, model.OrderTypeTakeProfitLimit:
+		if order.Side == model.SideTypeBuy && candle.Low+ask <= order.Price ||
+			order.Side == model.SideTypeSell && candle.High >= order.Price {
+			return order.Price, true
+		}
+	case model.OrderTypeStopLoss, model.OrderTypeStopLossLimit:
+		if order.Stop == nil {
+			return 0, false
+		}
+		before := order.UpdatedAt.Before(candle.Time)
+		stop := *order.Stop
+		switch {
+		case order.Side == model.SideTypeBuy && candle.High+ask >= stop:
+			price := stop
+			if p.execution.GapFills && before && candle.Open+ask > stop {
+				price = candle.Open + ask
+			}
+			return price + p.slippage(candle), true
+		case order.Side == model.SideTypeSell && candle.Low <= stop:
+			price := stop
+			if p.execution.GapFills && before && candle.Open < stop {
+				price = candle.Open
+			}
+			return price - p.slippage(candle), true
+		}
+	}
+	return 0, false
+}
+
+// stopAtOnce fills the stop loss of legs, just activated by the fill of their
+// entry within candle, when the candle crossed it too: which of the two came
+// first is unknown, the worst is assumed (see PaperExecution.Conservative).
+func (p *PaperWallet) stopAtOnce(legs []int, candle model.Candle) {
+	for _, i := range legs {
+		leg := p.orders[i]
+		if leg.Type != model.OrderTypeStopLoss || leg.Status != model.OrderStatusTypeNew || leg.Stop == nil {
+			continue
+		}
+		price, ok := p.fillPrice(leg, model.Candle{Pair: candle.Pair, Time: candle.Time, High: candle.High,
+			Low: candle.Low, Open: candle.Close, Close: candle.Close, Metadata: candle.Metadata})
+		if !ok {
+			continue
+		}
+		if leg.GroupID != nil {
+			for j, other := range p.orders {
+				if other.GroupID != nil && *other.GroupID == *leg.GroupID && other.ExchangeID != leg.ExchangeID &&
+					other.Status == model.OrderStatusTypeNew {
+					p.orders[j].Status = model.OrderStatusTypeCanceled
+					p.orders[j].UpdatedAt = candle.Time
+				}
+			}
+		}
+		p.release(lockKey(leg), leg.Pair)
+		fee := p.settle(leg.Side, leg.Pair, leg.Quantity, price, p.feeRate(leg.Type))
+		p.volume[candle.Pair] += leg.Quantity * price
+		p.orders[i].UpdatedAt = candle.Time
+		p.orders[i].Status = model.OrderStatusTypeFilled
+		p.orders[i].Price = price
+		p.orders[i].Fee = fee
+		delete(p.movedStops, leg.ExchangeID)
+		p.removeCompletedOrders(candle.Pair, []int{i})
+		return
+	}
 }
 
 // fillPrice reports whether a pending order is filled by the candle and at
@@ -684,6 +818,39 @@ func (p *PaperWallet) removeCompletedOrders(pair string, completedIndices []int)
 	} else {
 		p.pendingOrders[pair] = newPending
 	}
+}
+
+// Equity returns the value of the wallet now: its quote plus its assets at
+// the last close of their pair, a short at its liquidation value, as the
+// equity values count it.
+func (p *PaperWallet) Equity() float64 {
+	p.RLock()
+	defer p.RUnlock()
+	pairs := make(map[string]string, len(p.lastCandle))
+	for pair := range p.lastCandle {
+		if asset, quote := SplitAssetQuote(pair); quote == p.baseCoin {
+			pairs[asset] = pair
+		}
+	}
+	var total float64
+	for asset, info := range p.assets {
+		if asset == p.baseCoin {
+			total += info.Free + info.Lock
+			continue
+		}
+		amount := info.Free + info.Lock
+		pair, ok := pairs[asset]
+		if !ok {
+			pair = strings.ToUpper(asset + p.baseCoin)
+		}
+		if amount < 0 {
+			v := math.Abs(amount)
+			total += 2*v*p.avgShortPrice[pair] - v*p.lastCandle[pair].Close
+		} else {
+			total += amount * p.lastCandle[pair].Close
+		}
+	}
+	return total
 }
 
 // updateEquityValues calculates and stores equity values for complete candles
@@ -808,6 +975,12 @@ func (p *PaperWallet) CreateOrderOCO(side model.SideType, pair string,
 		GroupID:    &groupID,
 		RefPrice:   p.lastCandle[pair].Close,
 	}
+	if p.execution != nil && p.execution.Conservative {
+		// the stop loss first: a candle reaching both fills it
+		p.addOrder(stopOrder, true)
+		p.addOrder(limitMaker, true)
+		return []model.Order{limitMaker, stopOrder}, nil
+	}
 	p.addOrder(limitMaker, true)
 	p.addOrder(stopOrder, true)
 
@@ -930,6 +1103,14 @@ func (p *PaperWallet) createOrderMarket(side model.SideType, pair string, size f
 	}
 
 	price := p.lastCandle[pair].Close
+	if p.execution != nil {
+		// the close is the bid: a buy pays the spread; both the slippage
+		if side == model.SideTypeBuy {
+			price += p.spread(p.lastCandle[pair]) + p.slippage(p.lastCandle[pair])
+		} else {
+			price -= p.slippage(p.lastCandle[pair])
+		}
+	}
 
 	// the wallet may fill less than requested to make room for the fee
 	filled, fee, err := p.fillOrder(side, pair, size, price, p.feeRate(model.OrderTypeMarket))

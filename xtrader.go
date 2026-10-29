@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/internal/recovery"
@@ -44,10 +45,10 @@ type CandleSubscriber interface {
 	OnCandle(model.Candle)
 }
 
-// CandleHook is told every candle the bot processes live, the ones in progress
-// and the closed ones, once the strategy ran on it and, on a closed one, the
-// orders were settled (see processCandle): never the candles of the preload
-// nor of a backtest. A panic of it is recovered and logged. It runs on the
+// CandleHook is told every candle the bot processes live, and of a backtest,
+// the ones in progress and the closed ones, once the strategy ran on it and,
+// on a closed one, the orders were settled (see processCandle): never the
+// candles of the preload. A panic of it is recovered and logged. It runs on the
 // goroutine of the candles, so it must not wait long: eg: the protection of
 // the positions moving a stop loss.
 type CandleHook interface {
@@ -58,6 +59,27 @@ type CandleHook interface {
 func WithCandleHook(hook CandleHook) Option {
 	return func(bot *XTrader) {
 		bot.candleHook = hook
+	}
+}
+
+// ErrBacktestCanceled is the error of a backtest whose context ended before
+// its last candle.
+var ErrBacktestCanceled = errors.New("backtest canceled")
+
+// WithBacktestProgress tells progress, after each candle of a backtest, how
+// many it processed of all of them, in place of the progress bar.
+func WithBacktestProgress(progress func(done, total int)) Option {
+	return func(bot *XTrader) {
+		bot.backtestProgress = progress
+	}
+}
+
+// WithBacktestClock tells clock the time of each candle of a backtest before
+// it is processed: the end of the data known then (its UpdatedAt, else its
+// open time), the simulated now, eg: of a feed answering until then only.
+func WithBacktestClock(clock func(time.Time)) Option {
+	return func(bot *XTrader) {
+		bot.backtestClock = clock
 	}
 }
 
@@ -83,7 +105,10 @@ type XTrader struct {
 
 	backtest bool
 
-	candleHook CandleHook // see CandleHook
+	candleHook       CandleHook            // see CandleHook
+	backtestProgress func(done, total int) // see WithBacktestProgress
+	backtestClock    func(time.Time)       // see WithBacktestClock
+
 	// hooked: the candles processed go to candleHook, live after the preload;
 	// set before the goroutine of the candles starts, read on it
 	hooked bool
@@ -409,17 +434,33 @@ func (n *XTrader) processCandles(ctx context.Context, items <-chan model.Item) {
 	}
 }
 
-// Start the backtest process and create a progress bar
-// backtestCandles will process candles from a prirority queue in chronological order.
-// A panic of the strategy ends it, returned: the results would be wrong.
-func (n *XTrader) backtestCandles() error {
+// backtestCandles processes the candles of the priority queue in
+// chronological order, telling the backtest clock and progress, if any (else
+// a progress bar), and the candle hook. A panic of the strategy ends it,
+// returned: the results would be wrong; so does ctx done, with
+// ErrBacktestCanceled.
+func (n *XTrader) backtestCandles(ctx context.Context) error {
 	log.Info("[SETUP] Starting backtesting")
 
-	progressBar := progressbar.Default(int64(n.priorityQueueCandle.Len()))
-	for n.priorityQueueCandle.Len() > 0 {
+	total := n.priorityQueueCandle.Len()
+	var progressBar *progressbar.ProgressBar
+	if n.backtestProgress == nil {
+		progressBar = progressbar.Default(int64(total))
+	}
+	for done := 1; n.priorityQueueCandle.Len() > 0; done++ {
+		if ctx.Err() != nil {
+			return ErrBacktestCanceled
+		}
 		item := n.priorityQueueCandle.Pop()
 
 		candle := item.(model.Candle)
+		if n.backtestClock != nil {
+			at := candle.UpdatedAt
+			if at.IsZero() {
+				at = candle.Time
+			}
+			n.backtestClock(at)
+		}
 		if n.paperWallet != nil {
 			n.paperWallet.OnCandle(candle)
 		}
@@ -437,8 +478,11 @@ func (n *XTrader) backtestCandles() error {
 			}
 			n.orderController.OnCandle(candle)
 		}
+		n.hook(candle)
 
-		if err := progressBar.Add(1); err != nil {
+		if n.backtestProgress != nil {
+			n.backtestProgress(done, total)
+		} else if err := progressBar.Add(1); err != nil {
 			log.Warnf("update progressbar fail: %v", err)
 		}
 	}
@@ -518,7 +562,8 @@ func (n *XTrader) Run(ctx context.Context) error {
 
 	// start processing new candles for production or backtesting environment
 	if n.backtest {
-		return n.backtestCandles()
+		n.hooked = true // the candles of a backtest go to the hook, on the candle clock
+		return n.backtestCandles(ctx)
 	}
 
 	n.hooked = true // the preload is over: the live candles go to the hook
