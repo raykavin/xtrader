@@ -4,13 +4,16 @@ import {
   bucketOf,
   capitalOf,
   currenciesOf,
+  efficiencyOf,
   equityCurve,
+  excursionsByTrade,
   filterTrades,
   formatDuration,
   groupBars,
   listTrades,
   periodBars,
   summarize,
+  summarizeEfficiency,
   tradesCSV,
 } from "./performance";
 
@@ -182,6 +185,46 @@ describe("the series of the charts", () => {
   });
 });
 
+describe("the efficiency of the trades", () => {
+  it("measures the entry, the exit and the move over the range of the price", () => {
+    // a long from 4000 to 4010, the price from 3990 to 4030
+    const long = trade({ side: "BUY", entry: 4000, exit: 4010 });
+    const path = { account: "198974329", position: 1, high: 4030, low: 3990, mfe: 150, mae: 50 };
+    expect(efficiencyOf(long, path)).toEqual({ entry: 0.75, exit: 0.5, total: 0.25 });
+    // a short from 4100 to 4090, the ask from 4085 to 4105
+    const short = trade({ side: "SELL", entry: 4100, exit: 4090 });
+    const down = { account: "198974329", position: 2, high: 4105, low: 4085, mfe: 75, mae: 25 };
+    expect(efficiencyOf(short, down)).toEqual({ entry: 0.75, exit: 0.75, total: 0.5 });
+    // a loss: a negative total
+    expect(efficiencyOf(trade({ entry: 4000, exit: 3995 }), path).total).toBe(-0.125);
+    expect(efficiencyOf(long, undefined)).toEqual({ entry: null, exit: null, total: null });
+    expect(efficiencyOf(long, { ...path, high: 4000, low: 4000 }).total, "no range").toBeNull();
+  });
+
+  it("averages them, with what the wins gave back and the worst of the wins", () => {
+    const win = trade({ position: 1, side: "BUY", entry: 4000, exit: 4010, gross: 50, net: 50 });
+    const loss = trade({ position: 2, side: "BUY", entry: 4000, exit: 3990, gross: -50, net: -50 });
+    const unread = trade({ position: 3, gross: 10, net: 10 });
+    const paths = excursionsByTrade([
+      { account: "198974329", position: 1, high: 4030, low: 3990, mfe: 150, mae: 50 },
+      { account: "198974329", position: 2, high: 4010, low: 3980, mfe: 50, mae: 100 },
+      { account: "198974329", position: 3, mfe: 0, mae: 0, error: "abertura desconhecida" },
+    ]);
+    const e = summarizeEfficiency([win, loss, unread], paths);
+    expect(e.trades).toBe(2);
+    expect(e.missing).toBe(1);
+    expect(e.averageMFE).toBe(100);
+    expect(e.averageMAE).toBe(75);
+    expect(e.leftOnTable).toBe(100);
+    expect(e.largestWinMAE).toBe(50);
+    // entries 0.75 and 1/3, exits 0.5 and 1/3, totals 0.25 and -1/3
+    expect(e.entry).toBeCloseTo((0.75 + 1 / 3) / 2, 9);
+    expect(e.exit).toBeCloseTo((0.5 + 1 / 3) / 2, 9);
+    expect(e.total).toBeCloseTo((0.25 - 1 / 3) / 2, 9);
+    expect(summarizeEfficiency([unread], paths).averageMFE).toBeNull();
+  });
+});
+
 describe("the list and its CSV", () => {
   it("lists the latest first with the running sum", () => {
     expect(listTrades(trades).map((t) => [t.position, t.cumulative])).toEqual([
@@ -197,9 +240,15 @@ describe("the list and its CSV", () => {
     expect(lines).toHaveLength(3);
     expect(lines[0]).toContain("ativo;agente;conta;posicao;lado;lotes");
     expect(lines[1]).toBe(
-      "XAUUSDm;llm;198974329;1;BUY;0.02;1970-01-01 00:00:01;1970-01-01 01:00:00;3599;4000;4010;100;-2;98;98;BRL",
+      "XAUUSDm;llm;198974329;1;BUY;0.02;1970-01-01 00:00:01;1970-01-01 01:00:00;3599;4000;4010;100;-2;98;98;BRL;;;;;",
     );
-    expect(lines[2]?.endsWith(";-41;57;BRL")).toBe(true);
+    expect(lines[2]?.endsWith(";-41;57;BRL;;;;;")).toBe(true);
+    // with its excursion: MFE, MAE and the efficiencies
+    const x = { account: "198974329", position: 1, high: 4020, low: 3990, mfe: 200, mae: 100 };
+    const withPath = tradesCSV(trades.slice(0, 1), excursionsByTrade([x]))
+      .trim()
+      .split("\n");
+    expect(withPath[1]?.endsWith(";BRL;200;100;0.6667;0.6667;0.3333")).toBe(true);
   });
 
   it("writes the durations as the Profit does", () => {

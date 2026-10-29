@@ -34,6 +34,7 @@ type settings struct {
 	positions *openPositions // of the agents on their accounts, see GET /api/positions/open
 	closed    *closedProfits // of the agents on their accounts, see GET /api/positions/closed
 	trades    *performance   // of the agents on their accounts, see GET /api/performance
+	paths     *excursions    // of their trades, see GET /api/performance/excursions
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
@@ -41,7 +42,9 @@ type settings struct {
 func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState) {
 	positions := newOpenPositions(s, manager)
 	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth },
-		positions: positions, closed: newClosedProfits(positions), trades: newPerformance(positions)}
+		positions: positions, closed: newClosedProfits(positions)}
+	d.settings.trades = newPerformance(positions)
+	d.settings.paths = newExcursions(d.settings.trades)
 }
 
 func (s *settings) routes(r chi.Router) {
@@ -65,6 +68,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Get("/positions/open", s.positions.handle)
 	r.Get("/positions/closed", s.closed.handle)
 	r.Get("/performance", s.trades.handle)
+	r.Get("/performance/excursions", s.paths.handle)
 	r.Get("/users", s.handleUsers)
 	r.Post("/users", s.handleCreateUser)
 	r.Patch("/users/{id}", s.handleUpdateUser)

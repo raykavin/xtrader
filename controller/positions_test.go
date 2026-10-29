@@ -36,8 +36,10 @@ type fakeBridge struct {
 	deals     []bridgeDeal
 	status    int // answered instead, when set
 	requests  int
-	dealsRead []string // the queries of GET /deals
-	tradeMode int      // of the account: 0 demo, 2 real
+	dealsRead []string        // the queries of GET /deals
+	rates     []excursionRate // answered by GET /rates, in the range asked, whatever the symbol
+	ratesRead []string        // the queries of GET /rates
+	tradeMode int             // of the account: 0 demo, 2 real
 	trades    []map[string]any
 	// tradeAnswer answers POST /order in place of the bridge when set, onTrade
 	// is called with each trade request, before it, the bridge unlocked
@@ -80,7 +82,19 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 			}
 			_ = json.NewEncoder(w).Encode(orders)
 		case r.URL.Path == "/symbol":
-			_ = json.NewEncoder(w).Encode(map[string]any{"digits": 3, "filling_mode": 1})
+			_ = json.NewEncoder(w).Encode(map[string]any{"digits": 3, "filling_mode": 1, "point": 0.001,
+				"trade_tick_value": 0.5, "trade_tick_size": 0.001})
+		case r.URL.Path == "/rates":
+			b.ratesRead = append(b.ratesRead, r.URL.RawQuery)
+			from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+			to, _ := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+			rates := []excursionRate{}
+			for _, rate := range b.rates {
+				if rate.Time >= from && rate.Time <= to {
+					rates = append(rates, rate)
+				}
+			}
+			_ = json.NewEncoder(w).Encode(rates)
 		case r.URL.Path == "/tick":
 			_ = json.NewEncoder(w).Encode(map[string]any{"bid": 4160.0, "ask": 4160.2})
 		case r.URL.Path == "/order":

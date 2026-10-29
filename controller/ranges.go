@@ -11,6 +11,8 @@ import (
 // read of a range at a time, its answer kept for a while; the reads of the
 // other ranges, older than a minute, dropped.
 type rangeReads[T any] struct {
+	timeout time.Duration // of a read, 2*bridgeTimeout+1s when 0
+
 	mu    sync.Mutex
 	reads map[closedRange]*rangeRead[T]
 }
@@ -24,8 +26,8 @@ type rangeRead[T any] struct {
 
 // read returns the answer of window, read with readAll once the last read of
 // it is ttl old, a read of it at a time for all the requests; a read goes on
-// for the others when the request that started it ends, bounded by
-// 2*bridgeTimeout+1s.
+// for the others when the request that started it ends, bounded by the
+// timeout of c.
 func (c *rangeReads[T]) read(ctx context.Context, window closedRange, ttl time.Duration,
 	readAll func(context.Context, closedRange) (T, error)) (T, error) {
 	var zero T
@@ -62,7 +64,11 @@ func (c *rangeReads[T]) read(ctx context.Context, window closedRange, ttl time.D
 		read.reading = done
 		c.mu.Unlock()
 
-		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*bridgeTimeout+time.Second)
+		timeout := c.timeout
+		if timeout == 0 {
+			timeout = 2*bridgeTimeout + time.Second
+		}
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		response, err := readAll(readCtx, window)
 		cancel()
 		c.mu.Lock()

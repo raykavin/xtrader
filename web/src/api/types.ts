@@ -1156,6 +1156,41 @@ export interface PerformanceTrade {
   currency: string;
 }
 /**
+ * PerformanceExcursionsResponse is the payload of GET
+ * /api/performance/excursions: how far the price went for and against each
+ * trade of the range of a PerformanceResponse while it was open, see
+ * PerformanceExcursion; Complete and Missing as OpenPositionsResponse; At is
+ * when they were read.
+ */
+export interface PerformanceExcursionsResponse {
+  from: number /* int64 */;
+  to: number /* int64 */;
+  excursions: PerformanceExcursion[];
+  complete: boolean;
+  missing?: OpenPositionsGap[];
+  at: number /* int64 */;
+}
+/**
+ * PerformanceExcursion is the path of the price of a trade (its Position on
+ * its Account) from its opening to its closing, read from the candles of
+ * Timeframe of its symbol at the broker: High and Low the extremes of the
+ * price it could close at (the bid, and the ask of a short at its high),
+ * widened to its entry and exit; MFE and MAE the most it was up and down,
+ * positive, in the currency of its account, valued as the trade itself
+ * (its gross over its move). Error tells why a trade has none, eg: its
+ * opening unknown, its candles unread.
+ */
+export interface PerformanceExcursion {
+  account: string;
+  position: number /* int64 */;
+  timeframe?: string;
+  high?: number /* float64 */;
+  low?: number /* float64 */;
+  mfe: number /* float64 */;
+  mae: number /* float64 */;
+  error?: string;
+}
+/**
  * PerformanceAccount is an account of the agents read for a
  * PerformanceResponse: its key (its login), its currency, the agents trading
  * on it, its balance now and at From (the balance less every deal booked

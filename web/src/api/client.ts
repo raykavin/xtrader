@@ -32,6 +32,7 @@ import type {
   Order,
   OrderEvent,
   PairsResponse,
+  PerformanceExcursionsResponse,
   PerformanceResponse,
   PromptDetail,
   PromptInfo,
@@ -189,6 +190,22 @@ export function fetchPerformance(
   signal?: AbortSignal,
 ): Promise<PerformanceResponse> {
   return getJSON<PerformanceResponse>(`/performance?from=${from}&to=${to}`, signal);
+}
+
+/**
+ * How far the price went for and against each trade of the range while it
+ * was open, see PerformanceExcursionsResponse: read from the candles at the
+ * bridges, slow the first time.
+ */
+export function fetchExcursions(
+  from: number,
+  to: number,
+  signal?: AbortSignal,
+): Promise<PerformanceExcursionsResponse> {
+  return getJSON<PerformanceExcursionsResponse>(
+    `/performance/excursions?from=${from}&to=${to}`,
+    signal,
+  );
 }
 
 /** The path of the API of an agent, which the dashboard proxies. */

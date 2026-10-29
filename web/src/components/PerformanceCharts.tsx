@@ -9,18 +9,21 @@ import {
 } from "lightweight-charts";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { PerformanceTrade, Point } from "../api/types";
-import { formatMoney, formatProfit, LOCALE, signClass } from "../lib/format";
+import { formatMoney, formatPercent, formatProfit, LOCALE, signClass } from "../lib/format";
 import {
   bucketOf,
+  type EfficiencyState,
+  efficiencyOf,
   equityCurve,
   groupBars,
   type PerformanceBar,
   periodBars,
+  tradeKey,
 } from "../lib/performance";
 import { palettes, type Theme } from "../lib/theme";
 import { Tabs, tabIds } from "./Tabs";
 
-type ChartId = "equity" | "trades" | "period" | "symbol" | "agent";
+type ChartId = "equity" | "trades" | "efficiency" | "period" | "symbol" | "agent";
 
 interface Props {
   trades: PerformanceTrade[];
@@ -28,6 +31,7 @@ interface Props {
   /** The period shown, Unix seconds. */
   range: { from: number; to: number };
   theme: Theme;
+  efficiency: EfficiencyState;
 }
 
 /** The colors of the chart of the equity in theme. */
@@ -246,6 +250,145 @@ function Columns({
   );
 }
 
+/** A share in the tooltip, eg: 62%, — without one. */
+function share(value: number | null): string {
+  return value === null ? "—" : formatPercent(value, 0).replace("+", "");
+}
+
+/**
+ * The efficiency of each trade, in the order of the closes: a thin neutral
+ * range from its MAE below 0 to its MFE above, and a mark at its result
+ * before the costs, green or red; a tooltip with its efficiencies.
+ */
+function ExcursionColumns({
+  trades,
+  efficiency,
+  currency,
+}: {
+  trades: PerformanceTrade[];
+  efficiency: EfficiencyState;
+  currency: string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const figure = useRef<HTMLElement>(null);
+  const width = Math.max(useWidth(figure), 280);
+  const height = 300;
+  const pad = { top: 12, right: 12, bottom: 28, left: 72 };
+  const rows = [...trades]
+    .sort((a, b) => a.closed_at - b.closed_at || a.position - b.position)
+    .map((t, i) => ({ t, i: i + 1, x: efficiency.excursions.get(tradeKey(t)) }))
+    .filter((r) => r.x !== undefined);
+  const max = Math.max(0, ...rows.map((r) => Math.max(r.x?.mfe ?? 0, r.t.gross)));
+  const min = Math.min(0, ...rows.map((r) => Math.min(-(r.x?.mae ?? 0), r.t.gross)));
+  const { ticks, bottom, top } = scaleOf(min, max);
+  const y = (v: number) =>
+    pad.top + ((top - v) / (top - bottom || 1)) * (height - pad.top - pad.bottom);
+  const slot = (width - pad.left - pad.right) / Math.max(rows.length, 1);
+  const rangeWidth = Math.max(2, Math.min(10, slot * 0.35));
+  const every = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(width / 70))));
+  const shown = hover === null ? undefined : rows[hover];
+  const e = shown ? efficiencyOf(shown.t, shown.x) : null;
+  const timeframes = [...new Set(rows.map((r) => r.x?.timeframe).filter(Boolean))].join(", ");
+
+  return (
+    <>
+      <p className="field-hint">
+        Por operação, a faixa vai do máximo contra (MAE) ao máximo a favor (MFE) enquanto ela esteve
+        aberta, e o ponto marca o resultado antes dos custos, em {currency}. Lido dos candles da
+        corretora{timeframes ? ` (${timeframes})` : ""}.
+        {efficiency.summary?.missing
+          ? ` ${efficiency.summary.missing} operação(ões) sem o caminho: sem abertura conhecida ou candles não lidos.`
+          : ""}
+      </p>
+      {rows.length === 0 ? (
+        <p className="field-hint">Nenhuma operação com o caminho do preço lido.</p>
+      ) : (
+        <figure ref={figure} className="perf-columns-chart">
+          <svg
+            width={width}
+            height={height}
+            role="img"
+            aria-label="MFE, MAE e resultado de cada operação"
+          >
+            {ticks.map((t) => (
+              <g key={t}>
+                <line
+                  className={t === 0 ? "perf-zero" : "perf-grid"}
+                  x1={pad.left}
+                  x2={width - pad.right}
+                  y1={y(t)}
+                  y2={y(t)}
+                />
+                <text className="perf-axis" x={pad.left - 8} y={y(t)} dy="0.32em" textAnchor="end">
+                  {formatMoney(t)}
+                </text>
+              </g>
+            ))}
+            {rows.map((row, i) => {
+              const center = pad.left + i * slot + slot / 2;
+              const up = y(row.x?.mfe ?? 0);
+              const down = y(-(row.x?.mae ?? 0));
+              return (
+                // biome-ignore lint/a11y/noStaticElementInteractions: the tooltip of the trade; the list of the operations is its table
+                <g
+                  key={tradeKey(row.t)}
+                  onMouseEnter={() => setHover(i)}
+                  onMouseLeave={() => setHover(null)}
+                  className={hover === i ? "perf-bar is-hover" : "perf-bar"}
+                >
+                  <rect
+                    className="perf-hit"
+                    x={pad.left + i * slot}
+                    y={pad.top}
+                    width={slot}
+                    height={height - pad.top - pad.bottom}
+                  />
+                  <rect
+                    className="perf-range"
+                    x={center - rangeWidth / 2}
+                    y={up}
+                    width={rangeWidth}
+                    height={Math.max(1, down - up)}
+                    rx={Math.min(4, rangeWidth / 2)}
+                  />
+                  <circle
+                    className={row.t.gross >= 0 ? "perf-mark perf-up" : "perf-mark perf-down"}
+                    cx={center}
+                    cy={y(row.t.gross)}
+                    r={4.5}
+                  />
+                  {i % every === 0 && (
+                    <text className="perf-axis" x={center} y={height - 8} textAnchor="middle">
+                      {row.i}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+          {shown && e && (
+            <figcaption className="perf-tooltip" role="status">
+              <strong>
+                {shown.i}. {shown.t.symbol} · {shown.t.agent}
+              </strong>
+              <span className="mono">
+                MFE {formatMoney(shown.x?.mfe ?? 0)} · MAE {formatMoney(-(shown.x?.mae ?? 0))}
+              </span>
+              <span className={`mono ${signClass(shown.t.gross)}`}>
+                resultado {formatProfit(shown.t.gross)} {currency}
+              </span>
+              <span className="field-hint">
+                eficiência: entrada {share(e.entry)} · saída {share(e.exit)} · total{" "}
+                {share(e.total)}
+              </span>
+            </figcaption>
+          )}
+        </figure>
+      )}
+    </>
+  );
+}
+
 /** Horizontal bars from 0, the best first, each labelled with its result: by asset or by agent. */
 function Ranking({
   bars,
@@ -295,6 +438,7 @@ function Ranking({
 const charts: { id: ChartId; label: string }[] = [
   { id: "equity", label: "Patrimônio" },
   { id: "trades", label: "Operações" },
+  { id: "efficiency", label: "Eficiência" },
   { id: "period", label: "Por período" },
   { id: "symbol", label: "Por ativo" },
   { id: "agent", label: "Por agente" },
@@ -307,7 +451,7 @@ const bucketNames = { day: "dia", week: "semana", month: "mês" } as const;
  * result of each trade, by bucket of the period (days, weeks or months after
  * its length), by asset and by agent.
  */
-export function PerformanceCharts({ trades, currency, range, theme }: Props) {
+export function PerformanceCharts({ trades, currency, range, theme, efficiency }: Props) {
   const [shown, setShown] = useState<ChartId>("equity");
   const equity = useMemo(() => equityCurve(trades, range.from), [trades, range.from]);
   const bucket = bucketOf(Math.min(range.to, Date.now() / 1000) - range.from);
@@ -352,6 +496,16 @@ export function PerformanceCharts({ trades, currency, range, theme }: Props) {
             currency={currency}
             caption="Resultado líquido de cada operação, na ordem dos fechamentos"
           />
+        ) : shown === "efficiency" ? (
+          efficiency.error ? (
+            <p className="field-hint">
+              Os candles das operações não puderam ser lidos: {efficiency.error}
+            </p>
+          ) : efficiency.loading ? (
+            <p className="field-hint">Lendo os candles de cada operação na corretora…</p>
+          ) : (
+            <ExcursionColumns trades={trades} efficiency={efficiency} currency={currency} />
+          )
         ) : shown === "period" ? (
           <>
             <p className="field-hint">Resultado líquido por {bucketNames[bucket]} de fechamento.</p>
