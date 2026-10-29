@@ -37,6 +37,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 - [Uso](#uso)
   - [Painel web](#painel-web)
   - [Performance](#performance)
+  - [Backtesting](#backtesting)
   - [Agentes e parâmetros](#agentes-e-parâmetros)
   - [Redefinir os resultados](#redefinir-os-resultados)
   - [Prompts](#prompts)
@@ -404,6 +405,47 @@ A página **Performance** (na barra, ao lado de Painel; `/performance`) mostra o
   - **No Resumo:** MFE e MAE médios, as eficiências médias, o "deixado na mesa" (quanto as vencedoras devolveram do melhor ponto) e o maior MAE de uma vencedora (quanto um ganho chegou a andar contra, uma referência para o stop).
   - **Limitações:** os candles do MT5 são de bid, e para um vendido o spread de cada candle é somado (o preço em que ele fecha); o candle da entrada e o da saída podem ter preços de antes ou de depois da operação, e os extremos sempre incluem a entrada e a saída realizadas. Uma operação sem abertura conhecida fica sem caminho. O primeiro acesso a um período lê os candles de cada operação, o que pode levar alguns segundos; depois, cada operação lida fica guardada enquanto o controller roda.
 
+### Backtesting
+
+A página **Backtesting** (na barra, ao lado de Performance; `/backtesting`) roda as estratégias dos agentes sobre o histórico dos seus ativos, várias ao mesmo tempo, e compara os resultados nas mesmas condições. Serve para decidir quais agentes ligar; ligar continua sendo feito em Configurações › Agentes.
+
+- **Isolamento:** cada execução é um processo à parte do binário do tipo do agente, em `-mode backtest`, com feed de CSV e carteira paper.
+  - O processo não recebe o token do agente, as flags de conta e de ponte nem os tokens da ponte (`MT5_BRIDGE_TOKEN`, `MT5_MCP_TOKEN`); um agente LLM recebe só a chave do provedor do modelo.
+  - Nunca envia ordem e nunca grava nas tabelas, saldos ou históricos dos agentes. O controller só lê os candles (`/symbol` e `/rates`) da ponte da conta do agente.
+  - Os testes provam isso com uma ponte falsa que registra as requisições: nenhuma chega ao agente, e o controller só faz leituras.
+- **Configurar:** os agentes (os incompatíveis aparecem desabilitados, com o motivo), os ativos (um subconjunto, ou todos de cada agente), o período (até `backtest.max_period_days`), a validação fora da amostra, o timeframe (o do agente ou outro, que testa uma variação), o saldo inicial, a taxa, o spread de reserva, a slippage, os limites diários e os tetos dos agentes LLM. Antes de enviar, a página mostra as premissas e a estimativa de chamadas e de custo do LLM.
+- **Execuções:** em fila no controller, `backtest.concurrency` por vez. Cada uma tem status (na fila, executando, concluído, falhou, cancelado, interrompido, teto do LLM atingido), progresso, duração e o erro. Continuam com a página fechada; um reinício do controller marca as que estavam rodando como interrompidas. Cancelar para o processo e guarda o relatório parcial.
+- **Resultados:** uma linha por agente, com o ajuste e a validação lado a lado.
+  - Métricas: retorno/drawdown, líquido, retorno %, drawdown máximo (% e valor), fator de lucro, acerto, operações, abertas no fim (à parte), meses positivos e a validação.
+  - Nenhuma linha é "a melhor": a ordenação padrão é retorno/drawdown, todas as colunas ordenam, e há filtros de amostra mínima e de agentes LLM.
+  - Selos de robustez: amostra pequena (menos de 30 operações), drawdown alto (acima de 20%), degradou na validação (ajuste positivo e validação negativa, ou retorno/drawdown da validação abaixo da metade do ajuste), LLM não determinístico, dados com lacunas, ordens recusadas.
+  - As condições que diferem entre as linhas (ativos, timeframes, LLM com determinísticos) aparecem num aviso.
+  - Uma métrica indefinida (fator de lucro sem perdas, retorno/drawdown sem queda) aparece como "—", com o motivo ao passar o mouse.
+  - O detalhe de uma execução tem a curva de capital, as operações com o motivo da entrada e da saída (no LLM, a justificativa do modelo), as posições abertas no fim, os avisos e lacunas, a configuração copiada e, no LLM, as chamadas.
+- **Validação fora da amostra:** com uma validação de N% (até 50%), o lote roda cada agente duas vezes, no início do período (ajuste) e nos últimos N% (validação), com a mesma configuração.
+- **Configuração copiada:** cada execução guarda os parâmetros efetivos do agente (as mesmas flags com que ele roda, sem segredos), a proteção, o comando e o sha256 do binário, e, no LLM, o provedor, o modelo, os tetos, os preços e o prompt (nome, versão, sha256 e conteúdo).
+
+**Premissas da simulação**
+
+- **Dados:** candles de bid do MT5 lidos da ponte da conta do agente, com o spread de cada candle (o spread de reserva vale só para os candles sem ele), guardados em `backtest.dir/candles` e reaproveitados. Há um aquecimento antes do período (1000 candles do timeframe do agente, até 60 dias). Lacunas maiores que 3 vezes o timeframe (e que 2 horas) fora do fim de semana viram avisos, nunca são preenchidas; sem dados suficientes, a execução falha com o motivo.
+- **Sem dados futuros:** a estratégia, o breakeven/trailing e o contexto do LLM só leem candles fechados até o instante simulado, inclusive em timeframes superiores.
+- **Execução:** na resolução mais fina que o período permite (até 200 mil candles: M1 quando cabe, senão M5, M15…). Compras no ask (bid + spread), vendas no bid, slippage contra a ordem a mercado e nos stops. Um stop com gap executa na abertura do candle.
+- **Critério conservador:** stop e alvo tocados no mesmo candle, vale o stop; uma entrada executada num candle que também cruza o stop sai estopada nele.
+- **Lote e margem:** o passo e o mínimo de lote do símbolo (uma ordem fora deles é recusada e contada); a alavancagem do agente define a margem.
+- **Proteção e limites:** o breakeven e o trailing do agente rodam a cada candle. Os limites diários do lote (na moeda de cotação, dia de America/Belem) zeram a posição e bloqueiam as entradas até a virada. Os limites dos agentes (na moeda da conta) e o limite global não se aplicam.
+- **Fim do período:** as posições abertas são avaliadas a mercado (fechamento − spread − slippage) e mostradas à parte do realizado.
+- **Moeda:** a de cotação do par (USD em XAUUSD e BTCUSD), sem conversão: uma simulação, não o valor na moeda da conta.
+
+**Agentes LLM**
+
+- Rodam com teto de chamadas e de custo por execução (`backtest.llm_max_calls` e `llm_max_cost` por padrão, alteráveis no lote). O custo é estimado pelos tokens de cada resposta e pelos preços de `backtest.llm_prices`; sem o preço do modelo, só as chamadas limitam. Atingido o teto, a execução para com o status "teto do LLM atingido" e o resultado até ali.
+- O relógio é o simulado: datas, rate limit e as regras do dia seguem o candle, não o relógio real.
+- O contexto é reduzido e sinalizado: sem timeframes superiores, mercados correlatos, calendário econômico e memória de operações, que precisariam de dados do futuro ou do banco. Ficam candles, indicadores, estrutura/SMC, sessão, marcações e a memória das decisões da própria execução.
+- Cada chamada fica registrada: instante simulado, ativo, sha256 do contexto, decisão, confiança, justificativa, tokens e custo.
+- O resultado não é determinístico: outra execução pode dar outro resultado, e o modelo pode ter visto o período no treino.
+
+**Limitações:** sem livro de ofertas nem fila de execução, sem swap histórico, spread por candle (não por tick), a resolução de execução cai em períodos longos, e as lacunas da corretora reduzem a amostra.
+
 ### Persistência
 
 - **PostgreSQL 18:**
@@ -418,6 +460,7 @@ A página **Performance** (na barra, ao lado de Painel; `/performance`) mostra o
   - períodos de apuração dos resultados de cada agente;
   - a proteção das posições de cada agente (`agent_protection`) e as proteções que o XTrader AI armou nas posições (`position_protections`);
   - a trava diária: os limites de todos os agentes (`daily_limit_settings`, cuja coluna `currency` não é mais usada: grava `XXX`, o código ISO de "sem moeda", que o CHECK da migração 27 exige com o limite ligado) e de cada agente (`agent_daily_limits`), as travas de cada dia (`daily_guards`) e o registro das mudanças, disparos, liberações e zeragens (`daily_limit_events`);
+  - os backtests: os lotes com o período, a validação e as premissas (`backtest_batches`) e as execuções com status, progresso, a configuração copiada, o resumo e o relatório (`backtest_runs`); os candles e os arquivos das execuções ficam em `backtest.dir`;
   - o supervisor: as configurações (`supervisor_settings`), as análises com o retrato enviado (`supervisor_runs`), as ações (`supervisor_actions`), as conversas por usuário (`supervisor_messages`) e o bloqueio e a parada de cada agente (`agent_supervision`).
 - **Segredos** (chaves de API e tokens) cifrados com AES-256-GCM, cada um vinculado ao seu lugar (tabela, coluna e registro): copiado para outro agente ou outra coluna, ele não abre (veja [Segurança](#segurança)).
 - **Migrações SQL** versionadas, aplicadas pelo `cmd/migrator`.
@@ -475,7 +518,7 @@ agents/
   llm/               estratégia do modelo de linguagem (+ llmagent, o binário) e o cliente com ferramentas do supervisor
   strategies/        estratégias clássicas
   trendagent/ momentumagent/ breakoutagent/ intradayagent/   binários das famílias
-  internal/          runner comum e cliente remoto (outbox, config)
+  internal/          runner comum, cliente remoto (outbox, config), proteção e o motor de backtest
 cmd/
   controller/        painel, Telegram e supervisão dos agentes
   migrator/          migrações e seeds
@@ -548,7 +591,7 @@ O `config.yml` tem só o necessário para subir e acessar o banco. O resto fica 
 
 | No `config.yml`                                                                                                                                                                                                                            | No banco (Configurações)                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo, tempo de parada), `services` (bridge do host), `shutdown_timeout` (parada inteira), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt), prompts, Telegram, usuários |
+| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo, tempo de parada), `backtest` (concorrência, diretório, período e execuções máximos, tetos e preços do LLM), `services` (bridge do host), `shutdown_timeout` (parada inteira), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt), prompts, Telegram, usuários |
 
 | Variável                                                    | Uso                                                                                                     |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -781,6 +824,8 @@ go run ./agents/trendagent -mode backtest -strategy matrend -pair XAUUSDm -timef
 
 O agente LLM também roda backtests, mas cada candle vira uma requisição paga ao modelo.
 
+Pelo painel, a aba [Backtesting](#backtesting) faz o mesmo para vários agentes de uma vez, com a configuração atual de cada um, os candles lidos da ponte, custos, validação fora da amostra e a comparação dos resultados. Os binários aceitam `-backtest-config <arquivo.json>` (o `agentapi.BacktestConfig` que o controller escreve: período, saldo, custos, símbolos, proteção, limites, tetos do LLM e o arquivo do relatório).
+
 ### Agentes iniciais
 
 Num banco novo, o `migrator up` cria os agentes do seed `sql/seeds/0004_agents.sql`: os que o banco tinha em 14/10/2026, um agente LLM do prompt `support_resistance` e um agente sem LLM de cada estratégia do código. São 46, todos **desligados e sem segredos**, em XAUUSDm e BTCUSDm com lote 0.01 em cada (`pair = XAUUSDm;BTCUSDm`, `lot = XAUUSDm=0.01;BTCUSDm=0.01`), todos em live, com o controle via Telegram e sem o painel de trading:
@@ -861,6 +906,7 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - **XTrader AI** (rotas `supervisor`): `GET`/`PATCH /api/settings/supervisor` (a chave só de escrita: `api_key_set` diz se está definida; `""` a apaga), `GET /api/supervisor/overview` (o retrato que o modelo recebe), `POST /api/supervisor/run` (`202`; `409` com outra análise em andamento), `GET /api/supervisor/runs[/{id}]` (com o retrato no detalhe), `GET /api/supervisor/actions`, `GET`/`POST /api/supervisor/messages` (a conversa do usuário da sessão), `POST /api/supervisor/messages/stream` (a mesma pergunta, com a resposta em eventos SSE: `message` para cada mensagem gravada, a pergunta e cada proposta; `stage` com a etapa, `reading`, `thinking` ou `tool`; `text` com os pedaços do texto do modelo; `error`; e por último `done`, com as mensagens como o `POST` acima responde; uma mensagem vazia é recusada com `400` em JSON antes do stream), `POST /api/supervisor/actions/{id}/confirm` e `/reject` (`409` para uma ação já decidida, `410` para uma proposta expirada) e `POST /api/supervisor/agents/{nome}/entries` com `{"blocked": true, "reason": "…"}`, `GET /api/supervisor/protections` (as proteções armadas nas posições, com o motivo, as evidências e os stops anterior, pedido e confirmado; as análises trazem `protection_ids`).
   - **Trava diária:** `GET /api/daily-guard` (o dia, o fuso, o resultado considerado de todos os agentes, o de cada moeda das contas em `results`, e o dos agentes com limite próprio, os limites, o estado `off`/`free`/`blocked`/`incomplete`, a trava com motivo e zeragem, e os agentes em paper), `GET`/`PUT /api/settings/daily-limits` (o limite de todos os agentes: `{"settings": {"enabled": true, "max_loss": 150, "max_gain": 300}, "reason": "…", "confirm": false}`, na moeda de cada conta; `currency` é recusada com `400`) e `PUT /api/settings/agents/{nome}/daily-limit` (o de um agente, na moeda da conta). Uma mudança que dispararia ou liberaria a trava agora volta `409` com a prévia (`effect` `trip`/`release`, o resultado e a mensagem) até ser enviada com `"confirm": true`; `400` fora das regras. `/api/agents` traz `daily_blocked`/`daily_reason` em `supervision`, e `/api/settings/agents` o `daily_limit` de cada agente. `/api/agents` e `/api/settings/agents` trazem `supervision` (bloqueio e parada) em cada agente, e `/api/settings/agents` a `protection` (breakeven e trailing, unidade `atr`), alterada pelo `PATCH /api/settings/agents/{nome}` com `{"protection": {…}}` (`400` fora das regras);
   - `/api/settings/agents/{nome}/periods`: `GET` lista os períodos de apuração do agente (o atual primeiro); `POST` com `{"deposit": 1000, "currency": "BRL"}` redefine os resultados (201 com o período novo);
+  - **Backtests:** `GET /api/backtests` (os últimos 30 lotes com as execuções e os resumos, os agentes com a compatibilidade e os limites), `POST /api/backtests` (cria um lote, `ui.BacktestRequest`: `201`; `400` fora das regras), `DELETE /api/backtests/{id}` (`409` com execuções na fila ou rodando), `GET /api/backtests/runs/{id}` (a execução com a configuração copiada e o relatório) e `POST /api/backtests/runs/{id}/cancel` (`204`; `409` se já terminou);
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory`, `outbox` e `outbox/check` (responde como o `outbox`, sem gravar nada).
 - **API de cada agente** (`ui`, no `api_address` dele): só responde ao controller. Exige um host do loopback no `Host`, recusa com `403` requisições de navegador (com `Origin`, ou `Sec-Fetch-Site` `cross-site`/`same-site`) e, num agente lançado pelo controller, as que não trazem `X-Xtrader-Agent-Key` com a chave daquele start. `POST`, `PUT`, `PATCH` e `DELETE` exigem `Content-Type: application/json`, mesmo sem corpo (senão `415`).
