@@ -149,7 +149,7 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 		return fail("Não consegui montar o retrato dos agentes.", err)
 	}
 
-	turn := &chatTurn{s: s, userID: userID, by: by, view: v}
+	turn := &chatTurn{s: s, userID: userID, by: by, view: v, text: text}
 	messages := conversationOf(history)
 	messages = append(messages, llm.ChatMessage{Role: llm.ChatUser, Content: "Retrato atual dos agentes (JSON):\n" +
 		string(snapshot) + "\n\nMensagem do usuário:\n" + text})
@@ -271,7 +271,9 @@ func chatSystem(settings store.SupervisorSettings) string {
 
 Nesta conversa com o usuário:
 - Responda perguntas sobre os agentes com os dados do retrato; use get_agent para os detalhes de um agente (ordens e decisões recentes).
-- Para qualquer ação de controle, chame propose_action: você nunca executa nada. A interface mostra a proposta com os agentes, as posições e as ordens afetados, e só o usuário confirma.
+- Pedido explícito e completo do usuário nesta mensagem (a ação, os agentes nomeados ou todos, e as opções: em close_positions, se cancela as pendentes e se mantém as entradas bloqueadas; em stop_agent, quando zerado ou agora): chame execute_action, que executa na hora, sem confirmação na interface; o resultado, conferido na conta, aparece na conversa escrito pelo sistema. Ex.: "encerre todas as posições e bloqueie todos os agentes" é explícito (close_positions, all, keep_blocked true; pergunte das pendentes só se não der para entender, e na dúvida cancele-as junto, pois o pedido é parar tudo).
+- Faltou algo (qual agente, quais pares, fechar ou só bloquear, quando parar): pergunte antes, nunca adivinhe. propose_action fica para as suas sugestões, que o usuário confirma na interface.
+- Limites diários: use get_daily_limits para consultar e set_daily_limits só quando o usuário pedir. Diferencie sempre "um limite para o total de todos os agentes" (aggregate_all) de "o mesmo limite para cada agente" (each_agent); se o pedido não deixar claro, pergunte. Se a mudança dispararia ou liberaria a trava agora, conte o efeito ao usuário e só confirme (confirm_immediate_effect) se ele concordar.
 - As ações são separadas: bloquear novas entradas (block_entries), liberar entradas (allow_entries), parar o agente (stop_agent, mode when_flat: quando zerado; now: já, só se toda posição tiver stop loss na corretora), cancelar ordens pendentes de entrada (cancel_pending) e encerrar posições (close_positions).
 - Encerrar posições atinge só as posições dos agentes da aplicação, nunca operações feitas fora deles. Diga se o usuário também quer cancelar as pendentes (cancel_pending) e manter as entradas bloqueadas depois (keep_blocked, padrão sim).
 - Se o pedido for ambíguo (qual agente, quais pares, fechar ou só bloquear, parar quando zerado ou agora), pergunte antes de propor. Nunca adivinhe nomes de agentes: use os nomes exatos do retrato.
@@ -283,7 +285,7 @@ Nesta conversa com o usuário:
 
 // chatTools returns the tools of the model in a conversation.
 func chatTools() []llm.ToolSpec {
-	return []llm.ToolSpec{
+	return append([]llm.ToolSpec{
 		{Name: "get_agent", Description: "Os detalhes de um agente: as ordens e as decisões recentes.",
 			Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string",` +
 				`"description":"o nome exato do agente"}},"required":["name"]}`)},
@@ -302,7 +304,8 @@ func chatTools() []llm.ToolSpec {
 				`"category":{"type":"string","enum":["operational","risk","performance"]}` +
 				`},"required":["action","reason"]}`)},
 		protectTool(),
-	}
+		executeTool(),
+	}, dailyTools()...)
 }
 
 // chatTurn is a conversation answering a message: the proposals the model
@@ -312,6 +315,7 @@ type chatTurn struct {
 	userID    int64
 	by        string
 	view      *view
+	text      string // the message of the user, the evidence of an action executed
 	proposals []store.SupervisorMessage
 }
 
@@ -338,6 +342,12 @@ func (t *chatTurn) call(ctx context.Context, call llm.ToolCall) string {
 		}
 		t.proposals = append(t.proposals, m)
 		return result
+	case "execute_action":
+		return t.execute(ctx, call.Arguments)
+	case "get_daily_limits":
+		return t.dailyLimits(ctx)
+	case "set_daily_limits":
+		return t.setDailyLimits(ctx, call.Arguments)
 	case "propose_action":
 		var args proposal
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
@@ -418,6 +428,22 @@ type proposal struct {
 // It returns the action proposed and what it affects, for the model.
 func (s *Supervision) propose(ctx context.Context, v *view, p proposal, userID int64, by string) (
 	store.SupervisorAction, map[string]any, error) {
+	action, summary, err := s.buildAction(v, p, false)
+	if err != nil {
+		return action, nil, err
+	}
+	expires := s.now().Add(proposalTTL)
+	action.Source, action.UserID, action.Status = store.SourceSupervisor, &userID, store.ActionProposed
+	action.RequestedBy, action.ExpiresAt = by, &expires
+	created, err := s.store.CreateSupervisorAction(ctx, action)
+	return created, summary, err
+}
+
+// buildAction returns the action of p validated against v, not recorded, and
+// what it affects (see propose); whole, a close takes every position of the
+// agents read when executed (see ui.SupervisorOptions.Whole).
+func (s *Supervision) buildAction(v *view, p proposal, whole bool) (store.SupervisorAction, map[string]any,
+	error) {
 	p.Reason = strings.TrimSpace(p.Reason)
 	switch {
 	case !slices.Contains([]string{store.ActionBlockEntries, store.ActionAllowEntries, store.ActionStopAgent,
@@ -463,7 +489,7 @@ func (s *Supervision) propose(ctx context.Context, v *view, p proposal, userID i
 	slices.Sort(names)
 	scope := ui.SupervisorScope{Agents: names, Pairs: p.Pairs}
 	options := ui.SupervisorOptions{CancelPending: p.CancelPending, KeepBlocked: p.KeepBlocked == nil ||
-		*p.KeepBlocked}
+		*p.KeepBlocked, Whole: whole && len(p.Pairs) == 0 && p.Action == store.ActionClosePositions}
 	onPair := func(pair string) bool {
 		return len(p.Pairs) == 0 || slices.ContainsFunc(p.Pairs, func(want string) bool {
 			return strings.EqualFold(want, pair)
@@ -518,16 +544,13 @@ func (s *Supervision) propose(ctx context.Context, v *view, p proposal, userID i
 	if len(gaps) > 0 {
 		summary["incomplete_data"] = gaps
 	}
-	expires := s.now().Add(proposalTTL)
-	action := store.SupervisorAction{Source: store.SourceSupervisor, UserID: &userID, Action: p.Action,
-		Reason: p.Reason, Category: p.Category, Status: store.ActionProposed, RequestedBy: by, ExpiresAt: &expires}
+	action := store.SupervisorAction{Action: p.Action, Reason: p.Reason, Category: p.Category}
 	if p.Action == store.ActionStopAgent {
 		action.Mode = p.Mode
 	}
 	action.Scope, _ = json.Marshal(scope)
 	action.Options, _ = json.Marshal(options)
-	created, err := s.store.CreateSupervisorAction(ctx, action)
-	return created, summary, err
+	return action, summary, nil
 }
 
 // ordersOf returns the pending entries of the agent on the pairs onPair takes.

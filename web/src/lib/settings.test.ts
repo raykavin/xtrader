@@ -48,6 +48,7 @@ const agent = (fields: Partial<AgentSettings>): AgentSettings => ({
   restart_pending: false,
   params: {},
   secrets: { llm_api_key: false, bridge_token: false, calendar_token: false },
+  daily_limit: { enabled: false },
   protection: {
     unit: "atr",
     breakeven: { enabled: false, supervisor: false, trigger: 0, margin: 0 },
@@ -219,6 +220,7 @@ describe("the tabs of the settings", () => {
   it("reads the tab of the hash of the URL, the agents by default", () => {
     expect(settingsTabs).toEqual([
       "agentes",
+      "limites",
       "prompts",
       "supervisor",
       "telegram",

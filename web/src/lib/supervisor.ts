@@ -199,6 +199,13 @@ export function supervisionBadges(info?: AgentSupervisionInfo): (ToneLabel & { t
         .join(" · "),
     });
   }
+  if (info.daily_blocked) {
+    badges.push({
+      text: "Limite diário: entradas bloqueadas",
+      tone: "error",
+      title: `${info.daily_reason ?? "Um limite diário bloqueia as entradas"} · liberado às 00:00`,
+    });
+  }
   return badges;
 }
 

@@ -188,3 +188,27 @@ func TestController_ClosePosition(t *testing.T) {
 	_, err = controller.ClosePosition("BTCUSDT")
 	require.ErrorIs(t, err, ErrBotStopped, "never once closed")
 }
+
+// WaitIdle waits for the orders being sent to end, its bound at most: true at
+// once without one, true once the last ends, false when one lasts beyond it.
+func TestController_WaitIdle(t *testing.T) {
+	controller, _ := newWalletController(t)
+	require.True(t, controller.WaitIdle(time.Second), "none being sent")
+
+	end, err := controller.begin("BTCUSDT", false)
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		end()
+	}()
+	start := time.Now()
+	require.True(t, controller.WaitIdle(2*time.Second))
+	require.GreaterOrEqual(t, time.Since(start), 40*time.Millisecond, "waited for the order")
+
+	end, err = controller.begin("BTCUSDT", false)
+	require.NoError(t, err)
+	defer end()
+	start = time.Now()
+	require.False(t, controller.WaitIdle(80*time.Millisecond), "still being sent")
+	require.Less(t, time.Since(start), time.Second)
+}

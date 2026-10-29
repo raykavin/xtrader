@@ -151,16 +151,26 @@ func (s *Supervision) setEntries(ctx context.Context, a store.Agent, blocked boo
 		item.Status, item.Detail = itemFailed, err.Error()
 		return item
 	}
+	// what the agent applies: its supervision and its daily guards together
+	entries, err := combinedEntries(ctx, s.store, a.ID, supervision)
+	if err != nil {
+		item.Status, item.Detail = itemFailed, "o limite diário não pôde ser lido: "+err.Error()
+		return item
+	}
+	daily := !blocked && entries.EntriesBlocked // allowed, a daily guard still blocking
 	if err := s.manager.RefreshRuntime(ctx, a.Name); err != nil {
 		log.Warnf("supervisor: the runtime of the agent %s: %v", a.Name, err)
 	}
 	if !s.running(a.Name) {
 		item.Status, item.Detail = itemPending, "gravado: o agente aplica ao iniciar"
+		if daily {
+			item.Detail += dailyStill
+		}
 		return item
 	}
 	var state ui.SupervisionState
-	err = s.callAgent(ctx, a.Name, "POST", "supervision/entries", ui.SupervisionEntriesRequest{Blocked: blocked,
-		Revision: supervision.EntriesRevision, Reason: supervision.EntriesReason}, &state)
+	err = s.callAgent(ctx, a.Name, "POST", "supervision/entries", ui.SupervisionEntriesRequest{
+		Blocked: entries.EntriesBlocked, Revision: entries.EntriesRevision, Reason: entries.EntriesReason}, &state)
 	var refused *apiError
 	switch {
 	case errors.As(err, &refused) && refused.Status == 404:
@@ -168,20 +178,27 @@ func (s *Supervision) setEntries(ctx context.Context, a store.Agent, blocked boo
 			"gravado, aplicado quando ele for reiniciado"
 	case err != nil:
 		item.Status, item.Detail = itemPending, "gravado: o agente aplica ao ler o runtime ("+err.Error()+")"
-	case state.EntriesRevision < supervision.EntriesRevision:
+	case state.EntriesRevision < entries.EntriesRevision:
 		item.Status, item.Detail = itemUnknown, "o agente não confirmou a revisão"
-	case blocked && !state.EntriesBlocked:
+	case entries.EntriesBlocked && !state.EntriesBlocked:
 		item.Status, item.Detail = itemUnknown, "o agente não confirmou o bloqueio"
 	default:
 		item.Status = itemDone
-		if blocked {
+		switch {
+		case blocked:
 			item.Detail = "entradas bloqueadas"
-		} else {
+		case daily:
+			item.Detail = "entradas liberadas" + dailyStill
+		default:
 			item.Detail = "entradas liberadas"
 		}
 	}
 	return item
 }
+
+// dailyStill tells entries allowed in the supervision of an agent still
+// blocked by a daily guard.
+const dailyStill = "; continuam bloqueadas pelo limite diário até 00:00 (Belém)"
 
 // stopAgent stops the agent a as the action act asks: when flat, its entries
 // blocked and its pending entries canceled, disabled once it holds nothing
@@ -504,19 +521,30 @@ func holdOf(a store.Agent) int {
 // each position looked for on its account, closed, still open or unknown.
 func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorAction, scope ui.SupervisorScope,
 	options ui.SupervisorOptions, by string) []ui.SupervisorResultItem {
-	byAgent := make(map[string][]ui.SupervisorScopePosition)
-	for _, position := range scope.Positions {
-		byAgent[position.Agent] = append(byAgent[position.Agent], position)
-	}
 	before, err := s.read(ctx)
 	if err != nil {
 		return []ui.SupervisorResultItem{{Kind: "positions", Status: itemFailed,
 			Detail: "as contas não puderam ser lidas: " + err.Error()}}
 	}
+	if options.Whole { // every position of the agents now, the ones opened since included
+		scope.Positions = wholePositions(before, scope.Agents)
+	}
+	byAgent := make(map[string][]ui.SupervisorScopePosition)
+	for _, position := range scope.Positions {
+		byAgent[position.Agent] = append(byAgent[position.Agent], position)
+	}
 
 	var items []ui.SupervisorResultItem
 	var unknownPairs = make(map[string]map[string]bool) // the pairs closed with an outcome unknown, by agent
 	names := slices.Sorted(maps.Keys(byAgent))
+	if options.Whole { // the agents shown without a position too: their pending entries canceled
+		for _, agent := range before.snapshot.Agents {
+			if slices.Contains(scope.Agents, agent.Name) && !slices.Contains(names, agent.Name) {
+				names = append(names, agent.Name)
+			}
+		}
+		slices.Sort(names)
+	}
 	for _, name := range names {
 		agent, err := s.store.AgentByName(ctx, name)
 		if err != nil {
@@ -532,7 +560,9 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 			item := s.setEntries(ctx, agent, true, "encerramento de posições: "+a.Reason, by, &a.ID)
 			items = append(items, item)
 			if sup, err := s.store.AgentByName(ctx, name); err == nil {
-				revision = sup.SupervisionOf().EntriesRevision
+				if entries, err := entriesOf(ctx, s.store, sup); err == nil {
+					revision = entries.EntriesRevision
+				}
 			}
 		}
 		confirmed := byAgent[name]
@@ -578,7 +608,7 @@ func (s *Supervision) closeThroughAgent(ctx context.Context, a store.Agent, conf
 	for _, pair := range pairs {
 		unlisted := false
 		for _, held := range before.positions[a.Name] {
-			if held.position.Symbol == pair && !tickets[held.position.Ticket] {
+			if held.position.Symbol == pair && !tickets[held.position.Ticket] && !options.Whole {
 				unlisted = true
 			}
 		}
@@ -875,4 +905,20 @@ func (a *analysis) stopConfirmed(ctx context.Context, name string) bool {
 	return slices.ContainsFunc(findings, func(f ui.SupervisorFinding) bool {
 		return f.Agent == name && f.Recommendation == "stop"
 	})
+}
+
+// wholePositions returns every position of the agents names in v, live and
+// paper, as a scope to close (see ui.SupervisorOptions.Whole).
+func wholePositions(v *view, names []string) []ui.SupervisorScopePosition {
+	positions := []ui.SupervisorScopePosition{}
+	for _, agent := range v.snapshot.Agents {
+		if !slices.Contains(names, agent.Name) {
+			continue
+		}
+		for _, position := range agent.Positions {
+			positions = append(positions, ui.SupervisorScopePosition{Agent: agent.Name, SupervisorPosition: position,
+				Account: agent.Account, Running: agent.State == "running"})
+		}
+	}
+	return positions
 }

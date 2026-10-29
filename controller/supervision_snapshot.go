@@ -94,8 +94,13 @@ func (s *Supervision) read(ctx context.Context) (*view, error) {
 		positions: make(map[string][]heldPosition), orders: make(map[string][]heldOrder),
 		paper: make(map[string]ui.SupervisionState), gaps: make(map[string]string),
 		protections: make(map[string][]ui.PositionProtection)}
-	v.snapshot = ui.SupervisorSnapshot{GeneratedAt: now.Format(time.RFC3339), Timezone: now.Location().String(),
+	zone := llm.LocalZone() // the day of the windows and of the daily limits
+	v.snapshot = ui.SupervisorSnapshot{GeneratedAt: now.In(zone).Format(time.RFC3339), Timezone: zone.String(),
 		Accounts: []ui.SupervisorAccount{}, Exposure: []ui.SupervisorExposure{}, Agents: []ui.SupervisorAgent{}}
+	if s.daily != nil {
+		status := s.daily.Status()
+		v.snapshot.DailyGuard = &status
+	}
 	for _, a := range agents {
 		v.agents[a.Name] = a
 	}
@@ -210,7 +215,8 @@ type agentResults map[string]map[string][]ui.AgentClosedProfit
 // read of the deals of the accounts.
 func (s *Supervision) realized(ctx context.Context, now time.Time, agents []store.Agent) (agentResults,
 	[]ui.SupervisorWindow, error) {
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	local := now.In(llm.LocalZone())
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
 	windows := []closedRange{{from: midnight, to: now}, {from: now.Add(-24 * time.Hour), to: now}}
 	names := []string{windowToday, window24h}
 	periods, err := s.store.CurrentPeriods(ctx)

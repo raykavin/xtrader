@@ -779,6 +779,9 @@ type AgentSettings struct {
 	// Protection is the protection of its open positions (breakeven, trailing
 	// stop), all off unless set, applied live
 	Protection ProtectionSettings `json:"protection"`
+	// DailyLimit is its daily limits, in the currency of its account, off
+	// unless set, see DailyLimitSettings
+	DailyLimit DailyLimitSettings `json:"daily_limit"`
 }
 
 // AgentOutbox is what the outbox of an agent holds, as it told the
@@ -1219,6 +1222,10 @@ type SupervisionEntriesRequest struct {
 	Blocked  bool   `json:"blocked"`
 	Revision int64  `json:"revision"`
 	Reason   string `json:"reason,omitempty"`
+	// Drain, with Blocked, waits for the orders being sent to end (a few
+	// seconds at most) before answering, eg: before the pending entries are
+	// canceled, so that none sent just before the block is left
+	Drain bool `json:"drain,omitempty"`
 }
 
 // SupervisionCloseRequest is the payload of POST /api/supervision/close: the
@@ -1328,6 +1335,10 @@ type AgentSupervisionInfo struct {
 	StopCategory   string `json:"stop_category,omitempty"`
 	StopBy         string `json:"stop_by,omitempty"`
 	StopAt         *int64 `json:"stop_at,omitempty"`
+	// DailyBlocked tells its entries blocked by a daily guard, its own or the
+	// one of all the agents, until the next day, DailyReason why
+	DailyBlocked bool   `json:"daily_blocked,omitempty"`
+	DailyReason  string `json:"daily_reason,omitempty"`
 }
 
 // SupervisorAutonomy is what the supervisor does alone in its analyses, see
@@ -1401,6 +1412,9 @@ type SupervisorSnapshot struct {
 	Exposure    []SupervisorExposure `json:"exposure"`
 	Agents      []SupervisorAgent    `json:"agents"`
 	Gaps        []string             `json:"gaps,omitempty"`
+	// DailyGuard is how the daily limits stand: the result of the day
+	// considered, the limits and the guards, see DailyLimitsStatus
+	DailyGuard *DailyLimitsStatus `json:"daily_guard,omitempty"`
 }
 
 // SupervisorWindow is a window of the realized results, its start and end.
@@ -1663,6 +1677,9 @@ type SupervisorScopeOrder struct {
 type SupervisorOptions struct {
 	CancelPending bool `json:"cancel_pending"`
 	KeepBlocked   bool `json:"keep_blocked"`
+	// Whole closes every position of the agents read when executed, the ones
+	// opened after the action was built included (eg: by a daily limit)
+	Whole bool `json:"whole,omitempty"`
 }
 
 // SupervisorResultItem is how an action went on an agent, a position or an
@@ -1791,4 +1808,125 @@ type SupervisorStreamError struct {
 type SupervisorEntriesRequest struct {
 	Blocked bool   `json:"blocked"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+// DailyLimitSettings are daily limits: of all the agents together (Currency
+// theirs, each account converted to it) or of an agent (in the currency of its
+// account, Currency empty). Enabled, at MaxLoss lost or MaxGain won in the
+// result of the day (realized plus open, see DailyResult) the application
+// closes their positions, cancels their pending entries and blocks their
+// entries until the next day; absent, no limit of that side.
+type DailyLimitSettings struct {
+	Enabled   bool     `json:"enabled"`
+	Currency  string   `json:"currency,omitempty"`
+	MaxLoss   *float64 `json:"max_loss,omitempty"`
+	MaxGain   *float64 `json:"max_gain,omitempty"`
+	UpdatedBy string   `json:"updated_by,omitempty"`
+	UpdatedAt int64    `json:"updated_at,omitempty"`
+}
+
+// DailyResult is the result of the day of agents in Currency: Realized, the
+// exits of the day with their swap, commission and fee and the commission and
+// fee of the entries of the day; Open, the profit and swap of their positions
+// open now; Total, both. Complete false when an account wasn't read or a rate
+// was missing, Missing telling which: never counted as 0.
+type DailyResult struct {
+	Currency string   `json:"currency"`
+	Realized float64  `json:"realized"`
+	Open     float64  `json:"open"`
+	Total    float64  `json:"total"`
+	Complete bool     `json:"complete"`
+	Missing  []string `json:"missing,omitempty"`
+}
+
+// The states of a scope of the daily limits: off (no limit), free (under its
+// limits), blocked (a limit reached: its positions closed, its entries
+// blocked until the next day) or incomplete (its result unknown: its entries
+// blocked until it is read again).
+const (
+	DailyOff        = "off"
+	DailyFree       = "free"
+	DailyBlocked    = "blocked"
+	DailyIncomplete = "incomplete"
+)
+
+// DailyGuardInfo is a daily guard tripped: Kind limit (Trigger loss or gain,
+// Result and Limit in Currency) or incomplete; how its positions were closed
+// (FlattenStatus running, done, partial or failed, FlattenActionID the
+// action); times in Unix seconds.
+type DailyGuardInfo struct {
+	ID              int64   `json:"id"`
+	Kind            string  `json:"kind"`
+	Trigger         string  `json:"trigger,omitempty"`
+	Result          float64 `json:"result"`
+	Limit           float64 `json:"limit"`
+	Currency        string  `json:"currency"`
+	Reason          string  `json:"reason"`
+	Trips           int     `json:"trips"`
+	TrippedAt       int64   `json:"tripped_at"`
+	FlattenStatus   string  `json:"flatten_status,omitempty"`
+	FlattenActionID *int64  `json:"flatten_action_id,omitempty"`
+}
+
+// DailyScopeStatus is a scope of the daily limits now: all the agents (Agent
+// empty) or one; its limits, its result of the day, its state (see DailyOff)
+// and the guard blocking it, if any.
+type DailyScopeStatus struct {
+	Agent  string             `json:"agent,omitempty"`
+	Limits DailyLimitSettings `json:"limits"`
+	Result *DailyResult       `json:"result,omitempty"`
+	State  string             `json:"state"`
+	Guard  *DailyGuardInfo    `json:"guard,omitempty"`
+}
+
+// DailyLimitsStatus is the payload of GET /api/daily-guard: the day (eg:
+// 2026-10-29) in Zone, from its midnight, when it was evaluated (Unix
+// seconds, 0 not yet), all the agents together, the agents with their own
+// limits or guards, and the agents in paper, never counted (no money of an
+// account) though blocked and closed with all the agents.
+type DailyLimitsStatus struct {
+	Day         string             `json:"day"`
+	Zone        string             `json:"zone"`
+	EvaluatedAt int64              `json:"evaluated_at"`
+	Global      DailyScopeStatus   `json:"global"`
+	Agents      []DailyScopeStatus `json:"agents"`
+	Paper       []string           `json:"paper,omitempty"`
+}
+
+// DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the
+// limits of all the agents together) and of PUT
+// /api/settings/agents/{name}/daily-limit (of an agent): the limits, why
+// (Reason, recorded), and Confirm to apply a change that trips or releases
+// the guard at once (else refused, 409, a DailyLimitPreview).
+type DailyLimitsRequest struct {
+	Settings DailyLimitSettings `json:"settings"`
+	Reason   string             `json:"reason,omitempty"`
+	Confirm  bool               `json:"confirm,omitempty"`
+}
+
+// The effects of a change of daily limits on their guard now, see
+// DailyLimitPreview.
+const (
+	DailyEffectNone    = "none"
+	DailyEffectTrip    = "trip"
+	DailyEffectRelease = "release"
+)
+
+// DailyLimitPreview is what a change of daily limits would do now (Effect,
+// see DailyEffectNone), against Result; the answer (409) of a change of an
+// effect not confirmed.
+type DailyLimitPreview struct {
+	Effect  string       `json:"effect"`
+	Result  *DailyResult `json:"result,omitempty"`
+	Message string       `json:"message"`
+}
+
+// DailyLimitsResponse is the payload of GET and PUT
+// /api/settings/daily-limits and of PUT /api/settings/agents/{name}/daily-limit:
+// the limits of all the agents together, and how the daily limits stand.
+type DailyLimitsResponse struct {
+	Settings DailyLimitSettings `json:"settings"`
+	Status   DailyLimitsStatus  `json:"status"`
+	// Effect of the change just applied, see DailyEffectNone
+	Effect string `json:"effect,omitempty"`
 }

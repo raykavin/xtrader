@@ -573,7 +573,7 @@ func oneLine(text string) bool {
 // order of the dashboard.
 func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 	var agents []Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Order("position, name").
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Order("position, name").
 		Find(&agents).Error
 	return agents, err
 }
@@ -581,14 +581,14 @@ func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 // Agent returns the agent of id.
 func (s *Store) Agent(ctx context.Context, id int64) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").First(&agent, id).Error
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").First(&agent, id).Error
 	return agent, notFound(err, fmt.Sprintf("agent %d", id))
 }
 
 // AgentByName returns the agent of name.
 func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Where("name = ?", name).
+	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Where("name = ?", name).
 		First(&agent).Error
 	return agent, notFound(err, "agent "+name)
 }
@@ -791,7 +791,7 @@ func (s *Store) sealInto(column *[]byte, place string, secret Secret) error {
 func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (Agent, error) {
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
-		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").
+		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
 			First(&agent, id).Error
 		if err != nil {
 			return notFound(err, fmt.Sprintf("agent %d", id))

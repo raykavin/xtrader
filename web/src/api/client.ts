@@ -20,6 +20,10 @@ import type {
   ControlOrderRequest,
   ControlOrderResponse,
   ControlsResponse,
+  DailyLimitPreview,
+  DailyLimitsRequest,
+  DailyLimitsResponse,
+  DailyLimitsStatus,
   Decision,
   DecisionEvent,
   DecisionsResponse,
@@ -108,6 +112,7 @@ function failureOf(path: string, response: Response, text: string): APIError {
     message,
     response.status,
     retryAfterSeconds(response.headers.get("Retry-After")),
+    text,
   );
 }
 
@@ -338,6 +343,43 @@ export function updateAgentSettings(
   request: AgentSettingsRequest,
 ): Promise<AgentSettings> {
   return sendJSON<AgentSettings>("PATCH", `/settings/agents/${encodeURIComponent(name)}`, request);
+}
+
+/** The daily limits of all the agents together and how they stand. */
+export function fetchDailyLimits(signal?: AbortSignal): Promise<DailyLimitsResponse> {
+  return getJSON<DailyLimitsResponse>("/settings/daily-limits", signal);
+}
+
+/** How the daily limits stand: the result of the day, the limits and the guards. */
+export function fetchDailyGuard(signal?: AbortSignal): Promise<DailyLimitsStatus> {
+  return getJSON<DailyLimitsStatus>("/daily-guard", signal);
+}
+
+/** A change of daily limits: applied, or refused with what it would do now (unless confirmed). */
+export type DailyLimitOutcome =
+  | { applied: true; response: DailyLimitsResponse }
+  | { applied: false; preview: DailyLimitPreview };
+
+/**
+ * Sets daily limits: of all the agents together, or of the agent named. A
+ * change that would trip or release the guard now comes back unapplied with
+ * its preview, applied once asked again with confirm.
+ */
+export async function setDailyLimits(
+  request: DailyLimitsRequest,
+  agent?: string,
+): Promise<DailyLimitOutcome> {
+  const path = agent
+    ? `/settings/agents/${encodeURIComponent(agent)}/daily-limit`
+    : "/settings/daily-limits";
+  try {
+    return { applied: true, response: await sendJSON<DailyLimitsResponse>("PUT", path, request) };
+  } catch (e) {
+    if (e instanceof APIError && e.status === 409 && e.body) {
+      return { applied: false, preview: JSON.parse(e.body) as DailyLimitPreview };
+    }
+    throw e;
+  }
 }
 
 /** Deletes an agent disabled and stopped: its orders and its decisions are kept. */

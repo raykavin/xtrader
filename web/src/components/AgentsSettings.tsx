@@ -23,6 +23,7 @@ import { actorLabel, supervisionBadges } from "../lib/supervisor";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
+import { DailyLimitDialog } from "./DailyLimitDialog";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
 import { ProtectionDialog } from "./ProtectionDialog";
@@ -183,6 +184,7 @@ function AgentCard({
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState(false);
   const [protection, setProtection] = useState(false);
+  const [dailyLimit, setDailyLimit] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const state = agentState(agent);
   const status = promptStatusLabel(agent.prompt_status);
@@ -462,6 +464,16 @@ function AgentCard({
           </button>
           <button
             type="button"
+            className={agent.daily_limit?.enabled ? "btn btn-sm protection-on" : "btn btn-sm"}
+            aria-label={`Limite diário de ${agent.name}`}
+            title="Perda e ganho máximos do dia deste agente: atingidos, zera e bloqueia até 00:00"
+            onClick={() => setDailyLimit(true)}
+          >
+            <Icon name="alert" size={14} />
+            Limite diário
+          </button>
+          <button
+            type="button"
             className="btn btn-sm"
             aria-label={`Editar ${agent.name}`}
             disabled={busy}
@@ -540,6 +552,9 @@ function AgentCard({
       {results && <AgentResultsDialog agent={agent} onClose={() => setResults(false)} />}
       {protection && (
         <ProtectionDialog agent={agent} onChange={onChange} onClose={() => setProtection(false)} />
+      )}
+      {dailyLimit && (
+        <DailyLimitDialog agent={agent} onChange={onChange} onClose={() => setDailyLimit(false)} />
       )}
       {renaming && (
         <RenameAgentDialog

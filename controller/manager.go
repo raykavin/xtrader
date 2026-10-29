@@ -677,7 +677,13 @@ func (m *Manager) State(name string) AgentState {
 // its default prompt.
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
 	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl,
-		Reanalysis: a.ReanalysisAllowed(), Entries: entriesOf(a)}
+		Reanalysis: a.ReanalysisAllowed()}
+	entries, err := entriesOf(ctx, s, a)
+	if err != nil {
+		log.Warnf("controller: the entries of the agent %s: %v", a.Name, err)
+		return doc, false // it keeps the entries it has, blocked by a daily guard if they are
+	}
+	doc.Entries = entries
 	protection, err := protectionOf(ctx, s, a)
 	if err != nil {
 		log.Warnf("controller: the protection of the positions of the agent %s: %v", a.Name, err)
@@ -743,8 +749,30 @@ func protectionOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.
 	return protection, nil
 }
 
-func entriesOf(a store.Agent) agentapi.Entries {
-	supervision := a.SupervisionOf()
-	return agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked, EntriesReason: supervision.EntriesReason,
-		EntriesRevision: supervision.EntriesRevision}
+// entriesOf returns the entries of the agent a, see combinedEntries.
+func entriesOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Entries, error) {
+	return combinedEntries(ctx, s, a.ID, a.SupervisionOf())
+}
+
+// combinedEntries returns the entries of the agent of id: blocked by its
+// supervision (supervision) or by a daily guard, its own or the one of all the
+// agents (see store.DailyEntries), the reason of the daily guard first; their
+// revision the sum of both, which only grow, so that allowing the entries in
+// its supervision (eg: a user, or the agent enabled again) never lifts a daily
+// guard.
+func combinedEntries(ctx context.Context, s *store.Store, id int64,
+	supervision store.AgentSupervision) (agentapi.Entries, error) {
+	blocked, reason, revision, err := s.DailyEntries(ctx, id)
+	if err != nil {
+		return agentapi.Entries{}, err
+	}
+	entries := agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked || blocked,
+		EntriesRevision: supervision.EntriesRevision + revision, EntriesReason: supervision.EntriesReason}
+	switch {
+	case blocked && supervision.EntriesBlocked && supervision.EntriesReason != "":
+		entries.EntriesReason = reason + "; " + supervision.EntriesReason
+	case blocked:
+		entries.EntriesReason = reason
+	}
+	return entries, nil
 }

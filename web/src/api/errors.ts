@@ -4,6 +4,8 @@ export class APIError extends Error {
     message: string,
     readonly status: number,
     readonly retryAfter?: number,
+    /** The body of the answer, eg: the preview of a change refused (409). */
+    readonly body?: string,
   ) {
     super(message);
   }

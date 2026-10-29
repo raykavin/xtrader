@@ -88,6 +88,20 @@ describe("the actions of the supervisor", () => {
 describe("the badges of an agent supervised", () => {
   it("shows its stop and its entries blocked, with the reason", () => {
     expect(supervisionBadges(undefined)).toEqual([]);
+    expect(
+      supervisionBadges({
+        entries_blocked: false,
+        stop_state: "none",
+        daily_blocked: true,
+        daily_reason: "perda diária atingida",
+      }),
+    ).toEqual([
+      {
+        text: "Limite diário: entradas bloqueadas",
+        tone: "error",
+        title: "perda diária atingida · liberado às 00:00",
+      },
+    ]);
     const badges = supervisionBadges({
       entries_blocked: true,
       entries_reason: "loop de reinício",

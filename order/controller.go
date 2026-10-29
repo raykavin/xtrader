@@ -1744,6 +1744,29 @@ func (c *Controller) EntriesBlocked() (blocked bool, reason string, revision int
 	return reason != "", reason, c.entries.revision
 }
 
+// WaitIdle waits for the orders being sent (see begin) to end, d at most: eg:
+// once the entries are blocked, before the pending entries are canceled, so
+// that none sent just before the block is left. false when some are still
+// being sent after d.
+func (c *Controller) WaitIdle(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	timer := time.AfterFunc(d, func() {
+		c.mtx.Lock()
+		c.idleCond().Broadcast()
+		c.mtx.Unlock()
+	})
+	defer timer.Stop()
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	for c.inflight > 0 {
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		c.idleCond().Wait()
+	}
+	return true
+}
+
 // refusedEntry returns ErrEntriesBlocked when the entries are refused, nil
 // when they aren't.
 func (c *Controller) refusedEntry() error {

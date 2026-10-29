@@ -340,7 +340,10 @@ func (e *refusedToken) Error() string { return fmt.Sprintf("the token refused (%
 
 // bridgeFailure is an answer of the bridge that isn't the one asked for: an
 // error status, or a payload that isn't one.
-type bridgeFailure struct{ message string }
+type bridgeFailure struct {
+	message string
+	status  int // the HTTP status of the answer, 0 for an answer not understood
+}
 
 func (e *bridgeFailure) Error() string { return e.message }
 
@@ -370,7 +373,8 @@ func (p *openPositions) get(ctx context.Context, base, path, token string, out a
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(data, &answer)
-		return &bridgeFailure{message: fmt.Sprintf("GET %s: %d %s", path, response.StatusCode, answer.Error)}
+		return &bridgeFailure{message: fmt.Sprintf("GET %s: %d %s", path, response.StatusCode, answer.Error),
+			status: response.StatusCode}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return &bridgeFailure{message: fmt.Sprintf("GET %s: invalid answer: %v", path, err)}

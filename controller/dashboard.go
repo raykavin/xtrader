@@ -307,7 +307,7 @@ func (d *Dashboard) supervisions(ctx context.Context) map[string]*ui.AgentSuperv
 	}
 	infos := make(map[string]*ui.AgentSupervisionInfo)
 	for _, a := range agents {
-		if info := supervisionInfo(a); info != nil {
+		if info := withDaily(ctx, d.settings.store, a, supervisionInfo(a)); info != nil {
 			infos[a.Name] = info
 		}
 	}
