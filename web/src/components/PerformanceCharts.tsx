@@ -56,8 +56,19 @@ function equityStyle(theme: Theme) {
   };
 }
 
-/** The equity of the period: the net results summed trade after trade, green above 0, red below. */
-function EquityArea({ points, theme }: { points: Point[]; theme: Theme }) {
+/**
+ * The equity of the period: the net results summed trade after trade, green
+ * above base (0 by default), red below.
+ */
+export function EquityArea({
+  points,
+  theme,
+  base = 0,
+}: {
+  points: Point[];
+  theme: Theme;
+  base?: number;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const state = useRef<{ chart: IChartApi; series: ISeriesApi<"Baseline"> } | null>(null);
 
@@ -112,9 +123,10 @@ function EquityArea({ points, theme }: { points: Point[]; theme: Theme }) {
   useEffect(() => {
     const current = state.current;
     if (!current) return;
+    current.series.applyOptions({ baseValue: { type: "price", price: base } });
     current.series.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
     current.chart.timeScale().fitContent();
-  }, [points]);
+  }, [points, base]);
 
   return <div ref={container} className="chart perf-equity" />;
 }

@@ -1,3 +1,4 @@
+import type { BacktestRunDetail } from "../lib/backtest";
 import { liveStream } from "../lib/events";
 import { csrfToken } from "../lib/settings";
 import { createSSEParser } from "../lib/sse";
@@ -13,6 +14,9 @@ import type {
   AgentSettingsResponse,
   AgentStatus,
   AgentsResponse,
+  BacktestBatchInfo,
+  BacktestRequest,
+  BacktestsResponse,
   CandleEvent,
   CandlesResponse,
   ClosedProfitResponse,
@@ -206,6 +210,31 @@ export function fetchExcursions(
     `/performance/excursions?from=${from}&to=${to}`,
     signal,
   );
+}
+
+/** The last batches of backtests with their runs, the agents that can run and the limits. */
+export function fetchBacktests(signal?: AbortSignal): Promise<BacktestsResponse> {
+  return getJSON<BacktestsResponse>("/backtests", signal);
+}
+
+/** Queues a batch of backtests: never an order, the agents untouched. */
+export function createBacktest(request: BacktestRequest): Promise<BacktestBatchInfo> {
+  return postJSON<BacktestBatchInfo>("/backtests", request);
+}
+
+/** A run of a backtest with the config it ran with and its report. */
+export function fetchBacktestRun(id: number, signal?: AbortSignal): Promise<BacktestRunDetail> {
+  return getJSON<BacktestRunDetail>(`/backtests/runs/${id}`, signal);
+}
+
+/** Cancels a run queued or running; 409 once it ended. */
+export function cancelBacktestRun(id: number): Promise<void> {
+  return postJSON<void>(`/backtests/runs/${id}/cancel`);
+}
+
+/** Deletes a batch ended and its runs; 409 while some are queued or running. */
+export function deleteBacktest(id: number): Promise<void> {
+  return sendJSON<void>("DELETE", `/backtests/${id}`);
 }
 
 /** The path of the API of an agent, which the dashboard proxies. */
