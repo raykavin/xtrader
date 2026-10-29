@@ -348,6 +348,7 @@ function Config({ detail }: { detail: Detail }) {
   const a = c.assumptions;
   const p = c.protection;
   const report = detail.report;
+  const execution = detail.summary?.execution_timeframe || a.execution_timeframe;
   return (
     <ul className="kv-list">
       <li>
@@ -367,7 +368,7 @@ function Config({ detail }: { detail: Detail }) {
         <li>
           <span>Dados</span>
           <span>
-            {formatNumber(report.candles)} candles de {timeframeLabel(a.execution_timeframe)}
+            {formatNumber(report.candles)} candles de {timeframeLabel(execution)}
             {report.data_from && report.data_to
               ? `, de ${periodLabel(report.data_from, report.data_to + 1)}`
               : ""}
@@ -386,8 +387,8 @@ function Config({ detail }: { detail: Detail }) {
       <li>
         <span>Execução</span>
         <span>
-          {timeframeLabel(a.execution_timeframe)} · stop com gap na abertura · stop antes do alvo no
-          mesmo candle · abertas no fim a mercado, à parte
+          {timeframeLabel(execution)} · stop com gap na abertura · stop antes do alvo no mesmo
+          candle · abertas no fim a mercado, à parte
         </span>
       </li>
       <li>

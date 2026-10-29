@@ -1075,8 +1075,10 @@ type BacktestRunInfo struct {
 // factor and the payoff (nil when undefined: no loss, no win), the average
 // win and loss, the fees, the largest fall of the equity (and its share),
 // Net over it (nil without a fall), the months with trades and the positive
-// ones, the warnings and gaps of the data, the orders refused, and the calls
-// and the cost of a language model.
+// ones, the warnings and gaps of the data, the orders refused, the calls and
+// the cost of a language model, and the timeframe of the candles it was
+// filled on (ExecutionTimeframe: the one of the batch, or a coarser one when
+// the broker lacked the finer candles of the period).
 type BacktestSummary struct {
 	Currency           string   `json:"currency"`
 	InitialBalance     float64  `json:"initial_balance"`
@@ -1104,6 +1106,7 @@ type BacktestSummary struct {
 	Refused            int      `json:"refused"`
 	LLMCalls           int      `json:"llm_calls,omitempty"`
 	LLMCost            *float64 `json:"llm_cost,omitempty"`
+	ExecutionTimeframe string   `json:"execution_timeframe,omitempty"`
 }
 
 // BacktestCompatibility tells whether an agent can be backtested, why not

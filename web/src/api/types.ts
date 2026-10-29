@@ -1218,8 +1218,10 @@ export interface BacktestRunInfo {
  * factor and the payoff (nil when undefined: no loss, no win), the average
  * win and loss, the fees, the largest fall of the equity (and its share),
  * Net over it (nil without a fall), the months with trades and the positive
- * ones, the warnings and gaps of the data, the orders refused, and the calls
- * and the cost of a language model.
+ * ones, the warnings and gaps of the data, the orders refused, the calls and
+ * the cost of a language model, and the timeframe of the candles it was
+ * filled on (ExecutionTimeframe: the one of the batch, or a coarser one when
+ * the broker lacked the finer candles of the period).
  */
 export interface BacktestSummary {
   currency: string;
@@ -1248,6 +1250,7 @@ export interface BacktestSummary {
   refused: number /* int */;
   llm_calls?: number /* int */;
   llm_cost?: number /* float64 */;
+  execution_timeframe?: string;
 }
 /**
  * BacktestCompatibility tells whether an agent can be backtested, why not

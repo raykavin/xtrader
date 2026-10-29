@@ -163,6 +163,19 @@ describe("the comparison", () => {
       "ativos diferentes entre os agentes",
       "agentes LLM (não determinísticos) junto de determinísticos",
     ]);
+    const coarser = {
+      ...batch,
+      runs: batch.runs.map((r) =>
+        r.id === 3 && r.summary
+          ? { ...r, summary: { ...r.summary, execution_timeframe: "5m" } }
+          : r.summary
+            ? { ...r, summary: { ...r.summary, execution_timeframe: "1m" } }
+            : r,
+      ),
+    };
+    expect(conditionDifferences(comparisonRows(coarser))).toContain(
+      "execução em resoluções diferentes (1m, 5m)",
+    );
   });
 });
 

@@ -155,7 +155,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
           {formatMoney(a.balance)} {a.currency}
         </strong>
         {` · taxa ${share(a.fee, 3)} · spread de reserva ${formatNumber(a.spread_points)} pts · slippage ${formatNumber(a.slippage_points)} pts`}
-        {` · execução em ${timeframeLabel(a.execution_timeframe)}, stop antes do alvo no mesmo candle`}
+        {` · execução em ${timeframeLabel(a.execution_timeframe)} quando a corretora tem os candles (senão mais grosso, avisado), stop antes do alvo no mesmo candle`}
         {a.daily_loss || a.daily_gain
           ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
           : " · sem limites diários"}

@@ -26,12 +26,16 @@ const (
 	backtestGapsKept = 20
 )
 
-// backtestTimeframes are the timeframes of the candles of a backtest, the
-// MT5 name and the length, the finest first; see fileTimeframeOf.
-var backtestTimeframes = []struct {
+// backtestTimeframe is a timeframe of the candles of a backtest: its name in
+// the files, in MT5, and its length.
+type backtestTimeframe struct {
 	file, mt5 string
 	length    time.Duration
-}{{"1m", "M1", time.Minute}, {"5m", "M5", 5 * time.Minute}, {"15m", "M15", 15 * time.Minute},
+}
+
+// backtestTimeframes are the timeframes of the candles of a backtest, the
+// MT5 name and the length, the finest first; see fileTimeframeOf.
+var backtestTimeframes = []backtestTimeframe{{"1m", "M1", time.Minute}, {"5m", "M5", 5 * time.Minute}, {"15m", "M15", 15 * time.Minute},
 	{"1h", "H1", time.Hour}}
 
 // fileTimeframeOf returns the timeframe of the candles of a backtest of span,

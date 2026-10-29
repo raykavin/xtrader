@@ -351,6 +351,14 @@ export function conditionDifferences(rows: ComparisonRow[]): string[] {
   if (pairs.size > 1) differences.push("ativos diferentes entre os agentes");
   const timeframes = new Set(rows.map((row) => row.fit?.timeframe ?? ""));
   if (timeframes.size > 1) differences.push("timeframes diferentes entre os agentes");
+  const executions = new Set(
+    rows.flatMap((row) =>
+      [row.fit, row.validation].flatMap((run) => run?.summary?.execution_timeframe ?? []),
+    ),
+  );
+  if (executions.size > 1) {
+    differences.push(`execução em resoluções diferentes (${[...executions].sort().join(", ")})`);
+  }
   if (rows.some((row) => row.llm) && rows.some((row) => !row.llm)) {
     differences.push("agentes LLM (não determinísticos) junto de determinísticos");
   }

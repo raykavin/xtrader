@@ -275,27 +275,47 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	length := timeframeLength(snap.Timeframe)
 	warm := min(time.Duration(backtestWarmupCandles)*length, backtestWarmupMax)
 	dataFrom := run.From.Add(-warm)
-	file, mt5, fileLength := fileTimeframeOf(run.To.Sub(dataFrom))
+	// the finest timeframe of the period, else a coarser one when the broker
+	// keeps the finer candles of a pair for less time than the period, eg: M1
+	// for a few months only
+	file, _, _ := fileTimeframeOf(run.To.Sub(dataFrom))
+	start := slices.IndexFunc(backtestTimeframes, func(tf backtestTimeframe) bool { return tf.file == file })
 	var files, contracts, warnings []string
-	symbols := make(map[string]agentapi.BacktestSymbol)
-	gaps := 0
-	for _, pair := range snap.Pairs {
-		data, err := b.candles.read(ctx, snap.Bridge, secrets.BridgeToken, pair, file, mt5, fileLength, dataFrom,
-			run.To)
-		if err != nil {
-			return failed("os candles de %s não puderam ser lidos na ponte: %v", pair, err)
+	var symbols map[string]agentapi.BacktestSymbol
+	var gaps int
+	var short string // the pair whose candles start after the period, and when, at the last timeframe tried
+	for _, tf := range backtestTimeframes[start:] {
+		files, contracts, warnings, short, gaps = nil, nil, nil, "", 0
+		symbols = make(map[string]agentapi.BacktestSymbol)
+		for _, pair := range snap.Pairs {
+			data, err := b.candles.read(ctx, snap.Bridge, secrets.BridgeToken, pair, tf.file, tf.mt5, tf.length,
+				dataFrom, run.To)
+			if err != nil {
+				return failed("os candles de %s não puderam ser lidos na ponte: %v", pair, err)
+			}
+			if data.First.After(run.From) {
+				short = fmt.Sprintf("os candles de %s começam em %s", pair, data.First.Format(time.DateOnly))
+				break
+			}
+			files = append(files, data.File)
+			contract := max(data.Symbol.ContractSize, 1)
+			contracts = append(contracts, strconv.FormatFloat(contract, 'f', -1, 64))
+			symbols[pair] = agentapi.BacktestSymbol{Point: data.Symbol.Point,
+				VolumeStep: data.Symbol.VolumeStep * contract, VolumeMin: data.Symbol.VolumeMin * contract}
+			warnings = append(warnings, data.Gaps...)
+			gaps += len(data.Gaps)
 		}
-		if data.First.After(run.From) {
-			return failed("dados insuficientes: os candles de %s começam em %s, depois do início do período", pair,
-				data.First.Format(time.DateOnly))
+		if short == "" {
+			if tf.file != file {
+				warnings = append([]string{fmt.Sprintf("execução em %s: a corretora não tem candles de %s de todo "+
+					"o período", tf.mt5, backtestTimeframes[start].mt5)}, warnings...)
+			}
+			file = tf.file
+			break
 		}
-		files = append(files, data.File)
-		contract := max(data.Symbol.ContractSize, 1)
-		contracts = append(contracts, strconv.FormatFloat(contract, 'f', -1, 64))
-		symbols[pair] = agentapi.BacktestSymbol{Point: data.Symbol.Point, VolumeStep: data.Symbol.VolumeStep * contract,
-			VolumeMin: data.Symbol.VolumeMin * contract}
-		warnings = append(warnings, data.Gaps...)
-		gaps += len(data.Gaps)
+	}
+	if short != "" {
+		return failed("dados insuficientes: %s, depois do início do período", short)
 	}
 
 	a := snap.Assumptions
@@ -353,6 +373,7 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	}
 	report.Warnings = append(warnings, report.Warnings...)
 	summary := summarizeBacktest(report, gaps, snap.LLM)
+	summary.ExecutionTimeframe = file
 	summaryData, _ := json.Marshal(summary)
 	reportData, _ = json.Marshal(report)
 
