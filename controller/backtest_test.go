@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/config"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
@@ -33,11 +34,22 @@ type historyBridge struct {
 
 	mu    sync.Mutex
 	paths []string
+	since map[string]time.Time // the first candle the broker keeps of a timeframe of MT5, eg: M1
+}
+
+// keep makes the broker keep the candles of the timeframes of MT5 since at
+// only, eg: M1 for a few months.
+func (b *historyBridge) keep(at time.Time, timeframes ...string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, tf := range timeframes {
+		b.since[tf] = at
+	}
 }
 
 func newHistoryBridge(t *testing.T, start time.Time, minutes int) *historyBridge {
 	t.Helper()
-	b := &historyBridge{start: start}
+	b := &historyBridge{start: start, since: map[string]time.Time{}}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.paths = append(b.paths, r.Method+" "+r.URL.Path)
@@ -50,10 +62,15 @@ func newHistoryBridge(t *testing.T, start time.Time, minutes int) *historyBridge
 		case "/rates":
 			from, _ := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
 			to, _ := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+			timeframe := r.URL.Query().Get("timeframe")
+			step := map[string]int{"M1": 1, "M5": 5, "M15": 15, "H1": 60}[timeframe]
+			b.mu.Lock()
+			since, kept := b.since[timeframe]
+			b.mu.Unlock()
 			rates := []bridgeRate{}
-			for i := range minutes {
+			for i := 0; i < minutes; i += max(step, 1) {
 				at := start.Add(time.Duration(i) * time.Minute).Unix()
-				if at < from || at > to {
+				if at < from || at > to || (kept && at < since.Unix()) {
 					continue
 				}
 				p := 4000 + 30*math.Sin(float64(i)/180) + 10*math.Sin(float64(i)/23)
@@ -194,6 +211,57 @@ func TestBacktests_ABatchRunsTheAgentsOnTheirHistory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before.UpdatedAt, after.UpdatedAt, "the agent untouched")
 	assert.Equal(t, before.Params, after.Params)
+
+	cancel()
+	<-done
+}
+
+// A broker keeping the finer candles for less time than the period: the run
+// goes on a coarser timeframe, told, else fails for want of data.
+func TestBacktests_ACoarserTimeframeWhenTheBrokerLacksTheFinerCandles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the agents")
+	}
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -12)
+	bridge := newHistoryBridge(t, start, 12*24*60)
+	bridge.keep(start.Add(8*24*time.Hour), "M1")
+	c, b := newBacktested(t, bridge, 1)
+	call, _ := settingsSession(t, c)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		b.Run(ctx)
+		close(done)
+	}()
+
+	batchOf := func(to time.Time) int64 {
+		request := ui.BacktestRequest{Agents: []string{"trend"}, From: start.Add(4 * 24 * time.Hour).Unix(),
+			To: to.Unix(), Balance: 10000}
+		resp, body := call(http.MethodPost, "/api/backtests", request)
+		require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+		var batch ui.BacktestBatchInfo
+		require.NoError(t, json.Unmarshal([]byte(body), &batch))
+		assert.Equal(t, "1m", batch.Assumptions.ExecutionTimeframe, "the finest the period allows")
+		return batch.ID
+	}
+
+	runs := waitRuns(t, c, batchOf(start.Add(11*24*time.Hour)))
+	require.Len(t, runs, 1)
+	require.Equal(t, store.BacktestSucceeded, runs[0].Status, runs[0].Error)
+	var summary ui.BacktestSummary
+	require.NoError(t, json.Unmarshal(runs[0].Summary, &summary))
+	assert.Equal(t, "5m", summary.ExecutionTimeframe, "M5 kept for the whole period")
+	var report agentapi.BacktestReport
+	require.NoError(t, json.Unmarshal(runs[0].Result, &report))
+	require.NotEmpty(t, report.Warnings)
+	assert.Equal(t, "execução em M5: a corretora não tem candles de M1 de todo o período", report.Warnings[0])
+
+	bridge.keep(start.Add(8*24*time.Hour), "M5", "M15", "H1")
+	runs = waitRuns(t, c, batchOf(start.Add(10*24*time.Hour))) // another range: the candles read again
+	require.Len(t, runs, 1)
+	assert.Equal(t, store.BacktestFailed, runs[0].Status)
+	assert.Contains(t, runs[0].Error, "dados insuficientes: os candles de XAUUSDm começam em")
 
 	cancel()
 	<-done
