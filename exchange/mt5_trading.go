@@ -2383,7 +2383,7 @@ func (m *MT5) accountSwitched() error {
 // and sizes counts the bot's positions only.
 //   - with leverage: free = max(margin_free, 0), committed = margin;
 //   - without: committed = the value of every open position of the account at
-//     its open price (units x price_open x the rate of its quote currency into
+//     its open price (units x price_open x the point value of its symbol, in
 //     the account currency), free = max(balance - committed, 0), the balance
 //     not including the floating profits.
 func (m *MT5) wallet(ctx context.Context) (mt5Wallet, error) {
@@ -2429,9 +2429,8 @@ func (m *MT5) wallet(ctx context.Context) (mt5Wallet, error) {
 		wallet.committed = math.Max(account.Margin, 0)
 		return wallet, nil
 	}
-	rates := make(map[string]float64)
 	for _, position := range positions {
-		value, err := m.value(ctx, position, rates)
+		value, err := m.value(ctx, position)
 		if err != nil {
 			return mt5Wallet{}, err
 		}
@@ -2442,46 +2441,34 @@ func (m *MT5) wallet(ctx context.Context) (mt5Wallet, error) {
 }
 
 // value returns the value of a position in the account currency, at its open
-// price, the rates of the quote currencies cached in rates. A position the bot
-// can't value, eg: a manual trade on a symbol without conversion into the
-// account currency, counts for 0 rather than failing the wallet of every bot
-// on the account; the traded symbols always have one (NewMT5).
-func (m *MT5) value(ctx context.Context, position mt5Position, rates map[string]float64) (float64, error) {
+// price, by the point value of its symbol. A position the bot can't value, eg:
+// a manual trade on a symbol whose tick value is unknown, counts for 0 rather
+// than failing the wallet of every bot on the account.
+func (m *MT5) value(ctx context.Context, position mt5Position) (float64, error) {
 	symbol, traded := m.instruments[position.Symbol]
-	if !traded {
+	var value float64
+	if traded {
+		var err error
+		if value, err = m.pointValue(ctx, position.Symbol); err != nil {
+			return 0, err
+		}
+	} else {
 		found, err := m.symbol(ctx, position.Symbol)
-		if err != nil || found == nil {
-			log.Debugf("[MT5] no symbol %s to value the position %d, counted for 0", position.Symbol,
+		if err != nil || found == nil || found.pointValue() <= 0 {
+			log.Debugf("[MT5] no point value of %s to value the position %d, counted for 0", position.Symbol,
 				position.id())
 			return 0, nil
 		}
-		symbol = *found
+		symbol, value = *found, found.pointValue()
 	}
-	quote := symbol.CurrencyProfit
-	rate, ok := rates[quote]
-	if !ok {
-		var err error
-		if rate, err = m.rate(ctx, quote, m.currency); err != nil {
-			if !traded {
-				log.Debugf("[MT5] the position %d of %s counted for 0: %v", position.id(), position.Symbol, err)
-				return 0, nil
-			}
-			return 0, err
-		}
-		rates[quote] = rate
-	}
-	return symbol.units(position.Volume) * position.PriceOpen * rate, nil
+	return symbol.units(position.Volume) * position.PriceOpen * value, nil
 }
 
 // Account returns the cash available for new positions as a free balance and
-// the amount the positions commit as locked, and the net size of the bot on
-// each traded symbol as a balance of its base asset (the symbols sharing a base
-// summed), with the leverage of the account when trading with leverage. See
-// wallet. The cash is in the quote currency the traded symbols share, eg: USD
-// for a BRL account trading BTCUSDm, converted at the market as Position does,
-// as the consumers of the account value the pairs in their quote (the Telegram
-// /balance, the balance of the dashboard); in the account currency when the
-// symbols have several.
+// the amount the positions commit as locked, in the account currency, and the
+// net size of the bot on each traded symbol as a balance of its base asset (the
+// symbols sharing a base summed), with the leverage of the account when
+// trading with leverage. See wallet.
 func (m *MT5) Account() (model.Account, error) {
 	if m.dataOnly {
 		return model.Account{}, m.errDataOnly("Account")
@@ -2490,12 +2477,7 @@ func (m *MT5) Account() (model.Account, error) {
 	if err != nil {
 		return model.Account{}, err
 	}
-	currency := m.cashCurrency()
-	rate, err := m.rate(m.ctx, m.currency, currency)
-	if err != nil {
-		return model.Account{}, err
-	}
-	balances := []model.Balance{{Asset: currency, Free: wallet.free * rate, Lock: wallet.committed * rate}}
+	balances := []model.Balance{{Asset: m.currency, Free: wallet.free, Lock: wallet.committed}}
 	assets := make(map[string]int)
 	for _, name := range m.symbols {
 		size := wallet.sizes[name]
@@ -2517,30 +2499,9 @@ func (m *MT5) Account() (model.Account, error) {
 	return model.Account{Balances: balances}, nil
 }
 
-// cashCurrency returns the quote currency of the traded symbols when they all
-// share one, or else the account currency.
-func (m *MT5) cashCurrency() string {
-	currency := ""
-	for _, name := range m.symbols {
-		quote := m.assetsInfo[name].QuoteAsset
-		switch {
-		case quote == "":
-			return m.currency
-		case currency == "":
-			currency = quote
-		case quote != currency:
-			return m.currency
-		}
-	}
-	if currency == "" {
-		return m.currency
-	}
-	return currency
-}
-
 // Position returns the net size of the bot's positions of pair in units,
-// negative when short, and the cash available for new positions converted into
-// the quote currency of the pair.
+// negative when short, and the cash available for new positions in the account
+// currency: its point value (PointValue) turns a move of the price into it.
 func (m *MT5) Position(pair string) (asset, quote float64, err error) {
 	if m.dataOnly {
 		return 0, 0, m.errDataOnly("Position")
@@ -2549,15 +2510,7 @@ func (m *MT5) Position(pair string) (asset, quote float64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	currency := m.currency
-	if info, ok := m.assetsInfo[pair]; ok && info.QuoteAsset != "" {
-		currency = info.QuoteAsset
-	}
-	rate, err := m.rate(m.ctx, m.currency, currency)
-	if err != nil {
-		return 0, 0, err
-	}
-	return wallet.sizes[pair], wallet.free * rate, nil
+	return wallet.sizes[pair], wallet.free, nil
 }
 
 // MT5OpenPosition is the net position of the bot on a symbol as the terminal
@@ -3093,8 +3046,9 @@ func (m *MT5) marketNet(ctx context.Context, side model.SideType, pair string, l
 	return finish(nil)
 }
 
-// CreateOrderMarketQuote buys or sells the size worth quote at the current
-// price, the ask for a buy and the bid for a sell.
+// CreateOrderMarketQuote buys or sells the size worth quote, an amount in the
+// account currency, at the current price, the ask for a buy and the bid for a
+// sell, valued by the point value of pair (see Position).
 func (m *MT5) CreateOrderMarketQuote(side model.SideType, pair string, quote float64) (model.Order, error) {
 	if m.dataOnly {
 		return model.Order{}, m.errDataOnly("CreateOrderMarketQuote")
@@ -3110,7 +3064,11 @@ func (m *MT5) CreateOrderMarketQuote(side model.SideType, pair string, quote flo
 	if price <= 0 {
 		return model.Order{}, fmt.Errorf("mt5: no price for %s", pair)
 	}
-	return m.CreateOrderMarket(side, pair, quote/price)
+	value, err := m.pointValue(m.ctx, pair)
+	if err != nil {
+		return model.Order{}, err
+	}
+	return m.CreateOrderMarket(side, pair, quote/(price*value))
 }
 
 // CreateOrderLimit places a buy limit or a sell limit of size units at limit.

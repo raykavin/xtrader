@@ -14,21 +14,24 @@ import { Switch } from "./Switch";
 interface Props {
   /** The agent whose limits these are; all the agents together when absent. */
   agent?: string;
-  /** The currency of the account of the agent, told beside its amounts. */
-  accountCurrency?: string;
+  /**
+   * The currency told beside the amounts: of the account of the agent, or of
+   * the accounts of all the agents ("em cada moeda" when several).
+   */
+  unit?: string;
   settings: DailyLimitSettings | undefined;
   /** Called once a change is applied: the limits saved, and the answer of the controller. */
   onSaved: (settings: DailyLimitSettings, response: DailyLimitsResponse) => void;
 }
 
 /**
- * The form of daily limits, of all the agents together (its currency, every
- * account converted to it) or of an agent (in the currency of its account):
- * on or off, the loss and the gain of the day, why. Saved, a change that
- * would trip or release the guard now comes back with what it would do, to
- * confirm before it is applied.
+ * The form of daily limits, of all the agents together or of an agent, in the
+ * currency of the accounts (with accounts in several, the same amounts apply
+ * to each apart, none converted): on or off, the loss and the gain of the
+ * day, why. Saved, a change that would trip or release the guard now comes
+ * back with what it would do, to confirm before it is applied.
  */
-export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: Props) {
+export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
   const global = agent === undefined;
   const [form, setForm] = useState<DailyLimitForm>(() => dailyLimitForm(settings));
   const [reason, setReason] = useState("");
@@ -36,14 +39,13 @@ export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: 
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<DailyLimitPreview | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  const errors = dailyLimitErrors(form, global);
+  const errors = dailyLimitErrors(form);
   const invalid = Object.keys(errors).length > 0;
   const set = <K extends keyof DailyLimitForm>(field: K, value: DailyLimitForm[K]) => {
     setForm((current) => ({ ...current, [field]: value }));
     setPreview(null);
     setSaved(null);
   };
-  const unit = global ? form.currency.trim().toUpperCase() : (accountCurrency ?? "");
   const id = agent ? `daily-${agent}` : "daily-global";
 
   const save = async (confirm: boolean) => {
@@ -51,7 +53,7 @@ export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: 
     setBusy(true);
     setError(null);
     try {
-      const next = dailyLimitSettings(form, global);
+      const next = dailyLimitSettings(form);
       const outcome: DailyLimitOutcome = await setDailyLimits(
         { settings: next, reason: reason.trim(), confirm },
         agent,
@@ -111,6 +113,12 @@ export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: 
         label="Ligado"
         disabled={busy}
       />
+      {global && (
+        <p className="field-hint">
+          Na moeda das contas, sem conversão: com contas em moedas diferentes, o mesmo valor vale
+          para cada moeda separadamente.
+        </p>
+      )}
       <div className="form-grid">
         {amount(
           "maxLoss",
@@ -121,25 +129,6 @@ export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: 
           "maxGain",
           "Ganho máximo do dia",
           "Atingido, faz o mesmo: protege o lucro do dia de ser devolvido.",
-        )}
-        {global && (
-          <div className="field">
-            <label className="field-label" htmlFor={`${id}-currency`}>
-              Moeda
-            </label>
-            <input
-              id={`${id}-currency`}
-              className="input"
-              value={form.currency}
-              maxLength={3}
-              disabled={busy}
-              placeholder="BRL"
-              aria-invalid={errors.currency ? true : undefined}
-              onChange={(e) => set("currency", e.target.value)}
-            />
-            <p className="field-hint">Contas em outra moeda são convertidas pela cotação do MT5.</p>
-            {errors.currency && <p className="field-error">{errors.currency}</p>}
-          </div>
         )}
         <div className="field">
           <label className="field-label" htmlFor={`${id}-reason`}>
@@ -158,13 +147,13 @@ export function DailyLimitFields({ agent, accountCurrency, settings, onSaved }: 
       {preview && (
         <Alert tone="warn" title="Efeito imediato">
           <p>{preview.message}</p>
-          {preview.result && (
-            <p className="field-hint">
-              Resultado de hoje: {resultAmount(preview.result.total, preview.result.currency)}{" "}
-              (realizado {resultAmount(preview.result.realized, preview.result.currency)}, aberto{" "}
-              {resultAmount(preview.result.open, preview.result.currency)})
+          {(preview.results ?? (preview.result ? [preview.result] : [])).map((result) => (
+            <p key={result.currency || "none"} className="field-hint">
+              Resultado de hoje: {resultAmount(result.total, result.currency)} (realizado{" "}
+              {resultAmount(result.realized, result.currency)}, aberto{" "}
+              {resultAmount(result.open, result.currency)})
             </p>
-          )}
+          ))}
         </Alert>
       )}
       <div className="daily-actions">

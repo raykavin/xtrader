@@ -71,8 +71,13 @@ func (e *OCOSell) OnCandle(df *model.Dataframe, broker service.Broker) {
 
 	buyAmount := 4000.0
 	if quotePosition > buyAmount && df.Metadata["stoch"].Crossover(df.Metadata["stoch_signal"]) {
-		size := buyAmount / closePrice
-		_, err := broker.CreateOrderMarket(model.SideTypeBuy, df.Pair, size)
+		point, err := service.PointValue(broker, df.Pair)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		size := buyAmount / (closePrice * point) // buyAmount in the currency of the cash
+		_, err = broker.CreateOrderMarket(model.SideTypeBuy, df.Pair, size)
 		if err != nil {
 			log.WithFields(map[string]interface{}{
 				"pair":  df.Pair,

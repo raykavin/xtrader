@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -144,8 +145,9 @@ func TestMT5MarketNetting(t *testing.T) {
 		require.Equal(t, order, m5fOrderOf(t, m, order.ExchangeID))
 	}
 
-	// by quote: the size worth it at the ask
-	quoted, err := m.CreateOrderMarketQuote(model.SideTypeBuy, m5fPair, 3*(m5fAsk+2))
+	// by an amount of the account currency: the size worth it at the ask, by
+	// the point value (5.1807 BRL a unit for 1 of the price)
+	quoted, err := m.CreateOrderMarketQuote(model.SideTypeBuy, m5fPair, 3*(m5fAsk+2)*5.1807)
 	require.NoError(t, err)
 	require.Equal(t, 3.0, quoted.Quantity)
 }
@@ -236,56 +238,72 @@ func TestMT5MagicScoping(t *testing.T) {
 	require.Len(t, orders, 3)
 }
 
-// A BRL account trading a symbol quoted in USD: the cash is converted with
-// USDBRLm, inverted.
+// A BRL account trading a symbol quoted in USD: the cash stays in BRL, and the
+// value of a position is its units x its open price x the point value of its
+// symbol (its tick value, in BRL, over its tick size and its contract size).
 func TestMT5Wallet(t *testing.T) {
 	f := newM5F(t)
 	f.setAccount("balance", 100000.0)
 	f.setAccount("margin", 500.0)
 	f.setAccount("margin_free", 99000.0)
 	m := newM5FAdapter(t, f)
-	usdbrl := mid(5.1807, 5.1861)
+	const point = 5.1807 // BRL a unit of XAU or BTC for 1 of the price, of their tick value
 
-	asset, quote, err := m.Position(m5fPair)
+	asset, cash, err := m.Position(m5fPair)
 	require.NoError(t, err)
 	require.Zero(t, asset)
-	require.InDelta(t, 100000/usdbrl, quote, 1e-6)
+	require.InDelta(t, 100000, cash, 1e-6)
 
 	_, err = m.CreateOrderMarket(model.SideTypeBuy, m5fPair, 2)
 	require.NoError(t, err)
-	committed := 2 * m5fAsk * usdbrl
-	asset, quote, err = m.Position(m5fPair)
+	committed := 2 * m5fAsk * point
+	asset, cash, err = m.Position(m5fPair)
 	require.NoError(t, err)
 	require.Equal(t, 2.0, asset)
-	require.InDelta(t, (100000-committed)/usdbrl, quote, 1e-6)
+	require.InDelta(t, 100000-committed, cash, 1e-6)
 
 	// a manual trade of a symbol not traded commits its value too
 	f.openPosition("BTCUSDm", mt5TypeBuy, 0.01, 0, "")
-	btc := 0.01 * 83939.35 * usdbrl
+	btc := 0.01 * 83939.35 * point
 	require.Eventually(t, func() bool {
 		account, err := m.Account()
-		return err == nil && math.Abs(account.Balances[0].Lock-(committed+btc)/usdbrl) < 1e-6
+		return err == nil && math.Abs(account.Balances[0].Lock-(committed+btc)) < 1e-6
 	}, 5*time.Second, 5*time.Millisecond)
 	account, err := m.Account()
 	require.NoError(t, err)
-	require.Equal(t, "USD", account.Balances[0].Asset, "in the quote of the symbols, as the pairs are valued")
-	require.InDelta(t, (100000-committed-btc)/usdbrl, account.Balances[0].Free, 1e-6)
+	require.Equal(t, "BRL", account.Balances[0].Asset, "in the account currency")
+	require.InDelta(t, 100000-committed-btc, account.Balances[0].Free, 1e-6)
 	require.Equal(t, model.Balance{Asset: "XAU", Free: 2}, account.Balances[1])
 
 	// with leverage: the free margin
 	leveraged := newM5FAdapter(t, f, WithMT5Leverage())
 	account, err = leveraged.Account()
 	require.NoError(t, err)
-	require.Equal(t, "USD", account.Balances[0].Asset)
-	require.InDelta(t, 99000/usdbrl, account.Balances[0].Free, 1e-6)
-	require.InDelta(t, 500/usdbrl, account.Balances[0].Lock, 1e-6)
+	require.Equal(t, model.Balance{Asset: "BRL", Free: 99000, Lock: 500}, account.Balances[0])
 	require.Equal(t, model.Balance{Asset: "XAU", Free: 2, Leverage: 2000}, account.Balances[1])
-	_, quote, err = leveraged.Position(m5fPair)
+	_, cash, err = leveraged.Position(m5fPair)
 	require.NoError(t, err)
-	require.InDelta(t, 99000/usdbrl, quote, 1e-6)
+	require.InDelta(t, 99000, cash, 1e-6)
+
+	// no rate of exchange read: USDBRLm never asked
+	require.Empty(t, m5fQueried(f, "USDBRLm"))
 }
 
-// Symbols of several quote currencies: the cash stays in the account currency.
+// m5fQueried returns the requests of the bridge about symbol.
+func m5fQueried(f *m5fFake, symbol string) []m5fRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var found []m5fRequest
+	for _, request := range f.requests {
+		if query, _ := url.ParseQuery(request.query); query.Get("symbol") == symbol {
+			found = append(found, request)
+		}
+	}
+	return found
+}
+
+// Symbols of several quote currencies: the cash is in the account currency
+// all the same.
 func TestMT5AccountCurrencyOfMixedQuotes(t *testing.T) {
 	f := newM5F(t)
 	f.setAccount("balance", 100000.0)
@@ -293,12 +311,44 @@ func TestMT5AccountCurrencyOfMixedQuotes(t *testing.T) {
 
 	account, err := newM5FAdapter(t, f, WithMT5Symbols("BTCUSDm", "EURUSDm")).Account()
 	require.NoError(t, err)
-	require.Equal(t, "USD", account.Balances[0].Asset, "one quote, USD")
+	require.Equal(t, model.Balance{Asset: "BRL", Free: 100000}, account.Balances[0], "one quote, USD: the account's")
 
 	f.symbols["USDBRLm"].raw["trade_mode"] = 4.0 // full, disabled on the account read
 	account, err = newM5FAdapter(t, f, WithMT5Symbols("BTCUSDm", "USDBRLm")).Account()
 	require.NoError(t, err)
 	require.Equal(t, model.Balance{Asset: "BRL", Free: 100000}, account.Balances[0], "USD and BRL: the account's")
+}
+
+// The point value of a pair: its tick value in the account currency over its
+// tick size and its contract size, read from GET /symbol and kept a minute;
+// the costs of a position (commission of its entry twice, in BRL) turned into
+// a distance of the price by it.
+func TestMT5PointValue(t *testing.T) {
+	f := newM5F(t)
+	f.commission = -7 // BRL a lot, of the entry deals
+	m := newM5FAdapter(t, f)
+
+	value, err := m.PointValue(m5fPair)
+	require.NoError(t, err)
+	require.InDelta(t, 5.1807, value, 1e-9)
+	read := len(m5fQueried(f, m5fPair))
+	_, err = m.PointValue(m5fPair)
+	require.NoError(t, err)
+	require.Equal(t, read, len(m5fQueried(f, m5fPair)), "kept")
+	_, err = m.PointValue("USDJPYm")
+	require.Error(t, err, "not traded")
+
+	_, err = m.CreateOrderMarket(model.SideTypeBuy, m5fPair, 2)
+	require.NoError(t, err)
+	// 0.02 lot: a commission of 0.14 BRL at the entry, twice; 2 units at
+	// 5.1807 BRL for 1 of the price
+	require.Eventually(t, func() bool {
+		if err := m.readHistory(context.Background(), time.Now().Add(-time.Hour), time.Now().Add(time.Hour)); err != nil {
+			return false
+		}
+		costs := m.PositionCosts(m5fPair)
+		return costs.Known && math.Abs(costs.Price-0.28/(2*5.1807)) < 1e-9
+	}, 5*time.Second, 5*time.Millisecond)
 }
 
 func TestMT5ProtectedMarket(t *testing.T) {

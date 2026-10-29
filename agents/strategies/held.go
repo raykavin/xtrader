@@ -159,7 +159,7 @@ func rkCloseProtected(df *model.Dataframe, broker service.Broker, name string, s
 		log.Error(err)
 		return false, legs, rkLeftBare(df, name, side, bare)
 	}
-	if held := rkHeld(asset*df.Close.Last(0), minValue); held != side {
+	if held := rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), minValue); held != side {
 		rkCancelLeft(df, broker, name, legs)
 		return held == "", nil, rkLevels{} // closed by a leg meanwhile
 	}
@@ -177,7 +177,7 @@ func rkCloseProtected(df *model.Dataframe, broker service.Broker, name string, s
 		log.Error(err)
 		return false, legs, rkLeftBare(df, name, side, bare)
 	}
-	if held := rkHeld(asset*df.Close.Last(0), minValue); held != side {
+	if held := rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), minValue); held != side {
 		rkCancelLeft(df, broker, name, legs)
 		return held == "", nil, rkLevels{}
 	}

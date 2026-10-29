@@ -127,8 +127,7 @@ func TestMT5NewChecks(t *testing.T) {
 	t.Run("no conversion", func(t *testing.T) {
 		f := newM5F(t)
 		f.setAccount("currency", "JPY")
-		require.ErrorContains(t, create(f), "no symbol converts JPY into USD")
-		require.NoError(t, create(f, WithMT5DataOnly()), "no conversion without trading")
+		require.NoError(t, create(f), "the account currency is never converted: no symbol of JPY needed")
 	})
 }
 
@@ -546,7 +545,8 @@ func TestMT5HistoryParsing(t *testing.T) {
 	var symbol mt5Symbol
 	require.NoError(t, json.Unmarshal(m5fTestdata(t, "symbol_XAUUSDm.json"), &symbol))
 	require.Equal(t, mt5FillFOK, symbol.filling(), "filling_mode 3: fill or kill")
-	require.Equal(t, "m", mt5Suffix(symbol))
+	require.InDelta(t, 5.1807, symbol.pointValue(), 1e-9, "BRL a unit for 1 of the price: 0.51807 / 0.001 / 100")
+	require.Zero(t, mt5Symbol{TickSize: 0.01}.pointValue(), "no tick value")
 	require.Equal(t, 127, symbol.OrderMode)
 	require.NotZero(t, symbol.OrderMode&mt5OrderCloseBy)
 	require.Equal(t, mt5FillIOC, mt5Symbol{FillingMode: 2}.filling())

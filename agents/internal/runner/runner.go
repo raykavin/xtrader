@@ -168,8 +168,9 @@ func signals(trailing bool, names []string) []Strategy {
 //	# the market data of the bridge, trading a paper wallet
 //	go run ./agents/trendagent -mode paper -pair XAUUSDm -lot 0.05
 //	# the same, the stop loss and the take profit placed with the entry, a
-//	# stop loss losing 1 and a take profit earning 2 in the quote currency (USD
-//	# for XAUUSDm) in place of the ones in ATR
+//	# stop loss losing 1 and a take profit earning 2 in the currency of the
+//	# account (of the simulation in paper: the quote, USD for XAUUSDm) in place
+//	# of the ones in ATR
 //	go run ./agents/trendagent -strategy matrend -mode paper -pair XAUUSDm -lot 0.05 \
 //		-stop-value 1 -take-profit-value 2
 //
@@ -249,14 +250,14 @@ func run(agent Agent) error {
 		takeProfit   = flag.Float64("take-profit-atr", 0, "take profit at the broker from the entry close, in ATR (default: the strategy's); the signal strategies take 0 for none")
 		maxBars      = flag.Int("max-bars", 0, "close a trade still open after that many candles, 0 never (default: the strategy's)")
 		minATRPct    = flag.Float64("min-atr-pct", 0, "skip the entries while the ATR is under that % of the close, for the costs, eg: 0.025 for gold")
-		stopValue    = flag.Float64("stop-value", 0, "fixed stop loss at the broker, in place of the stops in ATR: what the position loses at it, in quote currency, eg: 1 for a dollar on XAUUSDm (0: off; mt5 or the paper wallet)")
-		profitValue  = flag.Float64("take-profit-value", 0, "fixed take profit at the broker, in place of the one in ATR: what the position earns at it, in quote currency, eg: 2 for two dollars on XAUUSDm (0: off; mt5 or the paper wallet)")
-		minValue     = flag.Float64("min-position-value", 10, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
+		stopValue    = flag.Float64("stop-value", 0, "fixed stop loss at the broker, in place of the stops in ATR: what the position loses at it, in the currency of the account (paper: the quote), eg: 5 for five reais on a BRL account (0: off; mt5 or the paper wallet)")
+		profitValue  = flag.Float64("take-profit-value", 0, "fixed take profit at the broker, in place of the one in ATR: what the position earns at it, in the currency of the account (paper: the quote), eg: 10 for ten reais on a BRL account (0: off; mt5 or the paper wallet)")
+		minValue     = flag.Float64("min-position-value", 10, "value under which a balance is dust, in the currency of the account (paper: the quote)")
 		fee          = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value; MT5 CFDs charge the spread instead: half of it over the price, eg: 0.0003")
 		fraction     = flag.Float64("position-fraction", 1, "share of the free balance each position commits (0-1]")
 		lotList      = flag.String("lot", "", "fixed size of every position, a lot, instead of a share of the balance (-position-fraction): in MT5 lots unless -mt5-size unit, eg: 0.01; one for all the pairs, one per pair, separated by ; in the order of -pair, or one by pair, eg: BTCUSDm=0.03;XAUUSDm=0.01; the decimals with . (a decimal comma, eg: 1,5, is refused)")
 		leverage     = flag.Float64("leverage", 1, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
-		maxRisk      = flag.Float64("max-risk-pct", 0, "skip an entry losing more than that % of the free balance at its stop loss, in the quote of the pair (0: no limit; trendconfluence needs a stop: -stop-atr, -trailing-atr, -broker-stop-atr, -broker-trailing-atr or -stop-value)")
+		maxRisk      = flag.Float64("max-risk-pct", 0, "skip an entry losing more than that % of the free balance at its stop loss, both in the currency of the account (0: no limit; trendconfluence needs a stop: -stop-atr, -trailing-atr, -broker-stop-atr, -broker-trailing-atr or -stop-value)")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")

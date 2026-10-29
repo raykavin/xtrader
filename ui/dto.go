@@ -65,7 +65,8 @@ type Order struct {
 
 	// AccountProfit is the profit the account booked for the order, a close,
 	// in AccountCurrency, see WithAccountReporter: the one shown, ProfitValue
-	// the one of the core, in the quote. Absent when unknown.
+	// the one of the core, in the quote, shown only in a simulation. Absent
+	// when unknown, eg: awaited from the history of the broker.
 	AccountProfit   *float64 `json:"account_profit,omitempty"`
 	AccountCurrency string   `json:"account_currency,omitempty"`
 
@@ -107,8 +108,17 @@ type Snapshot struct {
 	Protection *PositionProtection `json:"protection,omitempty"`
 
 	// AccountCurrency is the currency of the account, see WithAccountReporter:
-	// the profits of the orders are shown in it (their AccountProfit).
+	// the money is shown in it, the profits of the orders (their
+	// AccountProfit) and of the position, never converted into another.
 	AccountCurrency string `json:"account_currency,omitempty"`
+	// PointValue is the value in AccountCurrency of a move of 1 of the price
+	// of the pair for 1 unit of its asset, as the broker tells it (its tick
+	// value), see service.PointValuer: the risk and the return of an order are
+	// valued with it. Absent when unknown, eg: without an account.
+	PointValue float64 `json:"point_value,omitempty"`
+	// Simulated tells a bot trading a paper wallet: its money is simulated, in
+	// the quote of the pair, without any account.
+	Simulated bool `json:"simulated,omitempty"`
 
 	// LLM tells that a language model makes the decisions of the strategy,
 	// see strategy.LLMStrategy: the dashboard offers its justifications and
@@ -555,10 +565,11 @@ type ControlsResponse struct {
 }
 
 // ControlOrderRequest is the payload of POST /api/controls/order. Amount is
-// in quote currency; with Percent it is a percentage of the available balance
-// (quote balance for buys, asset balance for sells), and with Lot the size of
-// the order, in the units the broker trades the market in, mirroring the
-// Telegram /buy and /sell commands.
+// in the currency of the cash, the account's (the quote in a paper wallet);
+// with Percent it is a percentage of the available balance (the cash for
+// buys, the asset for sells), and with Lot the size of the order, in the units
+// the broker trades the market in, mirroring the Telegram /buy and /sell
+// commands.
 //
 // Type is "market", the default, or "limit" at Price. StopLoss and
 // TakeProfit, the ones above 0, are placed at the broker with the order.
@@ -602,8 +613,10 @@ type AssetBalance struct {
 }
 
 // BalanceResponse is the payload of GET /api/controls/balance: the assets of
-// the pairs of the bot, then their quotes, as the Telegram /balance command.
-// Total sums their values.
+// the pairs of the bot, then the cash, as the Telegram /balance command, their
+// values in the currency of the cash (Quote): the account's on an account the
+// broker reports, the quotes of the pairs in the paper wallet. Total sums
+// their values.
 type BalanceResponse struct {
 	Balances []AssetBalance `json:"balances"`
 	Total    float64        `json:"total"`
@@ -1810,9 +1823,10 @@ type SupervisorEntriesRequest struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// DailyLimitSettings are daily limits: of all the agents together (Currency
-// theirs, each account converted to it) or of an agent (in the currency of its
-// account, Currency empty). Enabled, at MaxLoss lost or MaxGain won in the
+// DailyLimitSettings are daily limits: of all the agents together (their
+// amounts applying to the result in each currency of the accounts apart, none
+// converted) or of an agent (in the currency of its account); Currency is
+// always empty, refused when set. Enabled, at MaxLoss lost or MaxGain won in the
 // result of the day (realized plus open, see DailyResult) the application
 // closes their positions, cancels their pending entries and blocks their
 // entries until the next day; absent, no limit of that side.
@@ -1828,8 +1842,8 @@ type DailyLimitSettings struct {
 // DailyResult is the result of the day of agents in Currency: Realized, the
 // exits of the day with their swap, commission and fee and the commission and
 // fee of the entries of the day; Open, the profit and swap of their positions
-// open now; Total, both. Complete false when an account wasn't read or a rate
-// was missing, Missing telling which: never counted as 0.
+// open now; Total, both. Complete false when an account wasn't read, Missing
+// telling which: never counted as 0.
 type DailyResult struct {
 	Currency string   `json:"currency"`
 	Realized float64  `json:"realized"`
@@ -1869,14 +1883,17 @@ type DailyGuardInfo struct {
 }
 
 // DailyScopeStatus is a scope of the daily limits now: all the agents (Agent
-// empty) or one; its limits, its result of the day, its state (see DailyOff)
-// and the guard blocking it, if any.
+// empty) or one; its limits, its result of the day (of all the agents, the
+// one of Results its limits weigh: reaching one, else the closest to one),
+// its results by currency of the accounts (of all the agents only), its state
+// (see DailyOff) and the guard blocking it, if any.
 type DailyScopeStatus struct {
-	Agent  string             `json:"agent,omitempty"`
-	Limits DailyLimitSettings `json:"limits"`
-	Result *DailyResult       `json:"result,omitempty"`
-	State  string             `json:"state"`
-	Guard  *DailyGuardInfo    `json:"guard,omitempty"`
+	Agent   string             `json:"agent,omitempty"`
+	Limits  DailyLimitSettings `json:"limits"`
+	Result  *DailyResult       `json:"result,omitempty"`
+	Results []DailyResult      `json:"results,omitempty"`
+	State   string             `json:"state"`
+	Guard   *DailyGuardInfo    `json:"guard,omitempty"`
 }
 
 // DailyLimitsStatus is the payload of GET /api/daily-guard: the day (eg:
@@ -1913,12 +1930,14 @@ const (
 )
 
 // DailyLimitPreview is what a change of daily limits would do now (Effect,
-// see DailyEffectNone), against Result; the answer (409) of a change of an
-// effect not confirmed.
+// see DailyEffectNone), against Result (of all the agents, the one of Results
+// weighed, see DailyScopeStatus); the answer (409) of a change of an effect not
+// confirmed.
 type DailyLimitPreview struct {
-	Effect  string       `json:"effect"`
-	Result  *DailyResult `json:"result,omitempty"`
-	Message string       `json:"message"`
+	Effect  string        `json:"effect"`
+	Result  *DailyResult  `json:"result,omitempty"`
+	Results []DailyResult `json:"results,omitempty"`
+	Message string        `json:"message"`
 }
 
 // DailyLimitsResponse is the payload of GET and PUT

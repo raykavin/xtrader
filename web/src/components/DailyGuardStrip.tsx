@@ -4,9 +4,11 @@ import type { DailyLimitsStatus } from "../api/types";
 import {
   dailyStateLabel,
   flattenLabel,
+  globalUnit,
   guardedAgents,
   limitsLabel,
   resultAmount,
+  scopeResults,
 } from "../lib/dailyLimits";
 
 /** How often the state of the daily limits is read again, in ms. */
@@ -58,7 +60,7 @@ export function DailyGuardStrip({ status, compact = false }: Props) {
   const guarded = Object.values(guardedAgents(status));
   if (global.state === "off" && guarded.length === 0) return null;
   const state = dailyStateLabel(global);
-  const result = global.result;
+  const results = scopeResults(global);
   const flatten = flattenLabel(global.guard?.flatten_status);
   return (
     <section
@@ -67,24 +69,28 @@ export function DailyGuardStrip({ status, compact = false }: Props) {
     >
       <span className="daily-strip-label">Limite diário</span>
       {global.state !== "off" && <span className={`status-chip ${state.tone}`}>{state.text}</span>}
-      {result && global.state !== "off" && (
-        <span
-          className="daily-strip-result"
-          title={`Hoje (${status.day}, desde 00:00 ${status.zone}): realizado ${resultAmount(result.realized, result.currency)}, aberto ${resultAmount(result.open, result.currency)}${result.complete ? "" : "; incompleto"}`}
-        >
-          <span className="field-hint">resultado do dia</span>{" "}
-          <strong className="mono">{resultAmount(result.total, result.currency)}</strong>
-          {!compact && (
-            <span className="field-hint">
-              {" "}
-              (realizado {resultAmount(result.realized, result.currency)} · aberto{" "}
-              {resultAmount(result.open, result.currency)})
-            </span>
-          )}
-        </span>
-      )}
+      {global.state !== "off" &&
+        results.map((result) => (
+          <span
+            key={result.currency || "none"}
+            className="daily-strip-result"
+            title={`Hoje (${status.day}, desde 00:00 ${status.zone}): realizado ${resultAmount(result.realized, result.currency)}, aberto ${resultAmount(result.open, result.currency)}${result.complete ? "" : "; incompleto"}`}
+          >
+            <span className="field-hint">resultado do dia</span>{" "}
+            <strong className="mono">{resultAmount(result.total, result.currency)}</strong>
+            {!compact && (
+              <span className="field-hint">
+                {" "}
+                (realizado {resultAmount(result.realized, result.currency)} · aberto{" "}
+                {resultAmount(result.open, result.currency)})
+              </span>
+            )}
+          </span>
+        ))}
       {global.state !== "off" && (
-        <span className="field-hint daily-strip-limits">{limitsLabel(global.limits)}</span>
+        <span className="field-hint daily-strip-limits">
+          {limitsLabel(global.limits, globalUnit(results))}
+        </span>
       )}
       {flatten && <span className={`status-chip ${flatten.tone}`}>{flatten.text}</span>}
       {!compact && global.guard && <p className="daily-strip-reason">{global.guard.reason}</p>}

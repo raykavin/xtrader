@@ -18,10 +18,10 @@ import (
 	"github.com/raykavin/xtrader/service"
 )
 
-// amountUnit ends the amount of an order: in quote, in % of the balance, or its
+// amountUnit ends the amount of an order: in the currency of the cash (the
+// account's at MT5, the quote in a paper wallet), in % of the balance, or its
 // size in lots, eg: 0.1 lot, in the units the broker trades the market in.
-// Nothing may follow it, so a typo in the unit isn't taken for an amount in
-// quote.
+// Nothing may follow it, so a typo in the unit isn't taken for an amount.
 const amountUnit = `(?:(?P<percent>%)|\s*(?P<lot>(?i:lot(?:s|es?)?)))?\s*$`
 
 var (
@@ -168,8 +168,20 @@ func (t telegram) BalanceHandle(m *tb.Message) {
 		return
 	}
 
+	// on an account the broker reports, in its currency, the assets valued by
+	// the point value of their pairs; elsewhere in their quotes
+	summary, reported := t.orderController.AccountSummary()
 	for _, pair := range t.settings.Pairs {
 		assetPair, quotePair := exchange.SplitAssetQuote(pair)
+		point := 1.0
+		if reported && summary.Currency != "" {
+			quotePair = summary.Currency
+			if point, err = t.orderController.PointValue(pair); err != nil {
+				log.Error(err)
+				t.OnError(err)
+				return
+			}
+		}
 		assetBalance, quoteBalance := account.Balance(assetPair, quotePair)
 
 		assetSize := assetBalance.Free + assetBalance.Lock
@@ -182,7 +194,7 @@ func (t telegram) BalanceHandle(m *tb.Message) {
 			return
 		}
 
-		assetValue := assetSize * quote
+		assetValue := assetSize * quote * point
 		quotesValue[quotePair] = quoteSize
 		total += assetValue
 		message += fmt.Sprintf("%s: `%.4f` ≅ `%.2f` %s \n", assetPair, assetSize, assetValue, quotePair)
@@ -194,8 +206,9 @@ func (t telegram) BalanceHandle(m *tb.Message) {
 	}
 
 	message += fmt.Sprintf("-----\nTotal: `%.4f`\n", total)
-	if account, ok := t.orderController.AccountSummary(); ok {
+	if reported {
 		// the account as the broker reports it, in its currency, eg: BRL
+		account := summary
 		message += fmt.Sprintf("-----\nAccount (%s)\nBalance: `%.2f`\nEquity: `%.2f`\nOpen P&L: `%.2f`\n"+
 			"Free margin: `%.2f`\n", account.Currency, account.Balance, account.Equity, account.Profit,
 			account.FreeMargin)

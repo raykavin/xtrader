@@ -672,6 +672,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     pair={snapshot.pair}
                     asset={snapshot.asset}
                     quote={snapshot.quote}
+                    accountCurrency={snapshot.account_currency}
+                    pointValue={snapshot.point_value}
+                    simulated={snapshot.simulated}
                     lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
                     controls={controls}
                     levels={levels}
@@ -697,6 +700,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                         pair={snapshot.pair}
                         quote={snapshot.quote}
                         accountCurrency={snapshot.account_currency}
+                        simulated={snapshot.simulated}
                         orders={snapshot.orders}
                         onCancel={interactive ? handleCancelOrder : undefined}
                         onShowDecision={hasDecisions ? setShownDecision : undefined}

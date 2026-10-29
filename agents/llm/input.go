@@ -72,7 +72,9 @@ type Input struct {
 
 	Position  *Position `json:"position"`          // nil when flat
 	EntrySize number    `json:"entry_size"`        // of the position an entry opens, in units of the asset
-	Balance   number    `json:"available_balance"` // quote available for new positions
+	Balance   number    `json:"available_balance"` // available for new positions, see Instrument.Currency
+
+	point float64 // the point value of the pair, see money
 
 	// PendingOrder is the pending entry waiting on the pair for its fill,
 	// while flat, see Config.PendingOrders: nil without one.
@@ -153,13 +155,16 @@ type Summary struct {
 }
 
 // Instrument tells what the numbers of the pair mean: its volume (tick volume,
-// the count of the changes of the price, or the volume traded), and the profit
-// or the loss of the position (or of entry_size when flat) for a move of 1 of
-// the price, in the quote currency.
+// the count of the changes of the price, or the volume traded), the profit or
+// the loss of the position (or of entry_size when flat) for a move of 1 of the
+// price, and Currency, the one of the money: the account's (in the paper
+// wallet, the quote, simulated), of value_per_price_unit, available_balance
+// and unrealized_pnl. The prices are in QuoteCurrency.
 type Instrument struct {
 	Volume            string `json:"volume"`
 	ValuePerPriceUnit number `json:"value_per_price_unit"`
 	QuoteCurrency     string `json:"quote_currency"`
+	Currency          string `json:"account_currency"`
 }
 
 // Position is the position held on the pair. Entry is unknown for a position
@@ -171,7 +176,7 @@ type Position struct {
 	Entry      number         `json:"entry_price"`
 	StopLoss   number         `json:"stop_loss"`
 	TakeProfit number         `json:"take_profit"`
-	PnL        number         `json:"unrealized_pnl"` // at the price, in quote currency, before the costs
+	PnL        number         `json:"unrealized_pnl"` // at the price, in the account currency, before the costs
 	Candles    int            `json:"candles_held"`   // closed since the entry, or since it is followed
 
 	// InitialStop is the stop loss placed with the entry, whose distance to

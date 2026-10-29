@@ -1,7 +1,10 @@
 import type { CandleEvent, Order, OrderEvent, Point, Snapshot } from "../api/types";
 
 export interface Stats {
-  /** Closed trades (orders that carry a profit). */
+  /**
+   * Closed trades (orders that carry a profit) counted: on an account, the
+   * ones it booked, see awaiting.
+   */
   trades: number;
   wins: number;
   losses: number;
@@ -10,17 +13,19 @@ export interface Stats {
   /** Sum of the profits, in profitCurrency. */
   totalProfit: number;
   /**
-   * The currency of the profits: the account's when the broker booked all of
-   * them (account_profit), or reports the account without any trade yet (eg:
-   * MT5), else the quote (profit_value, the core's).
+   * The currency of the profits: on an account (the broker reports it, eg:
+   * MT5), its own, the profits the ones it booked (account_profit); else the
+   * quote (profit_value, the core's), eg: simulated in a paper wallet.
    */
   profitCurrency: string;
+  /** The profits are simulated, of a paper wallet, see Snapshot.simulated. */
+  simulated: boolean;
   /**
-   * The closed trades the broker reports the profits of (the snapshot tells
-   * the currency of the account) without the one of each, eg: older than the
-   * history the broker keeps: the profits are then the core's, in the quote.
+   * The closed trades of an account whose profit it didn't book yet (eg: the
+   * history of the broker read a moment after the fill): left out of the
+   * results until it does, never valued otherwise.
    */
-  unbooked: number;
+  awaiting: number;
   /** Gross profit / gross loss; Infinity when there are no losses. */
   profitFactor: number;
   /** The sums of the wins and of the losses (positive), in profitCurrency. */
@@ -100,15 +105,16 @@ export function maxDrawdown(points: Point[]): number {
  * by default; the equity and buy & hold over the candles, whatever it.
  */
 export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stats {
-  const closed = snapshot.orders.filter((o) => isClosedTrade(o) && within(o, window));
-  // as the account booked them when it did for all, else the core's
-  const booked = closed.every((o) => o.account_profit !== undefined);
-  const unbooked = snapshot.account_currency
-    ? closed.filter((o) => o.account_profit === undefined).length
-    : 0;
-  const value = (o: Order) => (booked ? (o.account_profit ?? 0) : o.profit_value);
-  const profitCurrency = booked
-    ? (closed[0]?.account_currency ?? snapshot.account_currency ?? snapshot.quote)
+  const all = snapshot.orders.filter((o) => isClosedTrade(o) && within(o, window));
+  // on an account, as it booked them, the ones it didn't yet awaited apart;
+  // else the core's, in the quote
+  const account =
+    snapshot.account_currency !== undefined || all.some((o) => o.account_profit !== undefined);
+  const closed = account ? all.filter((o) => o.account_profit !== undefined) : all;
+  const awaiting = all.length - closed.length;
+  const value = (o: Order) => (account ? (o.account_profit ?? 0) : o.profit_value);
+  const profitCurrency = account
+    ? (snapshot.account_currency ?? closed[0]?.account_currency ?? snapshot.quote)
     : snapshot.quote;
   const won = (o: Order) => value(o) > 0 || (value(o) === 0 && o.profit > 0);
   const lost = (o: Order) => value(o) < 0 || (value(o) === 0 && o.profit < 0);
@@ -143,7 +149,8 @@ export function computeStats(snapshot: Snapshot, window: StatsWindow = {}): Stat
     winRate: closed.length ? wins.length / closed.length : 0,
     totalProfit,
     profitCurrency,
-    unbooked,
+    simulated: snapshot.simulated === true,
+    awaiting,
     profitFactor:
       grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Number.POSITIVE_INFINITY : 0,
     grossProfit,
@@ -335,30 +342,43 @@ export interface PositionPnL {
   side: string;
   quantity: number;
   entry: number;
-  profit: number;
+  /** Null when unknown: an account that doesn't tell it, never valued otherwise. */
+  profit: number | null;
   currency: string;
+  /** The profit is simulated, of a paper wallet. */
+  simulated?: boolean;
 }
 
 /**
  * Returns the open position of the snapshot and its profit: as the broker
  * reports it when it does (MT5: the profit of the terminal, in the currency of
- * the account, the swap included), else left by the filled orders and valued
- * at the last price, in the quote. Null when flat.
+ * the account, the swap included); on an account that doesn't, its profit
+ * unknown; else (a paper wallet) left by the filled orders and valued at the
+ * last price, in the quote, simulated. Null when flat.
  */
 export function positionPnL(snapshot: Snapshot): PositionPnL | null {
   const broker = snapshot.position;
   if (broker) {
     if (!broker.open || !broker.entry || !broker.quantity) return null;
+    const currency = broker.currency ?? snapshot.account_currency;
     return {
       side: broker.side ?? "BUY",
       quantity: broker.quantity,
       entry: broker.entry,
-      profit: broker.profit,
-      currency: broker.currency ?? snapshot.quote,
+      profit: currency ? broker.profit : null,
+      currency: currency ?? "",
     };
   }
   const position = openPosition(snapshot.orders);
   const last = snapshot.candles[snapshot.candles.length - 1]?.close ?? 0;
   if (!position || last <= 0) return null;
-  return { ...position, profit: positionProfit(position, last), currency: snapshot.quote };
+  if (snapshot.account_currency) {
+    return { ...position, profit: null, currency: snapshot.account_currency };
+  }
+  return {
+    ...position,
+    profit: positionProfit(position, last),
+    currency: snapshot.quote,
+    simulated: snapshot.simulated === true,
+  };
 }

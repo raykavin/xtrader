@@ -153,24 +153,27 @@ type RKTrendConfluenceConfig struct {
 
 	// StopValue and TakeProfitValue, above 0, place a stop loss and a take
 	// profit at the broker with the entry at a fixed value: what the position
-	// loses, or earns, when the price reaches them, in quote currency, eg: 1
-	// and 2 for a dollar and two on a pair quoted in USD, at that value over
-	// the size of the position from the entry close, whatever the ATR.
+	// loses, or earns, when the price reaches them, in the currency of the
+	// account (in the paper wallet, of the simulation, the quote), eg: 5 and 10
+	// for five and ten reais on a BRL account, at that value over the size of
+	// the position times its point value (see service.PointValuer) from the
+	// entry close, whatever the ATR.
 	// StopValue replaces the stops in ATR above, which are then unused. The
 	// broker must place them with the orders, see service.ProtectionBroker.
 	StopValue       float64
 	TakeProfitValue float64
 
-	// MinPositionValue is the value, in quote currency, below which a balance
-	// is dust rather than a position: 10 by default, as in the other example
-	// strategies, which suits pairs quoted in USD.
+	// MinPositionValue is the value, in the currency of the account (in the
+	// paper wallet, the quote), below which a balance is dust rather than a
+	// position: 10 by default, as in the other example strategies.
 	MinPositionValue float64
 
 	// Sizing. A position commits PositionFraction of the balance available for
-	// new positions (the quote of the broker's Position), 1 by default: all of
-	// it. Its value is the committed balance times Leverage, the leverage of the
-	// account on the market, 1 by default: none. With leverage, PositionFraction
-	// must be below 1, so the whole balance is never leveraged at once.
+	// new positions (the cash of the broker's Position, in the currency of the
+	// account), 1 by default: all of it. Its value is the committed balance
+	// times Leverage, the leverage of the account on the market, 1 by default:
+	// none. With leverage, PositionFraction must be below 1, so the whole
+	// balance is never leveraged at once.
 	//
 	// PositionSize, by pair, sets instead a fixed size for the positions, a
 	// lot: in the units the broker trades the market in, eg: 0.01 BTC of
@@ -395,17 +398,18 @@ func rkSign(side model.SideType) float64 {
 }
 
 // rkLossLevel returns the level at which the position of size opened on side
-// at price loses value, in quote currency: below price for a long, above for a
+// at price loses value, in the currency of the cash (the account's at MT5),
+// point its point value (see rkCash): below price for a long, above for a
 // short. See the StopValue of the configs.
-func rkLossLevel(side model.SideType, price, size, value float64) float64 {
-	return price - rkSign(side)*value/size
+func rkLossLevel(side model.SideType, price, size, point, value float64) float64 {
+	return price - rkSign(side)*value/(size*point)
 }
 
 // rkProfitLevel returns the level at which the position of size opened on side
-// at price earns value, in quote currency. See the TakeProfitValue of the
-// configs.
-func rkProfitLevel(side model.SideType, price, size, value float64) float64 {
-	return price + rkSign(side)*value/size
+// at price earns value, in the currency of the cash, point its point value.
+// See the TakeProfitValue of the configs.
+func rkProfitLevel(side model.SideType, price, size, point, value float64) float64 {
+	return price + rkSign(side)*value/(size*point)
 }
 
 // rkProtectionLeg returns the stop loss among the legs protecting a position,
@@ -634,19 +638,19 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 		return
 	}
 
-	_, quote, err := broker.Position(df.Pair)
+	cash, err := rkCashOf(broker, df.Pair)
 	if err != nil {
 		log.Error(err)
 		return
 	}
 
-	size, value, ok := s.sizing.position(df.Pair, quote, closePrice)
-	if !ok || s.sizing.risky(df.Pair, closePrice, s.entryStop(df, side, size), size, quote) {
+	size, value, ok := s.sizing.position(df.Pair, cash, closePrice)
+	if !ok || s.sizing.risky(df.Pair, closePrice, s.entryStop(df, side, size, cash.point), size, cash) {
 		return
 	}
 
 	if s.cfg.BrokerStopATR > 0 || s.cfg.BrokerTrailingATR > 0 || fixed || s.cfg.TakeProfitValue > 0 {
-		err = s.openProtected(df, broker, side, size)
+		err = s.openProtected(df, broker, side, size, cash.point)
 	} else {
 		err = s.sizing.open(broker, side, df.Pair, size, value)
 	}
@@ -667,9 +671,9 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 // openProtected opens a position of side of size with its legs placed at the
 // broker: the stop at StopValue, else the tighter of BrokerStopATR and
 // BrokerTrailingATR from the close, if any, and the take profit at
-// TakeProfitValue, if any.
+// TakeProfitValue, if any, point the point value of the pair.
 func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Broker, side model.SideType,
-	size float64) error {
+	size, point float64) error {
 
 	protected, ok := broker.(service.ProtectionBroker)
 	if !ok {
@@ -679,7 +683,7 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 	closePrice, atr, sign := df.Close.Last(0), df.Metadata["rk_atr"].Last(0), rkSign(side)
 	var stop, profit float64 // 0 for none
 	if s.cfg.StopValue > 0 {
-		stop = rkLossLevel(side, closePrice, size, s.cfg.StopValue)
+		stop = rkLossLevel(side, closePrice, size, point, s.cfg.StopValue)
 	} else {
 		for _, distance := range []float64{s.cfg.BrokerStopATR, s.cfg.BrokerTrailingATR} {
 			if level := closePrice - sign*distance*atr; distance > 0 && (stop == 0 || sign*level > sign*stop) {
@@ -688,7 +692,7 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 		}
 	}
 	if s.cfg.TakeProfitValue > 0 {
-		profit = rkProfitLevel(side, closePrice, size, s.cfg.TakeProfitValue)
+		profit = rkProfitLevel(side, closePrice, size, point, s.cfg.TakeProfitValue)
 	}
 
 	orders, err := protected.CreateOrderMarketProtected(side, df.Pair, size, stop, profit)
@@ -702,11 +706,11 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 // entryStop returns the stop loss of an entry of side of size on the last
 // candle of df: the tightest of the stops on the close (StopATR, TrailingATR)
 // and of the one at the broker (BrokerStopATR, BrokerTrailingATR), or the one
-// of StopValue; 0 for none.
-func (s *RKTrendConfluence) entryStop(df *model.Dataframe, side model.SideType, size float64) float64 {
+// of StopValue, point the point value of the pair; 0 for none.
+func (s *RKTrendConfluence) entryStop(df *model.Dataframe, side model.SideType, size, point float64) float64 {
 	closePrice, atr, sign := df.Close.Last(0), df.Metadata["rk_atr"].Last(0), rkSign(side)
 	if s.cfg.StopValue > 0 {
-		return rkLossLevel(side, closePrice, size, s.cfg.StopValue)
+		return rkLossLevel(side, closePrice, size, point, s.cfg.StopValue)
 	}
 	stop := 0.0
 	if s.cfg.StopATR > 0 || s.cfg.TrailingATR > 0 {
@@ -873,7 +877,7 @@ func (s *RKTrendConfluence) position(df *model.Dataframe, broker service.Broker)
 		return 0, "", err
 	}
 
-	return asset, rkHeld(asset*df.Close.Last(0), s.cfg.MinPositionValue), nil
+	return asset, rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), s.cfg.MinPositionValue), nil
 }
 
 // rkHeld returns the side of a position worth value, negative for a short:
@@ -895,8 +899,55 @@ func rkClose(df *model.Dataframe, broker service.Broker, side model.SideType, mi
 	return flat
 }
 
+// rkCash is the cash available for a new position on a pair and the point
+// value of the pair: the value of a move of 1 of its price for 1 unit, both in
+// the currency of the cash, the account's at MT5 (see service.PointValuer), 1
+// in the paper wallet, valuing the pairs in their quote.
+type rkCash struct {
+	free, point float64
+}
+
+// rkCashOf reads the cash of broker for a new position on pair.
+func rkCashOf(broker service.Broker, pair string) (rkCash, error) {
+	_, free, err := broker.Position(pair)
+	if err != nil {
+		return rkCash{}, err
+	}
+	point, err := rkPointValue(broker, pair)
+	if err != nil {
+		return rkCash{}, err
+	}
+	return rkCash{free: free, point: point}, nil
+}
+
+// rkPointValue returns the point value of pair at broker, see rkCash, an error
+// when it isn't positive.
+func rkPointValue(broker service.Broker, pair string) (float64, error) {
+	point, err := service.PointValue(broker, pair)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("%s: reading the point value: %w", pair, err)
+	case math.IsNaN(point) || math.IsInf(point, 0) || point <= 0:
+		return 0, fmt.Errorf("%s: no point value, %g", pair, point)
+	}
+	return point, nil
+}
+
+// rkWorth returns the value of asset units of pair at price in the currency of
+// the cash, to tell dust apart: by the point value of the pair, or 1 while it
+// can't be read.
+func rkWorth(broker service.Broker, pair string, asset, price float64) float64 {
+	point, err := rkPointValue(broker, pair)
+	if err != nil {
+		log.Debug(err)
+		point = 1
+	}
+	return asset * price * point
+}
+
 // rkSizing sizes the positions of a strategy, see the Sizing of
 // RKTrendConfluenceConfig: sizes are the PositionSize of the pairs, if any.
+// The money is in the currency of the cash, see rkCash.
 type rkSizing struct {
 	sizes              map[string]float64
 	fraction, leverage float64
@@ -904,28 +955,28 @@ type rkSizing struct {
 	maxRisk            float64 // % of the balance lost at the stop loss at most, 0 for no limit, see risky
 }
 
-// position returns the size, in the asset, and the value, in quote, of the
-// position to open on pair at price, with quote available. ok is false when
-// there is none: a share of the balance worth less than minValue, or a fixed
-// size missing, worth less than minValue, it would be taken for dust, or more
-// than quote times the leverage, all the balance can take.
-func (z rkSizing) position(pair string, quote, price float64) (size, value float64, ok bool) {
+// position returns the size, in the asset, and the value, in the currency of
+// the cash, of the position to open on pair at price. ok is false when there
+// is none: a share of the balance worth less than minValue, or a fixed size
+// missing, worth less than minValue, it would be taken for dust, or more than
+// the cash times the leverage, all the balance can take.
+func (z rkSizing) position(pair string, cash rkCash, price float64) (size, value float64, ok bool) {
 	if len(z.sizes) == 0 {
-		value = quote * z.fraction * z.leverage
-		return value / price, value, value >= z.minValue
+		value = cash.free * z.fraction * z.leverage
+		return value / (price * cash.point), value, value >= z.minValue
 	}
 
 	size, ok = z.sizes[pair]
-	value = size * price
+	value = size * price * cash.point
 	switch {
 	case !ok:
 		log.Errorf("%s: no position size set for the pair", pair)
 	case value < z.minValue:
 		log.Errorf("%s: a position of %g is worth %f, under the min position value of %g: it would be taken "+
 			"for dust", pair, size, value, z.minValue)
-	case value > quote*z.leverage:
+	case value > cash.free*z.leverage:
 		log.Errorf("%s: a position of %g is worth %f, more than the %f available times the leverage of %g",
-			pair, size, value, quote, z.leverage)
+			pair, size, value, cash.free, z.leverage)
 	default:
 		return size, value, true
 	}
@@ -933,7 +984,7 @@ func (z rkSizing) position(pair string, quote, price float64) (size, value float
 }
 
 // open opens the position of side on pair at the market: by its size when the
-// sizes are fixed, else by its value.
+// sizes are fixed, else by its value, in the currency of the cash.
 func (z rkSizing) open(broker service.Broker, side model.SideType, pair string, size, value float64) error {
 	var err error
 	if len(z.sizes) > 0 {
@@ -945,20 +996,20 @@ func (z rkSizing) open(broker service.Broker, side model.SideType, pair string, 
 }
 
 // risky reports whether a position of size opened on pair at price, its stop
-// loss at stop, would lose more than maxRisk % of the balance quote (the free
-// one, in the quote of the pair) at it, logged as why the entry is skipped:
-// never without a limit (maxRisk 0), nor without a stop loss (stop 0).
-func (z rkSizing) risky(pair string, price, stop, size, quote float64) bool {
-	if z.maxRisk <= 0 || stop <= 0 || quote <= 0 {
+// loss at stop, would lose more than maxRisk % of the free cash at it, both in
+// the currency of the cash, logged as why the entry is skipped: never without
+// a limit (maxRisk 0), nor without a stop loss (stop 0).
+func (z rkSizing) risky(pair string, price, stop, size float64, cash rkCash) bool {
+	if z.maxRisk <= 0 || stop <= 0 || cash.free <= 0 {
 		return false
 	}
-	risk := math.Abs(price-stop) * size
-	if risk <= quote*z.maxRisk/100 {
+	risk := math.Abs(price-stop) * size * cash.point
+	if risk <= cash.free*z.maxRisk/100 {
 		return false
 	}
 	log.Infof("%s: an entry of %g at %f would lose %f at its stop loss %f, %.2f%% of the free balance of %f, "+
-		"above the max risk of %g%% (max-risk-pct): skipped", pair, size, price, risk, stop, risk/quote*100, quote,
-		z.maxRisk)
+		"above the max risk of %g%% (max-risk-pct): skipped", pair, size, price, risk, stop, risk/cash.free*100,
+		cash.free, z.maxRisk)
 	return true
 }
 

@@ -125,7 +125,7 @@ func run() error {
 		lotList       = flag.String("lot", "", "fixed size of every position, in MT5 lots unless -mt5-size unit: the lot of each pair of -pair by its name, separated by ;, eg: BTCUSDm=0.01;XAUUSDm=0.02, the decimals with . (one for all the pairs, the order of -pair and a comma are refused)")
 		fraction      = flag.Float64("position-fraction", cfg.PositionFraction, "share of the free balance each position commits (0-1], without -lot")
 		leverage      = flag.Float64("leverage", cfg.Leverage, "live: leverage of the positions, at most the account's for the market; needs -position-fraction below 1, or -lot")
-		minValue      = flag.Float64("min-position-value", cfg.MinPositionValue, "quote value under which a balance is dust, eg: for pairs not quoted in USD")
+		minValue      = flag.Float64("min-position-value", cfg.MinPositionValue, "value under which a balance is dust, in the currency of the account (paper: the quote)")
 		fee           = flag.Float64("fee", 0.001, "backtest and paper: fee of each fill, a share of its value")
 		csvFiles      = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe  = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")

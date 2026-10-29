@@ -30,9 +30,10 @@ type BracketConfig struct {
 
 	// StopValue and TakeProfitValue, above 0, place the stop loss and the take
 	// profit at a fixed value instead: what the position loses, or earns, when
-	// the price reaches them, in quote currency, eg: 1 and 2 for a dollar and
-	// two on a pair quoted in USD. The level is that value over the size of
-	// the position from the entry close, whatever the ATR. 0 keeps the ATR.
+	// the price reaches them, in the currency of the account (in the paper
+	// wallet, the quote), eg: 5 and 10 for five and ten reais on a BRL account.
+	// The level is that value over the size of the position times its point
+	// value from the entry close, whatever the ATR. 0 keeps the ATR.
 	StopValue       float64
 	TakeProfitValue float64
 
@@ -205,18 +206,18 @@ func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model
 		return false
 	}
 
-	_, quote, err := broker.Position(df.Pair)
+	cash, err := rkCashOf(broker, df.Pair)
 	if err != nil {
 		log.Error(err)
 		return false
 	}
-	size, _, ok := b.sizing.position(df.Pair, quote, closePrice)
+	size, _, ok := b.sizing.position(df.Pair, cash, closePrice)
 	if !ok {
 		return false
 	}
 
-	stop, profit = b.fixed(entry, closePrice, size, stop, profit)
-	if b.sizing.risky(df.Pair, closePrice, stop, size, quote) {
+	stop, profit = b.fixed(entry, closePrice, size, cash.point, stop, profit)
+	if b.sizing.risky(df.Pair, closePrice, stop, size, cash) {
 		return false
 	}
 	log.Infof("[%s] %s %s | %s | close %f | stop %f | take profit %f", b.name, df.Pair, b.timeframe, entry,
@@ -252,18 +253,18 @@ func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.
 		return nil, false
 	}
 
-	_, quote, err := broker.Position(df.Pair)
+	cash, err := rkCashOf(broker, df.Pair)
 	if err != nil {
 		log.Error(err)
 		return nil, false
 	}
-	size, _, ok := b.sizing.position(df.Pair, quote, limit)
+	size, _, ok := b.sizing.position(df.Pair, cash, limit)
 	if !ok {
 		return nil, false
 	}
 
-	stop, profit = b.fixed(entry, limit, size, stop, profit)
-	if b.sizing.risky(df.Pair, limit, stop, size, quote) {
+	stop, profit = b.fixed(entry, limit, size, cash.point, stop, profit)
+	if b.sizing.risky(df.Pair, limit, stop, size, cash) {
 		return nil, false
 	}
 	log.Infof("[%s] %s %s | %s LIMIT | limit %f | stop %f | take profit %f | close %f", b.name, df.Pair,
@@ -284,13 +285,13 @@ func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.
 
 // fixed returns the stop loss and the take profit of a position of entry at
 // price of size, stop and profit unless StopValue or TakeProfitValue replace
-// them.
-func (b *bracket) fixed(entry model.SideType, price, size, stop, profit float64) (float64, float64) {
+// them, point the point value of the pair.
+func (b *bracket) fixed(entry model.SideType, price, size, point, stop, profit float64) (float64, float64) {
 	if b.cfg.StopValue > 0 {
-		stop = rkLossLevel(entry, price, size, b.cfg.StopValue)
+		stop = rkLossLevel(entry, price, size, point, b.cfg.StopValue)
 	}
 	if b.cfg.TakeProfitValue > 0 {
-		profit = rkProfitLevel(entry, price, size, b.cfg.TakeProfitValue)
+		profit = rkProfitLevel(entry, price, size, point, b.cfg.TakeProfitValue)
 	}
 	return stop, profit
 }
@@ -320,7 +321,7 @@ func (b *bracket) position(df *model.Dataframe, broker service.Broker) (float64,
 	if err != nil {
 		return 0, "", err
 	}
-	return asset, rkHeld(asset*df.Close.Last(0), b.cfg.MinPositionValue), nil
+	return asset, rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), b.cfg.MinPositionValue), nil
 }
 
 // close closes the position of trade at the market, and reports whether the

@@ -145,7 +145,7 @@ func newDailySupervised(t *testing.T) (*supervised, *dailyClock, *fakeAgent) {
 
 func setGlobal(t *testing.T, s *supervised, loss, gain float64) {
 	t.Helper()
-	settings := ui.DailyLimitSettings{Enabled: true, Currency: "BRL"}
+	settings := ui.DailyLimitSettings{Enabled: true}
 	if loss > 0 {
 		settings.MaxLoss = &loss
 	}
@@ -256,6 +256,47 @@ func TestDailyLimiter_LossClosesEverythingAndBlocksUntilTheNextDay(t *testing.T)
 	assert.Greater(t, entries.EntriesRevision, revision, "the revision grew")
 }
 
+// The limit of all the agents applies in each currency of the accounts apart,
+// none converted: a BRL account and a USD one each under it, whatever their
+// sum, free; the USD one reaching it, tripped, the reason in USD.
+func TestDailyLimiter_ByCurrency(t *testing.T) {
+	s, clock, _ := newDailySupervised(t)
+	ctx := context.Background()
+	l := s.sup.daily
+	usd := newFakeBridge(t, "bridge-token", 198974330, "USD")
+	a := s.agent(t, "usd", "trend", true, onBridge(usd.URL, 303, "XAUUSDm"))
+	require.NoError(t, s.store.SetAgentSecrets(ctx, a.ID, store.AgentSecrets{BridgeToken: secret("bridge-token")}))
+	setGlobal(t, s, 50, 0)
+	s.bridge.set(position(10, 101, "XAUUSDm", false, 0.01, -40, 0))
+	usd.set(position(30, 303, "XAUUSDm", false, 0.01, -30, 0))
+
+	for range 2 {
+		require.NoError(t, l.evaluate(ctx))
+		clock.add(5 * time.Second)
+	}
+	status := l.Status()
+	require.Equal(t, ui.DailyFree, status.Global.State, "-40 BRL and -30 USD: each under 50")
+	require.Len(t, status.Global.Results, 2)
+	assert.Equal(t, "BRL", status.Global.Results[0].Currency)
+	assert.InDelta(t, -40, status.Global.Results[0].Total, 1e-9)
+	assert.Equal(t, "USD", status.Global.Results[1].Currency)
+	assert.InDelta(t, -30, status.Global.Results[1].Total, 1e-9)
+	assert.Equal(t, "BRL", status.Global.Result.Currency, "the closest to the limit weighed")
+
+	usd.set(position(30, 303, "XAUUSDm", false, 0.01, -55, 0))
+	for range 2 {
+		require.NoError(t, l.evaluate(ctx))
+		clock.add(5 * time.Second)
+	}
+	status = l.Status()
+	require.Equal(t, ui.DailyBlocked, status.Global.State)
+	assert.Contains(t, status.Global.Guard.Reason, "−55,00 USD (limite 50,00 USD)")
+	require.Eventually(t, func() bool {
+		guards, err := s.store.TrippedDailyGuards(ctx)
+		return err == nil && len(guards) == 1 && guards[0].FlattenStatus != store.FlattenRunning
+	}, 20*time.Second, 50*time.Millisecond, "its close ended")
+}
+
 // The result unknown (the account not read) in two reads in a row: the
 // entries blocked, nothing closed; read again under the limits, released.
 func TestDailyLimiter_IncompleteBlocksTheEntries(t *testing.T) {
@@ -307,8 +348,8 @@ func TestDailyLimits_Changes(t *testing.T) {
 	call, _ := settingsSession(t, s.managed)
 
 	// a limit already reached: refused without the confirmation, its preview told
-	request := ui.DailyLimitsRequest{Settings: ui.DailyLimitSettings{Enabled: true, Currency: "BRL",
-		MaxLoss: ptrTo(20.0)}, Reason: "teste"}
+	request := ui.DailyLimitsRequest{Settings: ui.DailyLimitSettings{Enabled: true, MaxLoss: ptrTo(20.0)},
+		Reason: "teste"}
 	resp, body := call(http.MethodPut, "/api/settings/daily-limits", request)
 	require.Equal(t, http.StatusConflict, resp.StatusCode, body)
 	var preview ui.DailyLimitPreview
@@ -511,7 +552,7 @@ func TestSupervision_ChatSetsDailyLimits(t *testing.T) {
 
 	s.chat.script(
 		calling(tool("d1", "set_daily_limits", map[string]any{"scope": "aggregate_all", "max_loss": 150,
-			"max_gain": 300, "currency": "BRL", "reason": "limite somado de todos os agentes"})),
+			"max_gain": 300, "reason": "limite somado de todos os agentes"})),
 		saying("Pronto."))
 	added, err := s.sup.Ask(ctx, user, "admin", "perda máxima de 150 e ganho de 300 no total de todos os agentes")
 	require.NoError(t, err)
@@ -520,14 +561,14 @@ func TestSupervision_ChatSetsDailyLimits(t *testing.T) {
 	require.True(t, found)
 	assert.True(t, global.Enabled)
 	assert.Equal(t, 150.0, *global.MaxLoss)
-	assert.Equal(t, "BRL", global.Currency)
+	assert.Empty(t, global.Settings().Currency, "in the currency of each account")
 	var result string
 	for _, m := range added {
 		if m.Kind == store.MessageResult {
 			result = m.Content
 		}
 	}
-	assert.Contains(t, result, "perda máxima 150,00 BRL")
+	assert.Contains(t, result, "perda máxima 150,00")
 
 	s.chat.script(
 		calling(tool("d2", "set_daily_limits", map[string]any{"scope": "each_agent", "all": true, "max_loss": 40,

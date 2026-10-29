@@ -23,6 +23,15 @@ interface Props {
   pair: string;
   asset: string;
   quote: string;
+  /**
+   * The currency of the account, see Snapshot.account_currency: the money of
+   * the ticket (an amount, the value, the risk and the return) is in it.
+   */
+  accountCurrency?: string;
+  /** The value in accountCurrency of a move of 1 of the price for 1 unit, see Snapshot.point_value. */
+  pointValue?: number;
+  /** A paper wallet: the money simulated, in the quote. */
+  simulated?: boolean;
   /** The last close, where a market order enters. */
   lastPrice: number;
   /** Null while unknown: the ticket shows, locked. */
@@ -32,6 +41,7 @@ interface Props {
   onLevelsChange: (levels: TicketLevels) => void;
 }
 
+/** The unit of the amount: lots, money (of the account, else the quote) or a share of the balance. */
 type Unit = "quote" | "percent" | "lot";
 
 /** Why the ticket is blocked, and where to unblock it, on its badge. */
@@ -162,6 +172,9 @@ export function ControlPanel({
   pair,
   asset,
   quote,
+  accountCurrency,
+  pointValue,
+  simulated,
   lastPrice,
   controls,
   levels,
@@ -199,16 +212,23 @@ export function ControlPanel({
   const validTicket = validAmount && !missing && levelError === null;
   const step = priceStep(entry ?? lastPrice);
 
+  // the money of the ticket: on an account, in its currency, a move of the
+  // price valued by the point value of the pair (unknown until the broker
+  // tells it: the estimates left out); else in the quote, simulated
+  const money = accountCurrency ?? (simulated ? `${quote} sim.` : quote);
+  const point = accountCurrency ? (pointValue && pointValue > 0 ? pointValue : null) : 1;
   // the estimates of the summary: the size in the asset is known for a lot or
-  // an amount in quote, a share of the balance is sized by the broker
+  // an amount of money, a share of the balance is sized by the broker
   let size: number | null = null;
   if (validAmount && entry !== null && unit === "lot") size = parsedAmount;
-  if (validAmount && entry !== null && unit === "quote") size = parsedAmount / entry;
-  const notional = size !== null && entry !== null ? size * entry : null;
-  const risk =
-    size !== null && entry !== null && stop !== null ? size * Math.abs(entry - stop) : null;
-  const reward =
-    size !== null && entry !== null && profit !== null ? size * Math.abs(profit - entry) : null;
+  if (validAmount && entry !== null && unit === "quote" && point !== null) {
+    size = parsedAmount / (entry * point);
+  }
+  const valued = (distance: number | null) =>
+    size !== null && distance !== null && point !== null ? size * distance * point : null;
+  const notional = valued(entry);
+  const risk = valued(entry !== null && stop !== null ? Math.abs(entry - stop) : null);
+  const reward = valued(entry !== null && profit !== null ? Math.abs(profit - entry) : null);
 
   // Changing the pair starts a new ticket.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on pair change only
@@ -303,7 +323,7 @@ export function ControlPanel({
     });
 
   const amountLabel = {
-    quote: `${formatQuantity(parsedAmount)} ${quote}`,
+    quote: `${formatQuantity(parsedAmount)} ${money}`,
     percent: `${formatQuantity(parsedAmount)}% do saldo`,
     lot: `${formatQuantity(parsedAmount)} ${Math.abs(parsedAmount) < 2 ? "lote" : "lotes"}`,
   }[unit];
@@ -400,7 +420,7 @@ export function ControlPanel({
             aria-label="Unidade do valor"
           >
             <option value="lot">lote</option>
-            <option value="quote">{quote}</option>
+            <option value="quote">{accountCurrency ?? quote}</option>
             <option value="percent">% saldo</option>
           </select>
         </div>
@@ -507,14 +527,14 @@ export function ControlPanel({
                 : "—"}
           </dd>
           <dt>Valor</dt>
-          <dd>{notional === null ? "—" : `${formatNumber(notional)} ${quote}`}</dd>
+          <dd>{notional === null ? "—" : `${formatNumber(notional)} ${money}`}</dd>
           <dt>Risco</dt>
           <dd className={risk === null ? "" : "neg"}>
-            {risk === null ? "—" : `−${formatNumber(risk)} ${quote}`}
+            {risk === null ? "—" : `−${formatNumber(risk)} ${money}`}
           </dd>
           <dt>Retorno</dt>
           <dd className={reward === null ? "" : "pos"}>
-            {reward === null ? "—" : `+${formatNumber(reward)} ${quote}`}
+            {reward === null ? "—" : `+${formatNumber(reward)} ${money}`}
           </dd>
           <dt>Risco : retorno</dt>
           <dd>{risk && reward ? `1 : ${formatNumber(reward / risk)}` : "—"}</dd>

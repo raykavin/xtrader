@@ -22,6 +22,8 @@ interface Props {
   quote: string;
   /** The currency of the account, when the broker reports it, eg: MT5. */
   accountCurrency?: string;
+  /** A paper wallet: its money simulated, in the quote. */
+  simulated?: boolean;
   orders: Order[];
   /** With the control panel: cancels a pending order. */
   onCancel?: (order: Order) => Promise<void>;
@@ -37,13 +39,16 @@ export function OrdersTable({
   pair,
   quote,
   accountCurrency,
+  simulated,
   orders,
   onCancel,
   onShowDecision,
 }: Props) {
-  // the profits as the account books them, in its currency, when it does
-  const profitCurrency =
-    orders.find((o) => o.account_currency)?.account_currency ?? accountCurrency ?? quote;
+  // on an account, the profits as it books them, in its currency, the ones it
+  // didn't book yet awaited, never the core's in the quote
+  const booked = orders.find((o) => o.account_currency)?.account_currency ?? accountCurrency;
+  const account = booked !== undefined;
+  const profitCurrency = booked ?? (simulated ? `${quote}, simulação` : quote);
   const [page, setPage] = useState(0);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -103,12 +108,16 @@ export function OrdersTable({
                 <th scope="col" className="num">
                   Quantidade
                 </th>
-                <th scope="col" className="num">
-                  Total ({quote})
-                </th>
-                <th scope="col" className="num">
-                  Taxa
-                </th>
+                {!account && (
+                  <>
+                    <th scope="col" className="num">
+                      Total ({quote})
+                    </th>
+                    <th scope="col" className="num">
+                      Taxa
+                    </th>
+                  </>
+                )}
                 <th scope="col" className="num">
                   Lucro/Perda ({profitCurrency})
                 </th>
@@ -146,19 +155,21 @@ export function OrdersTable({
                   <td className="num mono" data-label="Quantidade">
                     {formatQuantity(order.quantity)}
                   </td>
-                  <td className="num mono" data-label={`Total (${quote})`}>
-                    {formatNumber(order.price * order.quantity)}
-                  </td>
-                  <td className="num mono" data-label="Taxa">
-                    {order.fee ? formatNumber(order.fee) : "—"}
-                  </td>
+                  {!account && (
+                    <>
+                      <td className="num mono" data-label={`Total (${quote})`}>
+                        {formatNumber(order.price * order.quantity)}
+                      </td>
+                      <td className="num mono" data-label="Taxa">
+                        {order.fee ? formatNumber(order.fee) : "—"}
+                      </td>
+                    </>
+                  )}
                   <td
-                    className={`num mono ${signClass(order.account_profit ?? order.profit)}`}
+                    className={`num mono ${signClass(account ? (order.account_profit ?? 0) : order.profit)}`}
                     data-label={`Lucro/Perda (${profitCurrency})`}
                   >
-                    {order.profit !== 0 || order.profit_value !== 0
-                      ? `${formatPercent(order.profit)} (${formatProfit(order.account_profit ?? order.profit_value)}${order.account_profit === undefined && profitCurrency !== quote ? ` ${quote}` : ""})`
-                      : "—"}
+                    {profitCell(order, account)}
                   </td>
                   {onShowDecision && (
                     <td data-label="Justificativa">
@@ -220,4 +231,17 @@ export function OrdersTable({
       <Paginator page={page} total={sorted.length} onPage={setPage} />
     </div>
   );
+}
+
+/**
+ * The profit of an order, a close: its percentage and its value, on an
+ * account the one it booked, awaited until it does; elsewhere the core's.
+ */
+function profitCell(order: Order, account: boolean): string {
+  if (order.profit === 0 && order.profit_value === 0) return "—";
+  if (!account) return `${formatPercent(order.profit)} (${formatProfit(order.profit_value)})`;
+  if (order.account_profit === undefined) {
+    return `${formatPercent(order.profit)} (aguardando a corretora)`;
+  }
+  return `${formatPercent(order.profit)} (${formatProfit(order.account_profit)})`;
 }

@@ -142,7 +142,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Nil(t, matrend.LLM)
 	require.Nil(t, matrend.Account.Comment, "the default of its strategy, nb:matrend")
 	require.Equal(t, Params{"strategy": "matrend", "pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.01",
-		"timeframe": "5m", "leverage": "400", "stop-value": "1", "take-profit-value": "2", "max-distance": "0.5"},
+		"timeframe": "5m", "leverage": "400", "stop-value": "5.4", "take-profit-value": "10.8", "max-distance": "0.5"},
 		matrend.Params)
 
 	fib := byName["fibonacci"]

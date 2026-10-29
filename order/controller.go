@@ -965,23 +965,31 @@ func (c *Controller) updatePosition(o *model.Order) {
 			c.notify(message)
 			return
 		}
-		// as the account books it, in its currency: its deals may come a
-		// moment after the fill, so the notification waits for them apart
-		closing, percent, table, unpriced := *o, result.ProfitPercent, c.Results[o.Pair].String(), result.unpriced
+		// as the account books it, in its currency, never the one computed from
+		// the prices, in the quote: its deals may come a moment after the fill,
+		// so the notification waits for them apart, and tells them awaited when
+		// they don't come in time
+		results := c.Results[o.Pair]
+		counts := fmt.Sprintf("%s | trades %d | win %d | loss %d", o.Pair, len(results.Win())+len(results.Lose()),
+			len(results.Win()), len(results.Lose()))
+		closing, percent, unpriced := *o, result.ProfitPercent, result.unpriced
 		go func() {
+			currency := "the account currency"
 			for wait := time.Now().Add(profitWait); ; {
+				if account, ok := reporter.AccountSummary(); ok && account.Currency != "" {
+					currency = account.Currency
+				}
 				if booked, ok := reporter.ClosedProfit(closing, entry); ok {
-					if account, ok := reporter.AccountSummary(); ok && account.Currency != "" {
-						message = fmt.Sprintf("[PROFIT] %.2f %s (%.4f %%)\n`%s`", booked, account.Currency,
-							percent*100, table)
-						if unpriced { // its percentage unknown
-							message = fmt.Sprintf("[PROFIT] %.2f %s\n`%s`", booked, account.Currency, table)
-						}
+					message = fmt.Sprintf("[PROFIT] %.2f %s (%.4f %%)\n%s", booked, currency, percent*100, counts)
+					if unpriced { // its percentage unknown
+						message = fmt.Sprintf("[PROFIT] %.2f %s\n%s", booked, currency, counts)
 					}
 					break
 				}
 				if time.Now().After(wait) {
-					break // the one computed from the prices, in the quote
+					message = fmt.Sprintf("[PROFIT] awaiting the broker: the result in %s isn't booked yet\n%s",
+						currency, counts)
+					break
 				}
 				time.Sleep(profitPoll)
 			}
@@ -993,7 +1001,7 @@ func (c *Controller) updatePosition(o *model.Order) {
 // profitWait bounds how long the notification of a closed trade waits for the
 // profit the broker books, polled every profitPoll.
 var (
-	profitWait = 5 * time.Second
+	profitWait = time.Minute
 	profitPoll = 250 * time.Millisecond
 )
 
@@ -1898,6 +1906,13 @@ func (c *Controller) Account() (model.Account, error) {
 
 func (c *Controller) Position(pair string) (asset, quote float64, err error) {
 	return c.exchange.Position(pair)
+}
+
+// PointValue returns the value in the currency of the cash of the exchange of
+// a move of 1 of the price of pair for 1 unit, see service.PointValuer: 1 for
+// an exchange valuing the pairs in their quote.
+func (c *Controller) PointValue(pair string) (float64, error) {
+	return service.PointValue(c.exchange, pair)
 }
 
 func (c *Controller) LastQuote(pair string) (float64, error) {

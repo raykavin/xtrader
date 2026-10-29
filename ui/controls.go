@@ -14,6 +14,7 @@ import (
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/order"
+	"github.com/raykavin/xtrader/service"
 )
 
 // OrderController is the subset of *order.Controller used by the dashboard
@@ -378,8 +379,10 @@ func createControlOrder(controller OrderController, side model.SideType, pair st
 }
 
 // controlSize returns the size of an order at price: its lots, its amount in
-// quote, or its share of the balance, of the quote for a buy and of the asset
-// held for a sell.
+// the currency of the cash (the account's at MT5, the quote in the paper
+// wallet), or its share of the balance, of the cash for a buy and of the asset
+// held for a sell; an amount turned into units by the point value of the pair
+// (see service.PointValuer).
 func controlSize(controller OrderController, side model.SideType, pair string, request ControlOrderRequest,
 	price float64) (float64, error) {
 
@@ -388,22 +391,32 @@ func controlSize(controller OrderController, side model.SideType, pair string, r
 		return request.Amount, nil
 	case price <= 0:
 		return 0, errors.New("no price to size the order at")
-	case request.Percent:
-		asset, quote, err := controller.Position(pair)
+	}
+	amount := request.Amount
+	if request.Percent {
+		asset, cash, err := controller.Position(pair)
 		if err != nil {
 			return 0, err
 		}
 		if side == model.SideTypeSell {
 			return request.Amount * asset / 100.0, nil
 		}
-		return request.Amount * quote / 100.0 / price, nil
+		amount = request.Amount * cash / 100.0
 	}
-	return request.Amount / price, nil
+	point, err := service.PointValue(controller, pair)
+	if err != nil {
+		return 0, err
+	}
+	if point <= 0 {
+		return 0, fmt.Errorf("no point value of %s to size the order", pair)
+	}
+	return amount / (price * point), nil
 }
 
 // createMarketOrder mirrors the Telegram /buy and /sell semantics: amounts are
-// in quote currency, percentages consume the available balance — quote balance
-// for buys, asset balance for sells — and lots are the size of the order.
+// in the currency of the cash (the account's at MT5), percentages consume the
+// available balance — the cash for buys, the asset for sells — and lots are
+// the size of the order.
 func createMarketOrder(controller OrderController, side model.SideType, pair string,
 	request ControlOrderRequest) (model.Order, error) {
 	amount := request.Amount
@@ -448,7 +461,11 @@ func (c *Chart) controlledOrder(w http.ResponseWriter, r *http.Request) (model.O
 
 // handleControlBalance replies the balance of the account on the pairs of the
 // bot, as the Telegram /balance command: their assets, valued at the last
-// close, and their quotes.
+// close, and the cash. On an account the broker reports (see
+// WithAccountReporter), the cash is in its currency and the assets are valued
+// in it by the point value of their pairs (see service.PointValuer), no rate
+// of exchange read; elsewhere, eg: the paper wallet, in the quotes of the
+// pairs.
 func (c *Chart) handleControlBalance(w http.ResponseWriter, r *http.Request) {
 	controller, ok := c.requireController(w, r)
 	if !ok {
@@ -470,14 +487,28 @@ func (c *Chart) handleControlBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	c.mu.Unlock()
 
+	var summary service.AccountSummary
+	reported := false
+	if c.reporter != nil {
+		summary, reported = c.reporter.AccountSummary()
+	}
+
 	response := BalanceResponse{Balances: make([]AssetBalance, 0, len(pairs)+1)}
 	var quotes []AssetBalance
 	for _, pair := range pairs {
 		asset, quote := exchange.SplitAssetQuote(pair)
+		point := 1.0
+		if reported && summary.Currency != "" {
+			quote = summary.Currency
+			if point, err = service.PointValue(controller, pair); err != nil {
+				writeControlError(w, err)
+				return
+			}
+		}
 		assetBalance, quoteBalance := account.Balance(asset, quote)
 		quantity := assetBalance.Free + assetBalance.Lock
 		response.Balances = append(response.Balances, AssetBalance{Asset: asset, Quantity: quantity,
-			Value: quantity * closes[pair], Quote: quote})
+			Value: quantity * closes[pair] * point, Quote: quote})
 
 		if !slices.ContainsFunc(quotes, func(b AssetBalance) bool { return b.Asset == quote }) {
 			quantity := quoteBalance.Free + quoteBalance.Lock
@@ -488,12 +519,9 @@ func (c *Chart) handleControlBalance(w http.ResponseWriter, r *http.Request) {
 	for _, balance := range response.Balances {
 		response.Total += balance.Value
 	}
-	if c.reporter != nil {
-		if account, ok := c.reporter.AccountSummary(); ok {
-			response.Account = &AccountSummary{Currency: account.Currency, Balance: account.Balance,
-				Equity: account.Equity, Profit: account.Profit, Margin: account.Margin,
-				FreeMargin: account.FreeMargin}
-		}
+	if reported {
+		response.Account = &AccountSummary{Currency: summary.Currency, Balance: summary.Balance,
+			Equity: summary.Equity, Profit: summary.Profit, Margin: summary.Margin, FreeMargin: summary.FreeMargin}
 	}
 	writeJSON(w, response)
 }

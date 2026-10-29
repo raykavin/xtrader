@@ -65,11 +65,28 @@ export function resultAmount(value: number, currency: string): string {
 /** The limits in words, eg: perda máx. 150,00 · ganho máx. 300,00 BRL. */
 export function limitsLabel(limits: DailyLimitSettings, currency?: string): string {
   if (!limits.enabled) return "sem limite";
-  const unit = limits.currency || currency || "";
+  const unit = currency ?? "";
   const parts: string[] = [];
   if (limits.max_loss != null) parts.push(`perda máx. ${formatMoney(limits.max_loss)}`);
   if (limits.max_gain != null) parts.push(`ganho máx. ${formatMoney(limits.max_gain)}`);
   return `${parts.join(" · ")}${unit ? ` ${unit}` : ""}`;
+}
+
+/**
+ * The results of the day of a scope: of all the agents, one by currency of
+ * their accounts (the limits apply to each apart, none converted); of an
+ * agent, its one.
+ */
+export function scopeResults(scope: DailyScopeStatus | undefined): DailyResult[] {
+  if (scope?.results && scope.results.length > 0) return scope.results;
+  return scope?.result ? [scope.result] : [];
+}
+
+/** The unit of the limits of all the agents: the currency of the accounts, or each one's when several. */
+export function globalUnit(results: DailyResult[]): string {
+  const currencies = [...new Set(results.map((r) => r.currency).filter((c) => c !== ""))];
+  if (currencies.length === 1) return currencies[0] ?? "";
+  return currencies.length > 1 ? "em cada moeda" : "";
 }
 
 /** How far the result went toward each limit, from 0 to 1: the loss and the gain. */
@@ -97,10 +114,9 @@ export function guardedAgents(status: DailyLimitsStatus | null): Record<string, 
   return guarded;
 }
 
-/** The fields of the form of the daily limits, as typed. */
+/** The fields of the form of the daily limits, as typed: in the currency of each account. */
 export interface DailyLimitForm {
   enabled: boolean;
-  currency: string;
   maxLoss: string;
   maxGain: string;
 }
@@ -109,7 +125,6 @@ export interface DailyLimitForm {
 export function dailyLimitForm(settings: DailyLimitSettings | undefined): DailyLimitForm {
   return {
     enabled: settings?.enabled ?? false,
-    currency: settings?.currency ?? "",
     maxLoss: settings?.max_loss != null ? String(settings.max_loss) : "",
     maxGain: settings?.max_gain != null ? String(settings.max_gain) : "",
   };
@@ -127,21 +142,19 @@ export function parseLimit(text: string): number | null {
   return /^\d+(\.\d+)?$/.test(normalized) ? Number(normalized) : Number.NaN;
 }
 
-/** The settings of a form; of all the agents (global), its currency in capitals. */
-export function dailyLimitSettings(form: DailyLimitForm, global: boolean): DailyLimitSettings {
+/** The settings of a form, without a currency: the one of each account. */
+export function dailyLimitSettings(form: DailyLimitForm): DailyLimitSettings {
   const settings: DailyLimitSettings = { enabled: form.enabled };
   const loss = parseLimit(form.maxLoss);
   const gain = parseLimit(form.maxGain);
   if (loss !== null) settings.max_loss = loss;
   if (gain !== null) settings.max_gain = gain;
-  if (global) settings.currency = form.currency.trim().toUpperCase();
   return settings;
 }
 
 /** Why each field is refused, by field, as the controller refuses it; empty when the form is taken. */
 export function dailyLimitErrors(
   form: DailyLimitForm,
-  global: boolean,
 ): Partial<Record<keyof DailyLimitForm, string>> {
   const errors: Partial<Record<keyof DailyLimitForm, string>> = {};
   const check = (field: "maxLoss" | "maxGain", value: number | null) => {
@@ -156,12 +169,6 @@ export function dailyLimitErrors(
   check("maxGain", gain);
   if (form.enabled && loss === null && gain === null) {
     errors.maxLoss = "Defina a perda, o ganho ou os dois.";
-  }
-  const currency = form.currency.trim();
-  if (global && currency !== "" && !/^[a-zA-Z]{3}$/.test(currency)) {
-    errors.currency = "Um código de 3 letras, ex.: BRL.";
-  } else if (global && form.enabled && currency === "") {
-    errors.currency = "Defina a moeda.";
   }
   return errors;
 }

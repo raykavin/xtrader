@@ -63,8 +63,13 @@ func (e *CrossEMA) OnCandle(df *xtrader.Dataframe, broker service.Broker) {
 	if quotePosition >= 10 && // minimum quote position to trade
 		df.Metadata["ema8"].Crossover(df.Metadata["sma21"]) { // trade signal (EMA8 > SMA21)
 
-		amount := quotePosition / closePrice // calculate amount of asset to buy
-		_, err := broker.CreateOrderMarket(xtrader.SideTypeBuy, df.Pair, amount)
+		point, err := service.PointValue(broker, df.Pair)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		amount := quotePosition / (closePrice * point) // calculate amount of asset to buy
+		_, err = broker.CreateOrderMarket(xtrader.SideTypeBuy, df.Pair, amount)
 		if err != nil {
 			log.Error(err)
 		}

@@ -46,6 +46,15 @@ type fakeController struct {
 	legsErr              error // of a protected entry placed, its legs failing
 }
 
+// pointedController is a controller of an account valuing a move of 1 of the
+// price of a unit at point in its currency, as MT5 on a BRL account.
+type pointedController struct {
+	fakeController
+	point float64
+}
+
+func (p *pointedController) PointValue(string) (float64, error) { return p.point, nil }
+
 func (f *fakeController) Status() order.Status { return f.status }
 func (f *fakeController) Start()               { f.started = true; f.status = order.StatusRunning }
 func (f *fakeController) Stop()                { f.stopped = true; f.status = order.StatusStopped }
@@ -383,6 +392,25 @@ func TestControls_OrderTicket(t *testing.T) {
 		})
 	}
 
+	t.Run("an amount of the account currency, sized by the point value", func(t *testing.T) {
+		// a BRL account: 5 BRL a unit for 1 of the price
+		c := newTestChart(t)
+		controller := &pointedController{fakeController: fakeController{asset: 2, quote: 100000}, point: 5}
+		c.SetOrderController(controller)
+		c.OnCandle(candleAt("BTCUSDT", base, 40000))
+		srv := newTestServer(t, c)
+		for body, size := range map[string]float64{
+			`{"pair":"BTCUSDT","side":"buy","amount":1000,"type":"limit","price":20000}`:              0.01,
+			`{"pair":"BTCUSDT","side":"buy","amount":50,"percent":true,"type":"limit","price":25000}`: 0.4,
+			`{"pair":"BTCUSDT","side":"buy","amount":4000,"stop_loss":39000}`:                         0.02,
+		} {
+			controller.calls = nil
+			resp, answer := postJSON(t, srv.URL+"/api/controls/order", body)
+			require.Equal(t, http.StatusOK, resp.StatusCode, answer)
+			assert.InDelta(t, size, controller.lastAmount, 1e-9, body)
+		}
+	})
+
 	t.Run("refused", func(t *testing.T) {
 		c := newTestChart(t)
 		controller := &fakeController{}
@@ -540,6 +568,29 @@ func TestControls_Balance(t *testing.T) {
 	resp, body = get(t, srv.URL+"/api/controls/balance")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, body, "exchange down")
+}
+
+// On an account the broker reports, the balance is in its currency: the cash
+// as the account holds it, the assets valued by the point value of their
+// pairs, without any rate of exchange.
+func TestControls_BalanceOfAnAccount(t *testing.T) {
+	c := newTestChart(t, WithAccountReporter(&fakeReporter{}))
+	c.OnCandle(candleAt("BTCUSDT", time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC), 20000))
+	srv := newTestServer(t, c)
+	c.SetOrderController(&pointedController{point: 5, fakeController: fakeController{account: model.Account{
+		Balances: []model.Balance{{Asset: "BRL", Free: 900, Lock: 100}, {Asset: "BTC", Free: 0.01}}}}})
+
+	resp, body := get(t, srv.URL+"/api/controls/balance")
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var balance BalanceResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &balance))
+	require.Len(t, balance.Balances, 2)
+	assert.Equal(t, AssetBalance{Asset: "BTC", Quantity: 0.01, Value: 1000, Quote: "BRL"}, balance.Balances[0],
+		"0.01 x 20000 x 5 BRL")
+	assert.Equal(t, AssetBalance{Asset: "BRL", Quantity: 1000, Value: 1000, Quote: "BRL"}, balance.Balances[1])
+	assert.InDelta(t, 2000, balance.Total, 1e-9)
+	require.NotNil(t, balance.Account)
+	assert.Equal(t, "BRL", balance.Account.Currency)
 }
 
 func TestControls_Channels(t *testing.T) {

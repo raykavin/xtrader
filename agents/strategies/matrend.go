@@ -49,9 +49,11 @@ type MATrendConfig struct {
 
 	// StopValue and TakeProfitValue, above 0, place a stop loss and a take
 	// profit at the broker with the entry at a fixed value: what the position
-	// loses, or earns, when the price reaches them, in quote currency, eg: 1
-	// and 2 for a dollar and two on a pair quoted in USD, at that value over
-	// the size of the position from the entry close, whatever the ATR.
+	// loses, or earns, when the price reaches them, in the currency of the
+	// account (in the paper wallet, of the simulation, the quote), eg: 5 and 10
+	// for five and ten reais on a BRL account, at that value over the size of
+	// the position times its point value (see service.PointValuer) from the
+	// entry close, whatever the ATR.
 	// StopValue replaces the stop in ATR above, beyond the trend MA and
 	// trailing, which is then unused: the broker closes the position at it.
 	// The broker must place them with the orders, see service.ProtectionBroker.
@@ -315,12 +317,12 @@ func (s *MATrend) OnCandle(df *model.Dataframe, broker service.Broker) {
 	log.Infof("[MA TREND] %s %s | %s | close %f | SMA %d %f", df.Pair, s.cfg.Timeframe, entry, closePrice,
 		s.cfg.TrendLen, trendMA)
 
-	_, quote, err := broker.Position(df.Pair)
+	cash, err := rkCashOf(broker, df.Pair)
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	size, value, ok := s.sizing.position(df.Pair, quote, closePrice)
+	size, value, ok := s.sizing.position(df.Pair, cash, closePrice)
 	if !ok {
 		return
 	}
@@ -328,13 +330,13 @@ func (s *MATrend) OnCandle(df *model.Dataframe, broker service.Broker) {
 	// the initial stop, beyond the trend MA, or at its fixed value
 	trade := &rkTrade{side: entry, extreme: closePrice, stop: trendMA - rkSign(entry)*s.cfg.StopBufferATR*atr}
 	if s.cfg.StopValue > 0 {
-		trade.stop = rkLossLevel(entry, closePrice, size, s.cfg.StopValue)
+		trade.stop = rkLossLevel(entry, closePrice, size, cash.point, s.cfg.StopValue)
 	}
-	if s.sizing.risky(df.Pair, closePrice, trade.stop, size, quote) {
+	if s.sizing.risky(df.Pair, closePrice, trade.stop, size, cash) {
 		return
 	}
 	if s.cfg.BrokerStop || s.cfg.StopValue > 0 || s.cfg.TakeProfitValue > 0 {
-		err = s.openProtected(df, broker, trade, size)
+		err = s.openProtected(df, broker, trade, size, cash.point)
 	} else {
 		err = s.sizing.open(broker, entry, df.Pair, size, value)
 	}
@@ -356,7 +358,7 @@ func (s *MATrend) position(df *model.Dataframe, broker service.Broker) (float64,
 	if err != nil {
 		return 0, "", err
 	}
-	return asset, rkHeld(asset*df.Close.Last(0), s.cfg.MinPositionValue), nil
+	return asset, rkHeld(rkWorth(broker, df.Pair, asset, df.Close.Last(0)), s.cfg.MinPositionValue), nil
 }
 
 // stopped reports whether the last candle closed through the stop of the
@@ -415,8 +417,9 @@ func (s *MATrend) stopped(df *model.Dataframe, broker service.Broker, held model
 
 // openProtected opens a position of size with its legs placed at the broker:
 // the stop of trade, with BrokerStop or at its fixed value, and the take profit
-// at TakeProfitValue, if any.
-func (s *MATrend) openProtected(df *model.Dataframe, broker service.Broker, trade *rkTrade, size float64) error {
+// at TakeProfitValue, if any, point the point value of the pair.
+func (s *MATrend) openProtected(df *model.Dataframe, broker service.Broker, trade *rkTrade,
+	size, point float64) error {
 	protected, ok := broker.(service.ProtectionBroker)
 	if !ok {
 		return errors.New("ma trend: the broker can't place the stop with the order")
@@ -427,7 +430,7 @@ func (s *MATrend) openProtected(df *model.Dataframe, broker service.Broker, trad
 		stop = trade.stop
 	}
 	if s.cfg.TakeProfitValue > 0 {
-		profit = rkProfitLevel(trade.side, df.Close.Last(0), size, s.cfg.TakeProfitValue)
+		profit = rkProfitLevel(trade.side, df.Close.Last(0), size, point, s.cfg.TakeProfitValue)
 	}
 
 	orders, err := protected.CreateOrderMarketProtected(trade.side, df.Pair, size, stop, profit)

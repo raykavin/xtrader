@@ -407,10 +407,17 @@ describe("positionPnL", () => {
     expect(positionPnL({ ...withBroker, position: { open: false, profit: 0 } })).toBeNull();
   });
 
-  it("values the filled orders at the last price without a broker", () => {
-    const pnl = positionPnL(snapshot({ orders: [entry], candles }));
+  it("values the filled orders at the last price in a simulation", () => {
+    const pnl = positionPnL(snapshot({ orders: [entry], candles, simulated: true }));
     expect(pnl?.profit).toBeCloseTo(1, 9);
     expect(pnl?.currency).toBe("USDT");
+    expect(pnl?.simulated).toBe(true);
+  });
+
+  it("never values the position of an account in the quote", () => {
+    const pnl = positionPnL(snapshot({ orders: [entry], candles, account_currency: "BRL" }));
+    expect(pnl?.profit).toBeNull();
+    expect(pnl?.currency).toBe("BRL");
   });
 });
 
@@ -434,20 +441,30 @@ describe("computeStats with the profits the account booked", () => {
     expect(stats.losses).toBe(1);
   });
 
-  it("keeps the ones of the core, in the quote, when some are unknown", () => {
+  it("leaves the ones not booked yet out, awaited, never valued in the quote", () => {
     const stats = computeStats(snapshot({ orders: [close(1, -14.49, -75.1), close(2, 12.74)] }));
-    expect(stats.profitCurrency).toBe("USDT");
-    expect(stats.totalProfit).toBeCloseTo(-1.75, 9);
-    expect(stats.unbooked, "the account not told: nothing awaited from the broker").toBe(0);
+    expect(stats.profitCurrency).toBe("BRL");
+    expect(stats.totalProfit).toBeCloseTo(-75.1, 9);
+    expect(stats.trades).toBe(1);
+    expect(stats.awaiting).toBe(1);
     const told = computeStats(
-      snapshot({ orders: [close(1, -14.49, -75.1), close(2, 12.74)], account_currency: "BRL" }),
+      snapshot({ orders: [close(1, -14.49), close(2, 12.74)], account_currency: "BRL" }),
     );
-    expect(told.profitCurrency).toBe("USDT");
-    expect(told.unbooked).toBe(1);
-    expect(
-      computeStats(snapshot({ orders: [close(1, -14.49, -75.1)], account_currency: "BRL" }))
-        .unbooked,
-    ).toBe(0);
+    expect(told.profitCurrency).toBe("BRL");
+    expect(told.totalProfit).toBe(0);
+    expect(told.trades).toBe(0);
+    expect(told.awaiting).toBe(2);
+    expect(told.curves.profit).toEqual([]);
+  });
+
+  it("keeps the ones of the core, in the quote, in a simulation", () => {
+    const stats = computeStats(
+      snapshot({ orders: [close(1, -14.49), close(2, 12.74)], simulated: true }),
+    );
+    expect(stats.profitCurrency).toBe("USDT");
+    expect(stats.simulated).toBe(true);
+    expect(stats.totalProfit).toBeCloseTo(-1.75, 9);
+    expect(stats.awaiting).toBe(0);
   });
 
   it("shows the currency of the account before any trade", () => {

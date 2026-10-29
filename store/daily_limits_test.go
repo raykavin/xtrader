@@ -26,11 +26,12 @@ func TestDailyLimits(t *testing.T) {
 	require.False(t, found, "no limit while never set")
 	require.Equal(t, ui.DailyLimitSettings{}, a.DailyLimitOf())
 
-	global := ui.DailyLimitSettings{Enabled: true, Currency: "brl", MaxLoss: amount(150), MaxGain: amount(300)}
+	global := ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(150), MaxGain: amount(300)}
 	previous, next, err := s.SetGlobalDailyLimit(ctx, global, change)
 	require.NoError(t, err)
 	require.Equal(t, DailyLimit{}, previous)
-	require.Equal(t, "BRL", next.Currency)
+	require.Equal(t, NoCurrency, next.Currency, "in the currency of each account: none of its own")
+	require.Empty(t, next.Settings().Currency)
 	got, found, err := s.GlobalDailyLimit(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -63,11 +64,10 @@ func TestDailyLimits(t *testing.T) {
 	require.True(t, a.DailyLimitOf().Enabled)
 
 	for name, bad := range map[string]ui.DailyLimitSettings{
-		"enabled without a limit":    {Enabled: true, Currency: "BRL"},
-		"enabled without a currency": {Enabled: true, MaxLoss: amount(10)},
-		"a loss of 0":                {MaxLoss: amount(0), Currency: "BRL"},
-		"a negative gain":            {MaxGain: amount(-5), Currency: "BRL"},
-		"a currency of 4 letters":    {Currency: "BRLX"},
+		"enabled without a limit": {Enabled: true},
+		"a loss of 0":             {MaxLoss: amount(0)},
+		"a negative gain":         {MaxGain: amount(-5)},
+		"a currency":              {Enabled: true, MaxLoss: amount(10), Currency: "BRL"},
 	} {
 		_, _, err := s.SetGlobalDailyLimit(ctx, bad, change)
 		require.ErrorIs(t, err, ErrInvalid, name)

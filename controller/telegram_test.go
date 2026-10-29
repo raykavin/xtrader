@@ -430,12 +430,20 @@ func TestProfitSummary(t *testing.T) {
 	assert.True(t, ok)
 	assert.Contains(t, summary, "Trades: 2 (1 wins, 1 losses, 50.0%)\nProfit: -9.08 BRL\nProfit factor: 0.88")
 
-	// the ones of the core, in the quote, when some are unknown
+	// one not booked yet: counted apart, awaited, never the one of the core
 	orders[1].AccountProfit, orders[1].AccountCurrency = nil, ""
 	summary, ok = profitSummary(ui.Snapshot{Pair: "BTCUSDm", Quote: "USD", AccountCurrency: "BRL", Orders: orders},
 		time.Time{})
 	assert.True(t, ok)
-	assert.Contains(t, summary, "Profit: -1.75 USD\nProfit factor: 0.88")
+	assert.Contains(t, summary, "Trades: 1 (0 wins, 1 losses, 0.0%)\nProfit: -75.10 BRL\nProfit factor: 0.00\n"+
+		"Awaiting the broker: 1 trade(s), their result not booked yet")
+	assert.NotContains(t, summary, " USD")
+
+	// a simulation: the ones of the core, told
+	summary, ok = profitSummary(ui.Snapshot{Pair: "XAUUSDm", Quote: "USD", Simulated: true, Orders: []ui.Order{
+		{Status: "FILLED", Profit: 0.01, ProfitValue: 5}}}, time.Time{})
+	assert.True(t, ok)
+	assert.Contains(t, summary, "Profit: 5.00 USD (simulated)")
 }
 
 // After a reset of the results of the agent, only the trades closed since the

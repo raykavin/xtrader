@@ -92,16 +92,22 @@ func (c *Chart) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 // snapshotOf returns the snapshot of the pair named name, see resolvePair. It
 // is made holding c.mu, and written without it: a client reading it slowly,
 // eg: a phone through ngrok, never holds the chart, nor the bot feeding it its
-// candles and orders. The account is read before, see readCurrency.
+// candles and orders. The account and the point value of the pair are read
+// before, see readCurrency and pointValue.
 func (c *Chart) snapshotOf(name string) (Snapshot, bool) {
 	c.readCurrency()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	pair, ok := c.resolvePair(name)
+	c.mu.Unlock()
 	if !ok {
 		return Snapshot{}, false
 	}
-	return c.snapshot(pair), true
+	point := c.pointValue(pair)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot := c.snapshot(pair)
+	snapshot.PointValue = point
+	return snapshot, true
 }
 
 // resolvePair returns the pair of the chart named name: the same name, or

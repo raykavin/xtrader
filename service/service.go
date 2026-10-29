@@ -217,6 +217,27 @@ type PositionCostReader interface {
 	PositionCosts(pair string) PositionCosts
 }
 
+// PointValuer is implemented by the brokers whose cash is in the currency of
+// the account rather than in the quote of the pairs, eg: MT5, a BRL account
+// trading XAUUSDm. PointValue returns the value in the account currency of a
+// move of 1 of the price of pair for 1 unit of its asset, as the broker tells
+// it (its tick value): no rate of exchange is read by the bot. The cash of
+// Position, the amount of CreateOrderMarketQuote and the money of the
+// strategies (their stops in money, their minimum position, their risk) are in
+// that currency. The order controller implements it for its exchange.
+type PointValuer interface {
+	PointValue(pair string) (float64, error)
+}
+
+// PointValue returns the point value of pair at broker, see PointValuer: 1
+// when the broker values the pairs in their quote, eg: the paper wallet.
+func PointValue(broker any, pair string) (float64, error) {
+	if valuer, ok := broker.(PointValuer); ok {
+		return valuer.PointValue(pair)
+	}
+	return 1, nil
+}
+
 // ErrStopNotTighter is the error of a stop loss of an open position moved to
 // a level that protects it less than the one it is at, or as much, refused
 // while the stop guard of its pair is on, see StopNotTighterError.
