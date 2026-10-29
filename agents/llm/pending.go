@@ -409,8 +409,9 @@ func (t *Trader) guardPending(df *model.Dataframe, broker service.Broker) {
 	held := heldSide(worth(broker, df.Pair, asset, df.Close.Last(0)), t.cfg.MinPositionValue)
 	ev := &pendingEvent{}
 	t.refreshPending(df, broker, t.state.Load(), held, t.dayClock(df), ev)
-	if p = t.pendings[df.Pair]; p != nil && !p.blockAt.IsZero() && !t.now().Before(p.blockAt) {
-		blocked := t.newsBlocked(df.Pair, t.now())
+	// the clock of the candles: in a backtest, never the wall clock
+	if p = t.pendings[df.Pair]; p != nil && !p.blockAt.IsZero() && !t.dayClock(df).Before(p.blockAt) {
+		blocked := t.newsBlocked(df.Pair, t.dayClock(df))
 		p.blockAt = time.Time{}
 		if blocked != "" {
 			t.cancelPending(df.Pair, broker, p, "no entry around the release "+blocked, ev)

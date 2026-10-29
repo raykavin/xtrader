@@ -171,14 +171,14 @@ func TestLotsToUnits(t *testing.T) {
 
 func TestBacktestPairs(t *testing.T) {
 	v := venue{lots: map[string]float64{"XAUUSDm": 0.05}, mt5: mt5Venue{inLots: true}}
-	require.NoError(t, v.backtestPairs([]string{"XAUUSDm"}, "USD"))
+	require.NoError(t, v.backtestPairs([]string{"XAUUSDm"}, "USD", nil))
 	require.Equal(t, map[string]float64{"XAUUSDm": 5}, v.lots, "100 ounces in a lot")
 
 	v = venue{lots: map[string]float64{"ZZZUSDm": 1}, mt5: mt5Venue{inLots: true}}
-	require.ErrorContains(t, v.backtestPairs([]string{"ZZZUSDm"}, "USD"), "-mt5-size unit")
+	require.ErrorContains(t, v.backtestPairs([]string{"ZZZUSDm"}, "USD", nil), "-mt5-size unit")
 
 	v = venue{lots: map[string]float64{"ZZZUSDm": 1}}
-	require.NoError(t, v.backtestPairs([]string{"ZZZUSDm"}, "USD"), "in units")
+	require.NoError(t, v.backtestPairs([]string{"ZZZUSDm"}, "USD", nil), "in units")
 	require.Equal(t, map[string]float64{"ZZZUSDm": 1}, v.lots)
 }
 
@@ -199,7 +199,7 @@ func TestCheckVenue(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkVenue(tc.exchange, tc.mode, tc.leverage)
+			err := checkVenue(tc.exchange, tc.mode, tc.leverage, false)
 			if tc.want == "" {
 				require.NoError(t, err)
 				return

@@ -253,6 +253,14 @@ type openPositions interface {
 	OpenPosition(pair string) (exchange.MT5OpenPosition, bool)
 }
 
+// SetClock sets the clock of the Trader in place of the wall clock: of its
+// rate limits, its retries and the times of its decisions, eg: the simulated
+// now of a backtest, the same whatever the speed of the machine. Before the
+// run.
+func (t *Trader) SetClock(now func() time.Time) {
+	t.now = now
+}
+
 // SetAccountReporter sets where the Trader reads the results of the trades of
 // the bot as the broker books them, in the currency of the account, eg: the
 // MT5 adapter, before the bot runs: the daily limits of the prompts (see

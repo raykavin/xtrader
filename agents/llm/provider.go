@@ -153,6 +153,14 @@ func WithStrategy(strategy string) ProviderOption {
 	}
 }
 
+// WithUsageHook tells hook the usage of each answer of the provider, as it
+// comes, eg: the budget of a backtest.
+func WithUsageHook(hook func(Usage)) ProviderOption {
+	return func(c *client) {
+		c.onUsage = hook
+	}
+}
+
 // WithHTTPClient sets the HTTP client of the requests, http.DefaultClient by
 // default. The Trader bounds each request with its Timeout.
 func WithHTTPClient(httpClient *http.Client) ProviderOption {
@@ -196,6 +204,7 @@ type client struct {
 	system    string // the instructions, see WithStrategy
 	http      *http.Client
 	usage     *usageMeter // tokens of the answers of the day
+	onUsage   func(Usage) // told the usage of each answer, see WithUsageHook
 
 	maxTokensSet bool // maxTokens is the one of WithMaxTokens, not the default
 }
