@@ -83,6 +83,27 @@ agents:
   # how long an agent stopped has before it is killed
   stop_timeout: 20s
 
+# the backtests of the dashboard (tab Backtesting): each run is a process of
+# the command of the kind of its agent (above), in backtest mode, apart from
+# the agents trading, reading candles of the MT5 bridge of the agent and never
+# sending an order
+backtest:
+  # runs at once at most
+  concurrency: 2
+  # the candles and the files of the runs, under agents.dir when relative
+  dir: data/backtests
+  # the longest period of a batch, and its most runs
+  max_period_days: 366
+  max_runs: 40
+  # the default ceilings of a run of an agent of a language model: calls of
+  # the model, and dollars estimated from llm_prices (by model, per million
+  # tokens of input and of output; without the price of the model, only the
+  # calls bound the run)
+  llm_max_calls: 300
+  llm_max_cost: 5
+  # llm_prices:
+  #   gpt-5-mini: {input: 0.25, output: 2}
+
 # the processes the agents need, launched before them and stopped after them:
 # the bridge of MT5 on the host, the token it requires (the agents have theirs
 # in the database). Their environment is PATH, HOME, USER, LOGNAME, TZ, LANG,

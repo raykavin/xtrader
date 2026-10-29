@@ -142,6 +142,7 @@ func run() int {
 	manager = controller.NewManager(st, cfg.Agents, agents, dashboard, bot)
 	dashboard.ServeSettings(st, manager, bot)
 	supervision := dashboard.ServeSupervision(st, manager)
+	backtests := dashboard.ServeBacktests(st, cfg.Agents, cfg.Backtest)
 
 	// the internal API first, then the dashboard: nothing is launched unless
 	// both can serve
@@ -177,6 +178,11 @@ func run() int {
 		close(managed)
 	}()
 	go supervision.Run(ctx) // the analyses of the agents, until ctx is done
+	backtested := make(chan struct{})
+	go func() {
+		backtests.Run(ctx) // the backtests queued, until ctx is done, then the ones running interrupted
+		close(backtested)
+	}()
 
 	<-ctx.Done()
 	return life.stop(func() {
@@ -193,6 +199,7 @@ func run() int {
 			}
 		}()
 		<-managed          // the agents stopped, their records sent through the internal API
+		<-backtested       // the backtests interrupted, their processes gone
 		services.StopAll() // after the agents, which use them, each with its stop timeout
 		<-served
 		_ = internal.Close()
