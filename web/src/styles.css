@@ -7530,6 +7530,13 @@ h3.md-heading {
   margin-left: auto;
 }
 
+/* the state: a padlock only, in the chip of its tone */
+.daily-strip-lock {
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+}
+
 .daily-strip-body {
   display: flex;
   flex-wrap: wrap;
