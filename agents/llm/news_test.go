@@ -3,23 +3,26 @@ package llm
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/raykavin/xtrader/exchange"
 )
 
 // The switch of the news: off, nothing asked to the server; on without the
-// token, refused before any request; a token refused by the server, told
-// apart from the server failing; the token replaced while it runs, the
-// session of the former one dropped.
+// server or the token, refused before any request; a token refused by the
+// server, told apart from the server failing; the token, the server and the
+// window replaced while it runs, the session of the former token dropped.
 func TestNewsSwitch(t *testing.T) {
 	f := newFakeMCP(t)
-	calendar, err := NewMCPCalendar(f.url(), "")
-	require.NoError(t, err)
 	day := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
-	news := NewNewsSwitch(calendar, false, fakeMCPToken)
+	config := NewsConfig{URL: f.url(), Token: fakeMCPToken, Before: 15 * time.Minute, After: 30 * time.Minute,
+		Importance: ImportanceHigh}
+	news := NewNewsSwitch(config)
 	read := func() error {
 		_, err := news.Events(context.Background(), []string{"USD"}, day, day.Add(24*time.Hour))
 		return err
@@ -29,33 +32,82 @@ func TestNewsSwitch(t *testing.T) {
 	require.Equal(t, CalendarDisabled, calendarStatus(read()))
 	require.Zero(t, f.opened, "nothing asked while off")
 
-	switched, changed := news.Set(true, " ")
+	config.Enabled, config.URL = true, ""
+	switched, changed := news.Set(config)
 	require.True(t, switched)
-	require.True(t, changed, "the token removed")
+	require.True(t, changed)
+	require.ErrorIs(t, read(), ErrNewsNoServer)
+	require.Equal(t, CalendarMissingServer, calendarStatus(read()))
+
+	config.URL, config.Token = f.url(), " "
+	news.Set(config)
 	require.ErrorIs(t, read(), ErrNewsNoToken)
 	require.Equal(t, CalendarMissingToken, calendarStatus(read()))
-	require.Zero(t, f.opened, "nothing asked without a token")
+	require.Zero(t, f.opened, "nothing asked without a server or a token")
 
-	news.Set(true, "wrong-token")
-	err = read()
+	config.Token = "wrong-token"
+	news.Set(config)
+	err := read()
 	require.ErrorIs(t, err, ErrMCPUnauthorized)
 	require.Equal(t, CalendarUnauthorized, calendarStatus(err))
 	require.NotContains(t, err.Error(), "wrong-token", "never the token in the error")
 
-	switched, changed = news.Set(true, fakeMCPToken)
+	config.Token = fakeMCPToken
+	switched, changed = news.Set(config)
 	require.False(t, switched)
 	require.True(t, changed)
 	require.NoError(t, read(), "the new token at once")
 	opened := f.opened
 	require.NoError(t, read())
 	require.Equal(t, opened, f.opened, "its session kept")
-	_, changed = news.Set(true, fakeMCPToken)
-	require.False(t, changed, "the same token")
+	_, changed = news.Set(config)
+	require.False(t, changed, "the same news")
 
-	news.Set(false, fakeMCPToken)
+	before, after, importance := news.Window()
+	require.Equal(t, [3]any{15 * time.Minute, 30 * time.Minute, ImportanceHigh}, [3]any{before, after, importance})
+	config.Before, config.Importance = 5*time.Minute, ImportanceMedium
+	news.Set(config)
+	before, _, importance = news.Window()
+	require.Equal(t, 5*time.Minute, before, "the window replaced")
+	require.Equal(t, ImportanceMedium, importance)
+
+	other := newFakeMCP(t)
+	config.URL = other.url()
+	news.Set(config)
+	require.NoError(t, read())
+	require.Positive(t, other.opened, "another server read")
+
+	config.Enabled = false
+	news.Set(config)
 	require.ErrorIs(t, read(), ErrNewsDisabled, "off again: nothing read")
-
 	require.Equal(t, CalendarUnavailable, calendarStatus(errors.New("terminal closed")))
+}
+
+// The release of a calendar blocking the entries in the window of the switch,
+// none with the window at 0; the currencies of the calendar of a pair.
+func TestNewsSwitch_Blocking(t *testing.T) {
+	at := time.Date(2026, 9, 25, 12, 20, 0, 0, time.UTC)
+	nfp := release(time.Date(2026, 9, 25, 12, 30, 0, 0, time.UTC), "nfp", ImportanceHigh, math.NaN())
+	minor := release(time.Date(2026, 9, 25, 12, 25, 0, 0, time.UTC), "minor", ImportanceLow, math.NaN())
+	news := NewNewsSwitch(NewsConfig{Enabled: true, Before: 15 * time.Minute, After: 15 * time.Minute,
+		Importance: ImportanceHigh})
+	event, ok := news.Blocking([]Event{minor, nfp}, at)
+	require.True(t, ok)
+	require.Equal(t, "nfp", event.Name)
+	_, ok = news.Blocking([]Event{nfp}, at.Add(-10*time.Minute))
+	require.False(t, ok, "before the window")
+	_, ok = news.Blocking([]Event{minor}, at)
+	require.False(t, ok, "below the importance")
+	news.Set(NewsConfig{Enabled: true, Importance: ImportanceHigh})
+	_, ok = news.Blocking([]Event{nfp}, at)
+	require.False(t, ok, "no window")
+
+	exchange.RegisterMT5Pair("XAUUSDm", "XAU", "USD")
+	exchange.RegisterMT5Pair("EURUSDm", "EUR", "USD")
+	exchange.RegisterMT5Pair("BTCUSDTm", "BTC", "USDT")
+	require.Equal(t, []string{"USD"}, CalendarCurrencies("XAUUSDm"))
+	require.Equal(t, []string{"USD", "EUR"}, CalendarCurrencies("EURUSDm"))
+	require.Empty(t, CalendarCurrencies("BTCUSDTm"), "no currency of the calendar")
 }
 
 // The test of the settings of the news: the server answering, refusing the
@@ -109,21 +161,26 @@ func TestTrader_CalendarStatus(t *testing.T) {
 }
 
 // The trader switches the news of its calendar when it is a NewsSwitch, and
-// nothing else.
+// nothing else; the window of the news block is the one of the switch.
 func TestTrader_SetNews(t *testing.T) {
 	f := newFakeMCP(t)
-	calendar, err := NewMCPCalendar(f.url(), fakeMCPToken)
-	require.NoError(t, err)
-	news := NewNewsSwitch(calendar, true, fakeMCPToken)
+	news := NewNewsSwitch(NewsConfig{Enabled: true, URL: f.url(), Token: fakeMCPToken})
 	r := calendarRunner(t, &fakeCalendar{}, 0)
-	switched, changed := r.trader.SetNews(false, "")
+	switched, changed := r.trader.SetNews(NewsConfig{})
 	require.False(t, switched || changed, "not a switch")
+	require.Nil(t, r.trader.News())
 
 	r = newTraderRunner(t, func(c *Config) { c.Calendar, c.CalendarCurrencies = news, []string{"USD"} }, 0)
-	switched, _ = r.trader.SetNews(false, fakeMCPToken)
+	require.Same(t, news, r.trader.News())
+	switched, _ = r.trader.SetNews(NewsConfig{URL: f.url(), Token: fakeMCPToken})
 	require.True(t, switched)
 	require.False(t, news.Enabled())
 	r.step(100, decide(ActionWait, 0.5, nil, nil, nil))
 	require.Equal(t, CalendarDisabled, r.provider.last().Calendar.Status)
 	require.Zero(t, f.opened, "nothing asked while off")
+
+	r.trader.SetNews(NewsConfig{Enabled: true, URL: f.url(), Token: fakeMCPToken, Before: 20 * time.Minute,
+		After: 10 * time.Minute, Importance: ImportanceMedium})
+	before, after, importance := r.trader.newsWindow()
+	require.Equal(t, [3]any{20 * time.Minute, 10 * time.Minute, ImportanceMedium}, [3]any{before, after, importance})
 }

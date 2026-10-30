@@ -211,81 +211,99 @@ func TestCheckVenue(t *testing.T) {
 }
 
 func TestCalendarConfig(t *testing.T) {
-	defaults := llm.DefaultConfig()
-	configure := func(set map[string]bool, url, token, importance, blockImportance string) (llm.Config, error) {
+	alone := func(set map[string]bool, url, token, importance, blockImportance string) (llm.Config, error) {
 		cfg := llm.DefaultConfig()
-		err := calendarConfig(&cfg, set, url, agentapi.News{Enabled: true, Token: token}, []string{"usd"},
-			3*time.Hour, time.Hour, importance, 0, 10*time.Minute, 20*time.Minute, blockImportance)
+		err := calendarConfig(&cfg, set, nil, url, token, []string{"usd"}, 3*time.Hour, time.Hour, importance, 0,
+			10*time.Minute, 20*time.Minute, blockImportance)
 		return cfg, err
 	}
 
-	cfg, err := configure(map[string]bool{}, "", "", "medium", "high")
+	// on its own: the flags
+	cfg, err := alone(map[string]bool{}, "", "", "medium", "high")
 	require.NoError(t, err)
 	require.Nil(t, cfg.Calendar, "no calendar without -calendar-mcp")
-	require.Equal(t, defaults.NewsBlockBefore, cfg.NewsBlockBefore)
-
-	_, err = configure(map[string]bool{"news-block-before": true}, "", "", "medium", "high")
+	_, err = alone(map[string]bool{"news-block-before": true}, "", "", "medium", "high")
 	require.ErrorContains(t, err, "-news-block-before needs the calendar of -calendar-mcp")
+	_, err = alone(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "urgent", "high")
+	require.ErrorContains(t, err, "-calendar-importance")
+	_, err = alone(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "low", "never")
+	require.ErrorContains(t, err, "-news-block-importance")
+
+	cfg, err = alone(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "low", "medium")
+	require.NoError(t, err)
+	news, ok := cfg.Calendar.(*llm.NewsSwitch)
+	require.True(t, ok, "behind the switch of the news")
+	require.True(t, news.Enabled())
+	before, after, importance := news.Window()
+	require.Equal(t, [3]any{10 * time.Minute, 20 * time.Minute, llm.ImportanceMedium}, [3]any{before, after, importance})
+	require.Equal(t, []string{"USD"}, cfg.CalendarCurrencies)
+	require.Equal(t, llm.ImportanceLow, cfg.CalendarImportance)
+	require.Equal(t, 3*time.Hour, cfg.CalendarAhead)
+	require.Equal(t, time.Hour, cfg.CalendarBack)
 
 	// without the token: the calendar set, its reads refused without asking
-	// the server, the context telling why
-	cfg, err = configure(map[string]bool{}, "http://127.0.0.1:22346/mcp", " ", "medium", "high")
+	cfg, err = alone(map[string]bool{}, "http://127.0.0.1:22346/mcp", " ", "medium", "high")
 	require.NoError(t, err)
 	_, err = cfg.Calendar.Events(context.Background(), []string{"USD"}, time.Now(), time.Now().Add(time.Hour))
 	require.ErrorIs(t, err, llm.ErrNewsNoToken)
 
-	_, err = configure(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "urgent", "high")
-	require.ErrorContains(t, err, "-calendar-importance")
-	_, err = configure(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "low", "never")
-	require.ErrorContains(t, err, "-news-block-importance")
-
-	cfg, err = configure(map[string]bool{}, "http://127.0.0.1:22346/mcp", "token", "low", "medium")
-	require.NoError(t, err)
-	require.IsType(t, &llm.NewsSwitch{}, cfg.Calendar, "switched from the dashboard")
-	require.Equal(t, []string{"USD"}, cfg.CalendarCurrencies)
-	require.Equal(t, llm.ImportanceLow, cfg.CalendarImportance)
-	require.Equal(t, llm.ImportanceMedium, cfg.NewsBlockImportance)
-	require.Equal(t, 3*time.Hour, cfg.CalendarAhead)
-	require.Equal(t, time.Hour, cfg.CalendarBack)
-	require.Equal(t, 10*time.Minute, cfg.NewsBlockBefore)
-	require.Equal(t, 20*time.Minute, cfg.NewsBlockAfter)
+	// launched by the controller: the news of the dashboard, the flags of the
+	// server and of the window ignored, a calendar even off (switched later)
+	cfg = llm.DefaultConfig()
+	require.NoError(t, calendarConfig(&cfg, map[string]bool{"calendar-mcp": true, "news-block-before": true},
+		&agentapi.News{}, "http://127.0.0.1:1/mcp", "env-token", nil, time.Hour, time.Hour, "medium", 0,
+		time.Minute, time.Minute, "low"))
+	news = cfg.Calendar.(*llm.NewsSwitch)
+	require.False(t, news.Enabled(), "off on the dashboard")
+	cfg = llm.DefaultConfig()
+	require.NoError(t, calendarConfig(&cfg, map[string]bool{}, &agentapi.News{Enabled: true,
+		URL: "http://mt5:22347/mcp", Token: "dashboard", BlockBefore: 30, BlockAfter: 5, BlockImportance: "high"},
+		"", "", nil, time.Hour, time.Hour, "medium", 0, time.Minute, time.Minute, "low"))
+	news = cfg.Calendar.(*llm.NewsSwitch)
+	before, after, importance = news.Window()
+	require.Equal(t, [3]any{30 * time.Minute, 5 * time.Minute, llm.ImportanceHigh}, [3]any{before, after, importance})
 }
 
-// Launched by the controller, the secrets are the ones of its settings.
+// Launched by the controller, the secrets are the ones of its settings, and the
+// news of its dashboard.
 func TestSecretsOf(t *testing.T) {
-	require.Equal(t, secrets{}, secretsOf(agentapi.Config{}))
+	require.Equal(t, secrets{news: &agentapi.News{}}, secretsOf(agentapi.Config{}))
 	cfg := agentapi.Config{Account: &agentapi.Account{BridgeToken: "bridge"},
 		LLM: &agentapi.LLM{APIKey: "key"}, News: &agentapi.News{Enabled: true, Token: "calendar"}}
-	require.Equal(t, secrets{provider: "key", bridge: "bridge", news: agentapi.News{Enabled: true, Token: "calendar"}},
+	require.Equal(t, secrets{provider: "key", bridge: "bridge", news: &agentapi.News{Enabled: true, Token: "calendar"}},
 		secretsOf(cfg))
 }
 
-// The news of the runtime switch the calendar of the trader while it runs: off,
-// nothing asked; on without the token, refused; a token replaced.
+// The news of the runtime switch the calendar of the trader while it runs.
 func TestApplyNews(t *testing.T) {
 	cfg := llm.DefaultConfig()
-	require.NoError(t, calendarConfig(&cfg, map[string]bool{}, "http://127.0.0.1:1/mcp",
-		agentapi.News{Enabled: true, Token: "first"}, nil, time.Hour, time.Hour, "low", 0, 0, 0, "high"))
+	require.NoError(t, calendarConfig(&cfg, map[string]bool{}, &agentapi.News{Enabled: true,
+		URL: "http://127.0.0.1:1/mcp", Token: "first", BlockBefore: 15, BlockAfter: 15, BlockImportance: "high"},
+		"", "", nil, time.Hour, time.Hour, "low", 0, 0, 0, "high"))
 	trader, err := llm.New(cfg, idleProvider{})
 	require.NoError(t, err)
-	news := cfg.Calendar.(*llm.NewsSwitch)
+	news := trader.News()
+	require.NotNil(t, news)
 	read := func() error {
 		_, err := news.Events(context.Background(), []string{"USD"}, time.Now(), time.Now().Add(time.Hour))
 		return err
 	}
 
-	applyNews(trader, agentapi.Runtime{}) // none: as it was
+	applyNews(news, agentapi.Runtime{}) // none: as it was
 	require.True(t, news.Enabled())
-	applyNews(trader, agentapi.Runtime{News: &agentapi.News{Enabled: false, Token: "first"}})
+	applyNews(news, agentapi.Runtime{News: &agentapi.News{}})
 	require.False(t, news.Enabled())
 	require.ErrorIs(t, read(), llm.ErrNewsDisabled)
-	applyNews(trader, agentapi.Runtime{News: &agentapi.News{Enabled: true}})
+	applyNews(news, agentapi.Runtime{News: &agentapi.News{Enabled: true, URL: "http://127.0.0.1:1/mcp"}})
 	require.ErrorIs(t, read(), llm.ErrNewsNoToken)
-	applyNews(trader, agentapi.Runtime{News: &agentapi.News{Enabled: true, Token: "second"}})
+	applyNews(news, agentapi.Runtime{News: &agentapi.News{Enabled: true, URL: "http://127.0.0.1:1/mcp",
+		Token: "second", BlockBefore: 30}})
 	err = read()
 	require.Error(t, err, "no server at the port")
 	require.NotErrorIs(t, err, llm.ErrNewsNoToken)
-	require.NotErrorIs(t, err, llm.ErrNewsDisabled)
+	before, _, _ := news.Window()
+	require.Equal(t, 30*time.Minute, before)
+	applyNews(nil, agentapi.Runtime{News: &agentapi.News{Enabled: true}}) // no calendar: nothing
 }
 
 func TestPromptNames(t *testing.T) {

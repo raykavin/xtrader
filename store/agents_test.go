@@ -155,8 +155,6 @@ func TestCreateAgent_RefusesTheInvalidOnes(t *testing.T) {
 			"max tokens -1"},
 		{"bad base URL", llm(func(a *Agent) { a.LLM.BaseURL = ptr("api.openai.com/v1") }), AgentSecrets{},
 			ErrInvalid, "the base URL of its language model"},
-		{"bad calendar URL", llm(func(a *Agent) { a.LLM.CalendarURL = ptr("ftp://127.0.0.1/mcp") }),
-			AgentSecrets{}, ErrInvalid, "the URL of its calendar"},
 		{"no bridge URL", trend(func(a *Agent) { a.Account.BridgeURL = "" }), AgentSecrets{}, ErrInvalid,
 			"the URL of its bridge is required"},
 		{"bad bridge URL", trend(func(a *Agent) { a.Account.BridgeURL = "127.0.0.1:18812" }), AgentSecrets{},
@@ -222,7 +220,7 @@ func TestCreateAgent_SplitsItsParamsAndGoesLast(t *testing.T) {
 		Launched: true, Params: params,
 		Account: &Account{BridgeURL: " http://127.0.0.1:18812 ", Magic: ptr(int64(0)), Comment: ptr(" ")},
 		LLM: &LLMSettings{Provider: "anthropic", Model: " claude-sonnet-4-5 ", BaseURL: ptr(""),
-			ReasoningEffort: ptr(" "), MaxTokens: ptr(0), CalendarURL: ptr(""), Params: llmParams}},
+			ReasoningEffort: ptr(" "), MaxTokens: ptr(0), Params: llmParams}},
 		AgentSecrets{})
 	require.NoError(t, err)
 	require.Equal(t, "gold", agent.Name)
@@ -245,7 +243,6 @@ func TestCreateAgent_SplitsItsParamsAndGoesLast(t *testing.T) {
 	require.Nil(t, agent.LLM.BaseURL)
 	require.Nil(t, agent.LLM.ReasoningEffort)
 	require.Nil(t, agent.LLM.MaxTokens)
-	require.Nil(t, agent.LLM.CalendarURL)
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
@@ -308,8 +305,7 @@ func TestUpdateAgent_EditsEveryField(t *testing.T) {
 		Account: &AccountUpdate{BridgeURL: ptr("https://bridge.local:18813"), Magic: ptr(int64(4242)),
 			Comment: ptr("nb:gold"), RealAllowed: ptr(true)},
 		LLM: &LLMUpdate{Provider: ptr("anthropic"), Model: ptr("claude-opus-4-1"),
-			BaseURL: ptr("https://api.anthropic.com"), ReasoningEffort: ptr("high"), MaxTokens: ptr(4096),
-			CalendarURL: ptr("http://127.0.0.1:22346/mcp")}})
+			BaseURL: ptr("https://api.anthropic.com"), ReasoningEffort: ptr("high"), MaxTokens: ptr(4096)}})
 	require.NoError(t, err)
 	require.Equal(t, "llm", updated.Name, "never changed")
 	require.Equal(t, "llm", updated.Kind, "never changed")
@@ -331,13 +327,12 @@ func TestUpdateAgent_EditsEveryField(t *testing.T) {
 	require.Equal(t, "https://api.anthropic.com", *updated.LLM.BaseURL)
 	require.Equal(t, "high", *updated.LLM.ReasoningEffort)
 	require.Equal(t, 4096, *updated.LLM.MaxTokens)
-	require.Equal(t, "http://127.0.0.1:22346/mcp", *updated.LLM.CalendarURL)
 	require.True(t, updated.LLM.PromptStatus.Applied, "the status of its prompt kept")
 
 	// the optional fields removed, the others left as they are
 	updated, err = s.UpdateAgent(ctx, agent.ID, AgentUpdate{Params: Params{},
 		Account: &AccountUpdate{Magic: ptr(int64(0)), Comment: ptr("")},
-		LLM:     &LLMUpdate{BaseURL: ptr(""), ReasoningEffort: ptr(""), MaxTokens: ptr(0), CalendarURL: ptr(" ")}})
+		LLM:     &LLMUpdate{BaseURL: ptr(""), ReasoningEffort: ptr(""), MaxTokens: ptr(0)}})
 	require.NoError(t, err)
 	require.Empty(t, updated.AllParams(), "{} removes them all")
 	require.Nil(t, updated.Account.Magic)
@@ -347,7 +342,6 @@ func TestUpdateAgent_EditsEveryField(t *testing.T) {
 	require.Nil(t, updated.LLM.BaseURL)
 	require.Nil(t, updated.LLM.ReasoningEffort)
 	require.Nil(t, updated.LLM.MaxTokens)
-	require.Nil(t, updated.LLM.CalendarURL)
 	require.Equal(t, "claude-opus-4-1", updated.LLM.Model)
 	require.Equal(t, "paper", updated.Mode)
 
@@ -428,8 +422,6 @@ func TestUpdateAgent_RefusesTheInvalidOnes(t *testing.T) {
 			`reasoning effort "max"`},
 		{"max tokens", AgentUpdate{LLM: &LLMUpdate{MaxTokens: ptr(-10)}}, ErrInvalid, "max tokens -10"},
 		{"base URL", AgentUpdate{LLM: &LLMUpdate{BaseURL: ptr("file:///etc/passwd")}}, ErrInvalid, "base URL"},
-		{"calendar URL", AgentUpdate{LLM: &LLMUpdate{CalendarURL: ptr("http://u:p@127.0.0.1/mcp")}}, ErrInvalid,
-			"the URL of its calendar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.UpdateAgent(ctx, agent.ID, tc.update)

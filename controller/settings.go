@@ -159,7 +159,7 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 	if l := a.LLM; l != nil {
 		settings.Model = l.Provider + " " + l.Model
 		settings.LLM = &ui.AgentLLMSettings{Provider: l.Provider, Model: l.Model, BaseURL: l.BaseURL,
-			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, CalendarURL: l.CalendarURL}
+			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens}
 		settings.PromptID = l.PromptID
 		settings.Secrets.LLMAPIKey = len(l.APIKey) > 0
 		if st := l.PromptStatus; st != nil {
@@ -188,8 +188,7 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	switch l := request.LLM; {
 	case l != nil:
 		agent.LLM = &store.LLMSettings{Provider: l.Provider, Model: l.Model, BaseURL: l.BaseURL,
-			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, CalendarURL: l.CalendarURL,
-			PromptID: request.PromptID}
+			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, PromptID: request.PromptID}
 	case request.PromptID != nil:
 		writeJSONError(w, http.StatusBadRequest, "a prompt without a language model: for an LLM agent only")
 		return
@@ -230,7 +229,7 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if l := request.LLM; l != nil {
 		update.LLM = &store.LLMUpdate{Provider: l.Provider, Model: l.Model, BaseURL: l.BaseURL,
-			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, CalendarURL: l.CalendarURL}
+			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens}
 	}
 	err = s.store.Transaction(ctx, func(ctx context.Context) error {
 		if _, err := s.store.UpdateAgent(ctx, a.ID, update); err != nil {

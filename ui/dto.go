@@ -827,15 +827,15 @@ type AgentAccountSettings struct {
 
 // AgentLLMSettings is the language model of an LLM agent: its provider
 // (openai or anthropic), its model, eg: gpt-5, and, when set, the base URL of
-// its API, its reasoning effort (minimal, low, medium or high), the tokens of
-// an answer at most, and the URL of the MCP server of the economic calendar.
+// its API, its reasoning effort (minimal, low, medium or high) and the tokens
+// of an answer at most. The MCP server of the economic calendar is the one of
+// the news of all the agents, see NewsSettingsResponse.
 type AgentLLMSettings struct {
 	Provider        string  `json:"provider"`
 	Model           string  `json:"model"`
 	BaseURL         *string `json:"base_url,omitempty"`
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 	MaxTokens       *int    `json:"max_tokens,omitempty"`
-	CalendarURL     *string `json:"calendar_url,omitempty"`
 }
 
 // AgentPromptStatus is the last prompt an LLM agent was asked to switch to,
@@ -1307,8 +1307,8 @@ type AgentAccountRequest struct {
 }
 
 // AgentLLMRequest is a change of the language model of an LLM agent, of the
-// fields set, see AgentLLMSettings: a BaseURL, a ReasoningEffort or a
-// CalendarURL of "" and a MaxTokens of 0 remove them, the defaults of the
+// fields set, see AgentLLMSettings: a BaseURL or a ReasoningEffort of "" and
+// a MaxTokens of 0 remove them, the defaults of the
 // agent applying. An LLM agent without a language model gets one, its
 // Provider and its Model required then.
 type AgentLLMRequest struct {
@@ -1317,7 +1317,6 @@ type AgentLLMRequest struct {
 	BaseURL         *string `json:"base_url,omitempty"`
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 	MaxTokens       *int    `json:"max_tokens,omitempty"`
-	CalendarURL     *string `json:"calendar_url,omitempty"`
 }
 
 // AgentCreateRequest is the payload of POST /api/settings/agents, answered
@@ -2203,47 +2202,58 @@ type DailyLimitsResponse struct {
 }
 
 // NewsSettingsResponse is the payload of GET and PUT /api/settings/news: the
-// news of all the agents, on or off (off, no agent reads the economic
-// calendar), whether the token of the MCP server is set (never the token),
-// the agents whose former tokens differed and wait for one to be set
-// (Conflict), who changed them last and when (Unix seconds, 0 never), and the
-// LLM agents with the server of their calendar (empty for none) and whether
-// they run: a change applies to them while they run, without a restart.
+// news of all the agents, LLM or not: on or off (off, no agent reads the
+// economic calendar nor blocks anything); the MCP server of the calendar (its
+// address, whether its token is set: never the token); the window of the news
+// block in minutes (BlockBefore before a release of at least BlockImportance
+// to BlockAfter after it, both 0 for none: inside it, no agent opens a
+// position, their pending entries canceled and their positions closed as it
+// starts); the agents whose former tokens (Conflict) or servers (URLConflict)
+// differed, none chosen, until set here; who changed them last and when (Unix
+// seconds, 0 never); and the agents, whether enabled and running: a change
+// applies to them while they run, without a restart.
 type NewsSettingsResponse struct {
-	Enabled   bool        `json:"enabled"`
-	TokenSet  bool        `json:"token_set"`
-	Conflict  []string    `json:"conflict"`
-	UpdatedBy string      `json:"updated_by,omitempty"`
-	UpdatedAt int64       `json:"updated_at,omitempty"`
-	Agents    []NewsAgent `json:"agents"`
+	Enabled         bool        `json:"enabled"`
+	URL             string      `json:"url,omitempty"`
+	TokenSet        bool        `json:"token_set"`
+	BlockBefore     int         `json:"block_before"`
+	BlockAfter      int         `json:"block_after"`
+	BlockImportance string      `json:"block_importance"`
+	Conflict        []string    `json:"conflict"`
+	URLConflict     []string    `json:"url_conflict"`
+	UpdatedBy       string      `json:"updated_by,omitempty"`
+	UpdatedAt       int64       `json:"updated_at,omitempty"`
+	Agents          []NewsAgent `json:"agents"`
 }
 
-// NewsAgent is an LLM agent in the settings of the news: the MCP server of
-// its calendar (its calendar_url, empty for none: it reads no news), whether
-// it is enabled and runs, and its news block (before and after a release, eg:
-// 15m, empty for none).
+// NewsAgent is an agent in the settings of the news: its kind, whether it is
+// enabled and runs.
 type NewsAgent struct {
-	Agent       string `json:"agent"`
-	CalendarURL string `json:"calendar_url,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	Running     bool   `json:"running"`
-	BlockBefore string `json:"block_before,omitempty"`
-	BlockAfter  string `json:"block_after,omitempty"`
+	Agent   string `json:"agent"`
+	Kind    string `json:"kind"`
+	Enabled bool   `json:"enabled"`
+	Running bool   `json:"running"`
 }
 
 // NewsSettingsRequest is the body of PUT /api/settings/news, the fields set:
-// Token replaces the token of the MCP server ("" removes it; absent keeps it).
+// Token replaces the token of the MCP server ("" removes it; absent keeps it),
+// URL its address ("" removes it), the window in minutes (0 to 1440) and its
+// importance (low, medium or high).
 type NewsSettingsRequest struct {
-	Enabled *bool   `json:"enabled,omitempty"`
-	Token   *string `json:"token,omitempty"`
+	Enabled         *bool   `json:"enabled,omitempty"`
+	Token           *string `json:"token,omitempty"`
+	URL             *string `json:"url,omitempty"`
+	BlockBefore     *int    `json:"block_before,omitempty"`
+	BlockAfter      *int    `json:"block_after,omitempty"`
+	BlockImportance *string `json:"block_importance,omitempty"`
 }
 
 // NewsTestResponse is the payload of POST /api/settings/news/test: the MCP
-// servers of the calendars of the LLM agents read once with the token of the
-// news, asked by the user, the news on or off, each with its agents and its
-// status: ok (it answered), missing_token (nothing asked), unauthorized (the
-// token refused) or unavailable (the server failing, Detail telling how,
-// without the token).
+// server of the news read once with its token, asked by the user, the news on
+// or off, with the agents reading it and its status: ok (it answered),
+// missing_server or missing_token (nothing asked), unauthorized (the token
+// refused) or unavailable (the server failing, Detail telling how, without
+// the token).
 type NewsTestResponse struct {
 	Results []NewsTestResult `json:"results"`
 	At      int64            `json:"at"`

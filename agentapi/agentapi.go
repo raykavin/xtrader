@@ -62,17 +62,24 @@ type Config struct {
 	Account         *Account          `json:"account,omitempty"`
 	LLM             *LLM              `json:"llm,omitempty"`
 	Prompt          *Prompt           `json:"prompt,omitempty"` // of an LLM agent, nil for its default one
-	News            *News             `json:"news,omitempty"`   // of an LLM agent, see News
+	News            *News             `json:"news,omitempty"`   // see News
 }
 
 // News is the news feature of all the agents, set on the dashboard (the tab
-// Notícias): on or off, and the token of the MCP server of the economic
-// calendar, shared by the agents (the server at the calendar_url of each
-// one). An LLM agent gets it at its start and in its runtime, applied while it
-// runs: off, it reads no calendar.
+// Notícias): on or off; the MCP server of the economic calendar (URL) and its
+// token, shared by the agents; and the window of the news block, in minutes
+// (BlockBefore before a release of at least BlockImportance to BlockAfter
+// after it, both 0 for none): inside it, an agent opens no position, its
+// pending entries canceled and its positions closed as it starts. Every agent
+// gets it at its start and in its runtime, applied while it runs: off, it
+// reads no calendar and blocks nothing.
 type News struct {
-	Enabled bool   `json:"enabled"`
-	Token   string `json:"token,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	URL             string `json:"url,omitempty"`
+	Token           string `json:"token,omitempty"`
+	BlockBefore     int    `json:"block_before,omitempty"`
+	BlockAfter      int    `json:"block_after,omitempty"`
+	BlockImportance string `json:"block_importance,omitempty"`
 }
 
 // Account is the trading account of an agent: the bridge of MT5, the token of
@@ -95,7 +102,6 @@ type LLM struct {
 	BaseURL         string            `json:"base_url,omitempty"`
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 	MaxTokens       int               `json:"max_tokens,omitempty"`
-	CalendarURL     string            `json:"calendar_url,omitempty"`
 	Params          map[string]string `json:"params"`
 }
 
@@ -127,7 +133,7 @@ type Runtime struct {
 	Entries                    // the entries blocked by the supervisor or the dashboard, if any
 	Protection                 // the protection of the positions, see Protection
 	Prompt          *PromptRef `json:"prompt,omitempty"`
-	News            *News      `json:"news,omitempty"` // of an LLM agent, see News
+	News            *News      `json:"news,omitempty"` // see News
 }
 
 // Protection is the protection of the open positions of an agent (breakeven,
@@ -348,9 +354,6 @@ func (cfg Config) Args() []string {
 		}
 		if l.MaxTokens > 0 {
 			add("llm-max-tokens", strconv.Itoa(l.MaxTokens))
-		}
-		if l.CalendarURL != "" {
-			add("calendar-mcp", l.CalendarURL)
 		}
 	}
 	return args

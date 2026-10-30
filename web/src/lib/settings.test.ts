@@ -484,7 +484,6 @@ describe("the form of an agent", () => {
       provider: "openai",
       model: "gpt-5",
       reasoning_effort: "low",
-      calendar_url: "http://mt5:22346/mcp",
     },
     model: "openai gpt-5",
     prompt_id: 3,
@@ -521,7 +520,6 @@ describe("the form of an agent", () => {
       baseURL: "",
       reasoningEffort: "",
       maxTokens: "",
-      calendarURL: "",
       promptID: "",
       llmAPIKey: "",
       bridgeToken: "",
@@ -544,7 +542,6 @@ describe("the form of an agent", () => {
       baseURL: "",
       reasoningEffort: "low",
       maxTokens: "",
-      calendarURL: "http://mt5:22346/mcp",
       promptID: "3",
       llmAPIKey: "",
       reanalysis: true,
@@ -595,12 +592,11 @@ describe("the form of an agent", () => {
             model: "gpt-5",
             baseURL: "api",
             maxTokens: "0",
-            calendarURL: "mt5:22346",
           }),
           true,
         ),
       ).sort(),
-    ).toEqual(["baseURL", "calendarURL", "maxTokens", "provider"]);
+    ).toEqual(["baseURL", "maxTokens", "provider"]);
     expect(agentFormErrors(newAgent({ baseURL: "api", maxTokens: "x" }), true)).toEqual({});
 
     // the params by row, the blank ones left out, a name repeated refused
@@ -667,7 +663,6 @@ describe("the form of an agent", () => {
         model: " claude-sonnet-5 ",
         reasoningEffort: "low",
         maxTokens: "8192",
-        calendarURL: " http://mt5:22346/mcp ",
         promptID: "3",
         llmAPIKey: " key ",
         reanalysis: true,
@@ -696,7 +691,6 @@ describe("the form of an agent", () => {
         model: "claude-sonnet-5",
         reasoning_effort: "low",
         max_tokens: 8192,
-        calendar_url: "http://mt5:22346/mcp",
       },
       prompt_id: 3,
       llm_api_key: "key",
@@ -740,11 +734,10 @@ describe("the form of an agent", () => {
         magic: "",
         comment: " ",
         reasoningEffort: "",
-        calendarURL: "",
       }),
     ).toEqual({
       account: { magic: 0, comment: "" },
-      llm: { reasoning_effort: "", calendar_url: "" },
+      llm: { reasoning_effort: "" },
     });
     expect(
       agentUpdateRequest(

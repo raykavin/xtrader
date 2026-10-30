@@ -954,8 +954,9 @@ export interface AgentAccountSettings {
 /**
  * AgentLLMSettings is the language model of an LLM agent: its provider
  * (openai or anthropic), its model, eg: gpt-5, and, when set, the base URL of
- * its API, its reasoning effort (minimal, low, medium or high), the tokens of
- * an answer at most, and the URL of the MCP server of the economic calendar.
+ * its API, its reasoning effort (minimal, low, medium or high) and the tokens
+ * of an answer at most. The MCP server of the economic calendar is the one of
+ * the news of all the agents, see NewsSettingsResponse.
  */
 export interface AgentLLMSettings {
   provider: string;
@@ -963,7 +964,6 @@ export interface AgentLLMSettings {
   base_url?: string;
   reasoning_effort?: string;
   max_tokens?: number /* int */;
-  calendar_url?: string;
 }
 /**
  * AgentPromptStatus is the last prompt an LLM agent was asked to switch to,
@@ -1468,8 +1468,8 @@ export interface AgentAccountRequest {
 }
 /**
  * AgentLLMRequest is a change of the language model of an LLM agent, of the
- * fields set, see AgentLLMSettings: a BaseURL, a ReasoningEffort or a
- * CalendarURL of "" and a MaxTokens of 0 remove them, the defaults of the
+ * fields set, see AgentLLMSettings: a BaseURL or a ReasoningEffort of "" and
+ * a MaxTokens of 0 remove them, the defaults of the
  * agent applying. An LLM agent without a language model gets one, its
  * Provider and its Model required then.
  */
@@ -1479,7 +1479,6 @@ export interface AgentLLMRequest {
   base_url?: string;
   reasoning_effort?: string;
   max_tokens?: number /* int */;
-  calendar_url?: string;
 }
 /**
  * AgentCreateRequest is the payload of POST /api/settings/agents, answered
@@ -2528,50 +2527,61 @@ export interface DailyLimitsResponse {
 }
 /**
  * NewsSettingsResponse is the payload of GET and PUT /api/settings/news: the
- * news of all the agents, on or off (off, no agent reads the economic
- * calendar), whether the token of the MCP server is set (never the token),
- * the agents whose former tokens differed and wait for one to be set
- * (Conflict), who changed them last and when (Unix seconds, 0 never), and the
- * LLM agents with the server of their calendar (empty for none) and whether
- * they run: a change applies to them while they run, without a restart.
+ * news of all the agents, LLM or not: on or off (off, no agent reads the
+ * economic calendar nor blocks anything); the MCP server of the calendar (its
+ * address, whether its token is set: never the token); the window of the news
+ * block in minutes (BlockBefore before a release of at least BlockImportance
+ * to BlockAfter after it, both 0 for none: inside it, no agent opens a
+ * position, their pending entries canceled and their positions closed as it
+ * starts); the agents whose former tokens (Conflict) or servers (URLConflict)
+ * differed, none chosen, until set here; who changed them last and when (Unix
+ * seconds, 0 never); and the agents, whether enabled and running: a change
+ * applies to them while they run, without a restart.
  */
 export interface NewsSettingsResponse {
   enabled: boolean;
+  url?: string;
   token_set: boolean;
+  block_before: number /* int */;
+  block_after: number /* int */;
+  block_importance: string;
   conflict: string[];
+  url_conflict: string[];
   updated_by?: string;
   updated_at?: number /* int64 */;
   agents: NewsAgent[];
 }
 /**
- * NewsAgent is an LLM agent in the settings of the news: the MCP server of
- * its calendar (its calendar_url, empty for none: it reads no news), whether
- * it is enabled and runs, and its news block (before and after a release, eg:
- * 15m, empty for none).
+ * NewsAgent is an agent in the settings of the news: its kind, whether it is
+ * enabled and runs.
  */
 export interface NewsAgent {
   agent: string;
-  calendar_url?: string;
+  kind: string;
   enabled: boolean;
   running: boolean;
-  block_before?: string;
-  block_after?: string;
 }
 /**
  * NewsSettingsRequest is the body of PUT /api/settings/news, the fields set:
- * Token replaces the token of the MCP server ("" removes it; absent keeps it).
+ * Token replaces the token of the MCP server ("" removes it; absent keeps it),
+ * URL its address ("" removes it), the window in minutes (0 to 1440) and its
+ * importance (low, medium or high).
  */
 export interface NewsSettingsRequest {
   enabled?: boolean;
   token?: string;
+  url?: string;
+  block_before?: number /* int */;
+  block_after?: number /* int */;
+  block_importance?: string;
 }
 /**
  * NewsTestResponse is the payload of POST /api/settings/news/test: the MCP
- * servers of the calendars of the LLM agents read once with the token of the
- * news, asked by the user, the news on or off, each with its agents and its
- * status: ok (it answered), missing_token (nothing asked), unauthorized (the
- * token refused) or unavailable (the server failing, Detail telling how,
- * without the token).
+ * server of the news read once with its token, asked by the user, the news on
+ * or off, with the agents reading it and its status: ok (it answered),
+ * missing_server or missing_token (nothing asked), unauthorized (the token
+ * refused) or unavailable (the server failing, Detail telling how, without
+ * the token).
  */
 export interface NewsTestResponse {
   results: NewsTestResult[];

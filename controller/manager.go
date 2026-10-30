@@ -668,8 +668,8 @@ func (m *Manager) State(name string) AgentState {
 	return state
 }
 
-// runtimeOf returns the runtime of the agent a: its channels, and of an LLM
-// agent the switch of its reanalysis, its prompt and the news. false when its
+// runtimeOf returns the runtime of the agent a: its channels, the news, and
+// of an LLM agent the switch of its reanalysis and its prompt. false when its
 // prompt or the news can't be read: the agent keeps the runtime it has rather
 // than switching to its default prompt.
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
@@ -695,31 +695,36 @@ func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Run
 		}
 		doc.Prompt = &agentapi.PromptRef{ID: prompt.ID, Name: prompt.Name, Version: prompt.Version}
 	}
-	if a.LLM != nil {
-		news, err := newsOf(ctx, s)
-		if err != nil {
-			log.Warnf("controller: the news of the agent %s: %v", a.Name, err)
-			return doc, false // it keeps the news it has
-		}
-		doc.News = news
+	news, err := newsOf(ctx, s)
+	if err != nil {
+		log.Warnf("controller: the news of the agent %s: %v", a.Name, err)
+		return doc, false // it keeps the news it has
 	}
+	doc.News = news
 	return doc, true
 }
 
-// newsOf returns the news of all the agents for an LLM agent: on or off, and
-// the token of the MCP server of the calendar, only while on; off before the
-// seeds are applied.
+// newsOf returns the news of all the agents for an agent, LLM or not: on or
+// off, and only while on the MCP server of the calendar, its token and the
+// window of the news block; off before the seeds are applied.
 func newsOf(ctx context.Context, s *store.Store) (*agentapi.News, error) {
 	settings, found, err := s.News(ctx)
 	if err != nil {
 		return nil, err
 	}
 	news := &agentapi.News{Enabled: found && settings.Enabled}
-	if news.Enabled {
-		if news.Token, err = s.NewsToken(ctx); err != nil {
-			return nil, err
-		}
+	if !news.Enabled {
+		return news, nil
 	}
+	if news.Token, err = s.NewsToken(ctx); err != nil {
+		return nil, err
+	}
+	rules, _, err := s.NewsRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	news.URL, news.BlockBefore, news.BlockAfter = deref(rules.MCPURL), rules.BlockBefore, rules.BlockAfter
+	news.BlockImportance = rules.BlockImportance
 	return news, nil
 }
 

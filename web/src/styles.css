@@ -8447,3 +8447,21 @@ circle.perf-down {
 .news-table {
   margin: 0 var(--sp-5) var(--sp-5);
 }
+
+.news-window {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.news-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+}
+
+@media (max-width: 720px) {
+  .news-window {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

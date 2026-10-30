@@ -114,5 +114,23 @@ func up(ctx context.Context, cfg *config.Config) error {
 			"be opened): none chosen, set the token on the dashboard (Configurações > Notícias)",
 			strings.Join(news.Conflict, ", "))
 	}
+
+	// the servers of the calendar the LLM agents had each, and their windows
+	url, err := s.MigrateNewsURL(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case url.Taken != "":
+		log.Infof("[MIGRATOR] news: the MCP server %s the %d LLM agents had taken for all the agents", url.Taken,
+			url.URLs)
+	case len(url.Conflict) > 0:
+		log.Warnf("[MIGRATOR] news: the LLM agents %s had different MCP servers of the calendar: none chosen, set "+
+			"the address on the dashboard (Configurações > Notícias)", strings.Join(url.Conflict, ", "))
+	}
+	if url.Params > 0 {
+		log.Infof("[MIGRATOR] news: the windows of the news block of %d LLM agents removed: the one of the "+
+			"news of all the agents applies", url.Params)
+	}
 	return nil
 }

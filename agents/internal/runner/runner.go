@@ -19,8 +19,10 @@ import (
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/internal/backtest"
 	"github.com/raykavin/xtrader/agents/internal/flaglist"
+	"github.com/raykavin/xtrader/agents/internal/newsguard"
 	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
+	"github.com/raykavin/xtrader/agents/llm"
 	"github.com/raykavin/xtrader/agents/strategies"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/service"
@@ -574,7 +576,11 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 		}()
 	}
 	if agent != nil {
-		return agent.Serve(ctx, nil, bot.Run) // the switches of the channels are the ones of the live mode
+		// the news of the dashboard: held out of the market around the releases
+		news := llm.NewNewsSwitch(newsguard.ConfigOf(agent.Config.News))
+		newsguard.Start(ctx, agent.Config, news, bot.Controller(), storage, settings.Pairs)
+		apply := func(runtime agentapi.Runtime) { newsguard.Apply(news, runtime) }
+		return agent.Serve(ctx, apply, bot.Run) // the switches of the channels are the ones of the live mode
 	}
 	return bot.Run(ctx)
 }
@@ -609,8 +615,11 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 	agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not, before it trades
 	// the protection of its positions
 	protect.Attach(ctx, bot, broker, strategy.Timeframe(), true, agent, chart)
+	// the news of the dashboard: held out of the market around the releases
+	news := llm.NewNewsSwitch(newsguard.ConfigOf(agent.Config.News))
+	newsguard.Start(ctx, agent.Config, news, bot.Controller(), orders, settings.Pairs)
 
-	apply := func(agentapi.Runtime) {}
+	apply := func(runtime agentapi.Runtime) { newsguard.Apply(news, runtime) }
 	if chart != nil {
 		orders.SetNotifier(chart) // the orders the outbox fails to write
 		// the orders of the previous runs, on the chart and in its history
@@ -630,6 +639,7 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 		chart.SetChannels(dash.channels()...)
 		chart.SetSupervision(bot.Controller())
 		apply = func(runtime agentapi.Runtime) {
+			newsguard.Apply(news, runtime)
 			chart.SetChannels(dashboard{tradePanel: runtime.TradePanel, telegram: runtime.TelegramControl}.channels()...)
 		}
 		go func() {

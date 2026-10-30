@@ -111,7 +111,6 @@ type LLMSettings struct {
 	MaxTokens       *int          `json:"max_tokens,omitempty"`
 	PromptID        *int64        `json:"prompt_id,omitempty"`
 	PromptStatus    *PromptStatus `gorm:"type:jsonb" json:"prompt_status,omitempty"`
-	CalendarURL     *string       `gorm:"column:calendar_url" json:"calendar_url,omitempty"`
 	Params          Params        `gorm:"type:jsonb" json:"params"`
 	CreatedAt       time.Time     `json:"-"`
 	UpdatedAt       time.Time     `json:"-"`
