@@ -11,12 +11,13 @@ SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 -- an agent deleted or renamed. Each trades XAUUSDm and BTCUSDm, a lot of 0.01
 -- on each. An agent finds its prompt by its name, never by an ID.
 --
--- Their secrets never go here: set the API key of the LLM, the token of the
--- bridge (MT5_BRIDGE_TOKEN of services/mt5/.env) and the one of the MCP server
--- of the terminal on the page of the settings of the dashboard, then turn the
--- agent on: off, the controller never launches it. The terminal of MT5 is the
--- service mt5 of the compose: its bridge at http://mt5:18812 and its MCP server
--- (the economic calendar) at http://mt5:22347/mcp. The comment of an agent on
+-- Their secrets never go here: set the API key of the LLM and the token of
+-- the bridge (MT5_BRIDGE_TOKEN of services/mt5/.env) on the page of the
+-- settings of the dashboard, then turn the agent on: off, the controller never
+-- launches it. The terminal of MT5 is the service mt5 of the compose: its
+-- bridge at http://mt5:18812 and its MCP server (the economic calendar of the
+-- news of all the agents, with its token in the tab Notícias, see 0006_news)
+-- at http://mt5:22347/mcp. The comment of an agent on
 -- MT5 (its default when null, eg: nb:llm) names its magic number, so it finds
 -- its positions on the account again: never run the same agent here and on
 -- another machine at once, they would trade the same positions.
@@ -42,10 +43,9 @@ WITH agent AS (
     INSERT INTO agent_reanalysis (agent_id, allowed)
     SELECT id, TRUE FROM agent
 )
-INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
+INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, params)
 SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
        (SELECT id FROM prompts WHERE name = 'trend_following' AND deleted_at IS NULL),
-       'http://mt5:22347/mcp',
        '{"llm-setup": "free", "llm-candles": "60", "llm-min-stop-atr": "1", "llm-max-spread-atr": "0.2",
          "calendar-importance": "high", "llm-consult-interval": "15m", "llm-higher-timeframes": "1h;4h",
          "llm-higher-trend-filter": "true", "llm-higher-trend-required": "false"}'::jsonb
@@ -94,10 +94,9 @@ WITH agent AS (
     INSERT INTO agent_reanalysis (agent_id, allowed)
     SELECT id, TRUE FROM agent
 )
-INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
+INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, params)
 SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
        (SELECT id FROM prompts WHERE name = 'smc_ict' AND deleted_at IS NULL),
-       'http://mt5:22347/mcp',
        '{"llm-setup": "free", "llm-candles": "2000", "llm-timeout": "3m", "calendar-importance": "high",
          "llm-consult-interval": "30m", "llm-higher-timeframes": "1h"}'::jsonb
 FROM agent;
@@ -172,10 +171,9 @@ WITH agent AS (
     INSERT INTO agent_reanalysis (agent_id, allowed)
     SELECT id, TRUE FROM agent
 )
-INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, calendar_url, params)
+INSERT INTO agent_llm_settings (agent_id, provider, model, reasoning_effort, prompt_id, params)
 SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
        (SELECT id FROM prompts WHERE name = 'support_resistance' AND deleted_at IS NULL),
-       'http://mt5:22347/mcp',
        '{"llm-setup": "free", "llm-candles": "60", "llm-min-rr": "1.5", "calendar-importance": "high",
          "llm-consult-interval": "15m"}'::jsonb
 FROM agent;

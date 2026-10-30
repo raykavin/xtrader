@@ -3,9 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
-	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -26,7 +24,15 @@ func (s *Supervision) newsResponse(ctx context.Context) (ui.NewsSettingsResponse
 	if err != nil {
 		return ui.NewsSettingsResponse{}, err
 	}
+	rules, _, err := s.store.NewsRules(ctx)
+	if err != nil {
+		return ui.NewsSettingsResponse{}, err
+	}
 	conflict, err := s.store.NewsConflict(ctx)
+	if err != nil {
+		return ui.NewsSettingsResponse{}, err
+	}
+	urlConflict, err := s.store.NewsURLConflict(ctx)
 	if err != nil {
 		return ui.NewsSettingsResponse{}, err
 	}
@@ -34,18 +40,16 @@ func (s *Supervision) newsResponse(ctx context.Context) (ui.NewsSettingsResponse
 	if err != nil {
 		return ui.NewsSettingsResponse{}, err
 	}
-	response := ui.NewsSettingsResponse{Enabled: settings.Enabled, TokenSet: len(settings.MCPToken) > 0,
-		Conflict: append([]string{}, conflict...), UpdatedBy: settings.UpdatedBy, Agents: []ui.NewsAgent{}}
+	response := ui.NewsSettingsResponse{Enabled: settings.Enabled, URL: deref(rules.MCPURL),
+		TokenSet: len(settings.MCPToken) > 0, BlockBefore: rules.BlockBefore, BlockAfter: rules.BlockAfter,
+		BlockImportance: rules.BlockImportance, Conflict: append([]string{}, conflict...),
+		URLConflict: append([]string{}, urlConflict...), UpdatedBy: settings.UpdatedBy, Agents: []ui.NewsAgent{}}
 	if !settings.UpdatedAt.IsZero() && settings.UpdatedBy != "" {
 		response.UpdatedAt = settings.UpdatedAt.Unix()
 	}
 	for _, a := range agents {
-		if a.LLM == nil {
-			continue
-		}
-		response.Agents = append(response.Agents, ui.NewsAgent{Agent: a.Name, CalendarURL: deref(a.LLM.CalendarURL),
-			Enabled: a.Enabled, Running: s.running(a.Name), BlockBefore: a.LLM.Params["news-block-before"],
-			BlockAfter: a.LLM.Params["news-block-after"]})
+		response.Agents = append(response.Agents, ui.NewsAgent{Agent: a.Name, Kind: a.Kind, Enabled: a.Enabled,
+			Running: s.running(a.Name)})
 	}
 	return response, nil
 }
@@ -62,8 +66,8 @@ func (s *Supervision) handleNews(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSetNews changes the news of all the agents (see
-// ui.NewsSettingsRequest: a token absent is kept), and applies them to the LLM
-// agents while they run, through their runtime.
+// ui.NewsSettingsRequest: a token absent is kept), and applies them to every
+// agent while it runs, through its runtime.
 func (s *Supervision) handleSetNews(w http.ResponseWriter, r *http.Request) {
 	var request ui.NewsSettingsRequest
 	if !decode(w, r, &request) {
@@ -71,7 +75,8 @@ func (s *Supervision) handleSetNews(w http.ResponseWriter, r *http.Request) {
 	}
 	by := userOf(r.Context())
 	if _, err := s.store.SetNews(r.Context(), store.NewsUpdate{Enabled: request.Enabled, Token: request.Token,
-		By: by}); err != nil {
+		URL: request.URL, BlockBefore: request.BlockBefore, BlockAfter: request.BlockAfter,
+		BlockImportance: request.BlockImportance, By: by}); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -92,9 +97,9 @@ func (s *Supervision) handleSetNews(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-// refreshNews publishes the runtime of every LLM agent again, the news in it:
-// the agents running apply them at once, their calendar switched and its
-// token replaced; the others get them as they start.
+// refreshNews publishes the runtime of every agent again, the news in it: the
+// agents running apply them at once (their calendar switched, its server, its
+// token and the window replaced); the others get them as they start.
 func (s *Supervision) refreshNews(ctx context.Context) {
 	agents, err := s.store.Agents(ctx)
 	if err != nil {
@@ -102,20 +107,22 @@ func (s *Supervision) refreshNews(ctx context.Context) {
 		return
 	}
 	for _, a := range agents {
-		if a.LLM == nil {
-			continue
-		}
 		if err := s.manager.RefreshRuntime(ctx, a.Name); err != nil {
 			log.Warnf("ui: the news not sent to the agent %s: %v", a.Name, err)
 		}
 	}
 }
 
-// handleTestNews reads once the MCP server of the calendar of each LLM agent
-// with the token of the news, asked by the user, see ui.NewsTestResponse.
+// handleTestNews reads once the MCP server of the news with its token, asked
+// by the user, see ui.NewsTestResponse.
 func (s *Supervision) handleTestNews(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token, err := s.store.NewsToken(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	rules, _, err := s.store.NewsRules(ctx)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -125,29 +132,26 @@ func (s *Supervision) handleTestNews(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	byURL := make(map[string][]string)
+	result := ui.NewsTestResult{URL: deref(rules.MCPURL), Agents: []string{}}
 	for _, a := range agents {
-		if a.LLM == nil {
-			continue
-		}
-		if url := strings.TrimSpace(deref(a.LLM.CalendarURL)); url != "" {
-			byURL[url] = append(byURL[url], a.Name)
+		if a.Enabled {
+			result.Agents = append(result.Agents, a.Name)
 		}
 	}
-	response := ui.NewsTestResponse{Results: []ui.NewsTestResult{}, At: time.Now().Unix()}
-	for _, url := range slices.Sorted(maps.Keys(byURL)) {
-		result := ui.NewsTestResult{URL: url, Agents: byURL[url], Status: llm.CalendarMissingToken}
-		if strings.TrimSpace(token) != "" {
-			probe, cancel := context.WithTimeout(ctx, newsProbeTimeout)
-			err := llm.ProbeNews(probe, url, token)
-			cancel()
-			result.Status, result.Detail = newsTestStatus(err, token)
-		}
-		response.Results = append(response.Results, result)
+	switch {
+	case result.URL == "":
+		result.Status = llm.CalendarMissingServer
+	case strings.TrimSpace(token) == "":
+		result.Status = llm.CalendarMissingToken
+	default:
+		probe, cancel := context.WithTimeout(ctx, newsProbeTimeout)
+		err := llm.ProbeNews(probe, result.URL, token)
+		cancel()
+		result.Status, result.Detail = newsTestStatus(err, token)
 	}
-	log.Infof("ui: the MCP servers of the news tested by %s", userOf(ctx))
+	log.Infof("ui: the MCP server of the news tested by %s: %s", userOf(ctx), result.Status)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, response)
+	writeJSON(w, ui.NewsTestResponse{Results: []ui.NewsTestResult{result}, At: time.Now().Unix()})
 }
 
 // newsTestStatus returns the status of the test of an MCP server that answered

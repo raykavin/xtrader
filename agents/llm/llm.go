@@ -1824,8 +1824,9 @@ func (t *Trader) calendar(pair string, at time.Time, input *Input) string {
 		return "" // no calendar, or no currency of it, eg: a crypto pair quoted in USDT
 	}
 
-	from := at.Add(-max(t.cfg.CalendarBack, t.cfg.NewsBlockAfter))
-	to := at.Add(max(t.cfg.CalendarAhead, t.cfg.NewsBlockBefore))
+	blockBefore, blockAfter, _ := t.newsWindow()
+	from := at.Add(-max(t.cfg.CalendarBack, blockAfter))
+	to := at.Add(max(t.cfg.CalendarAhead, blockBefore))
 	events, err := t.readCalendar(pair, currencies, from, to)
 	if err != nil {
 		input.Calendar = &CalendarContext{Available: false, Status: calendarStatus(err), Events: []calendarEvent{}}
@@ -1852,10 +1853,11 @@ func (t *Trader) calendar(pair string, at time.Time, input *Input) string {
 // in the context.
 func (t *Trader) newsBlocked(pair string, at time.Time) string {
 	currencies := t.calendarCurrencies(pair)
-	if len(currencies) == 0 || t.cfg.NewsBlockBefore == 0 && t.cfg.NewsBlockAfter == 0 {
+	before, after, _ := t.newsWindow()
+	if len(currencies) == 0 || before == 0 && after == 0 {
 		return ""
 	}
-	events, err := t.readCalendar(pair, currencies, at.Add(-t.cfg.NewsBlockAfter), at.Add(t.cfg.NewsBlockBefore))
+	events, err := t.readCalendar(pair, currencies, at.Add(-after), at.Add(before))
 	if err != nil {
 		return ""
 	}
@@ -1869,19 +1871,20 @@ func (t *Trader) newsBlocked(pair string, at time.Time) string {
 // then, see guardPending.
 func (t *Trader) nextNewsBlock(pair string, at time.Time) time.Time {
 	currencies := t.calendarCurrencies(pair)
-	if len(currencies) == 0 || t.cfg.NewsBlockBefore == 0 && t.cfg.NewsBlockAfter == 0 {
+	before, after, importance := t.newsWindow()
+	if len(currencies) == 0 || before == 0 && after == 0 {
 		return time.Time{}
 	}
-	events, err := t.readCalendar(pair, currencies, at, at.Add(max(t.cfg.CalendarAhead, t.cfg.NewsBlockBefore)))
+	events, err := t.readCalendar(pair, currencies, at, at.Add(max(t.cfg.CalendarAhead, before)))
 	if err != nil {
 		return time.Time{}
 	}
 	var next time.Time
 	for _, event := range events {
-		if event.Importance < t.cfg.NewsBlockImportance || !event.Timed() {
+		if event.Importance < importance || !event.Timed() {
 			continue
 		}
-		if start := event.Time.Add(-t.cfg.NewsBlockBefore); start.After(at) && (next.IsZero() || start.Before(next)) {
+		if start := event.Time.Add(-before); start.After(at) && (next.IsZero() || start.Before(next)) {
 			next = start
 		}
 	}
@@ -1891,10 +1894,11 @@ func (t *Trader) nextNewsBlock(pair string, at time.Time) time.Time {
 // newsBlock returns the release of events blocking new entries at at, if any,
 // see Config.NewsBlockBefore.
 func (t *Trader) newsBlock(events []Event, at time.Time) string {
-	if t.cfg.NewsBlockBefore == 0 && t.cfg.NewsBlockAfter == 0 {
+	before, after, importance := t.newsWindow()
+	if before == 0 && after == 0 {
 		return ""
 	}
-	event, ok := newsBlock(events, at, t.cfg.NewsBlockBefore, t.cfg.NewsBlockAfter, t.cfg.NewsBlockImportance)
+	event, ok := newsBlock(events, at, before, after, importance)
 	if !ok {
 		return ""
 	}

@@ -119,7 +119,7 @@ type AccountUpdate struct {
 }
 
 // LLMUpdate is a change of the language model of an LLM agent, of the fields
-// set: an empty BaseURL, ReasoningEffort or CalendarURL and a MaxTokens of 0
+// set: an empty BaseURL or ReasoningEffort and a MaxTokens of 0
 // remove them, the defaults of the agent applying.
 type LLMUpdate struct {
 	Provider        *string
@@ -127,7 +127,6 @@ type LLMUpdate struct {
 	BaseURL         *string
 	ReasoningEffort *string
 	MaxTokens       *int
-	CalendarURL     *string
 }
 
 // switchesOnly reports whether the update changes the switches of the agent
@@ -259,10 +258,6 @@ func (u LLMUpdate) apply(a *Agent) map[string]interface{} {
 		llm.MaxTokens = nonZero(u.MaxTokens)
 		columns["max_tokens"] = nullable(llm.MaxTokens)
 	}
-	if u.CalendarURL != nil {
-		llm.CalendarURL = optional(u.CalendarURL)
-		columns["calendar_url"] = nullable(llm.CalendarURL)
-	}
 	a.LLM = &llm
 	return columns
 }
@@ -347,7 +342,7 @@ func normalized(a Agent) Agent {
 		llm := *a.LLM
 		llm.Provider, llm.Model = strings.TrimSpace(llm.Provider), strings.TrimSpace(llm.Model)
 		llm.BaseURL, llm.ReasoningEffort = optional(llm.BaseURL), optional(llm.ReasoningEffort)
-		llm.MaxTokens, llm.CalendarURL = nonZero(llm.MaxTokens), optional(llm.CalendarURL)
+		llm.MaxTokens = nonZero(llm.MaxTokens)
 		a.LLM = &llm
 	}
 	if a.Reanalysis != nil {
@@ -473,9 +468,6 @@ func checkLLM(name string, llm *LLMSettings) error {
 	case llm.MaxTokens != nil && (*llm.MaxTokens < 1 || *llm.MaxTokens > math.MaxInt32):
 		return fmt.Errorf("%w: agent %s: max tokens %d, from 1 to %d", ErrInvalid, name, *llm.MaxTokens,
 			math.MaxInt32) // an INTEGER column
-	case llm.CalendarURL != nil && !httpURL(*llm.CalendarURL):
-		return fmt.Errorf("%w: agent %s: the URL of its calendar, an http(s) URL without credentials", ErrInvalid,
-			name)
 	}
 	return nil
 }

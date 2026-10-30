@@ -51,7 +51,7 @@ const intros: Record<SettingsTab, SectionIntro> = {
   noticias: {
     title: "Notícias",
     description:
-      "O calendário econômico que os agentes LLM consultam pelo servidor MCP do MetaTrader 5: ligue ou desligue para todos os agentes e defina o token, compartilhado por todos. As mudanças valem na hora para os agentes em execução, sem reiniciar.",
+      "O calendário econômico do servidor MCP do MetaTrader 5, para todos os agentes, LLM ou não: ligue ou desligue, defina o servidor, o token e a janela em que nenhum agente opera perto de uma divulgação. As mudanças valem na hora para os agentes em execução, sem reiniciar.",
   },
   prompts: {
     title: "Prompts",

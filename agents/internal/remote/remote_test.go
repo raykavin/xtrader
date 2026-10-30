@@ -26,8 +26,8 @@ func testConfig() agentapi.Config {
 		Account: &agentapi.Account{BridgeURL: "http://127.0.0.1:18812", BridgeToken: "bridge-secret",
 			Magic: &magic, Comment: &comment},
 		LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-secret", ReasoningEffort: "low",
-			MaxTokens: 2000, CalendarURL: "http://127.0.0.1:22346/mcp",
-			Params: map[string]string{"llm-min-stop-atr": "-1.5", "llm-widen-stop": "true"}},
+			MaxTokens: 2000,
+			Params:    map[string]string{"llm-min-stop-atr": "-1.5", "llm-widen-stop": "true"}},
 		Prompt: &agentapi.Prompt{PromptRef: agentapi.PromptRef{ID: 2, Name: "trend", Version: 1},
 			Content: "# t\n\nTrend."}}
 }
@@ -79,7 +79,7 @@ func TestAgent_Args(t *testing.T) {
 	assert.Empty(t, *baseURL)
 	assert.Equal(t, "low", *reasoning)
 	assert.Equal(t, 2000, *tokens)
-	assert.Equal(t, "http://127.0.0.1:22346/mcp", *calendar)
+	assert.Empty(t, *calendar, "the server of the news never a flag: in the news of the config")
 	assert.Equal(t, -1.5, *minStop, "a negative number is a value")
 	assert.True(t, *widen)
 	set := map[string]bool{}

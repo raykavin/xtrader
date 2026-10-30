@@ -172,3 +172,119 @@ func TestNews_TellsTheConflictOfTheTokensOfTheAgents(t *testing.T) {
 		})
 	}
 }
+
+// The rules of the news: the server and the window of the seeds; changed
+// with the news, checked, who changed them told.
+func TestNews_Rules(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	rules, found, err := s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.True(t, found, "seeded")
+	require.Equal(t, "http://mt5:22347/mcp", *rules.MCPURL)
+	require.Equal(t, [3]any{15, 15, "high"}, [3]any{rules.BlockBefore, rules.BlockAfter, rules.BlockImportance})
+	require.Empty(t, rules.UpdatedBy)
+
+	before, after, importance := 30, 5, "medium"
+	_, err = s.SetNews(ctx, NewsUpdate{URL: secret(" http://127.0.0.1:22346/mcp "), BlockBefore: &before,
+		BlockAfter: &after, BlockImportance: &importance, By: "admin"})
+	require.NoError(t, err)
+	rules, _, err = s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:22346/mcp", *rules.MCPURL)
+	require.Equal(t, [3]any{30, 5, "medium"}, [3]any{rules.BlockBefore, rules.BlockAfter, rules.BlockImportance})
+	require.Equal(t, "admin", rules.UpdatedBy)
+
+	tooLong, negative, urgent := 1441, -1, "urgent"
+	for _, refused := range []NewsUpdate{
+		{BlockBefore: &tooLong}, {BlockAfter: &negative}, {BlockImportance: &urgent},
+		{URL: secret("ftp://127.0.0.1/mcp")}, {URL: secret("http://u:p@127.0.0.1/mcp")},
+	} {
+		_, err := s.SetNews(ctx, refused)
+		require.ErrorIs(t, err, ErrInvalid)
+	}
+	rules, _, err = s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 30, rules.BlockBefore, "nothing changed")
+
+	_, err = s.SetNews(ctx, NewsUpdate{URL: secret(""), By: "admin"})
+	require.NoError(t, err)
+	rules, _, err = s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Nil(t, rules.MCPURL, "removed")
+}
+
+// legacyURL sets the server of the calendar the agent a had, and its params.
+func legacyURL(t *testing.T, s *Store, a Agent, url string, params string) {
+	t.Helper()
+	require.NoError(t, s.db.Exec("UPDATE agent_llm_settings SET calendar_url = ?, params = params || ?::jsonb "+
+		"WHERE agent_id = ?", url, params, a.ID).Error)
+}
+
+// The servers of the calendar the LLM agents had: all the same, the server of
+// the news, their column dropped; their windows of the news block removed.
+func TestNews_MigratesTheServerOfTheAgents(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	first, second := llmAgent(t, s, "first"), llmAgent(t, s, "second")
+	legacyURL(t, s, first, "http://127.0.0.1:22346/mcp", `{"news-block-before": "30m", "calendar-ahead": "4h"}`)
+	legacyURL(t, s, second, " http://127.0.0.1:22346/mcp ", `{"news-block-importance": "medium"}`)
+	llmAgent(t, s, "third") // without one
+
+	result, err := s.MigrateNewsURL(ctx)
+	require.NoError(t, err)
+	require.Equal(t, NewsURLMigration{URLs: 2, Taken: "http://127.0.0.1:22346/mcp", Params: 2}, result)
+	rules, _, err := s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:22346/mcp", *rules.MCPURL)
+	found, err := s.legacyCalendarURLs(ctx)
+	require.NoError(t, err)
+	require.False(t, found, "the former column dropped")
+	var params []string
+	require.NoError(t, s.db.Raw("SELECT params::text FROM agent_llm_settings ORDER BY agent_id").Scan(&params).Error)
+	for _, p := range params {
+		require.NotContains(t, p, "news-block", "the windows of the agents removed")
+	}
+	require.Contains(t, params[0], "calendar-ahead", "the window of the context kept")
+
+	result, err = s.MigrateNewsURL(ctx)
+	require.NoError(t, err)
+	require.Equal(t, NewsURLMigration{}, result, "run again harmlessly")
+}
+
+// Different servers: none chosen, the server of the news as it was, the column
+// kept and told until the server is set on the dashboard; the next run drops
+// it then. A server set on the dashboard is never replaced.
+func TestNews_TellsTheConflictOfTheServersOfTheAgents(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	alpha, beta := llmAgent(t, s, "alpha"), llmAgent(t, s, "beta")
+	legacyURL(t, s, alpha, "http://127.0.0.1:22346/mcp", "{}")
+	legacyURL(t, s, beta, "http://127.0.0.1:22347/mcp", "{}")
+
+	result, err := s.MigrateNewsURL(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "beta"}, result.Conflict)
+	require.Empty(t, result.Taken)
+	rules, _, err := s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://mt5:22347/mcp", *rules.MCPURL, "the one of the seeds, none chosen")
+	conflict, err := s.NewsURLConflict(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "beta"}, conflict)
+
+	_, err = s.SetNews(ctx, NewsUpdate{URL: secret("http://127.0.0.1:22347/mcp"), By: "admin"})
+	require.NoError(t, err)
+	conflict, err = s.NewsURLConflict(ctx)
+	require.NoError(t, err)
+	require.Empty(t, conflict, "ended by the server set")
+	result, err = s.MigrateNewsURL(ctx)
+	require.NoError(t, err)
+	require.Empty(t, result.Conflict)
+	rules, _, err = s.NewsRules(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:22347/mcp", *rules.MCPURL, "the one of the dashboard kept")
+	found, err := s.legacyCalendarURLs(ctx)
+	require.NoError(t, err)
+	require.False(t, found, "dropped by the next run")
+}

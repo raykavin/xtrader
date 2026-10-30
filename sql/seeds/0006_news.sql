@@ -10,3 +10,10 @@ SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 INSERT INTO news_settings (id, enabled)
 VALUES (1, FALSE)
 ON CONFLICT (id) DO NOTHING;
+
+-- The rules of the news: the MCP server of the terminal of the stack, and the
+-- window of the news block the LLM agents had by default, 15 minutes before
+-- and after a release of high importance; changed on the dashboard.
+INSERT INTO news_rules (id, mcp_url, block_before_minutes, block_after_minutes, block_importance)
+VALUES (1, 'http://mt5:22347/mcp', 15, 15, 'high')
+ON CONFLICT (id) DO NOTHING;

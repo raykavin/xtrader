@@ -18,6 +18,7 @@ import (
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/internal/backtest"
+	"github.com/raykavin/xtrader/agents/internal/newsguard"
 	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
 	"github.com/raykavin/xtrader/agents/llm"
@@ -187,10 +188,7 @@ func run() error {
 		keys = secretsOf(agent.Config)
 	} else {
 		flag.Parse()
-		// on its own, the news on with the token of its environment
-		token := os.Getenv(calendarTokenEnv)
-		keys = secrets{provider: os.Getenv(llm.KeyEnv(*providerName)), bridge: mt5Token(*mt5TokenArg),
-			news: agentapi.News{Enabled: token != "", Token: token}}
+		keys = secrets{provider: os.Getenv(llm.KeyEnv(*providerName)), bridge: mt5Token(*mt5TokenArg)}
 	}
 	set := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -327,8 +325,8 @@ func run() error {
 	cfg.MinPositionValue = *minValue
 	cfg.PositionFraction = *fraction
 	cfg.Leverage = *leverage
-	if err := calendarConfig(&cfg, set, *calendarURL, keys.news, list(*calendarCur), *calendarAhd,
-		*calendarBck, *calendarImp, *calendarOff, *blockBefore, *blockAfter, *blockImp); err != nil {
+	if err := calendarConfig(&cfg, set, keys.news, *calendarURL, os.Getenv(calendarTokenEnv), list(*calendarCur),
+		*calendarAhd, *calendarBck, *calendarImp, *calendarOff, *blockBefore, *blockAfter, *blockImp); err != nil {
 		return err
 	}
 	cfg.PositionSize = lots // shared: the MT5 lots are converted into units before the bot starts
@@ -412,12 +410,13 @@ func run() error {
 	return fmt.Errorf("invalid mode %q: backtest, paper or live", *mode)
 }
 
-// secrets are the secrets of the agent: the API key of the provider, the token
-// of the bridge, and the news (on or off, the token of the MCP server of the
-// calendar, shared by the agents).
+// secrets are the secrets of the agent: the API key of the provider and the
+// token of the bridge; launched by the controller, the news of the dashboard
+// too (on or off, the MCP server of the calendar and its token, the window of
+// the news block), nil on its own.
 type secrets struct {
 	provider, bridge string
-	news             agentapi.News
+	news             *agentapi.News
 }
 
 // secretsOf returns the secrets of the settings of the controller, never read
@@ -431,7 +430,9 @@ func secretsOf(cfg agentapi.Config) secrets {
 		s.provider = cfg.LLM.APIKey
 	}
 	if cfg.News != nil {
-		s.news = *cfg.News
+		s.news = cfg.News
+	} else {
+		s.news = &agentapi.News{}
 	}
 	return s
 }
@@ -564,7 +565,12 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 	// the protection of its positions, the costs those of the paper wallet
 	protect.Attach(ctx, bot, wallet, trader.Timeframe(), false, agent, chart)
 
-	apply := func(runtime agentapi.Runtime) { applyNews(trader, runtime) }
+	news := trader.News()
+	if agent != nil && news != nil {
+		// the news of the dashboard: held out of the market around the releases
+		newsguard.Start(ctx, agent.Config, news, bot.Controller(), storage, settings.Pairs)
+	}
+	apply := func(runtime agentapi.Runtime) { applyNews(news, runtime) }
 	if chart != nil {
 		chart.SetOrderController(bot.Controller()) // its orders are simulated too: every channel
 		chart.SetSupervision(bot.Controller())
@@ -572,7 +578,7 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 		// not: its switch of the settings, switched while the bot runs
 		chart.SetReanalysis(dash.reanalysis)
 		apply = func(runtime agentapi.Runtime) {
-			applyNews(trader, runtime)
+			applyNews(news, runtime)
 			chart.SetReanalysis(runtime.Reanalysis)
 		}
 		go func() {
@@ -646,7 +652,12 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 	// the protection of its positions
 	protect.Attach(ctx, bot, broker, trader.Timeframe(), true, agent, chart)
 
-	apply := func(runtime agentapi.Runtime) { applyNews(trader, runtime) }
+	news := trader.News()
+	if news != nil {
+		// the news of the dashboard: held out of the market around the releases
+		newsguard.Start(ctx, agent.Config, news, bot.Controller(), orders, settings.Pairs)
+	}
+	apply := func(runtime agentapi.Runtime) { applyNews(news, runtime) }
 	if chart != nil {
 		trader.SetNotifier(chart.Notify) // the results of the reanalyses
 		orders.SetNotifier(chart)        // the orders the outbox fails to write
@@ -669,7 +680,7 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 		chart.SetSupervision(bot.Controller())
 		chart.SetReanalysis(dash.reanalysis)
 		apply = func(runtime agentapi.Runtime) {
-			applyNews(trader, runtime)
+			applyNews(news, runtime)
 			chart.SetChannels(dashboard{tradePanel: runtime.TradePanel, telegram: runtime.TelegramControl}.channels()...)
 			chart.SetReanalysis(runtime.Reanalysis)
 		}
@@ -832,16 +843,20 @@ func checkVenue(exchangeName, mode string, leverage float64, backtestConfig bool
 // news of the dashboard, shared by the agents.
 const calendarTokenEnv = "MT5_MCP_TOKEN"
 
-// calendarConfig sets the economic calendar of cfg from the flags: the MCP
-// server of the terminal at url, behind the switch of the news (see
-// llm.NewsSwitch: off, or without a token, it reads nothing, and the context
-// tells why), and the windows of the context and of the news block. Without
-// url the flags of the calendar are refused, but the ones of the news block,
-// which need a calendar too.
-func calendarConfig(cfg *llm.Config, set map[string]bool, url string, news agentapi.News, currencies []string,
-	ahead, back time.Duration, importance string, offset, before, after time.Duration, blockImportance string) error {
+// calendarConfig sets the economic calendar of cfg: launched by the
+// controller, the news of its dashboard (dashboard: on or off, the MCP server,
+// its token and the window of the news block, applied while it runs, see
+// newsguard.Apply), the flags -calendar-mcp and -news-block-* ignored; on its
+// own, the MCP server of the terminal at url with token (of its environment)
+// and the window of the flags. Both behind the switch of the news (see
+// llm.NewsSwitch: off, without the server or its token, it reads nothing, and
+// the context tells why); the window of the context (-calendar-*) of the
+// flags. On its own without url, the flags of the calendar are refused.
+func calendarConfig(cfg *llm.Config, set map[string]bool, dashboard *agentapi.News, url, token string,
+	currencies []string, ahead, back time.Duration, importance string, offset, before, after time.Duration,
+	blockImportance string) error {
 
-	if strings.TrimSpace(url) == "" {
+	if dashboard == nil && strings.TrimSpace(url) == "" {
 		for _, name := range []string{"calendar-currencies", "calendar-ahead", "calendar-back",
 			"calendar-importance", "calendar-server-offset", "news-block-before", "news-block-after",
 			"news-block-importance"} {
@@ -855,49 +870,30 @@ func calendarConfig(cfg *llm.Config, set map[string]bool, url string, news agent
 	if cfg.CalendarImportance, err = llm.ParseImportance(importance); err != nil {
 		return fmt.Errorf("-calendar-importance: %w", err)
 	}
-	if cfg.NewsBlockImportance, err = llm.ParseImportance(blockImportance); err != nil {
-		return fmt.Errorf("-news-block-importance: %w", err)
+	var news llm.NewsConfig
+	if dashboard != nil {
+		for _, name := range []string{"calendar-mcp", "news-block-before", "news-block-after", "news-block-importance"} {
+			if set[name] {
+				log.Warnf("[SETUP] -%s ignored: the news are set on the dashboard (Configurações > Notícias)", name)
+			}
+		}
+		news = newsguard.ConfigOf(dashboard)
+	} else {
+		blocking, err := llm.ParseImportance(blockImportance)
+		if err != nil {
+			return fmt.Errorf("-news-block-importance: %w", err)
+		}
+		news = llm.NewsConfig{Enabled: true, URL: url, Token: token, Before: before, After: after,
+			Importance: blocking}
 	}
-	calendar, err := llm.NewMCPCalendar(url, news.Token, llm.WithMCPServerOffset(offset))
-	if err != nil {
-		return err
-	}
-	switched := llm.NewNewsSwitch(calendar, news.Enabled, news.Token)
 	for i := range currencies {
 		currencies[i] = strings.ToUpper(currencies[i])
 	}
-	cfg.Calendar, cfg.CalendarCurrencies = switched, currencies
+	cfg.Calendar = llm.NewNewsSwitch(news, llm.WithMCPServerOffset(offset))
+	cfg.CalendarCurrencies = currencies
 	cfg.CalendarAhead, cfg.CalendarBack = ahead, back
-	cfg.NewsBlockBefore, cfg.NewsBlockAfter = before, after
-	log.Infof("[SETUP] economic calendar: %v, news block %s before and %s after the %s releases; %s", calendar,
-		before, after, cfg.NewsBlockImportance, newsState(news))
+	log.Infof("[SETUP] economic calendar: %s", newsguard.State(news))
 	return nil
-}
-
-// newsState tells how the news stand for the logs: never the token.
-func newsState(news agentapi.News) string {
-	switch {
-	case !news.Enabled:
-		return "news off on the dashboard: the calendar is not read"
-	case strings.TrimSpace(news.Token) == "":
-		return "news on without the token of the MCP server: the calendar is not read"
-	}
-	return "news on"
-}
-
-// applyNews applies the news of runtime to the calendar of trader while it
-// runs, see llm.Trader.SetNews, telling the change in the logs.
-func applyNews(trader *llm.Trader, runtime agentapi.Runtime) {
-	if runtime.News == nil {
-		return
-	}
-	switched, tokenChanged := trader.SetNews(runtime.News.Enabled, runtime.News.Token)
-	switch {
-	case switched:
-		log.Infof("[NEWS] %s", newsState(*runtime.News))
-	case tokenChanged:
-		log.Infof("[NEWS] the token of the MCP server of the news replaced; %s", newsState(*runtime.News))
-	}
 }
 
 // correlatedByPair reads -llm-correlated: the markets of each pair by its name,
@@ -955,4 +951,12 @@ func list(value string) []string {
 		}
 	}
 	return items
+}
+
+// applyNews applies the news of runtime to the calendar of the agent while it
+// runs, see newsguard.Apply: none without a calendar.
+func applyNews(news *llm.NewsSwitch, runtime agentapi.Runtime) {
+	if news != nil {
+		newsguard.Apply(news, runtime)
+	}
 }

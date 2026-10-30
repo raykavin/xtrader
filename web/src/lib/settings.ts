@@ -512,7 +512,6 @@ export interface AgentFormValues {
   baseURL: string;
   reasoningEffort: string;
   maxTokens: string;
-  calendarURL: string;
   promptID: string;
   llmAPIKey: string;
   bridgeToken: string;
@@ -557,7 +556,6 @@ export function agentFormValues(agent?: AgentSettings): AgentFormValues {
     baseURL: llm?.base_url ?? "",
     reasoningEffort: llm?.reasoning_effort ?? "",
     maxTokens: llm?.max_tokens ? String(llm.max_tokens) : "",
-    calendarURL: llm?.calendar_url ?? "",
     promptID: agent?.prompt_id ? String(agent.prompt_id) : "",
     llmAPIKey: "",
     bridgeToken: "",
@@ -613,7 +611,6 @@ export function agentFormErrors(values: AgentFormValues, creating: boolean): Age
     check("model", modelError(values.model));
     check("baseURL", blank(values.baseURL) ? null : httpURLError(values.baseURL));
     check("maxTokens", maxTokensError(values.maxTokens));
-    check("calendarURL", blank(values.calendarURL) ? null : httpURLError(values.calendarURL));
   }
   const params: Record<number, string> = {};
   const seen = new Set<string>();
@@ -668,7 +665,6 @@ export function agentCreateRequest(values: AgentFormValues): AgentCreateRequest 
       base_url: filled(values.baseURL),
       reasoning_effort: values.reasoningEffort || undefined,
       max_tokens: parseCount(values.maxTokens),
-      calendar_url: filled(values.calendarURL),
     };
     request.prompt_id = values.promptID ? Number(values.promptID) : undefined;
     request.llm_api_key = filled(values.llmAPIKey);
@@ -721,7 +717,6 @@ export function agentUpdateRequest(
     if (changed("baseURL")) llm.base_url = values.baseURL.trim();
     if (changed("reasoningEffort")) llm.reasoning_effort = values.reasoningEffort;
     if (changed("maxTokens")) llm.max_tokens = parseCount(values.maxTokens) ?? 0;
-    if (changed("calendarURL")) llm.calendar_url = values.calendarURL.trim();
     if (Object.keys(llm).length > 0) request.llm = llm;
   }
 

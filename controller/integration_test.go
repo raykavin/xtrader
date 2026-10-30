@@ -496,8 +496,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 			TradePanel: true, Params: map[string]string{"pair": "XAUUSDm", "llm-min-stop-atr": "1"},
 			Account: ui.AgentAccountSettings{BridgeURL: "http://127.0.0.1:18812", Magic: ptrTo(int64(4242)),
 				Comment: secret("nb:gold")},
-			LLM: &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low"),
-				CalendarURL: secret("http://127.0.0.1:22346/mcp")},
+			LLM:      &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low")},
 			PromptID: &prompt.ID, LLMAPIKey: secret(secrets[0]), BridgeToken: secret(secrets[1])}
 	}
 
@@ -564,8 +563,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		Params: map[string]string{"pair": "XAUUSDm", "llm-min-stop-atr": "1"},
 		Account: &ui.AgentAccountSettings{BridgeURL: "http://127.0.0.1:18812", Magic: ptrTo(int64(4242)),
 			Comment: secret("nb:gold")},
-		LLM: &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low"),
-			CalendarURL: secret("http://127.0.0.1:22346/mcp")},
+		LLM:   &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low")},
 		Model: "openai gpt-5", PromptID: &prompt.ID,
 		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true},
 		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR}},
@@ -663,14 +661,14 @@ func TestSettingsAPI_EditAnAgent(t *testing.T) {
 	// its language model
 	status, llm, body = patch("llm", ui.AgentSettingsRequest{LLM: &ui.AgentLLMRequest{Provider: secret("anthropic"),
 		Model: secret("claude-sonnet-4-5"), BaseURL: secret("https://api.anthropic.com"),
-		ReasoningEffort: secret("medium"), MaxTokens: ptrTo(2048), CalendarURL: secret("http://127.0.0.1:22346/mcp")}})
+		ReasoningEffort: secret("medium"), MaxTokens: ptrTo(2048)}})
 	require.Equal(t, http.StatusOK, status, body)
 	assert.Equal(t, &ui.AgentLLMSettings{Provider: "anthropic", Model: "claude-sonnet-4-5",
-		BaseURL: secret("https://api.anthropic.com"), ReasoningEffort: secret("medium"), MaxTokens: ptrTo(2048),
-		CalendarURL: secret("http://127.0.0.1:22346/mcp")}, llm.LLM)
+		BaseURL: secret("https://api.anthropic.com"), ReasoningEffort: secret("medium"), MaxTokens: ptrTo(2048)},
+		llm.LLM)
 	assert.Equal(t, "anthropic claude-sonnet-4-5", llm.Model)
 	_, llm, _ = patch("llm", ui.AgentSettingsRequest{LLM: &ui.AgentLLMRequest{BaseURL: secret(""),
-		ReasoningEffort: secret(""), MaxTokens: ptrTo(0), CalendarURL: secret("")}})
+		ReasoningEffort: secret(""), MaxTokens: ptrTo(0)}})
 	assert.Equal(t, &ui.AgentLLMSettings{Provider: "anthropic", Model: "claude-sonnet-4-5"}, llm.LLM,
 		"their defaults")
 	assert.Equal(t, ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true}, llm.Secrets, "the secrets kept")

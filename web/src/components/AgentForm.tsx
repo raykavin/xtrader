@@ -435,14 +435,6 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                   placeholder="opcional"
                   hint="Por resposta, o raciocínio incluído; em branco, 4096."
                 />
-                <TextField
-                  label="URL do calendário (MCP)"
-                  {...text("calendarURL")}
-                  mono
-                  inputMode="url"
-                  placeholder="opcional"
-                  hint="O servidor MCP do terminal MT5, com o calendário econômico; em branco, nenhum."
-                />
                 {creating && (
                   <>
                     <SelectField

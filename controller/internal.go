@@ -129,13 +129,12 @@ func configOf(ctx context.Context, st *store.Store, a store.Agent) (agentapi.Con
 		cfg.Account = &agentapi.Account{BridgeURL: acc.BridgeURL, BridgeToken: secrets.BridgeToken, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
 	}
+	if cfg.News, err = newsOf(ctx, st); err != nil { // of every agent
+		return agentapi.Config{}, err
+	}
 	if l := a.LLM; l != nil {
 		cfg.LLM = &agentapi.LLM{Provider: l.Provider, Model: l.Model, APIKey: secrets.LLMAPIKey,
-			BaseURL: deref(l.BaseURL), ReasoningEffort: deref(l.ReasoningEffort), CalendarURL: deref(l.CalendarURL),
-			Params: l.Params}
-		if cfg.News, err = newsOf(ctx, st); err != nil {
-			return agentapi.Config{}, err
-		}
+			BaseURL: deref(l.BaseURL), ReasoningEffort: deref(l.ReasoningEffort), Params: l.Params}
 		if l.MaxTokens != nil {
 			cfg.LLM.MaxTokens = *l.MaxTokens
 		}
