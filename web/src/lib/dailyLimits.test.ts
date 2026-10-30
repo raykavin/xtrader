@@ -12,6 +12,9 @@ import {
   limitsLabel,
   parseLimit,
   scopeResults,
+  stripHeadline,
+  stripTone,
+  timeIn,
 } from "./dailyLimits";
 
 describe("the daily limits on the dashboard", () => {
@@ -106,5 +109,39 @@ describe("the form of the daily limits", () => {
     );
     expect(dailyLimitErrors({ ...form, maxLoss: "0" }).maxLoss).toBe("Acima de zero.");
     expect(dailyLimitErrors({ ...form, enabled: false, maxLoss: "" })).toEqual({});
+  });
+});
+
+describe("the strip of the daily limits", () => {
+  const limits = { enabled: true, max_loss: 150, max_gain: 300 };
+  const guard = (trigger: string) => ({
+    id: 1,
+    kind: "limit",
+    trigger,
+    result: 0,
+    limit: 0,
+    currency: "BRL",
+    reason: "",
+    trips: 1,
+    tripped_at: 0,
+  });
+
+  it("takes the color of the limit reached", () => {
+    expect(stripTone({ limits, state: "blocked", guard: guard("gain") })).toBe("gain");
+    expect(stripTone({ limits, state: "blocked", guard: guard("loss") })).toBe("loss");
+    expect(stripTone({ limits, state: "incomplete" })).toBe("incomplete");
+    expect(stripTone({ limits, state: "free" })).toBe("free");
+    expect(stripTone(undefined)).toBe("off");
+    expect(stripHeadline({ limits, state: "blocked", guard: guard("gain") })).toBe(
+      "Ganho diário atingido",
+    );
+    expect(stripHeadline({ limits, state: "blocked", guard: guard("loss") })).toBe(
+      "Perda diária atingida",
+    );
+  });
+
+  it("tells when a limit was reached in the zone of the limits", () => {
+    expect(timeIn(Date.UTC(2026, 9, 29, 17, 32) / 1000, "America/Belem")).toBe("14:32");
+    expect(timeIn(0, "America/Belem")).toBe("");
   });
 });

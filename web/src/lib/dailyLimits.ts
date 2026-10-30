@@ -42,6 +42,54 @@ export function dailyStateLabel(scope: DailyScopeStatus | undefined): DailyLabel
   return { text: "Sem limite", tone: "off" };
 }
 
+/**
+ * The tone of the strip of a scope on the panel: the limit reached, a gain
+ * or a loss; its result unknown; under its limits; or no limit.
+ */
+export type StripTone = "gain" | "loss" | "incomplete" | "free" | "off";
+
+/** The tone of the strip of scope, see StripTone. */
+export function stripTone(scope: DailyScopeStatus | undefined): StripTone {
+  switch (scope?.state) {
+    case "blocked":
+      return scope.guard?.trigger === "gain" ? "gain" : "loss";
+    case "incomplete":
+      return "incomplete";
+    case "free":
+      return "free";
+  }
+  return "off";
+}
+
+/** The headline of the strip of scope, eg: Ganho diário atingido. */
+export function stripHeadline(scope: DailyScopeStatus | undefined): string {
+  switch (stripTone(scope)) {
+    case "gain":
+      return "Ganho diário atingido";
+    case "loss":
+      return "Perda diária atingida";
+    case "incomplete":
+      return "Resultado do dia incompleto";
+    case "free":
+      return "Liberado";
+  }
+  return "Sem limite";
+}
+
+/** The time of day of a Unix time in zone, eg: 14:32; empty without it. */
+export function timeIn(unix: number | undefined, zone: string): string {
+  if (!unix) return "";
+  try {
+    return new Date(unix * 1000).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: zone || undefined,
+    });
+  } catch {
+    return "";
+  }
+}
+
 /** How the positions of a guard were closed, eg: posições zeradas. */
 export function flattenLabel(status: string | undefined): DailyLabel | null {
   switch (status) {
