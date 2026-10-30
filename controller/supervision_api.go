@@ -47,6 +47,9 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Put("/settings/daily-limits", s.handleSetDailyLimits)
 	r.Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
 	r.Get("/daily-guard", s.handleDailyGuard)
+	r.Get("/settings/news", s.handleNews)
+	r.Put("/settings/news", s.handleSetNews)
+	r.Post("/settings/news/test", s.handleTestNews)
 }
 
 // dailyLimitsResponse returns the limits of all the agents together and how

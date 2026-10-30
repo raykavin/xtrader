@@ -73,19 +73,18 @@ func LLMParam(name string) bool {
 }
 
 // AgentSecrets are the secrets of an agent to write, of the ones set, see
-// Secret: the key of its language model, the token of the bridge of its
-// account and the one of the MCP server of the calendar.
+// Secret: the key of its language model and the token of the bridge of its
+// account. The token of the MCP server of the calendar is the one of the news
+// of all the agents, see NewsSettings.
 type AgentSecrets struct {
-	LLMAPIKey     Secret
-	BridgeToken   Secret
-	CalendarToken Secret
+	LLMAPIKey   Secret
+	BridgeToken Secret
 }
 
 // AgentSecretValues are the secrets of an agent, decrypted: "" for none.
 type AgentSecretValues struct {
-	LLMAPIKey     string
-	BridgeToken   string
-	CalendarToken string
+	LLMAPIKey   string
+	BridgeToken string
 }
 
 // AgentUpdate is a change of an agent, of the fields set: its name and its
@@ -521,13 +520,13 @@ func repeatsName(name, value string) bool {
 
 // checkSecrets fails on a secret of the agent a without the record keeping
 // it: the token of the bridge without an account, the key of the language
-// model and the token of the calendar without a language model.
+// model without a language model.
 func checkSecrets(a Agent, secrets AgentSecrets) error {
 	set := func(secret Secret) bool { return secret != nil && strings.TrimSpace(*secret) != "" }
 	switch {
 	case set(secrets.BridgeToken) && a.Account == nil:
 		return fmt.Errorf("%w: agent %s: the token of a bridge, without an account", ErrInvalid, a.Name)
-	case (set(secrets.LLMAPIKey) || set(secrets.CalendarToken)) && a.LLM == nil:
+	case set(secrets.LLMAPIKey) && a.LLM == nil:
 		return fmt.Errorf("%w: agent %s: a secret of a language model, without one", ErrInvalid, a.Name)
 	}
 	return nil
@@ -659,9 +658,6 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 		if llm != nil {
 			llm.AgentID = agent.ID
 			if err := s.sealInto(&llm.APIKey, llmAPIKeyOf(agent.ID), secrets.LLMAPIKey); err != nil {
-				return err
-			}
-			if err := s.sealInto(&llm.CalendarToken, calendarTokenOf(agent.ID), secrets.CalendarToken); err != nil {
 				return err
 			}
 			if err := s.conn(ctx).Create(llm).Error; err != nil {
@@ -880,7 +876,7 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 			return err
 		}
 		err = s.conn(ctx).Model(&LLMSettings{}).Where("agent_id = ?", id).
-			Updates(map[string]interface{}{"api_key": nil, "calendar_token": nil}).Error
+			Update("api_key", nil).Error
 		if err != nil {
 			return err
 		}
@@ -960,7 +956,7 @@ func (s *Store) SetAgentPrompt(ctx context.Context, id int64, promptID *int64) e
 }
 
 // SetAgentSecrets writes the secrets of the agent of id, the ones set: the
-// token of the bridge to its account, the others to its language model.
+// token of the bridge to its account, the key to its language model.
 func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecrets) error {
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		if secrets.BridgeToken != nil {
@@ -977,8 +973,7 @@ func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecr
 			}
 		}
 		columns := map[string]interface{}{}
-		for column, secret := range map[string]Secret{"api_key": secrets.LLMAPIKey,
-			"calendar_token": secrets.CalendarToken} {
+		for column, secret := range map[string]Secret{"api_key": secrets.LLMAPIKey} {
 			if secret == nil {
 				continue
 			}
@@ -1023,9 +1018,6 @@ func (s *Store) SecretsOf(agent Agent) (AgentSecretValues, error) {
 	}
 	if agent.LLM != nil {
 		if values.LLMAPIKey, err = s.open(llmAPIKeyOf(agent.ID), agent.LLM.APIKey); err != nil {
-			return AgentSecretValues{}, err
-		}
-		if values.CalendarToken, err = s.open(calendarTokenOf(agent.ID), agent.LLM.CalendarToken); err != nil {
 			return AgentSecretValues{}, err
 		}
 	}

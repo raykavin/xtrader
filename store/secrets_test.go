@@ -50,8 +50,7 @@ func TestSecrets_SealedForTheirPlace(t *testing.T) {
 
 	values, err := s.AgentSecrets(ctx, second.ID)
 	require.NoError(t, err)
-	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token",
-		CalendarToken: "mcp-token"}, values)
+	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token"}, values)
 	for _, c := range []struct {
 		name                                  string
 		fromTable, fromColumn, fromKey        string
@@ -61,8 +60,6 @@ func TestSecrets_SealedForTheirPlace(t *testing.T) {
 	}{
 		{"of another agent", "agent_llm_settings", "api_key", "agent_id", first.ID,
 			"agent_llm_settings", "api_key", "agent_id", "agent_llm_settings:api_key", second.ID},
-		{"of another column", "agent_llm_settings", "api_key", "agent_id", second.ID,
-			"agent_llm_settings", "calendar_token", "agent_id", "agent_llm_settings:calendar_token", second.ID},
 		{"of another table", "telegram_settings", "token", "id", 1,
 			"agent_accounts", "bridge_token", "agent_id", "agent_accounts:bridge_token", second.ID},
 	} {
@@ -71,12 +68,17 @@ func TestSecrets_SealedForTheirPlace(t *testing.T) {
 		require.ErrorContains(t, err, "sealed for another place", c.name)
 		require.ErrorContains(t, err, c.wantInError, c.name)
 		require.NoError(t, s.SetAgentSecrets(ctx, second.ID, AgentSecrets{LLMAPIKey: secret("sk-test-key"),
-			BridgeToken: secret("bridge-token"), CalendarToken: secret("mcp-token")}), "set again")
+			BridgeToken: secret("bridge-token")}), "set again")
 	}
 
 	copySecret(t, s, "agent_accounts", "bridge_token", "agent_id", first.ID, "telegram_settings", "token", "id", 1)
 	_, err = s.TelegramToken(ctx)
 	require.ErrorContains(t, err, "sealed for another place")
+
+	// the key of a model as the token of the news
+	copySecret(t, s, "agent_llm_settings", "api_key", "agent_id", second.ID, "news_settings", "mcp_token", "id", 1)
+	_, err = s.NewsToken(ctx)
+	require.ErrorContains(t, err, "news_settings:mcp_token")
 
 	text := rawSecret(t, s, "agent_llm_settings", "api_key", "agent_id", second.ID)
 	require.Equal(t, fmt.Sprintf("\x00xtrader-secret-v1\x00agent_llm_settings:api_key:%d\x00sk-test-key", second.ID),
@@ -96,15 +98,14 @@ func TestSecrets_TheOnesSealedBeforeOpenAndAreSealedAgain(t *testing.T) {
 		return sealed
 	}
 	require.NoError(t, s.db.Table("agent_llm_settings").Where("agent_id = ?", agent.ID).
-		Updates(map[string]interface{}{"api_key": alone("sk-old"), "calendar_token": alone("mcp-old")}).Error)
+		Updates(map[string]interface{}{"api_key": alone("sk-old")}).Error)
 	require.NoError(t, s.db.Table("agent_accounts").Where("agent_id = ?", agent.ID).
 		Update("bridge_token", alone("bridge-old")).Error)
 	require.NoError(t, s.db.Table("telegram_settings").Where("id = 1").Update("token", alone("123:old")).Error)
 
 	values, err := s.AgentSecrets(ctx, agent.ID)
 	require.NoError(t, err)
-	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-old", BridgeToken: "bridge-old", CalendarToken: "mcp-old"},
-		values)
+	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-old", BridgeToken: "bridge-old"}, values)
 	token, err := s.TelegramToken(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "123:old", token)
@@ -112,12 +113,11 @@ func TestSecrets_TheOnesSealedBeforeOpenAndAreSealedAgain(t *testing.T) {
 	require.NoError(t, s.SetAgentSecrets(ctx, agent.ID, AgentSecrets{LLMAPIKey: secret("sk-new")}))
 	require.True(t, bytes.HasPrefix(rawSecret(t, s, "agent_llm_settings", "api_key", "agent_id", agent.ID),
 		[]byte("\x00xtrader-secret-v1\x00")), "written again: sealed for its place")
-	require.Equal(t, []byte("mcp-old"), rawSecret(t, s, "agent_llm_settings", "calendar_token", "agent_id",
+	require.Equal(t, []byte("bridge-old"), rawSecret(t, s, "agent_accounts", "bridge_token", "agent_id",
 		agent.ID), "not written: as it was")
 	values, err = s.AgentSecrets(ctx, agent.ID)
 	require.NoError(t, err)
-	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-new", BridgeToken: "bridge-old", CalendarToken: "mcp-old"},
-		values)
+	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-new", BridgeToken: "bridge-old"}, values)
 
 	off := false
 	require.NoError(t, s.SetTelegram(ctx, &off, nil))

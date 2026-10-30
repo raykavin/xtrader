@@ -850,11 +850,12 @@ type AgentPromptStatus struct {
 	At       int64  `json:"at"`
 }
 
-// AgentSecretsPresent tells which secrets of an agent are set.
+// AgentSecretsPresent tells which secrets of an agent are set. The token of
+// the MCP server of the calendar is the one of the news of all the agents, see
+// NewsSettingsResponse.
 type AgentSecretsPresent struct {
-	LLMAPIKey     bool `json:"llm_api_key"`
-	BridgeToken   bool `json:"bridge_token"`
-	CalendarToken bool `json:"calendar_token"`
+	LLMAPIKey   bool `json:"llm_api_key"`
+	BridgeToken bool `json:"bridge_token"`
 }
 
 // AgentSettingsResponse is the payload of GET /api/settings/agents: every
@@ -895,7 +896,6 @@ type AgentSettingsRequest struct {
 	DefaultPrompt   bool                 `json:"default_prompt,omitempty"`
 	LLMAPIKey       *string              `json:"llm_api_key,omitempty"`
 	BridgeToken     *string              `json:"bridge_token,omitempty"`
-	CalendarToken   *string              `json:"calendar_token,omitempty"`
 	// Protection replaces the protection of the open positions, applied live
 	Protection *ProtectionSettings `json:"protection,omitempty"`
 }
@@ -1347,7 +1347,6 @@ type AgentCreateRequest struct {
 	PromptID        *int64               `json:"prompt_id,omitempty"`
 	LLMAPIKey       *string              `json:"llm_api_key,omitempty"`
 	BridgeToken     *string              `json:"bridge_token,omitempty"`
-	CalendarToken   *string              `json:"calendar_token,omitempty"`
 }
 
 // PromptInfo is a prompt of the LLM agents without its content, with the
@@ -2201,4 +2200,59 @@ type DailyLimitsResponse struct {
 	Status   DailyLimitsStatus  `json:"status"`
 	// Effect of the change just applied, see DailyEffectNone
 	Effect string `json:"effect,omitempty"`
+}
+
+// NewsSettingsResponse is the payload of GET and PUT /api/settings/news: the
+// news of all the agents, on or off (off, no agent reads the economic
+// calendar), whether the token of the MCP server is set (never the token),
+// the agents whose former tokens differed and wait for one to be set
+// (Conflict), who changed them last and when (Unix seconds, 0 never), and the
+// LLM agents with the server of their calendar (empty for none) and whether
+// they run: a change applies to them while they run, without a restart.
+type NewsSettingsResponse struct {
+	Enabled   bool        `json:"enabled"`
+	TokenSet  bool        `json:"token_set"`
+	Conflict  []string    `json:"conflict"`
+	UpdatedBy string      `json:"updated_by,omitempty"`
+	UpdatedAt int64       `json:"updated_at,omitempty"`
+	Agents    []NewsAgent `json:"agents"`
+}
+
+// NewsAgent is an LLM agent in the settings of the news: the MCP server of
+// its calendar (its calendar_url, empty for none: it reads no news), whether
+// it is enabled and runs, and its news block (before and after a release, eg:
+// 15m, empty for none).
+type NewsAgent struct {
+	Agent       string `json:"agent"`
+	CalendarURL string `json:"calendar_url,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Running     bool   `json:"running"`
+	BlockBefore string `json:"block_before,omitempty"`
+	BlockAfter  string `json:"block_after,omitempty"`
+}
+
+// NewsSettingsRequest is the body of PUT /api/settings/news, the fields set:
+// Token replaces the token of the MCP server ("" removes it; absent keeps it).
+type NewsSettingsRequest struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	Token   *string `json:"token,omitempty"`
+}
+
+// NewsTestResponse is the payload of POST /api/settings/news/test: the MCP
+// servers of the calendars of the LLM agents read once with the token of the
+// news, asked by the user, the news on or off, each with its agents and its
+// status: ok (it answered), missing_token (nothing asked), unauthorized (the
+// token refused) or unavailable (the server failing, Detail telling how,
+// without the token).
+type NewsTestResponse struct {
+	Results []NewsTestResult `json:"results"`
+	At      int64            `json:"at"`
+}
+
+// NewsTestResult is an MCP server of a NewsTestResponse.
+type NewsTestResult struct {
+	URL    string   `json:"url"`
+	Agents []string `json:"agents"`
+	Status string   `json:"status"`
+	Detail string   `json:"detail,omitempty"`
 }

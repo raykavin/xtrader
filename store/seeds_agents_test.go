@@ -73,7 +73,6 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.Nil(t, llm.LLM.MaxTokens)
 	require.Nil(t, llm.LLM.PromptStatus, "no state of a run before")
 	require.Empty(t, llm.LLM.APIKey, "no secret in the seeds")
-	require.Empty(t, llm.LLM.CalendarToken)
 	require.Equal(t, "http://mt5:22347/mcp", *llm.LLM.CalendarURL)
 	trend, err := s.PromptByName(ctx, "trend_following")
 	require.NoError(t, err)

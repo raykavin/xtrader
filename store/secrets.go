@@ -36,10 +36,16 @@ func llmAPIKeyOf(agentID int64) string {
 	return placeOf("agent_llm_settings", "api_key", agentID)
 }
 
-// calendarTokenOf is the place of the token of the calendar of the agent of
-// agentID.
-func calendarTokenOf(agentID int64) string {
+// legacyCalendarTokenOf is the former place of the token of the calendar of
+// the agent of agentID, before the one of the news of all the agents (see
+// newsToken): only read to carry it there, see MigrateNewsToken.
+func legacyCalendarTokenOf(agentID int64) string {
 	return placeOf("agent_llm_settings", "calendar_token", agentID)
+}
+
+// newsToken is the place of the token of the MCP server of the news.
+func newsToken() string {
+	return placeOf("news_settings", "mcp_token", 1)
 }
 
 // telegramToken is the place of the token of the Telegram bot.

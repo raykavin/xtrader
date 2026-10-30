@@ -205,10 +205,9 @@ function AgentCard({
       setBusy(false);
     }
   };
-  const secret =
-    (field: "llm_api_key" | "bridge_token" | "calendar_token") => async (value: string) => {
-      onChange(await updateAgentSettings(agent.name, { [field]: value }));
-    };
+  const secret = (field: "llm_api_key" | "bridge_token") => async (value: string) => {
+    onChange(await updateAgentSettings(agent.name, { [field]: value }));
+  };
   const restart = async () => {
     setBusy(true);
     setError(null);
@@ -396,14 +395,6 @@ function AgentCard({
             disabled={busy}
             onSave={secret("bridge_token")}
           />
-          {llm && (
-            <SecretField
-              label="Token do calendário (MCP)"
-              set={agent.secrets.calendar_token}
-              disabled={busy}
-              onSave={secret("calendar_token")}
-            />
-          )}
         </div>
       </div>
 

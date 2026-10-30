@@ -26,7 +26,7 @@ func testConfig() agentapi.Config {
 		Account: &agentapi.Account{BridgeURL: "http://127.0.0.1:18812", BridgeToken: "bridge-secret",
 			Magic: &magic, Comment: &comment},
 		LLM: &agentapi.LLM{Provider: "openai", Model: "gpt-5", APIKey: "sk-secret", ReasoningEffort: "low",
-			MaxTokens: 2000, CalendarURL: "http://127.0.0.1:22346/mcp", CalendarToken: "mcp-secret",
+			MaxTokens: 2000, CalendarURL: "http://127.0.0.1:22346/mcp",
 			Params: map[string]string{"llm-min-stop-atr": "-1.5", "llm-widen-stop": "true"}},
 		Prompt: &agentapi.Prompt{PromptRef: agentapi.PromptRef{ID: 2, Name: "trend", Version: 1},
 			Content: "# t\n\nTrend."}}

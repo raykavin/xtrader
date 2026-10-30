@@ -459,13 +459,6 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                       placeholder="opcional"
                       hint="Opcional: dá para definir depois, no card."
                     />
-                    <TextField
-                      label="Token do calendário (MCP)"
-                      {...text("calendarToken")}
-                      type="password"
-                      placeholder="opcional"
-                      hint="Opcional: dá para definir depois, no card."
-                    />
                   </>
                 )}
               </div>

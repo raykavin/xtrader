@@ -266,7 +266,8 @@ type Config struct {
 	// release of at least NewsBlockImportance to NewsBlockAfter after it,
 	// whatever the model answers (both 0: never), checked again when an entry
 	// is applied. A calendar that can't be read blocks nothing: the context
-	// tells the model it is unavailable.
+	// tells the model it is unavailable, and why. A NewsSwitch switches it
+	// from the dashboard, see SetNews.
 	Calendar            Calendar
 	CalendarCurrencies  []string
 	CalendarAhead       time.Duration
@@ -1827,7 +1828,7 @@ func (t *Trader) calendar(pair string, at time.Time, input *Input) string {
 	to := at.Add(max(t.cfg.CalendarAhead, t.cfg.NewsBlockBefore))
 	events, err := t.readCalendar(pair, currencies, from, to)
 	if err != nil {
-		input.Calendar = &CalendarContext{Available: false, Events: []calendarEvent{}}
+		input.Calendar = &CalendarContext{Available: false, Status: calendarStatus(err), Events: []calendarEvent{}}
 		return ""
 	}
 
@@ -1919,11 +1920,13 @@ func (t *Trader) readCalendar(pair string, currencies []string, from, to time.Ti
 	ctx, cancel := context.WithTimeout(context.Background(), calendarTimeout)
 	defer cancel()
 	events, err := t.cfg.Calendar.Events(ctx, currencies, from, to)
-	if err != nil {
+	// the news off is told once, as they are switched (see SetNews), never
+	// as a calendar failing
+	if err != nil && !errors.Is(err, ErrNewsDisabled) {
 		if now := t.now(); now.Sub(t.calendarError) > calendarWarnEvery {
 			t.calendarError = now
-			log.Warnf("[LLM] %s %s | economic calendar unavailable, entries not blocked by news: %v", pair,
-				t.cfg.Timeframe, err)
+			log.Warnf("[LLM] %s %s | economic calendar not read (%s), entries not blocked by news: %v", pair,
+				t.cfg.Timeframe, calendarStatus(err), err)
 		}
 	}
 	return events, err

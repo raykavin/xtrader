@@ -47,7 +47,7 @@ const agent = (fields: Partial<AgentSettings>): AgentSettings => ({
   running: false,
   restart_pending: false,
   params: {},
-  secrets: { llm_api_key: false, bridge_token: false, calendar_token: false },
+  secrets: { llm_api_key: false, bridge_token: false },
   daily_limit: { enabled: false },
   protection: {
     unit: "atr",
@@ -221,6 +221,7 @@ describe("the tabs of the settings", () => {
     expect(settingsTabs).toEqual([
       "agentes",
       "limites",
+      "noticias",
       "prompts",
       "supervisor",
       "telegram",
@@ -524,7 +525,6 @@ describe("the form of an agent", () => {
       promptID: "",
       llmAPIKey: "",
       bridgeToken: "",
-      calendarToken: "",
       params: [],
     });
   });
@@ -670,7 +670,6 @@ describe("the form of an agent", () => {
         calendarURL: " http://mt5:22346/mcp ",
         promptID: "3",
         llmAPIKey: " key ",
-        calendarToken: " ",
         reanalysis: true,
       }),
     );

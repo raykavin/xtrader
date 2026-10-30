@@ -77,7 +77,7 @@ func (c *managed) agent(t *testing.T, name, kind string, enabled bool, edit ...f
 	secrets := store.AgentSecrets{BridgeToken: secret("bridge-" + name)}
 	if kind == "llm" {
 		a.LLM = &store.LLMSettings{Provider: "openai", Model: "gpt-5", Params: store.Params{"llm-min-stop-atr": "1"}}
-		secrets.LLMAPIKey, secrets.CalendarToken = secret("sk-"+name), secret("mcp-"+name)
+		secrets.LLMAPIKey = secret("sk-" + name)
 	}
 	for _, change := range edit {
 		change(&a)
@@ -248,7 +248,7 @@ func TestInternalAPI_OnlyTheAgentOfTheToken(t *testing.T) {
 	assert.Equal(t, map[string]string{"pair": "XAUUSDm", "lot": "0.01"}, cfg.Params)
 	assert.Equal(t, "bridge-llm", cfg.Account.BridgeToken)
 	assert.Equal(t, "sk-llm", cfg.LLM.APIKey, "its own secrets")
-	assert.Equal(t, "mcp-llm", cfg.LLM.CalendarToken)
+	assert.Equal(t, &agentapi.News{}, cfg.News, "the news off from the seeds")
 	assert.Equal(t, map[string]string{"llm-min-stop-atr": "1"}, cfg.LLM.Params)
 	require.NotNil(t, cfg.Prompt)
 	assert.Equal(t, "trend_following", cfg.Prompt.Name)
@@ -403,24 +403,22 @@ func TestSettingsAPI_TheAgents(t *testing.T) {
 	var agents ui.AgentSettingsResponse
 	require.NoError(t, json.Unmarshal([]byte(body), &agents))
 	require.Len(t, agents.Agents, 2)
-	assert.Equal(t, ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true, CalendarToken: true},
-		agents.Agents[0].Secrets)
+	assert.Equal(t, ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true}, agents.Agents[0].Secrets)
 	assert.Equal(t, "openai gpt-5", agents.Agents[0].Model)
-	for _, secret := range []string{"sk-llm", "bridge-llm", "mcp-llm"} {
+	for _, secret := range []string{"sk-llm", "bridge-llm"} {
 		assert.NotContains(t, body, secret, "never a secret")
 	}
 
 	prompt, err := c.store.PromptByName(context.Background(), "smc_ict")
 	require.NoError(t, err)
 	resp, body = call(http.MethodPatch, "/api/settings/agents/llm", ui.AgentSettingsRequest{Enabled: boolPtr(true),
-		TelegramControl: boolPtr(true), PromptID: &prompt.ID, LLMAPIKey: secret("sk-new"), CalendarToken: secret("")})
+		TelegramControl: boolPtr(true), PromptID: &prompt.ID, LLMAPIKey: secret("sk-new")})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	var updated ui.AgentSettings
 	require.NoError(t, json.Unmarshal([]byte(body), &updated))
 	assert.True(t, updated.Enabled)
 	assert.True(t, updated.TelegramControl)
 	assert.Equal(t, prompt.ID, *updated.PromptID)
-	assert.False(t, updated.Secrets.CalendarToken, "removed")
 	assert.NotContains(t, body, "sk-new")
 	secrets, err := c.store.AgentSecrets(context.Background(), llm.ID)
 	require.NoError(t, err)
@@ -492,7 +490,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 	call, srv := settingsSession(t, c)
 	prompt, err := c.store.PromptByName(ctx, "trend_following")
 	require.NoError(t, err)
-	secrets := []string{"sk-created-key", "bridge-created-token", "mcp-created-token"}
+	secrets := []string{"sk-created-key", "bridge-created-token"}
 	gold := func() ui.AgentCreateRequest {
 		return ui.AgentCreateRequest{Name: "gold", Kind: "llm", Mode: "live", APIAddress: "localhost:15600",
 			TradePanel: true, Params: map[string]string{"pair": "XAUUSDm", "llm-min-stop-atr": "1"},
@@ -500,8 +498,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 				Comment: secret("nb:gold")},
 			LLM: &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low"),
 				CalendarURL: secret("http://127.0.0.1:22346/mcp")},
-			PromptID: &prompt.ID, LLMAPIKey: secret(secrets[0]), BridgeToken: secret(secrets[1]),
-			CalendarToken: secret(secrets[2])}
+			PromptID: &prompt.ID, LLMAPIKey: secret(secrets[0]), BridgeToken: secret(secrets[1])}
 	}
 
 	for _, tc := range []struct {
@@ -521,7 +518,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		{"param of a field", func(r *ui.AgentCreateRequest) { r.Params = map[string]string{"mt5-comment": "nb:x"} },
 			http.StatusBadRequest, "param mt5-comment is a setting of its own"},
 		{"param of a language model", func(r *ui.AgentCreateRequest) {
-			r.Kind, r.LLM, r.PromptID, r.LLMAPIKey, r.CalendarToken = "trend", nil, nil, nil, nil
+			r.Kind, r.LLM, r.PromptID, r.LLMAPIKey = "trend", nil, nil, nil
 		}, http.StatusBadRequest, "for an LLM agent only"},
 		{"name taken", func(r *ui.AgentCreateRequest) { r.Name = "llm" }, http.StatusConflict, "already exists"},
 		{"address taken", func(r *ui.AgentCreateRequest) { r.APIAddress = "localhost:15503" }, http.StatusConflict,
@@ -539,7 +536,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		{"prompt missing", func(r *ui.AgentCreateRequest) { r.PromptID = ptrTo(int64(999999)) },
 			http.StatusBadRequest, "prompt 999999 doesn't exist"},
 		{"prompt without a language model", func(r *ui.AgentCreateRequest) {
-			r.Kind, r.LLM, r.Params, r.LLMAPIKey, r.CalendarToken = "trend", nil, nil, nil, nil
+			r.Kind, r.LLM, r.Params, r.LLMAPIKey = "trend", nil, nil, nil
 		}, http.StatusBadRequest, "a prompt without a language model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -570,7 +567,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		LLM: &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low"),
 			CalendarURL: secret("http://127.0.0.1:22346/mcp")},
 		Model: "openai gpt-5", PromptID: &prompt.ID,
-		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true, CalendarToken: true},
+		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true},
 		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR}},
 		agentSettingsOf(t, body))
 	stored, err := c.store.AgentByName(ctx, "gold")
@@ -579,8 +576,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 	assert.Equal(t, store.Params{"llm-min-stop-atr": "1"}, stored.LLM.Params, "kept with its language model")
 	values, err := c.store.AgentSecrets(ctx, stored.ID)
 	require.NoError(t, err)
-	assert.Equal(t, store.AgentSecretValues{LLMAPIKey: secrets[0], BridgeToken: secrets[1],
-		CalendarToken: secrets[2]}, values)
+	assert.Equal(t, store.AgentSecretValues{LLMAPIKey: secrets[0], BridgeToken: secrets[1]}, values)
 	assert.False(t, c.manager.supervisor.Running("gold"), "disabled: not launched")
 
 	// one enabled, launched at once, last on the dashboard
@@ -612,7 +608,7 @@ func TestSettingsAPI_EditAnAgent(t *testing.T) {
 	require.NoError(t, c.manager.Reconcile(ctx))
 	require.Eventually(t, func() bool { return strings.Contains(c.stdout.String(), "[matrend] started") },
 		5*time.Second, 10*time.Millisecond)
-	secrets := []string{"sk-llm", "bridge-llm", "mcp-llm", "bridge-matrend", "bridge-rotated"}
+	secrets := []string{"sk-llm", "bridge-llm", "bridge-matrend", "bridge-rotated"}
 	patch := func(name string, request interface{}) (int, ui.AgentSettings, string) {
 		t.Helper()
 		resp, body := call(http.MethodPatch, "/api/settings/agents/"+name, request)
@@ -677,8 +673,7 @@ func TestSettingsAPI_EditAnAgent(t *testing.T) {
 		ReasoningEffort: secret(""), MaxTokens: ptrTo(0), CalendarURL: secret("")}})
 	assert.Equal(t, &ui.AgentLLMSettings{Provider: "anthropic", Model: "claude-sonnet-4-5"}, llm.LLM,
 		"their defaults")
-	assert.Equal(t, ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true, CalendarToken: true}, llm.Secrets,
-		"the secrets kept")
+	assert.Equal(t, ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true}, llm.Secrets, "the secrets kept")
 
 	// refused, nothing changed
 	before, err := c.store.AgentByName(ctx, "llm")

@@ -32,13 +32,18 @@ var mcpAllowedTools = map[string]bool{
 // mcpAllowedTools.
 var ErrToolNotAllowed = errors.New("llm: MCP tool not allowed")
 
+// ErrMCPUnauthorized is the error of a call the MCP server refused for its
+// credential (HTTP 401 or 403): the token missing on the server's side, wrong
+// or revoked, never the service unavailable.
+var ErrMCPUnauthorized = errors.New("llm: the MCP server refused the token")
+
 // mcpClient calls the tools of an MCP server over its streamable HTTP
 // transport: JSON-RPC 2.0 requests posted to one endpoint, answered in JSON or
 // in a server-sent event, within a session opened by initialize and opened
 // again once when the server forgets it.
 type mcpClient struct {
 	url    string
-	token  string
+	token  string // guarded by mtx: replaced while the client runs, see setToken
 	client *http.Client
 
 	opening sync.Mutex // one session opened at a time, see open
@@ -57,6 +62,27 @@ func newMCPClient(url, token string, client *http.Client) *mcpClient {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &mcpClient{url: strings.TrimSuffix(url, "/"), token: token, client: client}
+}
+
+// currentToken returns the token the requests carry now.
+func (c *mcpClient) currentToken() string {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	return c.token
+}
+
+// setToken replaces the token of the client, the session of the former one
+// dropped: the next call opens a new one with it. It reports whether the
+// token changed.
+func (c *mcpClient) setToken(token string) bool {
+	token = strings.TrimSpace(token)
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if token == c.token {
+		return false
+	}
+	c.token, c.ready, c.session = token, false, ""
+	return true
 }
 
 // mcpError is a JSON-RPC error answer of the server.
@@ -104,13 +130,14 @@ var bearerPattern = regexp.MustCompile(`(?i)(bearer\s+)[^\s"',;]+`)
 // server, without the token of the client nor anything like an API key or a
 // bearer token, as it is logged.
 func (c *mcpClient) mcpErrorBody(data []byte) string {
+	token := c.currentToken()
 	cut := len(data) > maxMCPErrorBody
 	if cut {
 		data = data[:maxMCPErrorBody]
 	}
 	body := strings.ToValidUTF8(string(data), "")
-	if c.token != "" {
-		body = strings.ReplaceAll(body, c.token, "[redacted]")
+	if token != "" {
+		body = strings.ReplaceAll(body, token, "[redacted]")
 	}
 	body = keyPattern.ReplaceAllString(body, "[redacted]")
 	body = bearerPattern.ReplaceAllString(body, "${1}[redacted]")
@@ -122,6 +149,14 @@ func (c *mcpClient) mcpErrorBody(data []byte) string {
 
 func (e *mcpHTTPError) Error() string {
 	return fmt.Sprintf("MCP server: HTTP %d %s", e.Status, strings.TrimSpace(e.Body))
+}
+
+// Unwrap is ErrMCPUnauthorized for a status refusing the credential.
+func (e *mcpHTTPError) Unwrap() error {
+	if e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden {
+		return ErrMCPUnauthorized
+	}
+	return nil
 }
 
 // callTool calls a tool of mcpAllowedTools and decodes the JSON text of its
@@ -252,8 +287,8 @@ func (c *mcpClient) post(ctx context.Context, method string, params, out any, no
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	request.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
-	if c.token != "" {
-		request.Header.Set("Authorization", "Bearer "+c.token)
+	if token := c.currentToken(); token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	c.mtx.Lock()
 	if c.session != "" && method != "initialize" { // a new session never carries an old one

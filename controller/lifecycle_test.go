@@ -634,11 +634,15 @@ func TestManager_StartedAgainWithTheSecretsOfNow(t *testing.T) {
 	cfg := started(1)
 	assert.Equal(t, "bridge-llm", cfg.Account.BridgeToken)
 	assert.Equal(t, "sk-llm", cfg.LLM.APIKey)
-	assert.Equal(t, "mcp-llm", cfg.LLM.CalendarToken)
+	assert.Equal(t, &agentapi.News{}, cfg.News, "the news off")
 
-	// the secrets replaced while it runs: pending, the process has the old ones
+	// the secrets replaced while it runs: pending, the process has the old ones;
+	// the news of all the agents set
 	require.NoError(t, c.store.SetAgentSecrets(ctx, llm.ID, store.AgentSecrets{BridgeToken: secret("bridge-new"),
-		LLMAPIKey: secret("sk-new"), CalendarToken: secret("mcp-new")}))
+		LLMAPIKey: secret("sk-new")}))
+	on := true
+	_, err := c.store.SetNews(ctx, store.NewsUpdate{Enabled: &on, Token: secret("mcp-shared"), By: "test"})
+	require.NoError(t, err)
 	require.NoError(t, c.manager.Reconcile(ctx))
 	assert.True(t, c.manager.State("llm").RestartPending)
 
@@ -646,7 +650,7 @@ func TestManager_StartedAgainWithTheSecretsOfNow(t *testing.T) {
 	cfg = started(2)
 	assert.Equal(t, "bridge-new", cfg.Account.BridgeToken)
 	assert.Equal(t, "sk-new", cfg.LLM.APIKey)
-	assert.Equal(t, "mcp-new", cfg.LLM.CalendarToken)
+	assert.Equal(t, &agentapi.News{Enabled: true, Token: "mcp-shared"}, cfg.News, "the news of now")
 	state := c.manager.State("llm")
 	assert.False(t, state.RestartPending, "the secrets of now, read")
 	assert.Equal(t, 1, state.Restarts)
@@ -654,17 +658,17 @@ func TestManager_StartedAgainWithTheSecretsOfNow(t *testing.T) {
 	// another bridge and another calendar, pending, with their tokens: the new
 	// tokens never go to the endpoints of the launch
 	otherBridge, otherCalendar := "http://127.0.0.1:18813", "http://127.0.0.1:22347/mcp"
-	_, err := c.store.UpdateAgent(ctx, llm.ID, store.AgentUpdate{Account: &store.AccountUpdate{BridgeURL: &otherBridge},
+	_, err = c.store.UpdateAgent(ctx, llm.ID, store.AgentUpdate{Account: &store.AccountUpdate{BridgeURL: &otherBridge},
 		LLM: &store.LLMUpdate{CalendarURL: &otherCalendar}})
 	require.NoError(t, err)
 	require.NoError(t, c.store.SetAgentSecrets(ctx, llm.ID, store.AgentSecrets{BridgeToken: secret("bridge-other"),
-		LLMAPIKey: secret("sk-newer"), CalendarToken: secret("mcp-other")}))
+		LLMAPIKey: secret("sk-newer")}))
 	crash()
 	cfg = started(3)
 	assert.Equal(t, "http://127.0.0.1:18812", cfg.Account.BridgeURL, "the bridge waits for the restart")
 	assert.Equal(t, "bridge-new", cfg.Account.BridgeToken, "with the token it had")
 	assert.Equal(t, calendar, cfg.LLM.CalendarURL)
-	assert.Equal(t, "mcp-new", cfg.LLM.CalendarToken)
+	assert.Equal(t, "mcp-shared", cfg.News.Token, "the token of the news, whatever the calendar")
 	assert.Equal(t, "sk-newer", cfg.LLM.APIKey, "the same provider")
 	assert.True(t, c.manager.State("llm").RestartPending)
 
@@ -674,6 +678,6 @@ func TestManager_StartedAgainWithTheSecretsOfNow(t *testing.T) {
 	assert.Equal(t, otherBridge, cfg.Account.BridgeURL)
 	assert.Equal(t, "bridge-other", cfg.Account.BridgeToken)
 	assert.Equal(t, otherCalendar, cfg.LLM.CalendarURL)
-	assert.Equal(t, "mcp-other", cfg.LLM.CalendarToken)
+	assert.Equal(t, "mcp-shared", cfg.News.Token)
 	assert.False(t, c.manager.State("llm").RestartPending)
 }

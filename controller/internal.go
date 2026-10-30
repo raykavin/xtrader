@@ -132,7 +132,10 @@ func configOf(ctx context.Context, st *store.Store, a store.Agent) (agentapi.Con
 	if l := a.LLM; l != nil {
 		cfg.LLM = &agentapi.LLM{Provider: l.Provider, Model: l.Model, APIKey: secrets.LLMAPIKey,
 			BaseURL: deref(l.BaseURL), ReasoningEffort: deref(l.ReasoningEffort), CalendarURL: deref(l.CalendarURL),
-			CalendarToken: secrets.CalendarToken, Params: l.Params}
+			Params: l.Params}
+		if cfg.News, err = newsOf(ctx, st); err != nil {
+			return agentapi.Config{}, err
+		}
 		if l.MaxTokens != nil {
 			cfg.LLM.MaxTokens = *l.MaxTokens
 		}

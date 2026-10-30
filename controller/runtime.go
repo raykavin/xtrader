@@ -59,7 +59,7 @@ func (r *runtimes) get(id int64) (agentapi.Runtime, <-chan struct{}, bool) {
 func sameRuntime(a, b agentapi.Runtime) bool {
 	switch {
 	case a.TradePanel != b.TradePanel || a.TelegramControl != b.TelegramControl || a.Reanalysis != b.Reanalysis,
-		a.Entries != b.Entries, !reflect.DeepEqual(a.Protection, b.Protection):
+		a.Entries != b.Entries, !reflect.DeepEqual(a.Protection, b.Protection), !reflect.DeepEqual(a.News, b.News):
 		return false
 	case a.Prompt == nil || b.Prompt == nil:
 		return a.Prompt == b.Prompt

@@ -32,6 +32,9 @@ import type {
   DecisionEvent,
   DecisionsResponse,
   LoginRequest,
+  NewsSettingsRequest,
+  NewsSettingsResponse,
+  NewsTestResponse,
   OpenPositionsResponse,
   Order,
   OrderEvent,
@@ -699,6 +702,21 @@ export async function streamSupervisorMessage(
 }
 
 /** Blocks the entries of an agent, or allows them again, by the user. */
+/** The news of all the agents: on or off, whether the token of the MCP server is set (never the token). */
+export function fetchNewsSettings(signal?: AbortSignal): Promise<NewsSettingsResponse> {
+  return getJSON<NewsSettingsResponse>("/settings/news", signal);
+}
+
+/** Changes the news of all the agents, applied to the LLM agents while they run: a token left out is kept. */
+export function updateNewsSettings(request: NewsSettingsRequest): Promise<NewsSettingsResponse> {
+  return sendJSON<NewsSettingsResponse>("PUT", "/settings/news", request);
+}
+
+/** Reads once the MCP server of the calendar of each LLM agent with the token of the news. */
+export function testNews(): Promise<NewsTestResponse> {
+  return postJSON<NewsTestResponse>("/settings/news/test");
+}
+
 /** Closes every open position of an agent, asked by the user: its result, checked on the account; 409 without one. */
 export function closeAgentPositions(
   name: string,
