@@ -51,6 +51,15 @@ interface Props {
   compact?: boolean;
 }
 
+/**
+ * The daily limit of all the agents atop the panel, across it, below the bar
+ * of the agent: read by itself, whichever agent is shown.
+ */
+export function DailyGuardBanner() {
+  const status = useDailyGuard();
+  return <DailyGuardStrip status={status} wide />;
+}
+
 /** The class of a status chip of tone. */
 function chipClass(tone: DailyTone): string {
   return `status-chip ${tone === "error" ? "stopped" : tone === "off" ? "" : tone}`.trim();
@@ -70,7 +79,14 @@ function zoneLabel(zone: string): string {
  * the agents blocked by their own limits. Nothing while no limit is set and
  * none blocks. Compact, a line only.
  */
-export function DailyGuardStrip({ status, compact = false }: Props) {
+export function DailyGuardStrip({
+  status,
+  compact = false,
+  wide = false,
+}: Props & {
+  /** Across the panel, atop it: the figures more spaced. */
+  wide?: boolean;
+}) {
   if (!status) return null;
   const global = status.global;
   const guarded = Object.values(guardedAgents(status));
@@ -110,7 +126,7 @@ export function DailyGuardStrip({ status, compact = false }: Props) {
   }
 
   return (
-    <section className={`daily-strip is-${tone}`} aria-label="Limite diário">
+    <section className={`daily-strip is-${tone}${wide ? " wide" : ""}`} aria-label="Limite diário">
       <div className="daily-strip-head">
         <span className="daily-strip-label">Limite diário</span>
         {tone !== "off" && <span className={chipClass(headTone)}>{stripHeadline(global)}</span>}

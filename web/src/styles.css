@@ -7419,6 +7419,17 @@ h3.md-heading {
   background: color-mix(in srgb, var(--warn) 6%, var(--glass-tile));
 }
 
+/* atop the panel, across it: like the bar of the agent above it */
+.daily-strip.wide {
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
+}
+
+.daily-strip.wide .daily-strip-figure strong {
+  font-size: var(--fs-xl);
+}
+
 .daily-strip.compact {
   flex-direction: row;
   flex-wrap: wrap;

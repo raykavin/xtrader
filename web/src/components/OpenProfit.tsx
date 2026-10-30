@@ -28,7 +28,6 @@ import {
 import { actionStatusLabel } from "../lib/supervisor";
 import { palettes, type Theme } from "../lib/theme";
 import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
-import { DailyGuardStrip, useDailyGuard } from "./DailyGuardStrip";
 import { Icon } from "./Icon";
 import { Sparkline } from "./Sparkline";
 import { Skeleton } from "./States";
@@ -464,7 +463,6 @@ function ClosedEvolution({
  */
 export function OpenProfitCard({ theme }: { theme: Theme }) {
   const { read, error } = useOpenPositions();
-  const dailyGuard = useDailyGuard();
   const [period, setPeriod] = useState<ClosedPeriod>(loadClosedPeriod);
   const [picking, setPicking] = useState(false);
   const closed = useClosedProfit(period);
@@ -605,8 +603,6 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
               <dd className="openpl-summary">{read && accountsSummary(read)}</dd>
             </div>
           </dl>
-
-          <DailyGuardStrip status={dailyGuard} />
 
           <ClosedEvolution
             read={closed.read}
