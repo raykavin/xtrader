@@ -21,6 +21,7 @@ import type {
 import { AgentBar } from "./components/AgentBar";
 import { AppShell } from "./components/AppShell";
 import { ControlPanel } from "./components/ControlPanel";
+import { DailyGuardBanner } from "./components/DailyGuardStrip";
 import { DashboardCards, useDashboardLayout } from "./components/DashboardCards";
 import { DecisionDialog } from "./components/DecisionDialog";
 import { DecisionsPanel } from "./components/DecisionsPanel";
@@ -590,6 +591,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
         controls={controls}
         onControlsChange={setControls}
       />
+      <DailyGuardBanner />
       {error && (
         <Alert tone="error" title="Não foi possível carregar os dados do agente">
           {error}
