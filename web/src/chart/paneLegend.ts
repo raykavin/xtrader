@@ -8,10 +8,14 @@ import type {
   Time,
 } from "lightweight-charts";
 
-/** An item of the legend of a pane: a series drawn in it, with its color. */
+/**
+ * An item of the legend of a pane: a series drawn in it, with its color; or
+ * its title, first and bold, without a color, eg: the pair of the candles.
+ */
 export interface LegendItem {
   label: string;
   color: string;
+  title?: boolean;
 }
 
 /** The look of a legend: the face of the chart, its text and the background behind it. */
@@ -40,11 +44,18 @@ class LegendRenderer implements IPrimitivePaneRenderer {
     // biome-ignore lint/correctness/useHookAtTopLevel: fancy-canvas API, not a React hook
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       context.save();
-      context.font = `500 11px ${this.style.fontFamily}`;
+      const font = (item: LegendItem) =>
+        item.title ? `700 12px ${this.style.fontFamily}` : `500 11px ${this.style.fontFamily}`;
       context.textBaseline = "middle";
-      const widths = this.items.map((item) => context.measureText(item.label).width);
+      const widths = this.items.map((item) => {
+        context.font = font(item);
+        return context.measureText(item.label).width;
+      });
       const content =
-        widths.reduce((sum, width) => sum + DOT + DOT_GAP + width, 0) +
+        this.items.reduce(
+          (sum, item, i) => sum + (item.title ? 0 : DOT + DOT_GAP) + (widths[i] ?? 0),
+          0,
+        ) +
         ITEM_GAP * (this.items.length - 1);
       // never wider than the pane: cut at its edge
       const width = Math.min(content + 2 * PADDING, mediaSize.width - 2 * MARGIN);
@@ -63,11 +74,14 @@ class LegendRenderer implements IPrimitivePaneRenderer {
       const y = MARGIN + HEIGHT / 2;
       let x = MARGIN + PADDING;
       for (const [index, item] of this.items.entries()) {
-        context.fillStyle = item.color;
-        context.beginPath();
-        context.arc(x + DOT / 2, y, DOT / 2, 0, 2 * Math.PI);
-        context.fill();
-        x += DOT + DOT_GAP;
+        if (!item.title) {
+          context.fillStyle = item.color;
+          context.beginPath();
+          context.arc(x + DOT / 2, y, DOT / 2, 0, 2 * Math.PI);
+          context.fill();
+          x += DOT + DOT_GAP;
+        }
+        context.font = font(item);
         context.fillStyle = this.style.text;
         context.fillText(item.label, x, y + 0.5);
         x += (widths[index] ?? 0) + ITEM_GAP;
@@ -119,7 +133,10 @@ export class PaneLegendPrimitive implements IPanePrimitive<Time> {
     const same =
       items.length === this.items.length &&
       items.every(
-        (item, i) => item.label === this.items[i]?.label && item.color === this.items[i]?.color,
+        (item, i) =>
+          item.label === this.items[i]?.label &&
+          item.color === this.items[i]?.color &&
+          item.title === this.items[i]?.title,
       );
     if (same) return;
     this.items = items;
