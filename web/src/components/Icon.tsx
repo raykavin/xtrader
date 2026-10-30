@@ -39,6 +39,12 @@ const paths = {
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
     </>
   ),
+  unlock: (
+    <>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 7.75-1.4" />
+    </>
+  ),
   users: (
     <>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />

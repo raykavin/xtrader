@@ -13,6 +13,7 @@ import {
   timeIn,
 } from "../lib/dailyLimits";
 import { formatMoney, signClass } from "../lib/format";
+import { Icon } from "./Icon";
 
 /** How often the state of the daily limits is read again, in ms. */
 const POLL = 5000;
@@ -65,6 +66,24 @@ function chipClass(tone: DailyTone): string {
   return `status-chip ${tone === "error" ? "stopped" : tone === "off" ? "" : tone}`.trim();
 }
 
+/**
+ * The state of the strip as a padlock in a chip of its tone: closed while the
+ * entries are blocked (a limit reached, a result incomplete), open while free;
+ * the state in words for the screen readers and on hover.
+ */
+function StateLock({ tone, text, blocked }: { tone: DailyTone; text: string; blocked: boolean }) {
+  return (
+    <span
+      className={`${chipClass(tone)} daily-strip-lock`}
+      title={text}
+      role="img"
+      aria-label={text}
+    >
+      <Icon name={blocked ? "lock" : "unlock"} size={14} />
+    </span>
+  );
+}
+
 /** The zone of the limits in words, eg: Belém. */
 function zoneLabel(zone: string): string {
   const city = zone.split("/").pop()?.replace(/_/g, " ") ?? zone;
@@ -110,7 +129,9 @@ export function DailyGuardStrip({
     return (
       <section className={`daily-strip compact is-${tone}`} aria-label="Limite diário">
         <span className="daily-strip-label">Limite diário</span>
-        {tone !== "off" && <span className={chipClass(headTone)}>{stripHeadline(global)}</span>}
+        {tone !== "off" && (
+          <StateLock tone={headTone} text={stripHeadline(global)} blocked={tone !== "free"} />
+        )}
         {tone !== "off" &&
           results.map((result) => (
             <strong
@@ -129,7 +150,9 @@ export function DailyGuardStrip({
     <section className={`daily-strip is-${tone}${wide ? " wide" : ""}`} aria-label="Limite diário">
       <div className="daily-strip-head">
         <span className="daily-strip-label">Limite diário</span>
-        {tone !== "off" && <span className={chipClass(headTone)}>{stripHeadline(global)}</span>}
+        {tone !== "off" && (
+          <StateLock tone={headTone} text={stripHeadline(global)} blocked={tone !== "free"} />
+        )}
         {flatten && (
           <span className={`${chipClass(flatten.tone)} daily-strip-flatten`}>{flatten.text}</span>
         )}
