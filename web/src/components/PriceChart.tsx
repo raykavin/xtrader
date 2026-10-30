@@ -22,7 +22,7 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Analysis,
   Candle,
@@ -56,13 +56,13 @@ import {
   formatProfit,
   LOCALE,
 } from "../lib/format";
+import { shownFeatures } from "../lib/protection";
 import { type PositionPnL, positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
 import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
 import { candleUpdates, timeframeLabel } from "../lib/timeframes";
 import { Icon } from "./Icon";
 import { PositionProtection } from "./PositionProtection";
-import { SectionHead } from "./SectionHead";
 
 interface Props {
   snapshot: Snapshot;
@@ -153,10 +153,11 @@ function metricLabel(indicator: Indicator, metric: Metric): string {
 
 /**
  * The legends of the panes of the chart: in each one, the indicators drawn
- * in it, the ones over the candles in the first, each other one in its own.
+ * in it, the ones over the candles in the first after the pair, each other
+ * one in its own.
  */
-function paneLegends(state: ChartState, indicators: Indicator[], palette: Palette) {
-  const items = new Map<number, LegendItem[]>();
+function paneLegends(state: ChartState, indicators: Indicator[], palette: Palette, pair: string) {
+  const items = new Map<number, LegendItem[]>([[0, [{ label: pair, color: "", title: true }]]]);
   for (const indicator of indicators) {
     const pane = indicator.overlay ? 0 : state.paneByIndicator.get(indicator.name);
     if (pane === undefined) continue;
@@ -845,7 +846,7 @@ export function PriceChart({
       }
       state.paneCount = panes.length;
     }
-    paneLegends(state, snapshot.indicators, palette);
+    paneLegends(state, snapshot.indicators, palette, snapshot.pair);
 
     state.markers.setMarkers(buildMarkers(snapshot.orders, snapshot.candles, palette));
     state.tradeLines.setLines(buildTradeLines(snapshot.orders, snapshot.candles, palette));
@@ -942,8 +943,7 @@ export function PriceChart({
       label: metricLabel(indicator, metric),
     })),
   );
-  // the timeframe shown beside the pair only without the selector, which marks it
-  const shownLabel = timeframes.length > 0 ? "" : timeframeLabel(timeframe || execution);
+  const hasProtection = shownFeatures(snapshot.protection).length > 0;
 
   return (
     <section
@@ -951,58 +951,22 @@ export function PriceChart({
       className={fullscreen ? "card chart-card chart-fullscreen" : "card chart-card"}
       aria-label={`Gráfico de ${snapshot.pair}`}
     >
-      <SectionHead
-        className="chart-head"
-        eyebrow="Gráfico de preço"
-        title={snapshot.pair}
-        tag={shownLabel || undefined}
-        inline={
-          <>
-            {timeframes.length > 0 && (
-              <fieldset className="seg timeframes">
-                <legend>Timeframe do gráfico</legend>
-                {timeframes.map((view) => {
-                  const label = timeframeLabel(view.timeframe);
-                  const title = !view.available
-                    ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
-                    : view.execution
-                      ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
-                      : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
-                  return (
-                    <button
-                      key={view.timeframe}
-                      type="button"
-                      className={
-                        view.execution ? "seg-item timeframe execution" : "seg-item timeframe"
-                      }
-                      aria-pressed={view.timeframe === timeframe}
-                      aria-label={view.execution ? `${label} (execução)` : label}
-                      disabled={!view.available || !onTimeframeChange}
-                      title={title}
-                      onClick={() => onTimeframeChange?.(view.timeframe)}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </fieldset>
-            )}
-            {analysis && (
-              <span className="analysis-chip" title={analysisCaption(analysis)}>
-                <Icon name="sparkles" size={13} />
-                <span className="analysis-chip-text">{analysisCaption(analysis)}</span>
-                {onAnalysisReset && (
-                  <button type="button" className="btn btn-xs" onClick={onAnalysisReset}>
-                    Voltar à análise atual
-                  </button>
-                )}
-              </span>
-            )}
-          </>
-        }
-      />
-
-      <PositionProtection protection={snapshot.protection} />
+      {(analysis || hasProtection) && (
+        <div className="chart-meta">
+          {analysis && (
+            <span className="analysis-chip" title={analysisCaption(analysis)}>
+              <Icon name="sparkles" size={13} />
+              <span className="analysis-chip-text">{analysisCaption(analysis)}</span>
+              {onAnalysisReset && (
+                <button type="button" className="btn btn-xs" onClick={onAnalysisReset}>
+                  Voltar à análise atual
+                </button>
+              )}
+            </span>
+          )}
+          <PositionProtection protection={snapshot.protection} />
+        </div>
+      )}
 
       {/* the legends are drawn in the panes of the chart, see paneLegends: listed here for the screen readers */}
       {legend.length > 0 && (
@@ -1039,37 +1003,74 @@ export function PriceChart({
 
       <div className="chart-frame">
         <div ref={containerRef} className="chart price-chart" />
-        <button
-          type="button"
-          className="btn btn-icon chart-overlay-btn"
-          style={{ right: scaleWidth + 8 + 2 * (32 + 6) }}
-          title={fullscreen ? "Sair da tela cheia (Esc)" : "Gráfico em tela cheia"}
-          aria-label={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
-          aria-pressed={fullscreen !== null}
-          onClick={toggleFullscreen}
+        <div
+          className="chart-toolbar"
+          style={{ "--chart-scale": `${scaleWidth}px` } as CSSProperties}
         >
-          <Icon name={fullscreen ? "shrink" : "expand"} size={15} />
-        </button>
-        <button
-          type="button"
-          className="btn btn-icon chart-overlay-btn"
-          style={{ right: scaleWidth + 8 + 32 + 6 }}
-          title={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
-          aria-label={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
-          onClick={toggleChartType}
-        >
-          <Icon name={chartType === "line" ? "candles" : "area"} size={15} />
-        </button>
-        <button
-          type="button"
-          className="btn btn-icon chart-overlay-btn"
-          style={{ right: scaleWidth + 8 }}
-          title="Ir para o preço atual"
-          aria-label="Ir para o preço atual"
-          onClick={goLive}
-        >
-          <Icon name="crosshair" size={15} />
-        </button>
+          {timeframes.length > 0 ? (
+            <fieldset className="seg timeframes chart-timeframes">
+              <legend>Timeframe do gráfico</legend>
+              {timeframes.map((view) => {
+                const label = timeframeLabel(view.timeframe);
+                const title = !view.available
+                  ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
+                  : view.execution
+                    ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
+                    : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
+                return (
+                  <button
+                    key={view.timeframe}
+                    type="button"
+                    className={
+                      view.execution ? "seg-item timeframe execution" : "seg-item timeframe"
+                    }
+                    aria-pressed={view.timeframe === timeframe}
+                    aria-label={view.execution ? `${label} (execução)` : label}
+                    disabled={!view.available || !onTimeframeChange}
+                    title={title}
+                    onClick={() => onTimeframeChange?.(view.timeframe)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </fieldset>
+          ) : (
+            (timeframe || execution) && (
+              <span className="chart-timeframe-tag">{timeframeLabel(timeframe || execution)}</span>
+            )
+          )}
+          <span className="chart-toolbar-buttons">
+            <button
+              type="button"
+              className="btn btn-icon chart-overlay-btn"
+              title={fullscreen ? "Sair da tela cheia (Esc)" : "Gráfico em tela cheia"}
+              aria-label={fullscreen ? "Sair da tela cheia" : "Gráfico em tela cheia"}
+              aria-pressed={fullscreen !== null}
+              onClick={toggleFullscreen}
+            >
+              <Icon name={fullscreen ? "shrink" : "expand"} size={15} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-icon chart-overlay-btn"
+              title={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
+              aria-label={chartType === "line" ? "Mostrar em candles" : "Mostrar em linha"}
+              onClick={toggleChartType}
+            >
+              <Icon name={chartType === "line" ? "candles" : "area"} size={15} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-icon chart-overlay-btn"
+              title="Ir para o preço atual"
+              aria-label="Ir para o preço atual"
+              onClick={goLive}
+            >
+              <Icon name="crosshair" size={15} />
+            </button>
+          </span>
+        </div>
       </div>
     </section>
   );

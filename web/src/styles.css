@@ -4299,8 +4299,14 @@ fieldset.seg {
   flex: 1 1 auto;
 }
 
-.chart-head {
-  padding: 18px var(--sp-5) 14px;
+/* over the chart: the analysis of the language model drawn and the
+   protection of the position, only with one of them */
+.chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--sp-4);
+  padding: 10px var(--sp-5) 8px;
 }
 
 .timeframe {
@@ -4404,6 +4410,10 @@ fieldset.seg {
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+}
+
+.chart-meta ~ .chart-frame,
+.chart-notes ~ .chart-frame {
   border-top: 1px solid var(--border);
 }
 
@@ -4441,6 +4451,50 @@ fieldset.seg {
 .chart-overlay-btn:hover:not(:disabled) {
   background: var(--surface);
   color: var(--accent-text);
+}
+
+/* the tools over the chart, at its top right before the scale: the
+   timeframes, then the buttons; on a narrow chart, the buttons below */
+.chart-toolbar {
+  position: absolute;
+  top: var(--sp-2);
+  right: calc(var(--chart-scale, 0px) + 8px);
+  z-index: 3;
+  max-width: calc(100% - var(--chart-scale, 0px) - 16px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.chart-toolbar-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.chart-toolbar .chart-overlay-btn {
+  position: static;
+}
+
+.chart-timeframes {
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.chart-timeframe-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
 }
 
 /* the chart alone on the screen: its card over the whole of it, in the
@@ -5814,13 +5868,23 @@ fieldset.seg {
     grid-column: 1 / -1;
   }
 
-  .chart-head {
-    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  .chart-meta {
+    padding: var(--sp-3) var(--sp-4) var(--sp-2);
   }
 
-  .chart-head .section-aside,
-  .timeframes {
-    width: 100%;
+  /* a narrow chart: its tools on a line of their own above it, never over the legend */
+  .chart-toolbar {
+    position: static;
+    order: -1;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    max-width: none;
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chart-timeframes {
+    flex: 1 1 auto;
   }
 
   .timeframe {
@@ -7287,6 +7351,11 @@ h3.md-heading {
   padding: 0 var(--sp-5) var(--sp-2);
   list-style: none;
   font-size: var(--fs-xs);
+}
+
+/* in the line over the chart, beside the analysis */
+.chart-meta .position-protection {
+  padding: 0;
 }
 
 .position-protection-title {
