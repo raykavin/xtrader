@@ -164,9 +164,11 @@ type calendarEvent struct {
 // the time of the analysis (now, live, the candle in progress included; else
 // the close of the candle just closed), oldest first. Available is false when
 // the calendar couldn't be read, so the model doesn't take the silence for a
-// calm market.
+// calm market, and Status tells why: the news off, the token missing or
+// refused, the server unavailable (see CalendarDisabled).
 type CalendarContext struct {
 	Available bool            `json:"available"`
+	Status    string          `json:"status,omitempty"`
 	Events    []calendarEvent `json:"events"`
 }
 
@@ -384,6 +386,13 @@ func NewMCPCalendar(url, token string, options ...MCPOption) (*MCPCalendar, erro
 
 func (c *MCPCalendar) String() string {
 	return "MT5 MCP calendar at " + c.client.url
+}
+
+// SetToken replaces the token of the MCP server, eg: changed on the
+// dashboard, the session of the former one dropped; the releases read stay,
+// the same whatever the token.
+func (c *MCPCalendar) SetToken(token string) bool {
+	return c.client.setToken(token)
 }
 
 // Events returns the releases of the currencies between from and to, oldest

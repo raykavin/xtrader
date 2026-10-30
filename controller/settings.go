@@ -162,7 +162,6 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, CalendarURL: l.CalendarURL}
 		settings.PromptID = l.PromptID
 		settings.Secrets.LLMAPIKey = len(l.APIKey) > 0
-		settings.Secrets.CalendarToken = len(l.CalendarToken) > 0
 		if st := l.PromptStatus; st != nil {
 			settings.PromptStatus = &ui.AgentPromptStatus{PromptID: st.PromptID, Name: st.Name, Version: st.Version,
 				Applied: st.Applied, Error: st.Error, At: st.At.Unix()}
@@ -196,7 +195,7 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created, err := s.store.CreateAgent(ctx, agent, store.AgentSecrets{LLMAPIKey: request.LLMAPIKey,
-		BridgeToken: request.BridgeToken, CalendarToken: request.CalendarToken})
+		BridgeToken: request.BridgeToken})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -260,7 +259,7 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return s.store.SetAgentSecrets(ctx, a.ID, store.AgentSecrets{LLMAPIKey: request.LLMAPIKey,
-			BridgeToken: request.BridgeToken, CalendarToken: request.CalendarToken})
+			BridgeToken: request.BridgeToken})
 	})
 	if err != nil {
 		s.fail(w, err)

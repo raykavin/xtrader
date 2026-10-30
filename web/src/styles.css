@@ -8406,3 +8406,44 @@ circle.perf-down {
     white-space: normal;
   }
 }
+
+/* ---- Notícias: the news of the agents, see NewsSettings ---- */
+
+.news-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.news-body .field-hint {
+  margin: 0;
+}
+
+.news-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--sp-3);
+}
+
+.news-result .field-hint {
+  flex-basis: 100%;
+}
+
+.news-url {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.news-table {
+  margin: 0 var(--sp-5) var(--sp-5);
+}

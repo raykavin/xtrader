@@ -516,9 +516,9 @@ func (m *Manager) launchedAs(current store.Agent) store.Agent {
 // one, eg: a token of the bridge revoked and replaced, would keep the agent
 // started again by the supervisor failing until it is restarted. Each secret
 // goes with its endpoint, never to another one: the token of the bridge with
-// the same bridge, the key of the model with the same provider and base URL,
-// the token of the calendar with the same calendar; the one of the launch
-// stays with the endpoint of the launch.
+// the same bridge, the key of the model with the same provider and base URL;
+// the one of the launch stays with the endpoint of the launch. The token of
+// the calendar is the one of the news of all the agents, in their runtime.
 func withSecretsOf(a, current store.Agent) store.Agent {
 	if a.Account != nil && current.Account != nil && a.Account.BridgeURL == current.Account.BridgeURL {
 		account := *a.Account
@@ -529,9 +529,6 @@ func withSecretsOf(a, current store.Agent) store.Agent {
 		model := *a.LLM
 		if model.Provider == current.LLM.Provider && deref(model.BaseURL) == deref(current.LLM.BaseURL) {
 			model.APIKey = current.LLM.APIKey
-		}
-		if deref(model.CalendarURL) == deref(current.LLM.CalendarURL) {
-			model.CalendarToken = current.LLM.CalendarToken
 		}
 		a.LLM = &model
 	}
@@ -672,9 +669,9 @@ func (m *Manager) State(name string) AgentState {
 }
 
 // runtimeOf returns the runtime of the agent a: its channels, and of an LLM
-// agent the switch of its reanalysis and its prompt. false when its prompt
-// can't be read: the agent keeps the runtime it has rather than switching to
-// its default prompt.
+// agent the switch of its reanalysis, its prompt and the news. false when its
+// prompt or the news can't be read: the agent keeps the runtime it has rather
+// than switching to its default prompt.
 func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Runtime, bool) {
 	doc := agentapi.Runtime{TradePanel: a.TradePanel, TelegramControl: a.TelegramControl,
 		Reanalysis: a.ReanalysisAllowed()}
@@ -698,7 +695,32 @@ func runtimeOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Run
 		}
 		doc.Prompt = &agentapi.PromptRef{ID: prompt.ID, Name: prompt.Name, Version: prompt.Version}
 	}
+	if a.LLM != nil {
+		news, err := newsOf(ctx, s)
+		if err != nil {
+			log.Warnf("controller: the news of the agent %s: %v", a.Name, err)
+			return doc, false // it keeps the news it has
+		}
+		doc.News = news
+	}
 	return doc, true
+}
+
+// newsOf returns the news of all the agents for an LLM agent: on or off, and
+// the token of the MCP server of the calendar, only while on; off before the
+// seeds are applied.
+func newsOf(ctx context.Context, s *store.Store) (*agentapi.News, error) {
+	settings, found, err := s.News(ctx)
+	if err != nil {
+		return nil, err
+	}
+	news := &agentapi.News{Enabled: found && settings.Enabled}
+	if news.Enabled {
+		if news.Token, err = s.NewsToken(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return news, nil
 }
 
 // launchHash is the hash of the settings an agent is launched with: the ones
@@ -711,7 +733,7 @@ func launchHash(a store.Agent) [32]byte {
 		Account                *store.Account
 		LLM                    *store.LLMSettings
 		BridgeToken            []byte
-		APIKey, CalendarToken  []byte
+		APIKey                 []byte
 	}{Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress, Restart: a.Restart, Params: a.Params}
 	if a.Account != nil {
 		account := *a.Account
@@ -721,7 +743,7 @@ func launchHash(a store.Agent) [32]byte {
 	}
 	if a.LLM != nil {
 		model := *a.LLM
-		settings.APIKey, settings.CalendarToken = model.APIKey, model.CalendarToken
+		settings.APIKey = model.APIKey
 		model.PromptID, model.PromptStatus = nil, nil
 		model.CreatedAt, model.UpdatedAt = time.Time{}, time.Time{}
 		settings.LLM = &model

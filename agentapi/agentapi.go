@@ -62,6 +62,17 @@ type Config struct {
 	Account         *Account          `json:"account,omitempty"`
 	LLM             *LLM              `json:"llm,omitempty"`
 	Prompt          *Prompt           `json:"prompt,omitempty"` // of an LLM agent, nil for its default one
+	News            *News             `json:"news,omitempty"`   // of an LLM agent, see News
+}
+
+// News is the news feature of all the agents, set on the dashboard (the tab
+// Notícias): on or off, and the token of the MCP server of the economic
+// calendar, shared by the agents (the server at the calendar_url of each
+// one). An LLM agent gets it at its start and in its runtime, applied while it
+// runs: off, it reads no calendar.
+type News struct {
+	Enabled bool   `json:"enabled"`
+	Token   string `json:"token,omitempty"`
 }
 
 // Account is the trading account of an agent: the bridge of MT5, the token of
@@ -85,7 +96,6 @@ type LLM struct {
 	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 	MaxTokens       int               `json:"max_tokens,omitempty"`
 	CalendarURL     string            `json:"calendar_url,omitempty"`
-	CalendarToken   string            `json:"calendar_token,omitempty"`
 	Params          map[string]string `json:"params"`
 }
 
@@ -105,8 +115,9 @@ type Prompt struct {
 
 // Runtime is what an agent applies while it runs, the answer of GET
 // /runtime: the channels of its control panel, its entries (see Entries), and
-// of an LLM agent the switch of its reanalysis and its prompt, nil for its
-// default one. Version changes with any of them: GET /runtime?wait=25s with
+// of an LLM agent the switch of its reanalysis, its prompt, nil for its
+// default one, and the news (see News). Version changes with any of them: GET
+// /runtime?wait=25s with
 // If-None-Match: <version> waits for a change.
 type Runtime struct {
 	Version         int64      `json:"version"`
@@ -116,6 +127,7 @@ type Runtime struct {
 	Entries                    // the entries blocked by the supervisor or the dashboard, if any
 	Protection                 // the protection of the positions, see Protection
 	Prompt          *PromptRef `json:"prompt,omitempty"`
+	News            *News      `json:"news,omitempty"` // of an LLM agent, see News
 }
 
 // Protection is the protection of the open positions of an agent (breakeven,

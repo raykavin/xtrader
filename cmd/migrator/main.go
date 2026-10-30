@@ -3,7 +3,8 @@
 //
 //	# the migrations of sql/migrations, then the seeds of sql/seeds (the
 //	# Telegram bot off, the prompts and the agents of a new database, off and
-//	# without their secrets), run again harmlessly
+//	# without their secrets, the news off), run again harmlessly; then the
+//	# tokens of the calendar the agents kept each carried to the news
 //	go run ./cmd/migrator -config configs/config.yml up
 //
 // The settings live in the database only: the agents, their secrets, the
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/raykavin/gobox/database/migrate"
@@ -97,5 +99,20 @@ func up(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	log.Infof("[MIGRATOR] schema at version %d at least, as the controller needs", store.SchemaVersion)
+
+	// the tokens of the calendar the agents kept each, carried to the news
+	news, err := s.MigrateNewsToken(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case news.Taken:
+		log.Infof("[MIGRATOR] news: the token of the MCP server the %d LLM agents shared taken for all the agents, "+
+			"the news on", news.Tokens)
+	case len(news.Conflict) > 0:
+		log.Warnf("[MIGRATOR] news: the LLM agents %s held different tokens of the MCP server (or one that can't "+
+			"be opened): none chosen, set the token on the dashboard (Configurações > Notícias)",
+			strings.Join(news.Conflict, ", "))
+	}
 	return nil
 }

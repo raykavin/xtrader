@@ -192,6 +192,7 @@ export function agentSummary(agent: AgentSettings): { label: string; value: stri
 export const settingsTabs = [
   "agentes",
   "limites",
+  "noticias",
   "prompts",
   "supervisor",
   "telegram",
@@ -515,7 +516,6 @@ export interface AgentFormValues {
   promptID: string;
   llmAPIKey: string;
   bridgeToken: string;
-  calendarToken: string;
   params: ParamRow[];
 }
 
@@ -561,7 +561,6 @@ export function agentFormValues(agent?: AgentSettings): AgentFormValues {
     promptID: agent?.prompt_id ? String(agent.prompt_id) : "",
     llmAPIKey: "",
     bridgeToken: "",
-    calendarToken: "",
     params: Object.keys(params)
       .sort()
       .map((key, id) => ({ id, key, value: params[key] ?? "" })),
@@ -673,7 +672,6 @@ export function agentCreateRequest(values: AgentFormValues): AgentCreateRequest 
     };
     request.prompt_id = values.promptID ? Number(values.promptID) : undefined;
     request.llm_api_key = filled(values.llmAPIKey);
-    request.calendar_token = filled(values.calendarToken);
     request.reanalysis = values.reanalysis;
   }
   return request;

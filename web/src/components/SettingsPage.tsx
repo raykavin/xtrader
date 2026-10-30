@@ -20,6 +20,7 @@ import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
 import { DailyLimitsSettings } from "./DailyLimitsSettings";
 import { LayoutSettings } from "./LayoutSettings";
+import { NewsSettings } from "./NewsSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
 import { Alert, Loading, Skeleton } from "./States";
@@ -46,6 +47,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
     title: "Limites diários",
     description:
       "A perda e o ganho máximos do dia, de todos os agentes somados e de cada agente. Atingido um limite, a aplicação zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00.",
+  },
+  noticias: {
+    title: "Notícias",
+    description:
+      "O calendário econômico que os agentes LLM consultam pelo servidor MCP do MetaTrader 5: ligue ou desligue para todos os agentes e defina o token, compartilhado por todos. As mudanças valem na hora para os agentes em execução, sem reiniciar.",
   },
   prompts: {
     title: "Prompts",
@@ -230,6 +236,9 @@ export function SettingsPage() {
       </Panel>
       <Panel tab="limites" shown={tab}>
         <DailyLimitsSettings intro={intros.limites} />
+      </Panel>
+      <Panel tab="noticias" shown={tab}>
+        <NewsSettings intro={intros.noticias} />
       </Panel>
       <Panel tab="prompts" shown={tab}>
         {prompts === null ? (

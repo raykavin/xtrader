@@ -33,8 +33,7 @@ func llmAgent(t *testing.T, s *Store, name string) Agent {
 		Params:  Params{"pair": "BTCUSDm,XAUUSDm", "timeframe": "30m"},
 		Account: &Account{BridgeURL: "http://127.0.0.1:18812", Comment: &comment},
 		LLM:     &LLMSettings{Provider: "openai", Model: "gpt-5", Params: Params{"llm-min-stop-atr": "1"}}},
-		AgentSecrets{LLMAPIKey: secret("sk-test-key"), BridgeToken: secret("bridge-token"),
-			CalendarToken: secret("mcp-token")})
+		AgentSecrets{LLMAPIKey: secret("sk-test-key"), BridgeToken: secret("bridge-token")})
 	require.NoError(t, err)
 	return agent
 }
@@ -67,15 +66,13 @@ func TestCreateAgent_EncryptsItsSecrets(t *testing.T) {
 
 	secrets, err := s.AgentSecrets(ctx, agent.ID)
 	require.NoError(t, err)
-	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token",
-		CalendarToken: "mcp-token"}, secrets)
+	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token"}, secrets)
 
-	require.NoError(t, s.SetAgentSecrets(ctx, agent.ID, AgentSecrets{LLMAPIKey: secret("sk-new"),
-		CalendarToken: secret("")}))
+	require.NoError(t, s.SetAgentSecrets(ctx, agent.ID, AgentSecrets{LLMAPIKey: secret("sk-new")}))
 	secrets, err = s.AgentSecrets(ctx, agent.ID)
 	require.NoError(t, err)
 	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-new", BridgeToken: "bridge-token"}, secrets,
-		"the bridge token kept, the calendar token removed")
+		"the bridge token kept")
 
 	// another key: the secrets can't be read, never returned garbled
 	other, err := Open(config.Database{DSN: s.dsn(t), MaxOpenConns: 2, LogLevel: "silent"},
@@ -356,8 +353,8 @@ func TestUpdateAgent_EditsEveryField(t *testing.T) {
 
 	secrets, err := s.AgentSecrets(ctx, agent.ID)
 	require.NoError(t, err)
-	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token",
-		CalendarToken: "mcp-token"}, secrets, "the secrets kept")
+	require.Equal(t, AgentSecretValues{LLMAPIKey: "sk-test-key", BridgeToken: "bridge-token"}, secrets,
+		"the secrets kept")
 	_, err = s.UpdateAgent(ctx, agent.ID, AgentUpdate{APIAddress: ptr("LOCALHOST:5599")})
 	require.NoError(t, err, "its own address")
 }
@@ -498,22 +495,21 @@ func TestDeleteAgent_SoftlyTheDisabledOnes(t *testing.T) {
 
 	// kept in its table with its data, its secrets removed
 	var kept struct {
-		DeletedAt                          *time.Time
-		Orders, Decisions, Entries         int64
-		BridgeToken, APIKey, CalendarToken []byte
+		DeletedAt                  *time.Time
+		Orders, Decisions, Entries int64
+		BridgeToken, APIKey        []byte
 	}
 	require.NoError(t, s.db.Raw(`SELECT a.deleted_at,
 		(SELECT count(*) FROM orders WHERE agent_id = a.id) AS orders,
 		(SELECT count(*) FROM decisions WHERE agent_id = a.id) AS decisions,
 		(SELECT count(*) FROM journal_entries WHERE agent_id = a.id) AS entries,
-		c.bridge_token, l.api_key, l.calendar_token
+		c.bridge_token, l.api_key
 		FROM agents a JOIN agent_accounts c ON c.agent_id = a.id JOIN agent_llm_settings l ON l.agent_id = a.id
 		WHERE a.id = ?`, agent.ID).Scan(&kept).Error)
 	require.NotNil(t, kept.DeletedAt)
 	require.Equal(t, [3]int64{1, 1, 1}, [3]int64{kept.Orders, kept.Decisions, kept.Entries})
 	require.Empty(t, kept.BridgeToken)
 	require.Empty(t, kept.APIKey)
-	require.Empty(t, kept.CalendarToken)
 
 	// its name and its address free for a new agent, of its own data
 	again := llmAgent(t, s, "llm")
