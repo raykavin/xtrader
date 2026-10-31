@@ -60,12 +60,15 @@ type dailyLimiter struct {
 	owners    map[string]dailyOwner
 	ownersAt  time.Time
 	carry     map[string]dailyCarry
-	breaches  map[string]int       // the reads in a row a scope reached a limit in
-	failures  map[string]int       // the reads in a row the result of a scope was unknown in
-	held      map[int64]int        // the reads in a row the scope of a guard closed held a position in
-	flattenAt map[int64]time.Time  // the closes of the guards in progress, since when
-	triedAt   map[int64]time.Time  // the last close of each guard
-	status    ui.DailyLimitsStatus // as last evaluated
+	breaches  map[string]int        // the reads in a row a scope reached a limit in
+	failures  map[string]int        // the reads in a row the result of a scope was unknown in
+	held      map[int64]int         // the reads in a row the scope of a guard closed held a position in
+	flattenAt map[int64]time.Time   // the closes of the guards in progress, since when
+	triedAt   map[int64]time.Time   // the last close of each guard
+	status    ui.DailyLimitsStatus  // as last evaluated
+	hours     ui.TradingHoursStatus // as last evaluated, see evaluateHours
+
+	hoursMu sync.Mutex // an evaluation of the trading hours at a time
 }
 
 func newDailyLimiter(s *Supervision) *dailyLimiter {
@@ -109,6 +112,10 @@ func (l *dailyLimiter) Status() ui.DailyLimitsStatus {
 	if status.Day == "" {
 		status.Day, status.Zone = l.dayOf(l.s.now()), l.zone.String()
 		status.Global.State = ui.DailyOff
+	}
+	status.Hours = l.hours
+	if status.Hours.Zone == "" { // not evaluated yet
+		status.Hours.Zone, status.Hours.Open = l.zone.String(), true
 	}
 	return status
 }
@@ -361,6 +368,7 @@ func scopeName(key string) string {
 
 // evaluate evaluates the daily limits once, see dailyLimiter.
 func (l *dailyLimiter) evaluate(ctx context.Context) error {
+	l.evaluateHours(ctx)
 	now := l.s.now()
 	day := l.dayOf(now)
 	released, err := l.s.store.RolloverDailyGuards(ctx, day)

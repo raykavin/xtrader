@@ -2482,6 +2482,70 @@ export interface DailyLimitsStatus {
   global: DailyScopeStatus;
   agents: DailyScopeStatus[];
   paper?: string[];
+  hours: TradingHoursStatus;
+}
+/**
+ * TradingHoursSettings are the trading hours of all the agents: on, no agent
+ * opens a position before Start nor from End (HH:MM, of the zone of the
+ * controller, America/Belem; a window crossing midnight when Start is after
+ * End); at End every position of the agents is closed (Flatten) and their
+ * pending orders canceled (CancelPending), as checked. UpdatedBy and
+ * UpdatedAt (Unix seconds) tell the last change.
+ */
+export interface TradingHoursSettings {
+  enabled: boolean;
+  start: string;
+  end: string;
+  flatten: boolean;
+  cancel_pending: boolean;
+  updated_by?: string;
+  updated_at?: number /* int64 */;
+}
+/**
+ * TradingHoursStatus is how the trading hours stand: on or off, the window
+ * (Start, End, in Zone), Open while inside it, Blocked while the entries of
+ * the agents are blocked by it (as recorded and sent to the agents), NextAt
+ * the next change (the end while open, the start while closed; Unix seconds,
+ * 0 while off), and the actions of the last end of the window, if any.
+ */
+export interface TradingHoursStatus {
+  enabled: boolean;
+  start?: string;
+  end?: string;
+  zone: string;
+  open: boolean;
+  blocked: boolean;
+  next_at?: number /* int64 */;
+  last_end?: TradingHoursEnd;
+}
+/**
+ * TradingHoursEnd is how the actions of an end of the window went: when
+ * (Unix seconds), what was asked (Flatten, CancelPending), the status of the
+ * action (running while it runs, else the one of its result: succeeded,
+ * partial, failed or unknown) and the action of the XTrader AI recorded.
+ */
+export interface TradingHoursEnd {
+  at: number /* int64 */;
+  flatten: boolean;
+  cancel_pending: boolean;
+  status: string;
+  action_id?: number /* int64 */;
+}
+/**
+ * TradingHoursResponse answers GET and PUT /api/settings/trading-hours: the
+ * hours and how they stand.
+ */
+export interface TradingHoursResponse {
+  settings: TradingHoursSettings;
+  status: TradingHoursStatus;
+}
+/**
+ * TradingHoursRequest is the body of PUT /api/settings/trading-hours: the
+ * hours, and why (Reason, recorded).
+ */
+export interface TradingHoursRequest {
+  settings: TradingHoursSettings;
+  reason?: string;
 }
 /**
  * DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the

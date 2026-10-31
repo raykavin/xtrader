@@ -7703,6 +7703,11 @@ h3.md-heading {
   right: 6px;
 }
 
+/* the trading hours: a clock and their state */
+.daily-strip-hours {
+  gap: 5px;
+}
+
 /* the state: a padlock only, in the chip of its tone */
 .daily-strip-lock {
   justify-content: center;
@@ -7771,6 +7776,53 @@ h3.md-heading {
 .daily-strip-note + .daily-strip-agents {
   padding-top: 0;
   border-top: 0;
+}
+
+/* the trading hours, on the tab Limites */
+.hours-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.hours-times {
+  max-width: 420px;
+}
+
+.hours-end {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.hours-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.hours-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.hours-last {
+  margin: 0;
+}
+
+/* the last end in words: wrapped on a phone */
+.hours-last .status-chip {
+  height: auto;
+  min-height: 22px;
+  padding-block: 3px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* the form of the daily limits, in their settings and in the dialog of an agent */

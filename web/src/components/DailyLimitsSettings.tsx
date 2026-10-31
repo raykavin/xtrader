@@ -13,6 +13,7 @@ import { DailyLimitFields } from "./DailyLimitFields";
 import { PageHeader } from "./PageHeader";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, Loading, Skeleton } from "./States";
+import { TradingHoursCard } from "./TradingHoursCard";
 
 /** How often the state of the daily limits is read again, in ms. */
 const POLL = 5000;
@@ -129,6 +130,8 @@ export function DailyLimitsSettings({ intro }: Props) {
         </div>
       </section>
 
+      <TradingHoursCard />
+
       <section className="card card-flush" aria-labelledby="daily-agents-title">
         <header className="card-header">
           <div className="card-heading">
@@ -206,6 +209,13 @@ export function DailyLimitsSettings({ intro }: Props) {
               bloqueados e zerados junto com todos.
             </li>
           )}
+          <li>
+            Horário de operação: fora dele, nenhum agente abre posição (as entradas ficam
+            bloqueadas, como no limite diário). No horário de fim, zera as posições e cancela as
+            ordens pendentes, conforme marcado; desmarcado, o que estiver aberto fica como está, com
+            os stops. Se a aplicação estiver parada no horário de fim, ela faz isso ao voltar, se
+            ainda estiver fora do horário.
+          </li>
           <li>
             Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em
             seguida); o histórico do MT5 atrasa alguns segundos; entre a leitura e o fechamento o
