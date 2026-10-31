@@ -7598,6 +7598,29 @@ h3.md-heading {
   align-self: flex-end;
 }
 
+/* on a phone: the icon only, and only with positions open (shown while the
+   positions aren't read yet) */
+@media (max-width: 767px) {
+  .daily-zero-button {
+    justify-content: center;
+    width: 30px;
+    padding-inline: 0;
+  }
+
+  .daily-zero-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .daily-zero-button.is-flat {
+    display: none;
+  }
+}
+
 .daily-zero-confirm {
   display: flex;
   flex-wrap: wrap;
