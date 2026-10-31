@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { closeAgentPositions, fetchClosedProfit, fetchOpenPositions } from "../api/client";
+import { closeAgentPositions, fetchClosedProfit } from "../api/client";
 import type { ClosedProfitResponse, CurrencyAmount, OpenPositionsResponse } from "../api/types";
 import {
   type ClosedPeriod,
@@ -33,9 +33,7 @@ import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
 import { Icon } from "./Icon";
 import { Sparkline } from "./Sparkline";
 import { Skeleton } from "./States";
-
-/** How often the open profit and the balances of the agents are read again, in ms, as the market moves them. */
-const OPEN_PL_REFRESH = 5000;
+import { useOpenPositions } from "./useOpenPositions";
 
 /**
  * The agents a wide card shows beside its figures; with more, they go under
@@ -47,38 +45,11 @@ const AGENTS_BESIDE = 8;
 const CLOSED_PL_REFRESH = 15000;
 
 /**
- * The last reads, of all the agents: kept as the dashboard switches agents,
- * shown at once by the next one while it reads again.
+ * The last read of the closed profit, of all the agents: kept as the dashboard
+ * switches agents, shown at once by the next one while it reads again (the
+ * open positions are kept by useOpenPositions).
  */
-let lastRead: OpenPositionsResponse | null = null;
 let lastClosed: ClosedProfitResponse | null = null;
-
-/** The open profit of the agents, read at once and every OPEN_PL_REFRESH, the last one kept on a failure. */
-function useOpenPositions() {
-  const [read, setRead] = useState<OpenPositionsResponse | null>(lastRead);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = () => {
-      fetchOpenPositions(controller.signal)
-        .then((response) => {
-          lastRead = response;
-          setRead(response);
-          setError(null);
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
-        });
-    };
-    load();
-    const timer = window.setInterval(load, OPEN_PL_REFRESH);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-    };
-  }, []);
-  return { read, error };
-}
 
 /**
  * The closed profit of the agents in period, read at once, as the period

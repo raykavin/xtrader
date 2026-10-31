@@ -15,6 +15,7 @@ import {
 import { formatMoney, signClass } from "../lib/format";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { Icon } from "./Icon";
+import { useOpenPositions } from "./useOpenPositions";
 
 /** How often the state of the daily limits is read again, in ms. */
 const POLL = 5000;
@@ -60,6 +61,9 @@ export function DailyGuardBanner() {
   return <DailyGuardStrip status={status} wide />;
 }
 
+/** What the zeroing does, on hover and for the screen readers. */
+const closeAllTitle = "Zerar todas as posições e cancelar as ordens pendentes dos agentes";
+
 /**
  * Zeroing every position of the agents and canceling their pending entries,
  * from the card of the daily limit: apart from the close of an agent on its
@@ -68,6 +72,7 @@ export function DailyGuardBanner() {
  * accounts, kept until dismissed: what was closed, canceled, and what remains.
  */
 function CloseAll() {
+  const { read } = useOpenPositions();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
@@ -99,18 +104,16 @@ function CloseAll() {
       {!confirming && !busy && (
         <button
           type="button"
-          className="btn btn-xs btn-danger daily-zero-button"
+          className={`btn btn-xs btn-danger daily-zero-button${read && read.positions.length === 0 ? " is-flat" : ""}`}
+          title={closeAllTitle}
           onClick={() => setConfirming(true)}
         >
           <Icon name="alert" size={13} />
-          Zerar todas as posições e cancelar pendentes
+          <span className="daily-zero-label">Zerar + Cancelar ordens</span>
         </button>
       )}
       {(confirming || busy) && (
-        <fieldset
-          className="daily-zero-confirm"
-          aria-label="Zerar todas as posições e cancelar pendentes"
-        >
+        <fieldset className="daily-zero-confirm" aria-label={closeAllTitle}>
           <p>
             <strong>Todos os agentes:</strong> cancela as ordens pendentes de entrada e fecha a
             mercado as posições abertas. Posições e ordens fora dos agentes do XTrader não são
