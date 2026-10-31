@@ -45,7 +45,14 @@ func main() {
 // one of agentapi.DefaultStrategy for the kind breakout.
 func agent() runner.Agent {
 	fm := strategies.DefaultFimatheConfig()
+	sq := strategies.DefaultSqueezeBreakoutConfig()
 	f := flags{
+		sq: squeezeFlags{
+			minRR:      flag.Float64("squeezebreakout-min-rr", sq.MinRR, "squeezebreakout: no entry offering less than that risk reward"),
+			minVolume:  flag.Float64("squeezebreakout-min-volume", sq.MinVolume, "squeezebreakout: the least volume of the breakout, times its average"),
+			percentile: flag.Float64("squeezebreakout-max-atr-percentile", sq.MaxATRPercentile, "squeezebreakout: the ATR before the breakout under that percentile of the recent ATRs, the compression"),
+			maxBox:     flag.Float64("squeezebreakout-max-box-atr", sq.MaxBoxATR, "squeezebreakout: the highest box broken, in ATR"),
+		},
 		bufferATR:   flag.Float64("buffer-atr", 0, "atrbreakout: how far beyond the range the close must end, in ATR"),
 		expansion:   flag.Float64("expansion", 0, "atrbreakout: ATR multiple of its average for an expansion (default 1.2)"),
 		breakoutLen: flag.Int("breakout-len", 0, "atrbreakout: candles of the channel broken (default 20)"),
@@ -72,7 +79,7 @@ func agent() runner.Agent {
 		{Name: "fimathe", About: "the first entry of the trend of the reference channel of the Fimathe technique",
 			New: f.fimathe, Inputs: append(slices.Clone(fimatheInputs), "max-bars")},
 		{Name: "squeezebreakout", About: "the release of a compression with the volume", New: f.squeezeBreakout,
-			Inputs: []string{"min-atr-pct"}},
+			Inputs: append([]string{"min-atr-pct"}, squeezeInputs...)},
 	}, runner.Signals("donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner",
 		"volumebreakout", "highlow", "momentumbreakout")...)}
 }
@@ -82,7 +89,18 @@ type flags struct {
 	bufferATR, expansion *float64
 	breakoutLen          *int
 	fm                   fimatheFlags
+	sq                   squeezeFlags
 }
+
+// squeezeFlags holds the flags of squeezebreakout, named in squeezeInputs:
+// its filters, the ones of DefaultSqueezeBreakoutConfig unless set.
+type squeezeFlags struct {
+	minRR, minVolume, percentile, maxBox *float64
+}
+
+// squeezeInputs are the flags of squeezebreakout of its own.
+var squeezeInputs = []string{"squeezebreakout-min-rr", "squeezebreakout-min-volume",
+	"squeezebreakout-max-atr-percentile", "squeezebreakout-max-box-atr"}
 
 // fimatheFlags holds the flags of fimathe, named in fimatheInputs.
 type fimatheFlags struct {
@@ -138,6 +156,8 @@ func (f flags) fimathe(in runner.Inputs) (strategy.Strategy, error) {
 func (f flags) squeezeBreakout(in runner.Inputs) (strategy.Strategy, error) {
 	cfg := strategies.DefaultSqueezeBreakoutConfig()
 	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	cfg.MinRR, cfg.MinVolume = *f.sq.minRR, *f.sq.minVolume
+	cfg.MaxATRPercentile, cfg.MaxBoxATR = *f.sq.percentile, *f.sq.maxBox
 	trader, err := strategies.NewSqueezeBreakout(cfg)
 	return trader, err
 }
