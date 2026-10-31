@@ -240,12 +240,18 @@ func coverage(feed *exchange.CSVFeed, pairs []string, fileTimeframe string, stra
 			report.DataTo = last.Unix()
 		}
 		report.Candles += len(feed.CandlePairTimeFrame[fmt.Sprintf("%s--%s", pair, fileTimeframe)])
+		// the candles of the timeframe of the strategy before the period, as
+		// the engine hands them to it (the file may be of a finer one)
 		warm := 0
-		for _, c := range candles {
+		var bucket time.Time
+		for i, c := range candles {
 			if !c.Time.Before(from(cfg)) {
 				break
 			}
-			warm++
+			if at := c.Time.Truncate(length); i == 0 || !at.Equal(bucket) {
+				bucket = at
+				warm++
+			}
 		}
 		if warm < strat.WarmupPeriod() {
 			warnings = append(warnings, fmt.Sprintf("%s: aquecimento incompleto, %d de %d candles antes do início: "+

@@ -34,8 +34,10 @@ const (
 	backtestProgressGap   = 2 * time.Second  // between two records of the progress of a run
 	backtestStopWait      = 15 * time.Second // an interrupted run has before it is killed
 	backtestErrLines      = 30               // the last lines of the error output kept, the error of a run failed
-	backtestWarmupCandles = 1000             // candles of the timeframe of the agent read before the period
+	backtestWarmupCandles = 1000             // candles of the timeframe of the agent read before the period, by default
 	backtestWarmupMax     = 60 * 24 * time.Hour
+	backtestWarmupCap     = 365 * 24 * time.Hour // the most read before the period for the warmup of a strategy
+	backtestWarmupProbe   = 2 * time.Minute      // the agent has to tell the warmup of its strategy
 	backtestBatchesShown  = 30
 )
 
@@ -272,8 +274,7 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	length := timeframeLength(snap.Timeframe)
-	warm := min(time.Duration(backtestWarmupCandles)*length, backtestWarmupMax)
+	warm, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, secrets))
 	dataFrom := run.From.Add(-warm)
 	// the finest timeframe of the period, else a coarser one when the broker
 	// keeps the finer candles of a pair for less time than the period, eg: M1
@@ -371,6 +372,9 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	if err := json.Unmarshal(reportData, &report); err != nil {
 		return store.BacktestFailed, fmt.Sprintf("o relatório do backtest não pôde ser lido: %v", err), nil, nil
 	}
+	if note != "" {
+		warnings = append(warnings, note)
+	}
 	report.Warnings = append(warnings, report.Warnings...)
 	summary := summarizeBacktest(report, gaps, snap.LLM)
 	summary.ExecutionTimeframe = file
@@ -391,6 +395,60 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 		why = strings.Join(errLines, "\n")
 	}
 	return status, why, summaryData, reportData
+}
+
+// warmupOf returns how long before the period of a run of snap its candles
+// are read: the warmup the strategy of the agent asks for, as the agent tells
+// it (see agentapi.PrintWarmupFlag), its candles over the calendar (the
+// markets closed at the weekends and an hour a day: half of it more, and a
+// day), the default at least (backtestWarmupCandles of the timeframe of the
+// agent, backtestWarmupMax at most), backtestWarmupCap at most; the default
+// for an LLM agent (its warmup set by its prompt, the candles it keeps) or one
+// that can't tell it, and why then.
+func (b *Backtests) warmupOf(ctx context.Context, snap backtestSnapshot, env []string) (time.Duration, string) {
+	warm := min(time.Duration(backtestWarmupCandles)*timeframeLength(snap.Timeframe), backtestWarmupMax)
+	if snap.LLM != nil || len(snap.Command) == 0 {
+		return warm, ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, backtestWarmupProbe)
+	defer cancel()
+	args := append(slices.Clone(snap.Command[1:]), snap.Args...)
+	args = append(args, "-mode=backtest", "-pair="+strings.Join(snap.Pairs, ";"), "-"+agentapi.PrintWarmupFlag)
+	cmd := exec.CommandContext(ctx, snap.Command[0], args...)
+	cmd.Dir, cmd.Env = b.agents.Dir, env
+	out, err := cmd.Output()
+	var told agentapi.Warmup
+	if err == nil {
+		err = json.Unmarshal(lastLine(out), &told)
+	}
+	length := timeframeLength(told.Timeframe)
+	if err != nil || told.Candles <= 0 || length <= 0 {
+		log.Warnf("backtests: the warmup of %s: %v", snap.Agent, err)
+		return warm, fmt.Sprintf("o aquecimento da estratégia não pôde ser lido do agente: %s antes do período, o padrão",
+			durationText(warm))
+	}
+	needed := time.Duration(told.Candles)*length*3/2 + 24*time.Hour
+	if needed > backtestWarmupCap {
+		return backtestWarmupCap, fmt.Sprintf("a estratégia pede %d candles de %s de aquecimento: lidos %s antes "+
+			"do período, o máximo", told.Candles, told.Timeframe, durationText(backtestWarmupCap))
+	}
+	return max(warm, needed), ""
+}
+
+// lastLine returns the last line of out not blank, eg: the JSON a program
+// printed after its logs.
+func lastLine(out []byte) []byte {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	return []byte(lines[len(lines)-1])
+}
+
+// durationText returns d in days, eg: 60 dias.
+func durationText(d time.Duration) string {
+	days := int(math.Round(d.Hours() / 24))
+	if days == 1 {
+		return "1 dia"
+	}
+	return fmt.Sprintf("%d dias", days)
 }
 
 // stopped returns the status of the run of id stopped before its end:

@@ -67,13 +67,14 @@ type script struct {
 	calls     int
 	feed      *exchange.BacktestFeed
 	onCandle  func(df *model.Dataframe, broker service.Broker)
+	warmup    int // of its timeframe, 1 when 0
 
 	mu   sync.Mutex
 	errs []error
 }
 
 func (s *script) Timeframe() string                                     { return s.timeframe }
-func (s *script) WarmupPeriod() int                                     { return 1 }
+func (s *script) WarmupPeriod() int                                     { return max(s.warmup, 1) }
 func (s *script) Indicators(*model.Dataframe) []strategy.ChartIndicator { return nil }
 func (s *script) OnCandle(df *model.Dataframe, broker service.Broker) {
 	if s.onCandle != nil {
@@ -474,4 +475,22 @@ func TestRun_TradingHoursAcrossMidnight(t *testing.T) {
 	assert.NoError(t, reopened, "open again from its start")
 	assert.Empty(t, report.Trades, "no end acted on: the window wasn't open before")
 	require.Len(t, report.Open, 1)
+}
+
+// The warmup before the period counted in candles of the timeframe of the
+// strategy, the engine handing it those: 30 candles of 1m before the period
+// are 6 of 5m, short of a warmup of 10, told; enough for one of 5.
+func TestRun_WarmupInTheTimeframeOfTheStrategy(t *testing.T) {
+	warnings := func(warmup int) []string {
+		cfg := config(t, 60)
+		cfg.From = start.Add(30 * time.Minute).Unix()
+		s := &script{timeframe: "5m", warmup: warmup}
+		return runScript(t, context.Background(), s, flat(60, 100), cfg, Hooks{}).Warnings
+	}
+	short := warnings(10)
+	require.NotEmpty(t, short)
+	assert.Contains(t, strings.Join(short, "\n"), "aquecimento incompleto, 6 de 10 candles antes do início")
+	for _, w := range warnings(5) {
+		assert.NotContains(t, w, "aquecimento incompleto")
+	}
 }

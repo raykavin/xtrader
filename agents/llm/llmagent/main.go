@@ -133,6 +133,7 @@ func run() error {
 		csvFiles      = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe  = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
 		mt5CSize      = flag.String("mt5-contract-size", "", "backtest: the contract sizes of the pairs, the units of the asset in a lot, one for all of them or one per pair in the order of -pair, separated by ; (default: the ones the package knows)")
+		printWarmup   = flag.Bool(agentapi.PrintWarmupFlag, false, "prints the warmup of the strategy, its candles and its timeframe, as JSON (agentapi.Warmup), and exits: what a backtest reads before its period")
 		btConfig      = flag.String("backtest-config", "", "backtest: the JSON file of a backtest as the controller asks for it (period, balance, costs, symbols, ceilings of the model, report): the run writes its report there and exits (see agents/internal/backtest)")
 		api           = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5564 (default: off)")
 		tradePanel    = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot and asks the model again without it)")
@@ -343,6 +344,10 @@ func run() error {
 		if err := trader.SetPromptSource(agent.Prompts()); err != nil {
 			return err
 		}
+	}
+	if *printWarmup { // nothing connected, nothing asked to the model
+		return json.NewEncoder(os.Stdout).Encode(agentapi.Warmup{Timeframe: trader.Timeframe(),
+			Candles: trader.WarmupPeriod()})
 	}
 
 	if err := checkVenue(*exchangeName, *mode, *leverage, *btConfig != ""); err != nil {

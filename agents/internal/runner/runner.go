@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -263,6 +264,7 @@ func run(agent Agent) error {
 		maxRisk      = flag.Float64("max-risk-pct", 0, "skip an entry losing more than that % of the free balance at its stop loss, both in the currency of the account (0: no limit; trendconfluence needs a stop: -stop-atr, -trailing-atr, -broker-stop-atr, -broker-trailing-atr or -stop-value)")
 		csvFiles     = flag.String("csv", "", "backtest candles, as written by `xtrader download`: a file per pair, separated by ; in the order of -pair")
 		csvTimeframe = flag.String("csv-timeframe", "", "timeframe of the backtest candles (default -timeframe)")
+		printWarmup  = flag.Bool(agentapi.PrintWarmupFlag, false, "prints the warmup of the strategy, its candles and its timeframe, as JSON (agentapi.Warmup), and exits: what a backtest reads before its period")
 		btConfig     = flag.String("backtest-config", "", "backtest: the JSON file of a backtest as the controller asks for it (period, balance, costs, symbols, protection, daily limits, report): the run writes its report there and exits (see agents/internal/backtest)")
 		api          = flag.String("api", "", "address to serve the bot API at for the controller (cmd/controller), eg: localhost:5556 (default: off)")
 		tradePanel   = flag.Bool("trade-panel", false, "live: enable the trade panel of the web dashboard (manual orders, their moves and cancels; the dashboard starts and stops the bot without it)")
@@ -370,6 +372,10 @@ func run(agent Agent) error {
 		Fraction: *fraction, Leverage: *leverage, Lots: lots, MaxRiskPct: *maxRisk})
 	if err != nil {
 		return err
+	}
+	if *printWarmup { // nothing connected, nothing run
+		return json.NewEncoder(os.Stdout).Encode(agentapi.Warmup{Timeframe: trader.Timeframe(),
+			Candles: trader.WarmupPeriod()})
 	}
 
 	settings := xtrader.Settings{
