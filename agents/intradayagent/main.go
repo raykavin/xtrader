@@ -53,7 +53,7 @@ func agent() runner.Agent {
 		{Name: "zscore", About: "reversion of the Z-Score of the close", New: f.zscore,
 			Inputs: inputs("entry-z", "exit-z", "max-adx")},
 		{Name: "meanreversion", About: "the rejections of the Bollinger Bands of a range back to its mean",
-			New: f.meanReversion, Inputs: []string{"min-atr-pct"}},
+			New: f.meanReversion, Inputs: append([]string{"min-atr-pct"}, meanReversionInputs...)},
 		{Name: "scalp1m", About: "scalping the micro pullbacks of the micro trend on 1 minute candles",
 			New: f.scalp1m, Inputs: []string{"min-atr-pct"}},
 		{Name: "scalp1mbtc", About: "scalping the strong bursts of momentum on 1 minute candles, for a wide spread",
@@ -76,12 +76,32 @@ type flags struct {
 	anchor, setup                   *string
 	lookback                        *int
 	entryZ, exitZ, maxADX           *float64
+	mr                              meanReversionFlags
 }
+
+// meanReversionFlags holds the flags of meanreversion, named in
+// meanReversionInputs: its filters, the ones of DefaultMeanReversionConfig
+// unless set.
+type meanReversionFlags struct {
+	oversold, overbought, maxADX, flatATR, wick *float64
+}
+
+// meanReversionInputs are the flags of meanreversion of its own.
+var meanReversionInputs = []string{"meanreversion-oversold", "meanreversion-overbought", "meanreversion-max-adx",
+	"meanreversion-flat-atr", "meanreversion-wick-pct"}
 
 // newFlags defines the flags of the strategies of the agent, before
 // runner.Run parses them.
 func newFlags() flags {
+	mr := strategies.DefaultMeanReversionConfig()
 	return flags{
+		mr: meanReversionFlags{
+			oversold:   flag.Float64("meanreversion-oversold", mr.Oversold, "meanreversion: the RSI under it on the rejection of the lower band, a buy"),
+			overbought: flag.Float64("meanreversion-overbought", mr.Overbought, "meanreversion: the RSI over it on the rejection of the upper band, a sell"),
+			maxADX:     flag.Float64("meanreversion-max-adx", mr.MaxADX, "meanreversion: the ADX of a range under it, and not rising"),
+			flatATR:    flag.Float64("meanreversion-flat-atr", mr.FlatATR, "meanreversion: the fast and the slow EMAs of a range closer than that ATR"),
+			wick:       flag.Float64("meanreversion-wick-pct", mr.WickPct, "meanreversion: the wick of the rejection, a share of its candle at least"),
+		},
 		timezone:    flag.String("timezone", "", "orb, asialondon, vwap, sweep: IANA time zone of the session times, eg: America/New_York, Europe/London, UTC"),
 		session:     flag.String("session", "", "orb: session traded, HH:MM-HH:MM in -timezone (default 09:30-12:00 America/New_York)"),
 		openRange:   flag.Duration("open-range", 0, "orb: duration of the opening range from the start of the session (default 15m)"),
@@ -223,6 +243,8 @@ func (f flags) asiaLondon(in runner.Inputs) (strategy.Strategy, error) {
 func (f flags) meanReversion(in runner.Inputs) (strategy.Strategy, error) {
 	cfg := strategies.DefaultMeanReversionConfig()
 	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	cfg.Oversold, cfg.Overbought, cfg.MaxADX = *f.mr.oversold, *f.mr.overbought, *f.mr.maxADX
+	cfg.FlatATR, cfg.WickPct = *f.mr.flatATR, *f.mr.wick
 	trader, err := strategies.NewMeanReversion(cfg)
 	return trader, err
 }

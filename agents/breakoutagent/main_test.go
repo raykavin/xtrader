@@ -150,3 +150,43 @@ func TestAgent_TheStrategiesOfTheSeeds(t *testing.T) {
 	}
 	require.ElementsMatch(t, known, seeded)
 }
+
+// The filters of squeezebreakout set by their flags, its own only: the ones
+// of its defaults unless set, each reaching the strategy (a value out of its
+// bounds refused by it).
+func TestAgent_SqueezeBreakoutFilters(t *testing.T) {
+	a := testAgent()
+	for _, name := range squeezeInputs {
+		require.NoError(t, a.CheckInputs("squeezebreakout", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("atrbreakout", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy squeezebreakout")
+	}
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "squeezebreakout" })
+	require.GreaterOrEqual(t, i, 0)
+	in := runner.Inputs{Set: map[string]bool{}, Direction: strategies.RKDirectionBoth, MinValue: 10, Fraction: 1,
+		Leverage: 1}
+	_, err := a.Strategies[i].New(in)
+	require.NoError(t, err, "the defaults")
+	for name, refused := range map[string]string{
+		"squeezebreakout-min-rr":             "risk reward must be positive",
+		"squeezebreakout-max-atr-percentile": "ATR percentile",
+		"squeezebreakout-max-box-atr":        "the box must be positive",
+		"squeezebreakout-min-volume":         "the volumes not negative",
+	} {
+		value := "0"
+		if name == "squeezebreakout-min-volume" {
+			value = "-1"
+		}
+		before := flag.Lookup(name).Value.String()
+		require.NoError(t, flag.Set(name, value))
+		_, err := a.Strategies[i].New(in)
+		require.ErrorContains(t, err, refused, name)
+		require.NoError(t, flag.Set(name, before))
+	}
+	require.NoError(t, flag.Set("squeezebreakout-min-rr", "1.5"))
+	require.NoError(t, flag.Set("squeezebreakout-max-atr-percentile", "50"))
+	_, err = a.Strategies[i].New(in)
+	require.NoError(t, err, "the looser filters taken")
+	require.NoError(t, flag.Set("squeezebreakout-min-rr", "2"))
+	require.NoError(t, flag.Set("squeezebreakout-max-atr-percentile", "30"))
+}

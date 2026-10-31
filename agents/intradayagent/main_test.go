@@ -110,3 +110,44 @@ func TestAgent_TheStrategiesOfTheSeeds(t *testing.T) {
 	}
 	require.ElementsMatch(t, known, seeded)
 }
+
+// The filters of meanreversion set by their flags, its own only: the ones of
+// its defaults unless set, each reaching the strategy (a value out of its
+// bounds refused by it).
+func TestAgent_MeanReversionFilters(t *testing.T) {
+	a := testAgent()
+	for _, name := range meanReversionInputs {
+		require.NoError(t, a.CheckInputs("meanreversion", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("orb", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy meanreversion")
+	}
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "meanreversion" })
+	require.GreaterOrEqual(t, i, 0)
+	in := runner.Inputs{Set: map[string]bool{}, Direction: strategies.RKDirectionBoth, MinValue: 10, Fraction: 1,
+		Leverage: 1}
+	_, err := a.Strategies[i].New(in)
+	require.NoError(t, err, "the defaults")
+	for name, c := range map[string]struct{ value, refused string }{
+		"meanreversion-oversold":   {"80", "RSI levels"},
+		"meanreversion-overbought": {"20", "RSI levels"},
+		"meanreversion-max-adx":    {"0", "ADX of the range"},
+		"meanreversion-flat-atr":   {"0", "flat EMAs"},
+		"meanreversion-wick-pct":   {"2", "wick of the rejection"},
+	} {
+		before := flag.Lookup(name).Value.String()
+		require.NoError(t, flag.Set(name, c.value))
+		_, err := a.Strategies[i].New(in)
+		require.ErrorContains(t, err, c.refused, name)
+		require.NoError(t, flag.Set(name, before))
+	}
+	for name, value := range map[string]string{"meanreversion-oversold": "40", "meanreversion-overbought": "60",
+		"meanreversion-max-adx": "25", "meanreversion-flat-atr": "0.5", "meanreversion-wick-pct": "0.3"} {
+		require.NoError(t, flag.Set(name, value))
+	}
+	_, err = a.Strategies[i].New(in)
+	require.NoError(t, err, "the looser filters taken")
+	for name, value := range map[string]string{"meanreversion-oversold": "30", "meanreversion-overbought": "70",
+		"meanreversion-max-adx": "20", "meanreversion-flat-atr": "0.25", "meanreversion-wick-pct": "0.5"} {
+		require.NoError(t, flag.Set(name, value))
+	}
+}
