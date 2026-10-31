@@ -75,7 +75,8 @@ func (p *openPositions) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // read returns the open positions of the agents, read again once the last
-// read is openPositionsTTL old, a read at a time for all the requests.
+// read is openPositionsTTL old, a read at a time for all the requests; their
+// pending orders counted with them.
 func (p *openPositions) read(ctx context.Context) (ui.OpenPositionsResponse, error) {
 	for {
 		p.mu.Lock()
@@ -128,7 +129,8 @@ type liveAccount struct {
 	agents []bookedAgent
 }
 
-// readAll reads the accounts of the agents trading live, at once.
+// readAll reads the accounts of the agents trading live, at once, with their
+// pending orders.
 func (p *openPositions) readAll(ctx context.Context) (ui.OpenPositionsResponse, error) {
 	agents, err := p.store.Agents(ctx)
 	if err != nil {
@@ -141,7 +143,7 @@ func (p *openPositions) readAll(ctx context.Context) (ui.OpenPositionsResponse, 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reads[i] = p.readAccount(ctx, account, false)
+			reads[i] = p.readAccount(ctx, account, true)
 		}()
 	}
 	wg.Wait()
@@ -439,6 +441,16 @@ func (p *openPositions) sum(accounts []liveAccount, reads []accountRead) ui.Open
 				StopLoss: position.SL, TakeProfit: position.TP, Profit: profit, Currency: currency,
 				Ticket: position.Ticket, Running: p.running(owner.Name)})
 			total.Amount += profit
+		}
+		for _, o := range read.orders {
+			if _, ok := ownerOf(account.agents, o.Magic, o.Symbol); !ok {
+				continue // not of an agent, eg: by hand
+			}
+			key := read.account.key(account.bridge) + "/order/" + fmt.Sprint(o.Ticket)
+			if !seen[key] {
+				seen[key] = true
+				response.PendingOrders++
+			}
 		}
 	}
 	slices.SortStableFunc(response.Positions, func(a, b ui.OpenPosition) int {

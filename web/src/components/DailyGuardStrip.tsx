@@ -13,6 +13,7 @@ import {
   timeIn,
 } from "../lib/dailyLimits";
 import { formatMoney, signClass } from "../lib/format";
+import { hasExposure } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { Icon } from "./Icon";
 import { useOpenPositions } from "./useOpenPositions";
@@ -66,7 +67,8 @@ const closeAllTitle = "Zerar todas as posições e cancelar as ordens pendentes 
 
 /**
  * Zeroing every position of the agents and canceling their pending entries,
- * from the card of the daily limit: apart from the close of an agent on its
+ * from the card of the daily limit, shown only while they hold something
+ * (see hasExposure): apart from the close of an agent on its
  * tile, it asks to be confirmed, names what it does and what it never
  * touches; its button disabled until it ends; its outcome, checked on the
  * accounts, kept until dismissed: what was closed, canceled, and what remains.
@@ -101,10 +103,10 @@ function CloseAll() {
 
   return (
     <div className="daily-zero">
-      {!confirming && !busy && (
+      {!confirming && !busy && hasExposure(read) && (
         <button
           type="button"
-          className={`btn btn-xs btn-danger daily-zero-button${read && read.positions.length === 0 ? " is-flat" : ""}`}
+          className="btn btn-xs btn-danger daily-zero-button"
           title={closeAllTitle}
           onClick={() => setConfirming(true)}
         >

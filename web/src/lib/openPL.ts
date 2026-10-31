@@ -201,3 +201,12 @@ export function agentOpenState(line: AgentLine, open: OpenPositionsResponse | nu
   if (line.positions === 0) return "flat";
   return profitTone(line.open);
 }
+
+/**
+ * Whether the agents may hold something to zero: positions open or pending
+ * orders, or a read not done yet or incomplete (never hidden for want of data).
+ */
+export function hasExposure(read: OpenPositionsResponse | null): boolean {
+  if (!read?.complete) return true;
+  return read.positions.length > 0 || read.pending_orders > 0;
+}

@@ -7,6 +7,7 @@ import {
   amountsText,
   assetLabel,
   directionOf,
+  hasExposure,
   openPLByAgent,
   openPLGaps,
   openPLSummary,
@@ -39,6 +40,7 @@ const read = (fields: Partial<OpenPositionsResponse> = {}): OpenPositionsRespons
   accounts: 1,
   complete: true,
   positions: [],
+  pending_orders: 0,
   at: 1_760_000_000,
   ...fields,
 });
@@ -110,6 +112,16 @@ describe("the open profit of the agents", () => {
     expect(other?.assets.map((a) => [a.pair, a.side])).toEqual([["BTCUSDm", "BUY"]]);
     expect(directionOf("sell")).toEqual({ icon: "down", text: "Venda" });
     expect(directionOf("BUY")).toEqual({ icon: "up", text: "Compra" });
+  });
+
+  it("tells whether there is something to zero: positions, pending orders, or a read unknown", () => {
+    expect(hasExposure(null)).toBe(true);
+    expect(hasExposure(read())).toBe(false);
+    expect(hasExposure(read({ positions: [position("matrend", 1, 2)] }))).toBe(true);
+    expect(hasExposure(read({ pending_orders: 2 }))).toBe(true);
+    expect(
+      hasExposure(read({ complete: false, missing: [{ agents: ["orb"], reason: "unreachable" }] })),
+    ).toBe(true);
   });
 
   it("keeps each account in its currency, none converted, its code told with several", () => {
