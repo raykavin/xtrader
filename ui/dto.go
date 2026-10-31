@@ -910,17 +910,20 @@ type AgentSettingsRequest struct {
 // converted, in the order of the accounts: one for each account read, 0
 // without a position. Balances sum the balances of the accounts read, each
 // account once by its login, by their currency in the same order; Accounts
-// counts them. Complete tells that every account was read: else Missing tells
-// the agents whose account wasn't, left out of Totals and Balances. At is when
-// the accounts were read, in Unix seconds.
+// counts them. PendingOrders counts the pending orders of the agents on the
+// accounts read, each once by its ticket, the ones by hand left out.
+// Complete tells that every account was read: else Missing tells the agents
+// whose account wasn't, left out of Totals and Balances. At is when the
+// accounts were read, in Unix seconds.
 type OpenPositionsResponse struct {
-	Totals    []CurrencyAmount   `json:"totals"`
-	Balances  []CurrencyAmount   `json:"balances"`
-	Accounts  int                `json:"accounts"`
-	Complete  bool               `json:"complete"`
-	Positions []OpenPosition     `json:"positions"`
-	Missing   []OpenPositionsGap `json:"missing,omitempty"`
-	At        int64              `json:"at"`
+	Totals        []CurrencyAmount   `json:"totals"`
+	Balances      []CurrencyAmount   `json:"balances"`
+	Accounts      int                `json:"accounts"`
+	Complete      bool               `json:"complete"`
+	Positions     []OpenPosition     `json:"positions"`
+	PendingOrders int                `json:"pending_orders"`
+	Missing       []OpenPositionsGap `json:"missing,omitempty"`
+	At            int64              `json:"at"`
 }
 
 // OpenPosition is a position open on an MT5 account, of the agent of its

@@ -1045,9 +1045,11 @@ export interface AgentSettingsRequest {
  * converted, in the order of the accounts: one for each account read, 0
  * without a position. Balances sum the balances of the accounts read, each
  * account once by its login, by their currency in the same order; Accounts
- * counts them. Complete tells that every account was read: else Missing tells
- * the agents whose account wasn't, left out of Totals and Balances. At is when
- * the accounts were read, in Unix seconds.
+ * counts them. PendingOrders counts the pending orders of the agents on the
+ * accounts read, each once by its ticket, the ones by hand left out.
+ * Complete tells that every account was read: else Missing tells the agents
+ * whose account wasn't, left out of Totals and Balances. At is when the
+ * accounts were read, in Unix seconds.
  */
 export interface OpenPositionsResponse {
   totals: CurrencyAmount[];
@@ -1055,6 +1057,7 @@ export interface OpenPositionsResponse {
   accounts: number /* int */;
   complete: boolean;
   positions: OpenPosition[];
+  pending_orders: number /* int */;
   missing?: OpenPositionsGap[];
   at: number /* int64 */;
 }

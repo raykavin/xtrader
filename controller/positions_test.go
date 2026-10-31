@@ -273,7 +273,22 @@ func TestOpenPositions_TheAgentsOnTheirAccounts(t *testing.T) {
 	demo.mu.Lock()
 	requests := demo.requests
 	demo.mu.Unlock()
-	assert.LessOrEqual(t, requests, 4, "the account read once for the agents on it: /account and /positions")
+	assert.LessOrEqual(t, requests, 6, "the account read once for the agents on it: /account, /positions, /orders")
+
+	// the pending orders of the agents counted, the one by hand left out
+	assert.Zero(t, got.PendingOrders)
+	demo.mu.Lock()
+	demo.orders = []bridgeOrder{
+		{Ticket: 71, Type: 2, Magic: 101, Symbol: "XAUUSDm", PriceOpen: 4100, VolumeCurrent: 0.01},
+		{Ticket: 72, Type: 3, Magic: 303, Symbol: "XAUUSDm", PriceOpen: 4200, VolumeCurrent: 0.01},
+		{Ticket: 73, Type: 2, Magic: 0, Symbol: "EURUSDm", PriceOpen: 1.1, VolumeCurrent: 0.1},
+	}
+	demo.mu.Unlock()
+	got = openPL(t, call)
+	assert.Equal(t, 2, got.PendingOrders)
+	demo.mu.Lock()
+	demo.orders = nil
+	demo.mu.Unlock()
 
 	// a second URL of the same account: its positions counted once
 	twin := newFakeBridge(t, "twin-token", 198974329, "BRL")
@@ -462,5 +477,5 @@ func TestOpenPositions_AReadForAll(t *testing.T) {
 	demo.mu.Lock()
 	requests := demo.requests
 	demo.mu.Unlock()
-	assert.Equal(t, 2, requests, "/account and /positions once")
+	assert.Equal(t, 3, requests, "/account, /positions and /orders once")
 }
