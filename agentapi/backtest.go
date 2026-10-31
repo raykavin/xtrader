@@ -82,6 +82,19 @@ type BacktestSymbol struct {
 	SpreadPoint float64 `json:"spread_points,omitempty"` // the fallback spread of the symbol, else BacktestConfig.SpreadPoints
 }
 
+// PrintWarmupFlag is the flag of the agents printing the warmup of their
+// strategy, see Warmup, and exiting: what the controller reads before the
+// period of a backtest.
+const PrintWarmupFlag = "print-warmup"
+
+// Warmup is the warmup of the strategy of an agent, as -print-warmup prints
+// it: the candles of Timeframe its indicators need before it trades (the
+// engine hands it a candle only once it holds that many).
+type Warmup struct {
+	Timeframe string `json:"timeframe"`
+	Candles   int    `json:"candles"`
+}
+
 // ReadBacktestConfig reads the config of a backtest from path, validated.
 func ReadBacktestConfig(path string) (BacktestConfig, error) {
 	data, err := os.ReadFile(path)

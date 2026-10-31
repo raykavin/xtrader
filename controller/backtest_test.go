@@ -272,7 +272,9 @@ func TestBacktests_ACoarserTimeframeWhenTheBrokerLacksTheFinerCandles(t *testing
 func slowAgent(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "slowagent")
-	script := "#!/bin/sh\necho 'PROGRESS 1 100' >&2\ntrap 'exit 0' INT TERM\nwhile true; do sleep 0.1; done\n"
+	// as the agents, it tells the warmup of its strategy at once when asked
+	script := "#!/bin/sh\ncase \" $* \" in *' -print-warmup '*) echo '{\"timeframe\":\"15m\",\"candles\":100}'; " +
+		"exit 0;; esac\necho 'PROGRESS 1 100' >&2\ntrap 'exit 0' INT TERM\nwhile true; do sleep 0.1; done\n"
 	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
 	return path
 }
@@ -438,4 +440,39 @@ func TestBacktests_PlanRefused(t *testing.T) {
 		assert.ErrorIs(t, err, store.ErrInvalid, name)
 	}
 
+}
+
+// The candles read before the period cover the warmup of the strategy, as the
+// agent tells it: mtfema, 8832 candles of 15m, over the calendar (half of it
+// more, and a day); the default for an LLM agent, and for an agent that can't
+// tell it, told.
+func TestBacktests_WarmupOfTheStrategy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the agents")
+	}
+	bridge := newHistoryBridge(t, time.Now().AddDate(0, 0, -5), 10)
+	_, b := newBacktested(t, bridge, 1)
+	ctx := context.Background()
+	snap := backtestSnapshot{Agent: "trend", Kind: "trend", Pairs: []string{"XAUUSDm"}, Timeframe: "15m",
+		Command: strings.Fields(b.agents.Command("trend")), Args: []string{"-strategy=mtfema", "-lot=XAUUSDm=0.01"}}
+	warm, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, store.AgentSecretValues{}))
+	assert.Equal(t, 8832*15*time.Minute*3/2+24*time.Hour, warm, "about 139 days")
+	assert.Empty(t, note)
+
+	short := snap
+	short.Args = []string{"-strategy=emacross", "-lot=XAUUSDm=0.01"}
+	warm, _ = b.warmupOf(ctx, short, backtestEnv(b.agents, short, store.AgentSecretValues{}))
+	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm, "the default when larger")
+
+	llm := snap
+	llm.LLM = &backtestLLM{}
+	warm, note = b.warmupOf(ctx, llm, nil)
+	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm)
+	assert.Empty(t, note)
+
+	broken := snap
+	broken.Args = []string{"-strategy=nonexistent"}
+	warm, note = b.warmupOf(ctx, broken, backtestEnv(b.agents, broken, store.AgentSecretValues{}))
+	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm)
+	assert.Contains(t, note, "não pôde ser lido do agente")
 }
