@@ -132,6 +132,7 @@ const paths = {
   ),
   list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
   trend: <path d="M23 6l-9.5 9.5-5-5L1 18M17 6h6v6" />,
+  clock: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2" />,
   up: <path d="M12 19V5M5 12l7-7 7 7" />,
   down: <path d="M12 5v14M19 12l-7 7-7-7" />,
   chart: <path d="M3 3v18h18M8 8v7M13 5v9M18 9v6" />,

@@ -69,6 +69,8 @@ import type {
   TelegramSettingsRequest,
   TelegramSettingsResponse,
   TelegramUserRequest,
+  TradingHoursRequest,
+  TradingHoursResponse,
   UserInfo,
   UserRequest,
   UsersResponse,
@@ -710,6 +712,16 @@ export function fetchNewsSettings(signal?: AbortSignal): Promise<NewsSettingsRes
 /** Changes the news of all the agents, applied to the LLM agents while they run: a token left out is kept. */
 export function updateNewsSettings(request: NewsSettingsRequest): Promise<NewsSettingsResponse> {
   return sendJSON<NewsSettingsResponse>("PUT", "/settings/news", request);
+}
+
+/** The trading hours of all the agents and how they stand. */
+export function fetchTradingHours(signal?: AbortSignal): Promise<TradingHoursResponse> {
+  return getJSON<TradingHoursResponse>("/settings/trading-hours", signal);
+}
+
+/** Sets the trading hours of all the agents, applied at once: 400 when refused. */
+export function updateTradingHours(request: TradingHoursRequest): Promise<TradingHoursResponse> {
+  return sendJSON<TradingHoursResponse>("PUT", "/settings/trading-hours", request);
 }
 
 /** Reads once the MCP server of the calendar of each LLM agent with the token of the news. */

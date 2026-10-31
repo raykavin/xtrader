@@ -2169,6 +2169,65 @@ type DailyLimitsStatus struct {
 	Global      DailyScopeStatus   `json:"global"`
 	Agents      []DailyScopeStatus `json:"agents"`
 	Paper       []string           `json:"paper,omitempty"`
+	Hours       TradingHoursStatus `json:"hours"`
+}
+
+// TradingHoursSettings are the trading hours of all the agents: on, no agent
+// opens a position before Start nor from End (HH:MM, of the zone of the
+// controller, America/Belem; a window crossing midnight when Start is after
+// End); at End every position of the agents is closed (Flatten) and their
+// pending orders canceled (CancelPending), as checked. UpdatedBy and
+// UpdatedAt (Unix seconds) tell the last change.
+type TradingHoursSettings struct {
+	Enabled       bool   `json:"enabled"`
+	Start         string `json:"start"`
+	End           string `json:"end"`
+	Flatten       bool   `json:"flatten"`
+	CancelPending bool   `json:"cancel_pending"`
+	UpdatedBy     string `json:"updated_by,omitempty"`
+	UpdatedAt     int64  `json:"updated_at,omitempty"`
+}
+
+// TradingHoursStatus is how the trading hours stand: on or off, the window
+// (Start, End, in Zone), Open while inside it, Blocked while the entries of
+// the agents are blocked by it (as recorded and sent to the agents), NextAt
+// the next change (the end while open, the start while closed; Unix seconds,
+// 0 while off), and the actions of the last end of the window, if any.
+type TradingHoursStatus struct {
+	Enabled bool             `json:"enabled"`
+	Start   string           `json:"start,omitempty"`
+	End     string           `json:"end,omitempty"`
+	Zone    string           `json:"zone"`
+	Open    bool             `json:"open"`
+	Blocked bool             `json:"blocked"`
+	NextAt  int64            `json:"next_at,omitempty"`
+	LastEnd *TradingHoursEnd `json:"last_end,omitempty"`
+}
+
+// TradingHoursEnd is how the actions of an end of the window went: when
+// (Unix seconds), what was asked (Flatten, CancelPending), the status of the
+// action (running while it runs, else the one of its result: succeeded,
+// partial, failed or unknown) and the action of the XTrader AI recorded.
+type TradingHoursEnd struct {
+	At            int64  `json:"at"`
+	Flatten       bool   `json:"flatten"`
+	CancelPending bool   `json:"cancel_pending"`
+	Status        string `json:"status"`
+	ActionID      *int64 `json:"action_id,omitempty"`
+}
+
+// TradingHoursResponse answers GET and PUT /api/settings/trading-hours: the
+// hours and how they stand.
+type TradingHoursResponse struct {
+	Settings TradingHoursSettings `json:"settings"`
+	Status   TradingHoursStatus   `json:"status"`
+}
+
+// TradingHoursRequest is the body of PUT /api/settings/trading-hours: the
+// hours, and why (Reason, recorded).
+type TradingHoursRequest struct {
+	Settings TradingHoursSettings `json:"settings"`
+	Reason   string               `json:"reason,omitempty"`
 }
 
 // DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the

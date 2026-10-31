@@ -782,24 +782,38 @@ func entriesOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Ent
 }
 
 // combinedEntries returns the entries of the agent of id: blocked by its
-// supervision (supervision) or by a daily guard, its own or the one of all the
-// agents (see store.DailyEntries), the reason of the daily guard first; their
-// revision the sum of both, which only grow, so that allowing the entries in
-// its supervision (eg: a user, or the agent enabled again) never lifts a daily
-// guard.
+// supervision (supervision), by a daily guard, its own or the one of all the
+// agents (see store.DailyEntries), or by the trading hours, their window
+// closed (see store.TradingHoursEntries), the reasons of the daily guard and
+// of the hours first; their revision the sum of the three, which only grow,
+// so that allowing the entries in its supervision (eg: a user, or the agent
+// enabled again) never lifts a daily guard nor the hours.
 func combinedEntries(ctx context.Context, s *store.Store, id int64,
 	supervision store.AgentSupervision) (agentapi.Entries, error) {
-	blocked, reason, revision, err := s.DailyEntries(ctx, id)
+	daily, dailyReason, dailyRevision, err := s.DailyEntries(ctx, id)
 	if err != nil {
 		return agentapi.Entries{}, err
 	}
-	entries := agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked || blocked,
-		EntriesRevision: supervision.EntriesRevision + revision, EntriesReason: supervision.EntriesReason}
-	switch {
-	case blocked && supervision.EntriesBlocked && supervision.EntriesReason != "":
-		entries.EntriesReason = reason + "; " + supervision.EntriesReason
-	case blocked:
-		entries.EntriesReason = reason
+	hours, hoursReason, hoursRevision, err := s.TradingHoursEntries(ctx)
+	if err != nil {
+		return agentapi.Entries{}, err
 	}
+	entries := agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked || daily || hours,
+		EntriesRevision: supervision.EntriesRevision + dailyRevision + hoursRevision,
+		EntriesReason:   supervision.EntriesReason}
+	if !daily && !hours {
+		return entries, nil
+	}
+	var reasons []string
+	if daily {
+		reasons = append(reasons, dailyReason)
+	}
+	if hours {
+		reasons = append(reasons, hoursReason)
+	}
+	if supervision.EntriesBlocked && supervision.EntriesReason != "" {
+		reasons = append(reasons, supervision.EntriesReason)
+	}
+	entries.EntriesReason = strings.Join(reasons, "; ")
 	return entries, nil
 }

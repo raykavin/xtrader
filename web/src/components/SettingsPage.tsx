@@ -44,9 +44,9 @@ const intros: Record<SettingsTab, SectionIntro> = {
       "Ligue, configure e reinicie cada agente. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt mudam na hora; o resto vale depois de reiniciar.",
   },
   limites: {
-    title: "Limites diários",
+    title: "Limites",
     description:
-      "A perda e o ganho máximos do dia, de todos os agentes somados e de cada agente. Atingido um limite, a aplicação zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00.",
+      "A perda e o ganho máximos do dia, de todos os agentes somados e de cada agente, e o horário de operação. Atingido um limite, a aplicação zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00; fora do horário, nenhum agente abre posição.",
   },
   noticias: {
     title: "Notícias",
