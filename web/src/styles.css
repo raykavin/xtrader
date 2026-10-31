@@ -3405,27 +3405,38 @@ fieldset.seg {
   opacity: 0.5;
 }
 
-.openpl-close-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  color: var(--text);
-  font-size: var(--fs-xs);
+/* closing: the button turning, disabled until the result */
+.openpl-close.is-busy svg {
+  animation: openpl-turn 1s linear infinite;
 }
 
-.openpl-close-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+@keyframes openpl-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openpl-close.is-busy svg {
+    animation: none;
+  }
 }
 
 .openpl-close-note {
   margin: 0;
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
+}
+
+.openpl-close-note p {
+  margin: 0;
+}
+
+/* what remains after a close: failed or unknown, to check on the account */
+.openpl-close-note ul {
+  margin: 4px 0 0;
+  padding-left: 14px;
+  color: var(--text-2);
 }
 
 .openpl-close-note.ok {
@@ -3468,6 +3479,38 @@ fieldset.seg {
 
 .openpl-asset dd {
   margin: 0;
+}
+
+/* the direction of the positions of an asset: up for a buy, down for a sell */
+.openpl-asset dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.openpl-asset dt > span:last-child {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.openpl-side {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.openpl-side.is-up {
+  background: var(--pos-soft);
+  color: var(--pos);
+}
+
+.openpl-side.is-down {
+  background: var(--neg-soft);
+  color: var(--neg);
 }
 
 /* the closed profit of the period, under the assets */
@@ -7459,8 +7502,8 @@ h3.md-heading {
   color: var(--text-2);
 }
 
-/* the state of the daily limit of all the agents, on the card of the accounts
-   and in the panel of the XTrader AI: a line, wrapped as needed */
+/* the state of the daily limit of all the agents, atop the panel: a line,
+   wrapped as needed */
 .daily-strip {
   display: flex;
   flex-direction: column;
@@ -7499,16 +7542,6 @@ h3.md-heading {
   font-size: var(--fs-xl);
 }
 
-.daily-strip.compact {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px var(--sp-3);
-  margin: 0 var(--sp-3) var(--sp-2);
-  padding: 6px 10px;
-  font-size: var(--fs-xs);
-}
-
 .daily-strip-head {
   display: flex;
   flex-wrap: wrap;
@@ -7528,6 +7561,128 @@ h3.md-heading {
 
 .daily-strip-flatten {
   margin-left: auto;
+}
+
+.daily-strip-off {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+/* zeroing every position of the agents: its button at the end of the head;
+   asked to be confirmed, then its outcome, across the strip */
+.daily-zero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.daily-strip-flatten + .daily-zero {
+  margin-left: 0;
+}
+
+.daily-zero:has(.daily-zero-confirm, .daily-zero-outcome) {
+  flex-basis: 100%;
+  align-items: stretch;
+}
+
+.daily-zero-button {
+  gap: 6px;
+  white-space: normal;
+  text-align: left;
+}
+
+.daily-zero:has(.daily-zero-outcome) .daily-zero-button {
+  align-self: flex-end;
+}
+
+.daily-zero-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px var(--sp-4);
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--neg) 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--neg) 6%, var(--glass-tile));
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.daily-zero-confirm p {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+.daily-zero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.daily-zero-outcome {
+  position: relative;
+  padding: 10px 36px 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-tile);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.daily-zero-outcome.ok {
+  border-color: color-mix(in srgb, var(--pos) 45%, transparent);
+}
+
+.daily-zero-outcome.ok strong {
+  color: var(--pos);
+}
+
+.daily-zero-outcome.warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.daily-zero-outcome.warn strong {
+  color: var(--warn);
+}
+
+.daily-zero-outcome.error {
+  border-color: color-mix(in srgb, var(--neg) 45%, transparent);
+}
+
+.daily-zero-outcome.error strong {
+  color: var(--neg);
+}
+
+.daily-zero-outcome p {
+  margin: 0;
+}
+
+.daily-zero-caption {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.daily-zero-outcome ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--text-2);
+}
+
+.daily-zero-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
 }
 
 /* the state: a padlock only, in the chip of its tone */

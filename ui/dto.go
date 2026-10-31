@@ -1489,18 +1489,23 @@ type SupervisionEntriesRequest struct {
 // positions of Pairs closed, all of them without any, never opening the
 // other side; Block blocks the entries first, at Revision, for Reason, and
 // they are held anyway as the positions are closed, then HoldSeconds more.
+// CancelPending cancels the pending entries of the pairs first, under the
+// same hold, so an entry filled as it is canceled is closed with the rest.
 type SupervisionCloseRequest struct {
-	Pairs       []string `json:"pairs,omitempty"`
-	Block       bool     `json:"block"`
-	Revision    int64    `json:"revision,omitempty"`
-	Reason      string   `json:"reason,omitempty"`
-	HoldSeconds int      `json:"hold_seconds,omitempty"`
+	Pairs         []string `json:"pairs,omitempty"`
+	Block         bool     `json:"block"`
+	Revision      int64    `json:"revision,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
+	HoldSeconds   int      `json:"hold_seconds,omitempty"`
+	CancelPending bool     `json:"cancel_pending,omitempty"`
 }
 
 // SupervisionCloseResponse answers POST /api/supervision/close: a result by
-// pair.
+// pair, and the cancels of the pending entries when asked (null when the
+// agent doesn't cancel them, an earlier version).
 type SupervisionCloseResponse struct {
-	Results []SupervisionCloseResult `json:"results"`
+	Results  []SupervisionCloseResult  `json:"results"`
+	Canceled []SupervisionCancelResult `json:"canceled"`
 }
 
 // The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
@@ -2069,7 +2074,9 @@ type SupervisorEntriesRequest struct {
 
 // SupervisorCloseRequest is the payload of POST
 // /api/supervisor/agents/{name}/close: every open position of the agent
-// closed by the user, for Reason (a default naming the user without one).
+// closed by the user, for Reason (a default naming the user without one); and
+// of POST /api/supervisor/close-all: every position of the agents closed and
+// their pending entries canceled.
 type SupervisorCloseRequest struct {
 	Reason string `json:"reason,omitempty"`
 }

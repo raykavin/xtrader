@@ -282,6 +282,9 @@ func (c *Chart) handleSupervisionClose(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	response := SupervisionCloseResponse{Results: make([]SupervisionCloseResult, 0, len(pairs))}
+	if request.CancelPending { // first, held: an entry filled as it is canceled is closed below
+		response.Canceled = c.cancelEntries(controller, pairs)
+	}
 	for _, pair := range pairs {
 		result := SupervisionCloseResult{Pair: pair}
 		closed, err := controller.ClosePosition(pair)
@@ -319,7 +322,13 @@ func (c *Chart) handleSupervisionCancel(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusNotFound, "unknown pairs: "+strings.Join(unknown, ", "))
 		return
 	}
-	response := SupervisionCancelResponse{Results: []SupervisionCancelResult{}}
+	writeJSON(w, SupervisionCancelResponse{Results: c.cancelEntries(controller, pairs)})
+}
+
+// cancelEntries cancels the pending entries of the bot on pairs, the legs of
+// its positions left, and returns how each cancel went.
+func (c *Chart) cancelEntries(controller SupervisedController, pairs []string) []SupervisionCancelResult {
+	results := []SupervisionCancelResult{}
 	for _, o := range c.pendingOrders(pairs) {
 		if !pendingEntry(o) {
 			continue
@@ -334,9 +343,9 @@ func (c *Chart) handleSupervisionCancel(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		log.Warnf("[SUPERVISOR] %s: the pending entry %d %s", o.Pair, o.ID, result.Status)
-		response.Results = append(response.Results, result)
+		results = append(results, result)
 	}
-	writeJSON(w, response)
+	return results
 }
 
 // cmpOr returns value, or fallback when empty.

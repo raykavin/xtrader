@@ -43,6 +43,7 @@ func (s *Supervision) routes(r chi.Router) {
 	r.Post("/supervisor/messages/stream", s.handleAskStream)
 	r.Post("/supervisor/agents/{name}/entries", s.handleEntries)
 	r.Post("/supervisor/agents/{name}/close", s.handleClose)
+	r.Post("/supervisor/close-all", s.handleCloseAll)
 	r.Get("/settings/daily-limits", s.handleDailyLimits)
 	r.Put("/settings/daily-limits", s.handleSetDailyLimits)
 	r.Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
@@ -606,6 +607,12 @@ func (s *Supervision) handleClose(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	release, refusal := s.beginClose(a.Name)
+	if refusal != "" {
+		writeJSONError(w, http.StatusConflict, refusal)
+		return
+	}
+	defer release()
 	v, err := s.read(r.Context())
 	if err != nil {
 		s.fail(w, err)
@@ -638,5 +645,89 @@ func (s *Supervision) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Infof("ui: the positions of the agent %s closed by %s: %s", a.Name, by, status)
+	writeJSON(w, confirmResponse{Action: actionInfo(created)})
+}
+
+// beginClose marks the close from the dashboard of the agent of name ("" for
+// all of them) running, and returns its release, or why it is refused: the
+// same one running, or the one of all of them.
+func (s *Supervision) beginClose(name string) (release func(), refusal string) {
+	s.locksMu.Lock()
+	defer s.locksMu.Unlock()
+	switch {
+	case s.closing[""]:
+		return nil, "o encerramento de todas as posições já está em andamento"
+	case name != "" && s.closing[name]:
+		return nil, "o encerramento das posições deste agente já está em andamento"
+	case name == "" && len(s.closing) > 0:
+		return nil, "o encerramento das posições de um agente está em andamento: aguarde o resultado"
+	}
+	if s.closing == nil {
+		s.closing = make(map[string]bool)
+	}
+	s.closing[name] = true
+	return func() {
+		s.locksMu.Lock()
+		defer s.locksMu.Unlock()
+		delete(s.closing, name)
+	}, ""
+}
+
+// handleCloseAll closes every open position of the agents and cancels their
+// pending entries, asked by the user from the dashboard, through a
+// close_positions recorded (see Supervision.execute): the entries of each
+// agent held as its pending entries are canceled and its positions closed,
+// then a candle, never blocked for good, its enablement and its limits left;
+// the positions and the orders out of the agents (by hand, of another magic)
+// untouched. It answers the action with its result checked on the accounts:
+// what was closed, canceled, and what remains.
+func (s *Supervision) handleCloseAll(w http.ResponseWriter, r *http.Request) {
+	var request ui.SupervisorCloseRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	release, refusal := s.beginClose("")
+	if refusal != "" {
+		writeJSONError(w, http.StatusConflict, refusal)
+		return
+	}
+	defer release()
+	agents, err := s.store.Agents(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if len(agents) == 0 {
+		writeJSONError(w, http.StatusConflict, "nenhum agente cadastrado")
+		return
+	}
+	names := make([]string, 0, len(agents))
+	for _, a := range agents {
+		names = append(names, a.Name)
+	}
+	by := userOf(r.Context())
+	action := store.SupervisorAction{Source: store.SourceUser, Action: store.ActionClosePositions,
+		Reason: strings.TrimSpace(request.Reason), Category: store.CategoryRisk, Status: store.ActionExecuting,
+		RequestedBy: by, ConfirmedBy: by}
+	if action.Reason == "" {
+		action.Reason = "todas as posições zeradas e as pendentes canceladas por " + by
+	}
+	if userID := userIDOf(r.Context()); userID != 0 {
+		action.UserID = &userID
+	}
+	action.Scope, _ = json.Marshal(ui.SupervisorScope{Agents: names})
+	action.Options, _ = json.Marshal(ui.SupervisorOptions{Whole: true, CancelPending: true})
+	created, err := s.store.CreateSupervisorAction(r.Context(), action)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	status, _ := s.execute(r.Context(), created)
+	created, err = s.store.SupervisorAction(r.Context(), created.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	log.Warnf("ui: every position of the agents closed and their pending entries canceled by %s: %s", by, status)
 	writeJSON(w, confirmResponse{Action: actionInfo(created)})
 }

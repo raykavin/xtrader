@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { fetchDailyGuard } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { closeAllPositions, fetchDailyGuard } from "../api/client";
 import type { DailyLimitsStatus } from "../api/types";
 import {
   type DailyTone,
@@ -13,6 +13,7 @@ import {
   timeIn,
 } from "../lib/dailyLimits";
 import { formatMoney, signClass } from "../lib/format";
+import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { Icon } from "./Icon";
 
 /** How often the state of the daily limits is read again, in ms. */
@@ -48,8 +49,6 @@ export function useDailyGuard(): DailyLimitsStatus | null {
 
 interface Props {
   status: DailyLimitsStatus | null;
-  /** A line only, eg: in the panel of the XTrader AI. */
-  compact?: boolean;
 }
 
 /**
@@ -59,6 +58,113 @@ interface Props {
 export function DailyGuardBanner() {
   const status = useDailyGuard();
   return <DailyGuardStrip status={status} wide />;
+}
+
+/**
+ * Zeroing every position of the agents and canceling their pending entries,
+ * from the card of the daily limit: apart from the close of an agent on its
+ * tile, it asks to be confirmed, names what it does and what it never
+ * touches; its button disabled until it ends; its outcome, checked on the
+ * accounts, kept until dismissed: what was closed, canceled, and what remains.
+ */
+function CloseAll() {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<CloseOutcome | null>(null);
+  const running = useRef(false);
+
+  const run = () => {
+    if (running.current) return; // a click more while it runs
+    running.current = true;
+    setBusy(true);
+    setOutcome(null);
+    closeAllPositions()
+      .then(({ action }) => setOutcome(closeOutcome(action)))
+      .catch((e) =>
+        setOutcome({
+          tone: "error",
+          text: e instanceof Error ? e.message : String(e),
+          remaining: [],
+        }),
+      )
+      .finally(() => {
+        running.current = false;
+        setBusy(false);
+        setConfirming(false);
+      });
+  };
+
+  return (
+    <div className="daily-zero">
+      {!confirming && !busy && (
+        <button
+          type="button"
+          className="btn btn-xs btn-danger daily-zero-button"
+          onClick={() => setConfirming(true)}
+        >
+          <Icon name="alert" size={13} />
+          Zerar todas as posições e cancelar pendentes
+        </button>
+      )}
+      {(confirming || busy) && (
+        <fieldset
+          className="daily-zero-confirm"
+          aria-label="Zerar todas as posições e cancelar pendentes"
+        >
+          <p>
+            <strong>Todos os agentes:</strong> cancela as ordens pendentes de entrada e fecha a
+            mercado as posições abertas. Posições e ordens fora dos agentes do XTrader não são
+            tocadas; as entradas ficam retidas durante a execução; a habilitação e os limites não
+            mudam.
+          </p>
+          <span className="daily-zero-actions">
+            <button
+              type="button"
+              className="btn btn-xs btn-danger"
+              disabled={busy}
+              aria-busy={busy}
+              onClick={run}
+            >
+              {busy ? "Zerando…" : "Zerar tudo"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs"
+              disabled={busy}
+              onClick={() => setConfirming(false)}
+            >
+              Voltar
+            </button>
+          </span>
+        </fieldset>
+      )}
+      {outcome && (
+        <div className={`daily-zero-outcome ${outcome.tone}`} role="status">
+          <p>
+            <strong>Zerar tudo:</strong> {outcome.text}
+          </p>
+          {outcome.remaining.length > 0 && (
+            <>
+              <span className="daily-zero-caption">O que resta</span>
+              <ul>
+                {outcome.remaining.map((text) => (
+                  <li key={text}>{text}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon daily-zero-dismiss"
+            aria-label="Dispensar o resultado"
+            onClick={() => setOutcome(null)}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** The class of a status chip of tone. */
@@ -95,12 +201,12 @@ function zoneLabel(zone: string): string {
  * state atop (the limit reached in the color of a gain or a loss, its result
  * unknown, or free) with how the positions were zeroed; the result of the day
  * (realized plus open) and the limits; until when the entries stay blocked;
- * the agents blocked by their own limits. Nothing while no limit is set and
- * none blocks. Compact, a line only.
+ * the agents blocked by their own limits; and the zeroing of every position
+ * of the agents. While no limit is set and none blocks, its label and the
+ * zeroing only.
  */
 export function DailyGuardStrip({
   status,
-  compact = false,
   wide = false,
 }: Props & {
   /** Across the panel, atop it: the figures more spaced. */
@@ -109,7 +215,6 @@ export function DailyGuardStrip({
   if (!status) return null;
   const global = status.global;
   const guarded = Object.values(guardedAgents(status));
-  if (global.state === "off" && guarded.length === 0) return null;
   const tone = stripTone(global);
   const results = scopeResults(global);
   const unit = globalUnit(results);
@@ -125,27 +230,6 @@ export function DailyGuardStrip({
     </p>
   );
 
-  if (compact) {
-    return (
-      <section className={`daily-strip compact is-${tone}`} aria-label="Limite diário">
-        <span className="daily-strip-label">Limite diário</span>
-        {tone !== "off" && (
-          <StateLock tone={headTone} text={stripHeadline(global)} blocked={tone !== "free"} />
-        )}
-        {tone !== "off" &&
-          results.map((result) => (
-            <strong
-              key={result.currency || "none"}
-              className={`mono daily-strip-total ${signClass(result.total)}`}
-            >
-              {resultAmount(result.total, result.currency)}
-            </strong>
-          ))}
-        {flatten && <span className={chipClass(flatten.tone)}>{flatten.text}</span>}
-      </section>
-    );
-  }
-
   return (
     <section className={`daily-strip is-${tone}${wide ? " wide" : ""}`} aria-label="Limite diário">
       <div className="daily-strip-head">
@@ -153,9 +237,13 @@ export function DailyGuardStrip({
         {tone !== "off" && (
           <StateLock tone={headTone} text={stripHeadline(global)} blocked={tone !== "free"} />
         )}
+        {tone === "off" && guarded.length === 0 && (
+          <span className="daily-strip-off">Sem limite definido</span>
+        )}
         {flatten && (
           <span className={`${chipClass(flatten.tone)} daily-strip-flatten`}>{flatten.text}</span>
         )}
+        <CloseAll />
       </div>
       {tone !== "off" && (
         <div className="daily-strip-body">

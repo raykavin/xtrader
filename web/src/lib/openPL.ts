@@ -9,15 +9,34 @@ export interface AgentOpenPL {
   running: boolean;
   /** The profit of its positions by the currency of their account, none converted. */
   amounts: CurrencyAmount[];
-  /** Its positions by asset, in the order of the read. */
+  /** Its positions by asset and direction, in the order of the read. */
   assets: AssetOpenPL[];
 }
 
-/** The positions open of an agent on an asset, eg: XAUUSDm: their count and their profit by the currency of their account. */
+/**
+ * The positions open of an agent on an asset in a direction, eg: XAUUSDm
+ * bought: their count and their profit by the currency of their account. An
+ * asset held both ways is two of them, never a direction for the agent.
+ */
 export interface AssetOpenPL {
   pair: string;
+  /** BUY or SELL, as the account tells it. */
+  side: string;
   positions: number;
   amounts: CurrencyAmount[];
+}
+
+/** The direction of a side in the words and the icon of the dashboard: up for a buy, down for a sell. */
+export function directionOf(side: string): { icon: "up" | "down"; text: string } {
+  return side.toUpperCase() === "SELL"
+    ? { icon: "down", text: "Venda" }
+    : { icon: "up", text: "Compra" };
+}
+
+/** What an asset of an agent tells the screen readers and on hover, eg: Compra em XAUUSDm, 2 posições abertas. */
+export function assetLabel(asset: AssetOpenPL): string {
+  const count = asset.positions === 1 ? "1 posição aberta" : `${asset.positions} posições abertas`;
+  return `${directionOf(asset.side).text} em ${asset.pair}, ${count}`;
 }
 
 /** Adds profit in currency to amounts, one per currency. */
@@ -39,9 +58,10 @@ export function openPLByAgent(read: OpenPositionsResponse): AgentOpenPL[] {
     agent.positions += 1;
     agent.running ||= position.running;
     addAmount(agent.amounts, position.currency, position.profit);
-    let asset = agent.assets.find((a) => a.pair === position.pair);
+    const side = position.side.toUpperCase();
+    let asset = agent.assets.find((a) => a.pair === position.pair && a.side === side);
     if (!asset) {
-      asset = { pair: position.pair, positions: 0, amounts: [] };
+      asset = { pair: position.pair, side, positions: 0, amounts: [] };
       agent.assets.push(asset);
     }
     asset.positions += 1;
