@@ -7,13 +7,16 @@ import type {
   BacktestAssumptions,
   BacktestBatchInfo,
   BacktestCompatibility,
+  BacktestHours,
   BacktestRequest,
   BacktestRunInfo,
   BacktestSummary,
   ProtectionSettings,
+  TradingHoursSettings,
 } from "../api/types";
 import { dayOf, dayStart } from "./closedPL";
 import type { SupervisorTone } from "./supervisor";
+import { endActionsText, hoursError } from "./tradingHours";
 
 /** A trade of the report of a run, see agentapi.BacktestTrade. */
 export interface BacktestTrade {
@@ -152,7 +155,14 @@ export const reasonLabels: Record<string, string> = {
   take_profit: "Alvo",
   daily_limit: "Limite diário",
   stop_out: "Patrimônio zerado",
+  trading_hours: "Fim do horário",
 };
+
+/** The trading hours of assumptions in words, eg: 09:00–17:30, zera e cancela no fim; empty for none. */
+export function hoursAssumption(hours: BacktestHours | undefined): string {
+  if (!hours) return "";
+  return `${hours.start}–${hours.end}, no fim ${endActionsText(hours.flatten, hours.cancel_pending)}`;
+}
 
 /** Whether a run is still to end. */
 export function active(run: BacktestRunInfo): boolean {
@@ -412,6 +422,12 @@ export interface BacktestForm {
   slippage: string;
   dailyLoss: string;
   dailyGain: string;
+  /** The trading hours of the runs: applied or not, their window and the actions of their end. */
+  hours: boolean;
+  hoursStart: string;
+  hoursEnd: string;
+  hoursFlatten: boolean;
+  hoursCancel: boolean;
   llmMaxCalls: string;
   llmMaxCost: string;
 }
@@ -441,8 +457,29 @@ export function defaultForm(now: Date = new Date()): BacktestForm {
     slippage: "0",
     dailyLoss: "",
     dailyGain: "",
+    hours: false,
+    hoursStart: "",
+    hoursEnd: "",
+    hoursFlatten: false,
+    hoursCancel: false,
     llmMaxCalls: "",
     llmMaxCost: "",
+  };
+}
+
+/**
+ * form with the trading hours of the agents (the tab Limites) as its hours:
+ * applied when they are on, their window and the actions of their end copied,
+ * to change as the batch tests.
+ */
+export function withHours(form: BacktestForm, hours: TradingHoursSettings): BacktestForm {
+  return {
+    ...form,
+    hours: hours.enabled,
+    hoursStart: hours.start,
+    hoursEnd: hours.end,
+    hoursFlatten: hours.flatten,
+    hoursCancel: hours.cancel_pending,
   };
 }
 
@@ -525,6 +562,16 @@ export function formRequest(
     "Um número inteiro, 0 ou mais.",
   );
   const llmMaxCost = number("llmMaxCost", (v) => v >= 0, "0 ou mais dólares.");
+  if (form.hours) {
+    const refused = hoursError({
+      enabled: true,
+      start: form.hoursStart,
+      end: form.hoursEnd,
+      flatten: form.hoursFlatten,
+      cancel_pending: form.hoursCancel,
+    });
+    if (refused) errors.hoursStart = refused;
+  }
   if (form.timeframe !== "" && !backtestTimeframes.includes(form.timeframe)) {
     errors.timeframe = "Um timeframe da lista.";
   }
@@ -549,6 +596,14 @@ export function formRequest(
       slippage_points: slippage,
       daily_loss: dailyLoss || undefined,
       daily_gain: dailyGain || undefined,
+      hours: form.hours
+        ? {
+            start: form.hoursStart,
+            end: form.hoursEnd,
+            flatten: form.hoursFlatten,
+            cancel_pending: form.hoursCancel,
+          }
+        : undefined,
       llm_max_calls: llmMaxCalls || undefined,
       llm_max_cost: llmMaxCost || undefined,
     },

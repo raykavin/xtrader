@@ -392,6 +392,16 @@ func TestBacktests_PlanRefused(t *testing.T) {
 	assert.Equal(t, "15m", snap.Timeframe)
 	assert.True(t, snap.Assumptions.Conservative)
 	assert.Equal(t, "USD", snap.Assumptions.Currency)
+	assert.Nil(t, snap.Assumptions.Hours, "no trading hours unless asked")
+
+	// the trading hours of the batch, copied to the assumptions of each run
+	hours := ok
+	hours.Hours = &ui.BacktestHours{Start: "22:00", End: "02:00", Flatten: true}
+	_, runs, err = b.plan(context.Background(), hours, "admin", time.Now())
+	require.NoError(t, err)
+	var hoursSnap backtestSnapshot
+	require.NoError(t, json.Unmarshal(runs[0].Config, &hoursSnap))
+	assert.Equal(t, hours.Hours, hoursSnap.Assumptions.Hours)
 
 	// an LLM agent: its model, its ceilings and its prompt copied, flagged
 	llmRequest := ok
@@ -417,6 +427,10 @@ func TestBacktests_PlanRefused(t *testing.T) {
 		"an LLM without the key of its provider": func(r *ui.BacktestRequest) { r.Agents = []string{"llmnokey"} },
 		"an unknown agent":                       func(r *ui.BacktestRequest) { r.Agents = []string{"ghost"} },
 		"a pair not traded":                      func(r *ui.BacktestRequest) { r.Pairs = []string{"BTCUSDm"} },
+		"the hours apart": func(r *ui.BacktestRequest) {
+			r.Hours = &ui.BacktestHours{Start: "09:00", End: "09:00"}
+		},
+		"the hours HH:MM": func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{Start: "9:00", End: "17:00"} },
 	} {
 		request := ok
 		change(&request)

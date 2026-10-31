@@ -1143,8 +1143,22 @@ export interface BacktestRequest {
   slippage_points: number /* float64 */;
   daily_loss?: number /* float64 */;
   daily_gain?: number /* float64 */;
+  hours?: BacktestHours;
   llm_max_calls?: number /* int */;
   llm_max_cost?: number /* float64 */;
+}
+/**
+ * BacktestHours are the trading hours of the runs of a batch, as the ones of
+ * the agents (see TradingHoursSettings) on the clock of the candles: no entry
+ * before Start nor from End (HH:MM of America/Belem, crossing midnight when
+ * Start is after End); at End, after a window open, the positions closed
+ * (Flatten) and the pending entries canceled (CancelPending), as checked.
+ */
+export interface BacktestHours {
+  start: string;
+  end: string;
+  flatten: boolean;
+  cancel_pending: boolean;
 }
 /**
  * BacktestAssumptions are the assumptions of the runs of a batch, the same
@@ -1164,6 +1178,10 @@ export interface BacktestAssumptions {
   slippage_points: number /* float64 */;
   daily_loss?: number /* float64 */;
   daily_gain?: number /* float64 */;
+  /**
+   * Hours are the trading hours of the runs, nil for none
+   */
+  hours?: BacktestHours;
   timeframe?: string;
   execution_timeframe: string;
   gap_fills: boolean;

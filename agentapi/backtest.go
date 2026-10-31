@@ -52,6 +52,9 @@ type BacktestConfig struct {
 	Protection *ui.ProtectionSettings `json:"protection,omitempty"`
 	DailyLoss  float64                `json:"daily_loss,omitempty"`
 	DailyGain  float64                `json:"daily_gain,omitempty"`
+	// Hours are the trading hours of the run, nil for none, see
+	// ui.BacktestHours and TradingWindow.
+	Hours *ui.BacktestHours `json:"hours,omitempty"`
 
 	// LLMMaxCalls and LLMMaxCost bound the calls of the language model of an
 	// LLM agent and their cost, in dollars, estimated with LLMPriceInput and
@@ -115,6 +118,8 @@ func (c *BacktestConfig) Validate() error {
 		return errors.New("backtest: the ceilings and the prices of the language model must be 0 or more")
 	case c.Report == "":
 		return errors.New("backtest: the file of the report")
+	case c.Hours != nil && (!ValidClock(c.Hours.Start) || !ValidClock(c.Hours.End) || c.Hours.Start == c.Hours.End):
+		return errors.New("backtest: the trading hours: a start and an end HH:MM, apart")
 	}
 	for pair, s := range c.Symbols {
 		if !positive(s.Point) || !positive(s.VolumeStep) || !positive(s.VolumeMin) || !positive(s.SpreadPoint) {
@@ -136,13 +141,14 @@ const (
 
 // The reasons of the entries and the exits of the trades, see Trade.
 const (
-	BacktestReasonMarket     = "market"      // an order at the market of the strategy
-	BacktestReasonLimit      = "limit"       // a limit order
-	BacktestReasonStopEntry  = "stop_entry"  // a stop entry order
-	BacktestReasonStopLoss   = "stop_loss"   // the stop loss, maybe moved by the breakeven or the trailing stop
-	BacktestReasonTakeProfit = "take_profit" // the take profit
-	BacktestReasonDailyLimit = "daily_limit" // closed by the daily limit, see the backtest of the agents
-	BacktestReasonStopOut    = "stop_out"    // closed as the equity reached 0
+	BacktestReasonMarket     = "market"        // an order at the market of the strategy
+	BacktestReasonLimit      = "limit"         // a limit order
+	BacktestReasonStopEntry  = "stop_entry"    // a stop entry order
+	BacktestReasonStopLoss   = "stop_loss"     // the stop loss, maybe moved by the breakeven or the trailing stop
+	BacktestReasonTakeProfit = "take_profit"   // the take profit
+	BacktestReasonDailyLimit = "daily_limit"   // closed by the daily limit, see the backtest of the agents
+	BacktestReasonStopOut    = "stop_out"      // closed as the equity reached 0
+	BacktestReasonHours      = "trading_hours" // closed at the end of the trading hours
 )
 
 // BacktestReport is the result of a backtest: its status (see BacktestStatusSucceeded) and

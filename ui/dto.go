@@ -990,21 +990,34 @@ type ClosedProfitResponse struct {
 // of their account, never converted); the ceilings of the runs of a language
 // model (0 for the defaults of the controller).
 type BacktestRequest struct {
-	Name            string   `json:"name"`
-	Agents          []string `json:"agents"`
-	Pairs           []string `json:"pairs,omitempty"`
-	From            int64    `json:"from"`
-	To              int64    `json:"to"`
-	ValidationShare float64  `json:"validation_share"`
-	Timeframe       string   `json:"timeframe,omitempty"`
-	Balance         float64  `json:"balance"`
-	Fee             float64  `json:"fee"`
-	SpreadPoints    float64  `json:"spread_points"`
-	SlippagePoints  float64  `json:"slippage_points"`
-	DailyLoss       float64  `json:"daily_loss,omitempty"`
-	DailyGain       float64  `json:"daily_gain,omitempty"`
-	LLMMaxCalls     int      `json:"llm_max_calls,omitempty"`
-	LLMMaxCost      float64  `json:"llm_max_cost,omitempty"`
+	Name            string         `json:"name"`
+	Agents          []string       `json:"agents"`
+	Pairs           []string       `json:"pairs,omitempty"`
+	From            int64          `json:"from"`
+	To              int64          `json:"to"`
+	ValidationShare float64        `json:"validation_share"`
+	Timeframe       string         `json:"timeframe,omitempty"`
+	Balance         float64        `json:"balance"`
+	Fee             float64        `json:"fee"`
+	SpreadPoints    float64        `json:"spread_points"`
+	SlippagePoints  float64        `json:"slippage_points"`
+	DailyLoss       float64        `json:"daily_loss,omitempty"`
+	DailyGain       float64        `json:"daily_gain,omitempty"`
+	Hours           *BacktestHours `json:"hours,omitempty"`
+	LLMMaxCalls     int            `json:"llm_max_calls,omitempty"`
+	LLMMaxCost      float64        `json:"llm_max_cost,omitempty"`
+}
+
+// BacktestHours are the trading hours of the runs of a batch, as the ones of
+// the agents (see TradingHoursSettings) on the clock of the candles: no entry
+// before Start nor from End (HH:MM of America/Belem, crossing midnight when
+// Start is after End); at End, after a window open, the positions closed
+// (Flatten) and the pending entries canceled (CancelPending), as checked.
+type BacktestHours struct {
+	Start         string `json:"start"`
+	End           string `json:"end"`
+	Flatten       bool   `json:"flatten"`
+	CancelPending bool   `json:"cancel_pending"`
 }
 
 // BacktestAssumptions are the assumptions of the runs of a batch, the same
@@ -1016,20 +1029,22 @@ type BacktestRequest struct {
 // (Conservative), the positions open at the end valued at the market apart
 // from the realized result (EndPolicy).
 type BacktestAssumptions struct {
-	Balance            float64 `json:"balance"`
-	Currency           string  `json:"currency"`
-	Fee                float64 `json:"fee"`
-	SpreadPoints       float64 `json:"spread_points"`
-	SlippagePoints     float64 `json:"slippage_points"`
-	DailyLoss          float64 `json:"daily_loss,omitempty"`
-	DailyGain          float64 `json:"daily_gain,omitempty"`
-	Timeframe          string  `json:"timeframe,omitempty"`
-	ExecutionTimeframe string  `json:"execution_timeframe"`
-	GapFills           bool    `json:"gap_fills"`
-	Conservative       bool    `json:"conservative"`
-	EndPolicy          string  `json:"end_policy"`
-	LLMMaxCalls        int     `json:"llm_max_calls"`
-	LLMMaxCost         float64 `json:"llm_max_cost"`
+	Balance        float64 `json:"balance"`
+	Currency       string  `json:"currency"`
+	Fee            float64 `json:"fee"`
+	SpreadPoints   float64 `json:"spread_points"`
+	SlippagePoints float64 `json:"slippage_points"`
+	DailyLoss      float64 `json:"daily_loss,omitempty"`
+	DailyGain      float64 `json:"daily_gain,omitempty"`
+	// Hours are the trading hours of the runs, nil for none
+	Hours              *BacktestHours `json:"hours,omitempty"`
+	Timeframe          string         `json:"timeframe,omitempty"`
+	ExecutionTimeframe string         `json:"execution_timeframe"`
+	GapFills           bool           `json:"gap_fills"`
+	Conservative       bool           `json:"conservative"`
+	EndPolicy          string         `json:"end_policy"`
+	LLMMaxCalls        int            `json:"llm_max_calls"`
+	LLMMaxCost         float64        `json:"llm_max_cost"`
 }
 
 // BacktestBatchInfo is a batch of backtests and its runs, see

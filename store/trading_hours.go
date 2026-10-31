@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/ui"
 )
 
@@ -74,9 +74,6 @@ type TradingHoursEvent struct {
 
 func (TradingHoursEvent) TableName() string { return "trading_hours_events" }
 
-// hoursClock is a time of the trading hours, HH:MM.
-var hoursClock = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
-
 // validateTradingHours returns why settings are refused, as the database
 // checks them: the times HH:MM when set; on, both set and apart.
 func validateTradingHours(settings ui.TradingHoursSettings) error {
@@ -84,7 +81,7 @@ func validateTradingHours(settings ui.TradingHoursSettings) error {
 		return fmt.Errorf("%w: the trading hours: %s", ErrInvalid, fmt.Sprintf(format, args...))
 	}
 	for name, value := range map[string]string{"the start": settings.Start, "the end": settings.End} {
-		if value != "" && !hoursClock.MatchString(value) {
+		if value != "" && !agentapi.ValidClock(value) {
 			return invalid("%s: a time HH:MM, from 00:00 to 23:59", name)
 		}
 	}

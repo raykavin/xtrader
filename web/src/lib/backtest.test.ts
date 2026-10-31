@@ -13,10 +13,13 @@ import {
   formCalls,
   formPeriod,
   formRequest,
+  hoursAssumption,
   progressOf,
+  reasonLabels,
   robustnessFlags,
   runsOf,
   sortRows,
+  withHours,
 } from "./backtest";
 
 function summary(partial: Partial<BacktestSummary>): BacktestSummary {
@@ -280,6 +283,45 @@ describe("the form of a batch", () => {
     expect(formRequest(form({}), { ...limits, max_runs: 3 }, now).errors.agents).toBe(
       "O lote teria 4 execuções; o máximo é 3.",
     );
+  });
+
+  it("takes the trading hours of the agents, to change for the batch", () => {
+    const hours = {
+      enabled: true,
+      start: "09:00",
+      end: "17:30",
+      flatten: true,
+      cancel_pending: false,
+      updated_by: "admin",
+    };
+    const f = withHours(form({}), hours);
+    expect([f.hours, f.hoursStart, f.hoursEnd, f.hoursFlatten, f.hoursCancel]).toEqual([
+      true,
+      "09:00",
+      "17:30",
+      true,
+      false,
+    ]);
+    expect(withHours(form({}), { ...hours, enabled: false }).hours).toBe(false);
+    expect(formRequest(f, limits, now).request?.hours).toEqual({
+      start: "09:00",
+      end: "17:30",
+      flatten: true,
+      cancel_pending: false,
+    });
+    expect(formRequest(form({}), limits, now).request?.hours).toBeUndefined();
+    expect(formRequest({ ...f, hoursEnd: "09:00" }, limits, now).errors.hoursStart).toBe(
+      "O início e o fim devem ser diferentes.",
+    );
+    expect(formRequest({ ...f, hoursStart: "" }, limits, now).request).toBeNull();
+    expect(
+      formRequest({ ...f, hours: false, hoursStart: "" }, limits, now).request?.hours,
+    ).toBeUndefined();
+    expect(
+      hoursAssumption({ start: "22:00", end: "02:00", flatten: true, cancel_pending: true }),
+    ).toBe("22:00–02:00, no fim zera as posições e cancela as ordens pendentes");
+    expect(hoursAssumption(undefined)).toBe("");
+    expect(reasonLabels.trading_hours).toBe("Fim do horário");
   });
 
   it("counts the runs and the calls of the LLMs, by run", () => {

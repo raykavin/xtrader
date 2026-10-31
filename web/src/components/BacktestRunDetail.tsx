@@ -5,6 +5,7 @@ import {
   type BacktestTrade,
   callFor,
   type BacktestRunDetail as Detail,
+  hoursAssumption,
   type RecordedCall,
   reasonLabels,
 } from "../lib/backtest";
@@ -398,6 +399,10 @@ function Config({ detail }: { detail: Detail }) {
             ? `perda ${a.daily_loss ? formatMoney(a.daily_loss) : "—"} · ganho ${a.daily_gain ? formatMoney(a.daily_gain) : "—"} ${a.currency}`
             : "nenhum"}
         </span>
+      </li>
+      <li>
+        <span>Horário</span>
+        <span>{a.hours ? hoursAssumption(a.hours) : "o dia todo"}</span>
       </li>
       <li>
         <span>Proteção</span>
