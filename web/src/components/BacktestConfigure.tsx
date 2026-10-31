@@ -1,5 +1,5 @@
-import { type FormEvent, useId, useState } from "react";
-import { createBacktest } from "../api/client";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { createBacktest, fetchTradingHours } from "../api/client";
 import type { BacktestBatchInfo, BacktestCompatibility, BacktestsResponse } from "../api/types";
 import {
   type BacktestForm,
@@ -9,11 +9,14 @@ import {
   formCalls,
   formPeriod,
   formRequest,
+  hoursAssumption,
   pairsTested,
   runsOf,
+  withHours,
 } from "../lib/backtest";
 import { formatMoney, formatNumber } from "../lib/format";
 import { timeframeLabel } from "../lib/timeframes";
+import { crossesMidnight, endActionsText } from "../lib/tradingHours";
 import { Icon } from "./Icon";
 import { Select } from "./Select";
 import { Alert } from "./States";
@@ -47,9 +50,27 @@ export function BacktestConfigure({ read, onCreated }: Props) {
   const id = useId();
 
   const set = <K extends keyof BacktestForm>(field: K, value: BacktestForm[K]) => {
+    if (field.startsWith("hours")) touchedHours.current = true;
     setForm((f) => ({ ...f, [field]: value }));
-    setErrors((e) => ({ ...e, [field]: undefined }));
+    setErrors((e) => ({ ...e, [field]: undefined, hoursStart: undefined }));
   };
+
+  // the trading hours of the agents (the tab Limites) as the hours of the
+  // batch, unless changed meanwhile
+  const touchedHours = useRef(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchTradingHours(controller.signal)
+      .then(({ settings }) => {
+        if (!touchedHours.current && settings.start && settings.end) {
+          setForm((f) => withHours(f, settings));
+        }
+      })
+      .catch(() => {
+        // without them, the hours of the batch start off
+      });
+    return () => controller.abort();
+  }, []);
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 
@@ -254,6 +275,78 @@ export function BacktestConfigure({ read, onCreated }: Props) {
         </p>
       </fieldset>
 
+      <fieldset className="form-section">
+        <legend>Horário de operação</legend>
+        <label className="hours-check">
+          <input
+            type="checkbox"
+            checked={form.hours}
+            onChange={(e) => set("hours", e.target.checked)}
+          />
+          Aplicar o horário de operação
+        </label>
+        {form.hours && (
+          <>
+            <div className="form-grid bt-grid">
+              <div className="field" data-invalid={errors.hoursStart ? "" : undefined}>
+                <label className="field-label" htmlFor={`${id}-hoursStart`}>
+                  Início
+                </label>
+                <input
+                  id={`${id}-hoursStart`}
+                  className="input mono"
+                  type="time"
+                  step={60}
+                  value={form.hoursStart}
+                  aria-invalid={errors.hoursStart ? true : undefined}
+                  onChange={(e) => set("hoursStart", e.target.value)}
+                />
+              </div>
+              <div className="field" data-invalid={errors.hoursStart ? "" : undefined}>
+                <label className="field-label" htmlFor={`${id}-hoursEnd`}>
+                  Fim
+                </label>
+                <input
+                  id={`${id}-hoursEnd`}
+                  className="input mono"
+                  type="time"
+                  step={60}
+                  value={form.hoursEnd}
+                  aria-invalid={errors.hoursStart ? true : undefined}
+                  onChange={(e) => set("hoursEnd", e.target.value)}
+                />
+              </div>
+            </div>
+            {errors.hoursStart && <p className="field-error">{errors.hoursStart}</p>}
+            <div className="hours-end">
+              <span className="field-label">No horário de fim</span>
+              <label className="hours-check">
+                <input
+                  type="checkbox"
+                  checked={form.hoursFlatten}
+                  onChange={(e) => set("hoursFlatten", e.target.checked)}
+                />
+                Zerar todas as posições em aberto
+              </label>
+              <label className="hours-check">
+                <input
+                  type="checkbox"
+                  checked={form.hoursCancel}
+                  onChange={(e) => set("hoursCancel", e.target.checked)}
+                />
+                Cancelar todas as ordens pendentes
+              </label>
+            </div>
+          </>
+        )}
+        <p className="field-hint">
+          {form.hours
+            ? `No horário de America/Belem, nos candles: fora dele, nenhuma entrada; no fim, ${endActionsText(form.hoursFlatten, form.hoursCancel)}.${crossesMidnight({ start: form.hoursStart, end: form.hoursEnd }) ? " Passa da meia-noite: termina no dia seguinte." : ""}`
+            : "Desligado, as execuções operam o dia todo."}{" "}
+          Vem preenchido com o horário da aba Limites; mudar aqui só vale para este lote.
+        </p>
+      </fieldset>
+
       {llm && (
         <fieldset className="form-section">
           <legend>Agentes LLM</legend>
@@ -298,6 +391,19 @@ export function BacktestConfigure({ read, onCreated }: Props) {
             <span>
               {runsOf(form)} (máximo {read.max_runs}), em fila no controller: continuam com a página
               fechada
+            </span>
+          </li>
+          <li>
+            <span>Horário</span>
+            <span>
+              {form.hours
+                ? hoursAssumption({
+                    start: form.hoursStart,
+                    end: form.hoursEnd,
+                    flatten: form.hoursFlatten,
+                    cancel_pending: form.hoursCancel,
+                  })
+                : "o dia todo"}
             </span>
           </li>
           <li>

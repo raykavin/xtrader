@@ -322,7 +322,7 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	cfg := agentapi.BacktestConfig{From: run.From.Unix(), To: run.To.Unix(), Balance: a.Balance, Leverage: 1,
 		Fee: a.Fee, SlippagePoints: a.SlippagePoints, SpreadPoints: a.SpreadPoints, Conservative: a.Conservative,
 		GapFills: a.GapFills, Symbols: symbols, Protection: snap.Protection, DailyLoss: a.DailyLoss,
-		DailyGain: a.DailyGain, Report: filepath.Join(dir, "report.json"), Progress: true}
+		DailyGain: a.DailyGain, Hours: a.Hours, Report: filepath.Join(dir, "report.json"), Progress: true}
 	var extra []string
 	if snap.LLM != nil {
 		cfg.LLMMaxCalls, cfg.LLMMaxCost = snap.LLM.MaxCalls, snap.LLM.MaxCost
@@ -654,6 +654,9 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		return store.BacktestBatch{}, nil, invalid("o spread e a slippage devem ser 0 ou mais")
 	case !positive(request.DailyLoss) || !positive(request.DailyGain):
 		return store.BacktestBatch{}, nil, invalid("os limites diários devem ser 0 ou mais")
+	case request.Hours != nil && (!agentapi.ValidClock(request.Hours.Start) ||
+		!agentapi.ValidClock(request.Hours.End) || request.Hours.Start == request.Hours.End):
+		return store.BacktestBatch{}, nil, invalid("o horário de operação: início e fim HH:MM, diferentes")
 	case request.LLMMaxCalls < 0 || !positive(request.LLMMaxCost):
 		return store.BacktestBatch{}, nil, invalid("os tetos do LLM devem ser 0 ou mais")
 	case request.Timeframe != "" && !slices.Contains(backtestTimeframesAllowed, request.Timeframe):
@@ -677,7 +680,8 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 	file, _, _ := fileTimeframeOf(to.Sub(from) + backtestWarmupMax)
 	assumptions := ui.BacktestAssumptions{Balance: request.Balance, Currency: "", Fee: request.Fee,
 		SpreadPoints: request.SpreadPoints, SlippagePoints: request.SlippagePoints, DailyLoss: request.DailyLoss,
-		DailyGain: request.DailyGain, Timeframe: request.Timeframe, ExecutionTimeframe: file, GapFills: true,
+		DailyGain: request.DailyGain, Hours: request.Hours, Timeframe: request.Timeframe, ExecutionTimeframe: file,
+		GapFills:     true,
 		Conservative: true, EndPolicy: "mark_to_market",
 		LLMMaxCalls: cmpOr(request.LLMMaxCalls, b.cfg.LLMMaxCalls),
 		LLMMaxCost:  cmpOr(request.LLMMaxCost, b.cfg.LLMMaxCost)}

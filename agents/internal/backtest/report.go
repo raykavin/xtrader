@@ -27,6 +27,7 @@ const (
 	ReasonTakeProfit = agentapi.BacktestReasonTakeProfit
 	ReasonDailyLimit = agentapi.BacktestReasonDailyLimit
 	ReasonStopOut    = agentapi.BacktestReasonStopOut
+	ReasonHours      = agentapi.BacktestReasonHours
 )
 
 // The report of a backtest and its parts, see agentapi.BacktestReport.

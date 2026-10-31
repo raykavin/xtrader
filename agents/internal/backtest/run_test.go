@@ -390,3 +390,88 @@ func TestRun_Breakeven(t *testing.T) {
 	assert.Equal(t, ReasonStopLoss, report.Trades[0].ExitReason)
 	assert.Greater(t, report.Trades[0].Exit, report.Trades[0].Entry, "stopped above the entry by the breakeven")
 }
+
+// The trading hours of a backtest on the clock of the candles (each closing
+// a minute after 00:00 of Belém): no entry outside the window; at its end,
+// after it was open, the position closed (its exit told) and the pending
+// entry canceled, as checked; unchecked, both left as they are.
+func TestRun_TradingHours(t *testing.T) {
+	type outcome struct {
+		before, inside, after error
+		pending               model.Order
+		report                Report
+	}
+	run := func(t *testing.T, flatten, cancel bool) outcome {
+		t.Helper()
+		var o outcome
+		var limit model.Order
+		cfg := config(t, 8)
+		cfg.Hours = &ui.BacktestHours{Start: "00:02", End: "00:05", Flatten: flatten, CancelPending: cancel}
+		s := &script{steps: map[int]func(*model.Dataframe, service.Broker){
+			0: func(_ *model.Dataframe, b service.Broker) { // closes at 00:01
+				_, o.before = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+			},
+			1: func(_ *model.Dataframe, b service.Broker) { // 00:02
+				_, o.inside = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+			},
+			2: func(_ *model.Dataframe, b service.Broker) { // 00:03: an entry far below
+				limit, _ = b.CreateOrderLimit(model.SideTypeBuy, testPair, 1, 50)
+			},
+			5: func(_ *model.Dataframe, b service.Broker) { // 00:06
+				_, o.after = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+				o.pending, _ = b.Order(testPair, limit.ID)
+			},
+		}}
+		o.report = runScript(t, context.Background(), s, flat(8, 100), cfg, Hooks{})
+		return o
+	}
+
+	t.Run("flatten and cancel", func(t *testing.T) {
+		o := run(t, true, true)
+		assert.Error(t, o.before, "before the start")
+		assert.NoError(t, o.inside)
+		assert.Error(t, o.after, "from the end")
+		require.Len(t, o.report.Trades, 1)
+		assert.Equal(t, ReasonHours, o.report.Trades[0].ExitReason)
+		assert.Equal(t, start.Add(4*time.Minute).Unix(), o.report.Trades[0].ClosedAt,
+			"on the candle closing at the end (the trades tell the time of their candle)")
+		assert.Empty(t, o.report.Open)
+		assert.Equal(t, model.OrderStatusTypeCanceled, o.pending.Status, "the pending entry canceled")
+	})
+
+	t.Run("left as they are", func(t *testing.T) {
+		o := run(t, false, false)
+		assert.Error(t, o.after, "the entries blocked all the same")
+		assert.Empty(t, o.report.Trades)
+		require.Len(t, o.report.Open, 1, "the position left open")
+		assert.Equal(t, model.OrderStatusTypeNew, o.pending.Status, "the pending entry left")
+	})
+
+	t.Run("only the pending entries", func(t *testing.T) {
+		o := run(t, false, true)
+		assert.Empty(t, o.report.Trades)
+		require.Len(t, o.report.Open, 1)
+		assert.Equal(t, model.OrderStatusTypeCanceled, o.pending.Status)
+	})
+}
+
+// A window of the trading hours crossing midnight: closed from its end, open
+// again from its start, the entries allowed again.
+func TestRun_TradingHoursAcrossMidnight(t *testing.T) {
+	cfg := config(t, 4)
+	cfg.Hours = &ui.BacktestHours{Start: "00:03", End: "00:01", Flatten: true}
+	var closed, reopened error
+	s := &script{steps: map[int]func(*model.Dataframe, service.Broker){
+		1: func(_ *model.Dataframe, b service.Broker) { // 00:02
+			_, closed = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+		},
+		2: func(_ *model.Dataframe, b service.Broker) { // 00:03
+			_, reopened = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+		},
+	}}
+	report := runScript(t, context.Background(), s, flat(4, 100), cfg, Hooks{})
+	assert.Error(t, closed)
+	assert.NoError(t, reopened, "open again from its start")
+	assert.Empty(t, report.Trades, "no end acted on: the window wasn't open before")
+	require.Len(t, report.Open, 1)
+}

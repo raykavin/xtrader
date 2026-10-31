@@ -42,7 +42,7 @@ func TestHoursWindow(t *testing.T) {
 		{"22:00", "02:00", day(31, 2, 0), false, day(31, 22, 0)},
 		{"00:00", "23:59", day(30, 23, 59), false, day(31, 0, 0)},
 	} {
-		open, next := hoursWindow(c.start, c.end, c.at, zone)
+		open, next := agentapi.TradingWindow(c.start, c.end, c.at, zone)
 		assert.Equal(t, c.open, open, "%s–%s at %s", c.start, c.end, c.at.Format("15:04"))
 		assert.Equal(t, c.next, next, "%s–%s at %s", c.start, c.end, c.at.Format("15:04"))
 	}

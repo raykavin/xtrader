@@ -5,57 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
 
 // hoursBy is who the trading hours act as, in the records.
 const hoursBy = "horário de operação"
-
-// clockMinutes returns the minutes of the day of clock, HH:MM.
-func clockMinutes(clock string) int {
-	hours, minutes, _ := strings.Cut(clock, ":")
-	h, _ := strconv.Atoi(hours)
-	m, _ := strconv.Atoi(minutes)
-	return h*60 + m
-}
-
-// hoursWindow returns whether at is inside the window of the trading hours
-// from start to end (HH:MM of zone, crossing midnight when start is after
-// end; the end itself outside), and its next change: the end while inside,
-// the start else.
-func hoursWindow(start, end string, at time.Time, zone *time.Location) (open bool, next time.Time) {
-	from, to := clockMinutes(start), clockMinutes(end)
-	local := at.In(zone)
-	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, zone)
-	when := func(days, minutes int) time.Time {
-		day := midnight.AddDate(0, 0, days)
-		return time.Date(day.Year(), day.Month(), day.Day(), minutes/60, minutes%60, 0, 0, zone)
-	}
-	now := local.Hour()*60 + local.Minute()
-	if from < to {
-		switch {
-		case now < from:
-			return false, when(0, from)
-		case now < to:
-			return true, when(0, to)
-		}
-		return false, when(1, from)
-	}
-	switch {
-	case now >= from:
-		return true, when(1, to)
-	case now < to:
-		return true, when(0, to)
-	}
-	return false, when(0, from)
-}
 
 // evaluateHours applies the trading hours now: off, the entries freed when
 // their window had blocked them (released); on, the entries freed as the
@@ -89,7 +49,7 @@ func (l *dailyLimiter) evaluateHours(ctx context.Context) {
 		}
 	} else {
 		status.Start, status.End = settings.Start, settings.End
-		open, next := hoursWindow(settings.Start, settings.End, l.s.now(), l.zone)
+		open, next := agentapi.TradingWindow(settings.Start, settings.End, l.s.now(), l.zone)
 		status.Open, status.NextAt = open, next.Unix()
 		switch {
 		case open && (!found || last.Kind != store.HoursOpened):
