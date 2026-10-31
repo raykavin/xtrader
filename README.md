@@ -442,7 +442,7 @@ A página **Backtesting** (na barra, ao lado de Performance; `/backtesting`) rod
   - Selos de robustez: amostra pequena (menos de 30 operações), drawdown alto (acima de 20%), degradou na validação (ajuste positivo e validação negativa, ou retorno/drawdown da validação abaixo da metade do ajuste), LLM não determinístico, dados com lacunas, ordens recusadas.
   - As condições que diferem entre as linhas (ativos, timeframes, LLM com determinísticos) aparecem num aviso.
   - Uma métrica indefinida (fator de lucro sem perdas, retorno/drawdown sem queda) aparece como "—", com o motivo ao passar o mouse.
-  - O detalhe de uma execução tem a curva de capital, as operações com o motivo da entrada e da saída (no LLM, a justificativa do modelo), as posições abertas no fim, os avisos e lacunas, a configuração copiada e, no LLM, as chamadas.
+  - O detalhe de uma execução abre num painel à direita, sobre a página, ao clicar no agente (fecha com Esc, com o × ou clicando fora; no celular, na largura toda), e tem a curva de capital, as operações com o motivo da entrada e da saída (no LLM, a justificativa do modelo), as posições abertas no fim, os avisos e lacunas, a configuração copiada e, no LLM, as chamadas.
 - **Validação fora da amostra:** com uma validação de N% (até 50%), o lote roda cada agente duas vezes, no início do período (ajuste) e nos últimos N% (validação), com a mesma configuração.
 - **Configuração copiada:** cada execução guarda os parâmetros efetivos do agente (as mesmas flags com que ele roda, sem segredos), a proteção, o comando e o sha256 do binário, e, no LLM, o provedor, o modelo, os tetos, os preços e o prompt (nome, versão, sha256 e conteúdo).
 

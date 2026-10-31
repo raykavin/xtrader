@@ -17,6 +17,7 @@ import type { Theme } from "../lib/theme";
 import { timeframeLabel } from "../lib/timeframes";
 import { BacktestRunDetail } from "./BacktestRunDetail";
 import { periodLabel } from "./BacktestRuns";
+import { RunDrawer } from "./RunDrawer";
 import { Select } from "./Select";
 import { Alert, EmptyState } from "./States";
 import { toneClass } from "./SupervisorAction";
@@ -225,19 +226,26 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
       <p className="field-hint">
         Nenhuma linha é "a melhor": compare o retorno pelo risco, a amostra ({MIN_SAMPLE}+
         operações), a consistência e a validação. "—" é uma métrica indefinida (ex.: fator de lucro
-        sem perdas); passe o mouse para ver o motivo. Clique num agente para ver a execução.
+        sem perdas); passe o mouse para ver o motivo. Clique num agente para abrir a execução ao
+        lado.
       </p>
 
-      {opened && openedRun && (
-        <BacktestRunDetail
-          key={openedRun.id}
-          run={openedRun}
-          other={open.segment === "validation" ? opened.fit : opened.validation}
-          onSegment={(segment) => setOpen({ agent: opened.agent, segment })}
-          onClose={() => setOpen(null)}
-          theme={theme}
-        />
-      )}
+      <RunDrawer
+        open={Boolean(opened && openedRun)}
+        onClose={() => setOpen(null)}
+        label={opened ? `Execução de ${opened.agent}` : "Execução"}
+      >
+        {opened && openedRun && (
+          <BacktestRunDetail
+            key={openedRun.id}
+            run={openedRun}
+            other={open.segment === "validation" ? opened.fit : opened.validation}
+            onSegment={(segment) => setOpen({ agent: opened.agent, segment })}
+            onClose={() => setOpen(null)}
+            theme={theme}
+          />
+        )}
+      </RunDrawer>
     </div>
   );
 }
