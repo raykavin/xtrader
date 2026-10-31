@@ -5,6 +5,8 @@ import {
   agentLines,
   agentOpenState,
   amountsText,
+  assetLabel,
+  directionOf,
   openPLByAgent,
   openPLGaps,
   openPLSummary,
@@ -79,6 +81,35 @@ describe("the open profit of the agents", () => {
     expect(agent?.assets[0]?.amounts[0]?.amount).toBeCloseTo(21.6, 9);
     expect(agent?.assets[1]?.amounts).toEqual([{ currency: "BRL", amount: -4.1 }]);
     expect(agent?.assets[1] && amountsText(agent.assets[1].amounts, false)).toBe("−4,10");
+  });
+
+  it("tells the buys and the sells of each asset apart, never a direction for the agent", () => {
+    const [agent, other] = openPLByAgent(
+      read({
+        positions: [
+          position("llm-smc", 1, 10),
+          position("llm-smc", 2, -3, { side: "SELL" }),
+          position("llm-smc", 3, 4, { pair: "BTCUSDm", side: "SELL" }),
+          position("llm-smc", 4, 2),
+          position("matrend", 5, 1, { pair: "BTCUSDm" }),
+        ],
+      }),
+    );
+    expect(agent?.assets.map((a) => [a.pair, a.side, a.positions])).toEqual([
+      ["XAUUSDm", "BUY", 2],
+      ["XAUUSDm", "SELL", 1],
+      ["BTCUSDm", "SELL", 1],
+    ]);
+    expect(agent?.assets.map((a) => a.amounts[0]?.amount)).toEqual([12, -3, 4]);
+    expect(agent?.assets.map((a) => directionOf(a.side).icon)).toEqual(["up", "down", "down"]);
+    expect(agent?.assets.map(assetLabel)).toEqual([
+      "Compra em XAUUSDm, 2 posições abertas",
+      "Venda em XAUUSDm, 1 posição aberta",
+      "Venda em BTCUSDm, 1 posição aberta",
+    ]);
+    expect(other?.assets.map((a) => [a.pair, a.side])).toEqual([["BTCUSDm", "BUY"]]);
+    expect(directionOf("sell")).toEqual({ icon: "down", text: "Venda" });
+    expect(directionOf("BUY")).toEqual({ icon: "up", text: "Compra" });
   });
 
   it("keeps each account in its currency, none converted, its code told with several", () => {
@@ -173,7 +204,14 @@ describe("the agents on the band", () => {
         running: true,
         positions: 1,
         open: [{ currency: "BRL", amount: 12.3 }],
-        assets: [{ pair: "XAUUSDm", positions: 1, amounts: [{ currency: "BRL", amount: 12.3 }] }],
+        assets: [
+          {
+            pair: "XAUUSDm",
+            side: "BUY",
+            positions: 1,
+            amounts: [{ currency: "BRL", amount: 12.3 }],
+          },
+        ],
         closedPositions: 2,
         closed: [{ currency: "BRL", amount: -8.42 }],
       },
@@ -182,7 +220,14 @@ describe("the agents on the band", () => {
         running: true,
         positions: 1,
         open: [{ currency: "BRL", amount: -1 }],
-        assets: [{ pair: "XAUUSDm", positions: 1, amounts: [{ currency: "BRL", amount: -1 }] }],
+        assets: [
+          {
+            pair: "XAUUSDm",
+            side: "BUY",
+            positions: 1,
+            amounts: [{ currency: "BRL", amount: -1 }],
+          },
+        ],
         closedPositions: 0,
         closed: [],
       },

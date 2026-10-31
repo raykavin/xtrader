@@ -728,6 +728,17 @@ export function closeAgentPositions(
   );
 }
 
+/**
+ * Closes every open position of the agents and cancels their pending entries,
+ * asked by the user: the positions and the orders out of the agents untouched;
+ * its result checked on the accounts; 409 while one runs.
+ */
+export function closeAllPositions(
+  request: SupervisorCloseRequest = {},
+): Promise<SupervisorDecision> {
+  return postJSON<SupervisorDecision>("/supervisor/close-all", request);
+}
+
 export function setAgentEntries(
   name: string,
   request: SupervisorEntriesRequest,

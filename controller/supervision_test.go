@@ -134,6 +134,10 @@ type fakeAgent struct {
 	protect     ui.SupervisionProtectResponse // the answer to an arm
 	armed       []ui.SupervisionProtectRequest
 	drains      int // the blocks asking to wait for the orders being sent
+	// fills are the positions the pending entries of their IDs open as they
+	// are canceled; closes the close requests it got
+	fills  map[int64]bridgePosition
+	closes []ui.SupervisionCloseRequest
 }
 
 func newFakeAgent(t *testing.T, bridge *fakeBridge, magic int64) *fakeAgent {
@@ -212,8 +216,13 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/supervision/close":
 		var request ui.SupervisionCloseRequest
 		_ = json.NewDecoder(r.Body).Decode(&request)
+		a.closes = append(a.closes, request)
 		if request.Block && request.Revision >= a.revision {
 			a.blocked, a.reason, a.revision = true, request.Reason, request.Revision
+		}
+		response := ui.SupervisionCloseResponse{}
+		if request.CancelPending {
+			response.Canceled = a.cancel()
 		}
 		pairs := request.Pairs
 		if len(pairs) == 0 {
@@ -221,7 +230,6 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 				pairs = append(pairs, pair)
 			}
 		}
-		response := ui.SupervisionCloseResponse{}
 		for _, pair := range pairs {
 			if status := a.closeStatus[pair]; status != "" {
 				response.Results = append(response.Results, ui.SupervisionCloseResult{Pair: pair, Status: status,
@@ -241,18 +249,38 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	case "/api/supervision/cancel":
-		response := ui.SupervisionCancelResponse{Results: []ui.SupervisionCancelResult{}}
-		for _, o := range a.pending {
-			if o.Entry {
-				response.Results = append(response.Results, ui.SupervisionCancelResult{ID: o.ID, Pair: o.Pair,
-					Status: ui.SupervisionCanceled})
-			}
-		}
-		a.pending = slices.DeleteFunc(a.pending, func(o ui.SupervisedOrder) bool { return o.Entry })
-		_ = json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(ui.SupervisionCancelResponse{Results: a.cancel()})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// cancel cancels the pending entries of the agent, the ones of fills filled
+// as they are canceled (gone, their position opened). The caller holds a.mu.
+func (a *fakeAgent) cancel() []ui.SupervisionCancelResult {
+	results := []ui.SupervisionCancelResult{}
+	for _, o := range a.pending {
+		if !o.Entry {
+			continue
+		}
+		result := ui.SupervisionCancelResult{ID: o.ID, Pair: o.Pair, Status: ui.SupervisionCanceled}
+		if filled, ok := a.fills[o.ID]; ok {
+			result.Status = ui.SupervisionGone
+			a.bridge.mu.Lock()
+			a.bridge.positions = append(a.bridge.positions, filled)
+			a.bridge.mu.Unlock()
+		}
+		results = append(results, result)
+	}
+	a.pending = slices.DeleteFunc(a.pending, func(o ui.SupervisedOrder) bool { return o.Entry })
+	return results
+}
+
+// closeRequests returns the close requests the agent got.
+func (a *fakeAgent) closeRequests() []ui.SupervisionCloseRequest {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]ui.SupervisionCloseRequest(nil), a.closes...)
 }
 
 // entries returns the entries of the agent.
@@ -799,11 +827,12 @@ func TestSupervisionAPI_Entries(t *testing.T) {
 func TestSupervisionAPI_ClosePositions(t *testing.T) {
 	s := newSupervised(t)
 	ctx := context.Background()
-	s.liveAgent(t, "fibonacci", 101, true)
-	s.liveAgent(t, "vwap", 102, true)
+	fibonacci := s.liveAgent(t, "fibonacci", 101, true)
+	vwap := s.liveAgent(t, "vwap", 102, true)
 	s.liveAgent(t, "emacross", 103, false)
 	byHand := position(9, 0, "EURUSDm", false, 0.1, 50, 0)
 	s.bridge.set(protected(1, 101), protected(2, 102), protected(3, 103), byHand)
+	vwap.pending = []ui.SupervisedOrder{{ID: 21, Pair: "XAUUSDm", Side: "SELL", Type: "STOP", Entry: true}}
 	call, _ := settingsSession(t, s.managed)
 
 	resp, body := call(http.MethodPost, "/api/supervisor/agents/fibonacci/close", ui.SupervisorCloseRequest{})
@@ -826,6 +855,13 @@ func TestSupervisionAPI_ClosePositions(t *testing.T) {
 	assert.Equal(t, []int64{1}, closed)
 	assert.Equal(t, []bridgePosition{protected(2, 102), protected(3, 103), byHand}, s.bridge.held())
 	assert.Empty(t, s.bridge.tradeRequests(), "closed through the agent running")
+	closes := fibonacci.closeRequests()
+	require.Len(t, closes, 1, "at once, no confirmation asked")
+	assert.Equal(t, []string{"XAUUSDm"}, closes[0].Pairs, "the pairs of its positions")
+	assert.False(t, closes[0].CancelPending, "its positions only")
+	assert.Empty(t, vwap.closeRequests(), "the other agents untouched")
+	assert.False(t, vwap.called("/api/supervision/cancel"))
+	assert.Len(t, vwap.pending, 1, "their pending entries too")
 	a, err := s.store.AgentByName(ctx, "fibonacci")
 	require.NoError(t, err)
 	assert.False(t, a.SupervisionOf().EntriesBlocked, "the entries left free")
@@ -846,6 +882,152 @@ func TestSupervisionAPI_ClosePositions(t *testing.T) {
 	require.Len(t, trades, 1, "the agent stopped: on its bridge")
 	assert.EqualValues(t, 3, trades[0]["position"])
 	assert.Equal(t, []bridgePosition{protected(2, 102), byHand}, s.bridge.held())
+}
+
+// itemsOf returns the statuses of the items of kind of result by ticket, and
+// the items of kind without a ticket.
+func itemsOf(result *ui.SupervisorResult, kind string) (map[int64]string, []ui.SupervisorResultItem) {
+	byTicket := map[int64]string{}
+	var others []ui.SupervisorResultItem
+	for _, item := range result.Items {
+		switch {
+		case item.Kind != kind:
+		case item.Ticket != 0:
+			byTicket[item.Ticket] = item.Status
+		default:
+			others = append(others, item)
+		}
+	}
+	return byTicket, others
+}
+
+// Every position of the agents closed and their pending entries canceled by
+// a user from the dashboard: an agent running cancels and closes together,
+// its entries held a candle, the entry filled as it was canceled closed too;
+// an agent stopped, on its bridge, its orders removed first; the positions
+// and the orders by hand untouched; the entries, the enablement and the
+// limits of the agents left; the result checked on the account.
+func TestSupervisionAPI_CloseAll(t *testing.T) {
+	s := newSupervised(t)
+	ctx := context.Background()
+	fibonacci := s.liveAgent(t, "fibonacci", 101, true)
+	vwap := s.liveAgent(t, "vwap", 102, true)
+	s.liveAgent(t, "emacross", 103, false)
+	byHand := position(9, 0, "EURUSDm", false, 0.1, 50, 0)
+	s.bridge.set(protected(1, 101), protected(3, 103), byHand)
+	handOrder := bridgeOrder{Ticket: 90, Type: 2, Magic: 0, Symbol: "EURUSDm", PriceOpen: 1.1, VolumeCurrent: 0.1}
+	s.bridge.mu.Lock()
+	s.bridge.orders = []bridgeOrder{handOrder,
+		{Ticket: 31, Type: 2, Magic: 103, Symbol: "XAUUSDm", PriceOpen: 4100, VolumeCurrent: 0.01}}
+	s.bridge.mu.Unlock()
+	vwap.pending = []ui.SupervisedOrder{{ID: 21, Pair: "XAUUSDm", Side: "SELL", Type: "STOP", Entry: true}}
+	vwap.fills = map[int64]bridgePosition{21: position(22, 102, "XAUUSDm", true, 0.01, -1, 0)} // filled meanwhile
+	fibonacci.pending = []ui.SupervisedOrder{{ID: 11, Pair: "BTCUSDm", Side: "BUY", Type: "LIMIT", Entry: true}}
+	before, err := s.store.Agents(ctx)
+	require.NoError(t, err)
+	call, _ := settingsSession(t, s.managed)
+
+	resp, body := call(http.MethodPost, "/api/supervisor/close-all", ui.SupervisorCloseRequest{})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var result confirmResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &result))
+	assert.Equal(t, store.ActionClosePositions, result.Action.Action)
+	assert.Equal(t, store.ActionSucceeded, result.Action.Status, body)
+	assert.Equal(t, "todas as posições zeradas e as pendentes canceladas por admin", result.Action.Reason)
+	assert.ElementsMatch(t, []string{"fibonacci", "vwap", "emacross"}, result.Action.Scope.Agents)
+	assert.True(t, result.Action.Options.Whole)
+	assert.True(t, result.Action.Options.CancelPending)
+	assert.False(t, result.Action.Options.KeepBlocked, "never blocked for good")
+	require.NotNil(t, result.Action.Result)
+
+	positions, opened := itemsOf(result.Action.Result, "position")
+	assert.Equal(t, map[int64]string{1: itemDone, 3: itemDone}, positions)
+	require.Len(t, opened, 1, "the entry filled as it was canceled")
+	assert.Equal(t, ui.SupervisorResultItem{Agent: "vwap", Kind: "position", Pair: "XAUUSDm", Status: itemDone,
+		Detail: "posição aberta durante o encerramento: fechada pelo agente"}, opened[0])
+	orders, _ := itemsOf(result.Action.Result, "order")
+	assert.Equal(t, map[int64]string{11: itemDone, 21: itemAlready, 31: itemDone}, orders,
+		"never the order by hand")
+
+	assert.Equal(t, []bridgePosition{byHand}, s.bridge.held(), "only the position by hand left")
+	s.bridge.mu.Lock()
+	assert.Equal(t, []bridgeOrder{handOrder}, s.bridge.orders, "only the order by hand left")
+	s.bridge.mu.Unlock()
+	trades := s.bridge.tradeRequests()
+	require.Len(t, trades, 2, "the agent stopped on its bridge: its order removed, then its position closed")
+	assert.EqualValues(t, 31, trades[0]["order"])
+	assert.EqualValues(t, 3, trades[1]["position"])
+	for _, api := range []*fakeAgent{fibonacci, vwap} {
+		closes := api.closeRequests()
+		require.Len(t, closes, 1)
+		assert.True(t, closes[0].CancelPending, "canceled and closed together")
+		assert.Empty(t, closes[0].Pairs, "every pair of the agent")
+		assert.False(t, closes[0].Block)
+		assert.Positive(t, closes[0].HoldSeconds, "held a candle")
+		assert.False(t, api.called("/api/supervision/cancel"), "no cancel apart")
+	}
+	after, err := s.store.Agents(ctx)
+	require.NoError(t, err)
+	for i, a := range after {
+		assert.Equal(t, before[i].Enabled, a.Enabled, a.Name)
+		assert.False(t, a.SupervisionOf().EntriesBlocked, a.Name)
+		assert.Equal(t, before[i].DailyLimitOf(), a.DailyLimitOf(), a.Name)
+	}
+}
+
+// The close of every position told as it went, never as a success because it
+// was asked: a close whose outcome is unknown never sent again, a close
+// refused by the bridge failed, an order the bridge didn't remove still
+// pending; one at a time, and none of an agent meanwhile.
+func TestSupervisionAPI_CloseAllPartial(t *testing.T) {
+	s := newSupervised(t)
+	fibonacci := s.liveAgent(t, "fibonacci", 101, true)
+	vwap := s.liveAgent(t, "vwap", 102, true)
+	s.liveAgent(t, "emacross", 103, false)
+	s.bridge.set(protected(1, 101), protected(2, 102), protected(3, 103))
+	s.bridge.mu.Lock()
+	s.bridge.orders = []bridgeOrder{{Ticket: 31, Type: 2, Magic: 103, Symbol: "XAUUSDm", PriceOpen: 4100,
+		VolumeCurrent: 0.01}}
+	s.bridge.mu.Unlock()
+	vwap.closeStatus["XAUUSDm"] = ui.SupervisionUnknown      // its answer lost, the position left
+	s.bridge.tradeAnswer = func(map[string]any) (int, any) { // the terminal refusing
+		return http.StatusOK, map[string]any{"retcode": 10018, "comment": "Market closed"}
+	}
+	call, _ := settingsSession(t, s.managed)
+
+	// one at a time: refused while one runs, the one of an agent too
+	release, refusal := s.sup.beginClose("")
+	require.Empty(t, refusal)
+	resp, body := call(http.MethodPost, "/api/supervisor/close-all", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "já está em andamento")
+	resp, body = call(http.MethodPost, "/api/supervisor/agents/fibonacci/close", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	release()
+	release, _ = s.sup.beginClose("vwap")
+	resp, body = call(http.MethodPost, "/api/supervisor/agents/vwap/close", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "deste agente já está em andamento")
+	resp, _ = call(http.MethodPost, "/api/supervisor/close-all", ui.SupervisorCloseRequest{})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	release()
+	assert.Empty(t, fibonacci.closeRequests(), "nothing sent while refused")
+	assert.Empty(t, s.bridge.tradeRequests())
+
+	resp, body = call(http.MethodPost, "/api/supervisor/close-all", ui.SupervisorCloseRequest{})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var result confirmResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &result))
+	assert.Equal(t, store.ActionPartial, result.Action.Status)
+	positions, _ := itemsOf(result.Action.Result, "position")
+	assert.Equal(t, map[int64]string{1: itemDone, 2: itemUnknown, 3: itemFailed}, positions)
+	orders, _ := itemsOf(result.Action.Result, "order")
+	assert.Equal(t, map[int64]string{31: itemFailed}, orders, "told once, still pending")
+	assert.Len(t, vwap.closeRequests(), 1, "the close of an outcome unknown never sent again")
+	assert.Equal(t, []bridgePosition{protected(2, 102), protected(3, 103)}, s.bridge.held(),
+		"the positions left keep their stops")
+	trades := s.bridge.tradeRequests()
+	require.Len(t, trades, 2, "each refused once, never sent again")
 }
 
 // itoa returns the decimal of id.

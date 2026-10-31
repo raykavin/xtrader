@@ -1670,6 +1670,8 @@ export interface SupervisionEntriesRequest {
  * positions of Pairs closed, all of them without any, never opening the
  * other side; Block blocks the entries first, at Revision, for Reason, and
  * they are held anyway as the positions are closed, then HoldSeconds more.
+ * CancelPending cancels the pending entries of the pairs first, under the
+ * same hold, so an entry filled as it is canceled is closed with the rest.
  */
 export interface SupervisionCloseRequest {
   pairs?: string[];
@@ -1677,13 +1679,16 @@ export interface SupervisionCloseRequest {
   revision?: number /* int64 */;
   reason?: string;
   hold_seconds?: number /* int */;
+  cancel_pending?: boolean;
 }
 /**
  * SupervisionCloseResponse answers POST /api/supervision/close: a result by
- * pair.
+ * pair, and the cancels of the pending entries when asked (null when the
+ * agent doesn't cancel them, an earlier version).
  */
 export interface SupervisionCloseResponse {
   results: SupervisionCloseResult[];
+  canceled: SupervisionCancelResult[];
 }
 /**
  * The statuses of a SupervisionCloseResult and a SupervisionCancelResult.
@@ -2359,7 +2364,9 @@ export interface SupervisorEntriesRequest {
 /**
  * SupervisorCloseRequest is the payload of POST
  * /api/supervisor/agents/{name}/close: every open position of the agent
- * closed by the user, for Reason (a default naming the user without one).
+ * closed by the user, for Reason (a default naming the user without one); and
+ * of POST /api/supervisor/close-all: every position of the agents closed and
+ * their pending entries canceled.
  */
 export interface SupervisorCloseRequest {
   reason?: string;

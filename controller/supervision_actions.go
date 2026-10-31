@@ -430,49 +430,62 @@ func (s *Supervision) cancelPending(ctx context.Context, a store.Agent, pairs []
 		if err != nil {
 			return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemFailed, Detail: err.Error()}}
 		}
-		if len(response.Results) == 0 {
-			return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemAlready,
-				Detail: "nenhuma ordem pendente de entrada"}}
-		}
-		var items []ui.SupervisorResultItem
-		for _, result := range response.Results {
-			item := ui.SupervisorResultItem{Agent: a.Name, Kind: "order", Pair: result.Pair, Ticket: result.ID,
-				Detail: result.Error}
-			switch result.Status {
-			case ui.SupervisionCanceled:
-				item.Status = itemDone
-			case ui.SupervisionGone:
-				item.Status, item.Detail = itemAlready, "a ordem já tinha terminado"
-			default:
-				item.Status = itemFailed
-			}
-			items = append(items, item)
-		}
-		return items
+		return canceledItems(a, response.Results)
 	}
 	if a.Mode != "live" {
 		return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemAlready,
 			Detail: "agente em paper parado: as ordens simuladas não existem mais"}}
 	}
 	return s.onBridge(ctx, a, func(v *view, token string) []ui.SupervisorResultItem {
-		var items []ui.SupervisorResultItem
-		for _, held := range v.orders[a.Name] {
-			if len(pairs) > 0 && !slices.ContainsFunc(pairs, func(p string) bool {
-				return strings.EqualFold(p, held.order.Symbol)
-			}) {
-				continue
-			}
-			item := ui.SupervisorResultItem{Agent: a.Name, Kind: "order", Pair: held.order.Symbol,
-				Ticket: held.order.Ticket}
-			item.Status, item.Detail = s.bridges.remove(ctx, held.bridge, token, held.order, bridgeAgentOf(a))
-			items = append(items, item)
-		}
-		if len(items) == 0 {
-			return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemAlready,
-				Detail: "nenhuma ordem pendente na conta"}}
-		}
-		return items
+		return s.removeOrders(ctx, a, v, token, pairs)
 	})
+}
+
+// canceledItems returns the items of the cancels of the pending entries of the
+// agent a, as it told them.
+func canceledItems(a store.Agent, results []ui.SupervisionCancelResult) []ui.SupervisorResultItem {
+	if len(results) == 0 {
+		return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemAlready,
+			Detail: "nenhuma ordem pendente de entrada"}}
+	}
+	var items []ui.SupervisorResultItem
+	for _, result := range results {
+		item := ui.SupervisorResultItem{Agent: a.Name, Kind: "order", Pair: result.Pair, Ticket: result.ID,
+			Detail: result.Error}
+		switch result.Status {
+		case ui.SupervisionCanceled:
+			item.Status, item.Detail = itemDone, "ordem pendente cancelada"
+		case ui.SupervisionGone:
+			item.Status, item.Detail = itemAlready, "a ordem já tinha terminado"
+		default:
+			item.Status = itemFailed
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+// removeOrders removes the pending orders of the agent a, not running, of
+// pairs (all of them without any) on its bridge, with token, the ones of v.
+func (s *Supervision) removeOrders(ctx context.Context, a store.Agent, v *view, token string,
+	pairs []string) []ui.SupervisorResultItem {
+	var items []ui.SupervisorResultItem
+	for _, held := range v.orders[a.Name] {
+		if len(pairs) > 0 && !slices.ContainsFunc(pairs, func(p string) bool {
+			return strings.EqualFold(p, held.order.Symbol)
+		}) {
+			continue
+		}
+		item := ui.SupervisorResultItem{Agent: a.Name, Kind: "order", Pair: held.order.Symbol,
+			Ticket: held.order.Ticket}
+		item.Status, item.Detail = s.bridges.remove(ctx, held.bridge, token, held.order, bridgeAgentOf(a))
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		return []ui.SupervisorResultItem{{Agent: a.Name, Kind: "orders", Status: itemAlready,
+			Detail: "nenhuma ordem pendente na conta"}}
+	}
+	return items
 }
 
 // onBridge runs act on the bridge of the agent a, not running, with its token
@@ -519,6 +532,11 @@ func holdOf(a store.Agent) int {
 // refused when it holds a position on it the confirmation didn't list; the
 // ones of an agent not running closed on its bridge, its launch fenced; then
 // each position looked for on its account, closed, still open or unknown.
+// Every position with the pending entries canceled (Whole and CancelPending,
+// eg: zeroing all), an agent running cancels and closes under the same hold
+// of its entries, every pair of it, an agent not running has its orders
+// removed then whatever it holds closed: an entry filled meanwhile closed too,
+// and what the agents still hold after told.
 func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorAction, scope ui.SupervisorScope,
 	options ui.SupervisorOptions, by string) []ui.SupervisorResultItem {
 	before, err := s.read(ctx)
@@ -529,6 +547,10 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 	if options.Whole { // every position of the agents now, the ones opened since included
 		scope.Positions = wholePositions(before, scope.Agents)
 	}
+	// everything of the agents: their pending entries canceled and their
+	// positions closed together, an entry filled meanwhile closed too, then
+	// what they still hold told
+	flatten := options.Whole && options.CancelPending
 	byAgent := make(map[string][]ui.SupervisorScopePosition)
 	for _, position := range scope.Positions {
 		byAgent[position.Agent] = append(byAgent[position.Agent], position)
@@ -552,7 +574,8 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 				Detail: err.Error()})
 			continue
 		}
-		if options.CancelPending {
+		running := s.running(name)
+		if options.CancelPending && !flatten { // when flattened, with the closes, see below
 			items = append(items, s.cancelPending(ctx, agent, nil)...)
 		}
 		revision := int64(0)
@@ -567,24 +590,84 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 		}
 		confirmed := byAgent[name]
 		switch {
-		case s.running(name):
+		case running:
 			closed, unknown := s.closeThroughAgent(ctx, agent, confirmed, before, options, revision, a.Reason)
 			items = append(items, closed...)
 			if len(unknown) > 0 {
 				unknownPairs[name] = unknown
 			}
 		case agent.Mode != "live":
+			if flatten {
+				items = append(items, s.cancelPending(ctx, agent, nil)...)
+			}
 			for _, position := range confirmed {
 				items = append(items, ui.SupervisorResultItem{Agent: name, Kind: "position", Pair: position.Pair,
 					Status: itemAlready, Detail: "agente em paper parado: a posição simulada não existe mais"})
 			}
 		default:
 			items = append(items, s.onBridge(ctx, agent, func(v *view, token string) []ui.SupervisorResultItem {
-				return s.closeOnBridge(ctx, agent, confirmed, v, token)
+				var items []ui.SupervisorResultItem
+				if flatten { // its orders removed first, then whatever it holds: an order filled meanwhile too
+					items = s.removeOrders(ctx, agent, v, token, nil)
+					if fresh, err := s.read(ctx); err == nil {
+						v = fresh
+					}
+				}
+				return append(items, s.closeOnBridge(ctx, agent, confirmed, v, token, flatten)...)
 			})...)
 		}
 	}
-	return s.checkClosed(ctx, items, scope.Positions, unknownPairs)
+	items, last := s.checkClosed(ctx, items, scope.Positions, unknownPairs)
+	if flatten {
+		items = remaining(items, names, scope.Positions, last)
+	}
+	return items
+}
+
+// remaining tells what the agents names still hold in last, the view read
+// after their positions were closed and their pending entries canceled (see
+// ui.SupervisorOptions): a position opened meanwhile still open, an order
+// still pending, failed, but the ones items tell failed or unknown already
+// and the positions confirmed (told by the check); unknown without last.
+func remaining(items []ui.SupervisorResultItem, names []string, confirmed []ui.SupervisorScopePosition,
+	last *view) []ui.SupervisorResultItem {
+	if last == nil {
+		return append(items, ui.SupervisorResultItem{Kind: "positions", Status: itemUnknown,
+			Detail: "as contas não puderam ser lidas para conferir o que restou: confira na conta"})
+	}
+	told := make(map[string]bool) // agent/kind/ticket and agent/kind/pair
+	for _, item := range items {
+		if item.Status == itemFailed || item.Status == itemUnknown {
+			told[fmt.Sprintf("%s/%s/%d", item.Agent, item.Kind, item.Ticket)] = true
+			told[item.Agent+"/"+item.Kind+"/"+item.Pair] = true
+		}
+	}
+	for _, position := range confirmed {
+		told[fmt.Sprintf("%s/position/%d", position.Agent, position.Ticket)] = true
+	}
+	for _, name := range names {
+		if last.agentGap(name) != "" {
+			continue // its positions told unknown by the check
+		}
+		for _, held := range last.positions[name] {
+			p := held.position
+			if told[fmt.Sprintf("%s/position/%d", name, p.Ticket)] || told[name+"/position/"+p.Symbol] {
+				continue
+			}
+			items = append(items, ui.SupervisorResultItem{Agent: name, Kind: "position", Pair: p.Symbol,
+				Ticket: p.Ticket, Status: itemFailed,
+				Detail: "posição aberta durante o encerramento: continua aberta, confira na conta"})
+		}
+		for _, held := range last.orders[name] {
+			o := held.order
+			if told[fmt.Sprintf("%s/order/%d", name, o.Ticket)] || told[name+"/order/"+o.Symbol] {
+				continue
+			}
+			items = append(items, ui.SupervisorResultItem{Agent: name, Kind: "order", Pair: o.Symbol,
+				Ticket: o.Ticket, Status: itemFailed, Detail: "ordem pendente continua aberta: confira na conta"})
+		}
+	}
+	return items
 }
 
 // closeThroughAgent closes the positions confirmed of the agent a, running,
@@ -603,6 +686,7 @@ func (s *Supervision) closeThroughAgent(ctx context.Context, a store.Agent, conf
 			pairs = append(pairs, position.Pair)
 		}
 	}
+	flatten := options.Whole && options.CancelPending
 	var items []ui.SupervisorResultItem
 	var allowed []string
 	for _, pair := range pairs {
@@ -620,11 +704,14 @@ func (s *Supervision) closeThroughAgent(ctx context.Context, a store.Agent, conf
 		}
 		allowed = append(allowed, pair)
 	}
-	if len(allowed) == 0 {
+	if len(allowed) == 0 && !flatten {
 		return items, nil
 	}
 	request := ui.SupervisionCloseRequest{Pairs: allowed, Block: options.KeepBlocked, Revision: revision,
 		Reason: "encerramento de posições: " + reason}
+	if flatten { // every pair: one filled as its entry is canceled closed too
+		request.Pairs, request.CancelPending = nil, true
+	}
 	if !options.KeepBlocked {
 		request.HoldSeconds = holdOf(a)
 	}
@@ -637,20 +724,47 @@ func (s *Supervision) closeThroughAgent(ctx context.Context, a store.Agent, conf
 				items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: pair,
 					Status: itemFailed, Detail: err.Error()})
 			}
+			if flatten {
+				items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "orders", Status: itemFailed,
+					Detail: "as ordens pendentes não foram canceladas: " + err.Error()})
+			}
 			return items, nil
 		}
 		for _, pair := range allowed { // maybe closed: checked on the account, never sent again
 			unknown[pair] = true
 		}
+		if flatten {
+			items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "orders", Status: itemUnknown,
+				Detail: "o agente não respondeu: as ordens pendentes conferidas na conta, nada é reenviado"})
+		}
 		return items, unknown
 	}
+	if flatten {
+		if response.Canceled == nil { // an earlier agent: its entries canceled apart
+			items = append(items, s.cancelPending(ctx, a, nil)...)
+		} else {
+			items = append(items, canceledItems(a, response.Canceled)...)
+		}
+	}
 	for _, result := range response.Results {
+		listed := slices.Contains(allowed, result.Pair) // else held since the positions were read
 		switch result.Status {
 		case ui.SupervisionUnknown:
-			unknown[result.Pair] = true
+			if listed {
+				unknown[result.Pair] = true
+				continue
+			}
+			items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: result.Pair,
+				Status: itemUnknown, Detail: "posição aberta durante o encerramento, resultado desconhecido: " +
+					"confira na conta, nada é reenviado"})
 		case ui.SupervisionFailed:
 			items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: result.Pair,
 				Status: itemFailed, Detail: result.Error})
+		case ui.SupervisionClosed:
+			if !listed {
+				items = append(items, ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: result.Pair,
+					Status: itemDone, Detail: "posição aberta durante o encerramento: fechada pelo agente"})
+			}
 		}
 	}
 	return items, unknown
@@ -659,7 +773,7 @@ func (s *Supervision) closeThroughAgent(ctx context.Context, a store.Agent, conf
 // closeOnBridge closes the positions confirmed of the agent a, not running, on
 // its bridge, by their tickets, the ones still open in v.
 func (s *Supervision) closeOnBridge(ctx context.Context, a store.Agent, confirmed []ui.SupervisorScopePosition,
-	v *view, token string) []ui.SupervisorResultItem {
+	v *view, token string, whole bool) []ui.SupervisorResultItem {
 	open := make(map[int64]heldPosition)
 	for _, held := range v.positions[a.Name] {
 		open[held.position.Ticket] = held
@@ -670,11 +784,28 @@ func (s *Supervision) closeOnBridge(ctx context.Context, a store.Agent, confirme
 		if !ok {
 			continue // closed meanwhile: told by the check
 		}
+		delete(open, position.Ticket)
 		item := ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: position.Pair, Ticket: position.Ticket}
 		item.Status, item.Detail = s.bridges.close(ctx, held.bridge, token, held.position, bridgeAgentOf(a))
 		if item.Status != itemDone {
 			items = append(items, item) // the done ones checked on the account
 		}
+	}
+	if !whole {
+		return items
+	}
+	for _, held := range v.positions[a.Name] { // opened since the positions were read, eg: an entry filled
+		if _, ok := open[held.position.Ticket]; !ok {
+			continue
+		}
+		item := ui.SupervisorResultItem{Agent: a.Name, Kind: "position", Pair: held.position.Symbol,
+			Ticket: held.position.Ticket}
+		status, detail := s.bridges.close(ctx, held.bridge, token, held.position, bridgeAgentOf(a))
+		item.Status, item.Detail = status, "posição aberta durante o encerramento: "+detail
+		if status == itemDone {
+			item.Detail = "posição aberta durante o encerramento: fechada"
+		}
+		items = append(items, item)
 	}
 	return items
 }
@@ -684,7 +815,8 @@ func (s *Supervision) closeOnBridge(ctx context.Context, a store.Agent, confirme
 // before (already), still open (failed, or unknown when its close was), or
 // unknown when its account isn't read; the items of the failures before kept.
 func (s *Supervision) checkClosed(ctx context.Context, items []ui.SupervisorResultItem,
-	confirmed []ui.SupervisorScopePosition, unknownPairs map[string]map[string]bool) []ui.SupervisorResultItem {
+	confirmed []ui.SupervisorScopePosition, unknownPairs map[string]map[string]bool) ([]ui.SupervisorResultItem,
+	*view) {
 	failed := make(map[string]bool) // the pairs of each agent refused or failed before
 	for _, item := range items {
 		if item.Kind == "position" && item.Status == itemFailed {
@@ -744,7 +876,7 @@ func (s *Supervision) checkClosed(ctx context.Context, items []ui.SupervisorResu
 		}
 		items = append(items, item)
 	}
-	return items
+	return items, last
 }
 
 // allGone reports whether none of the positions confirmed is open in v, but

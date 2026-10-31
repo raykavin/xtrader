@@ -70,6 +70,7 @@ type Supervision struct {
 	bulk      sync.Mutex  // the actions on several agents, one at a time, before the locks of the agents
 	locksMu   sync.Mutex
 	locks     map[string]*sync.Mutex // the actions on each agent, one at a time
+	closing   map[string]bool        // the closes asked from the dashboard running, by agent, "" for all of them
 
 	mu       sync.Mutex
 	next     time.Time            // of the next analysis, zero while disabled

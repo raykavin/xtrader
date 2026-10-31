@@ -32,6 +32,10 @@ type fakeSupervised struct {
 	canceled  []int64
 	cancelErr map[int64]error
 	drained   int // the waits for the orders being sent
+	// onCancel is called with each cancel, locked, eg: an entry filled as it
+	// is canceled; cancelHeldAt the holds as each one was canceled
+	onCancel     func(f *fakeSupervised, id int64)
+	cancelHeldAt []int
 }
 
 func (f *fakeSupervised) WaitIdle(time.Duration) bool {
@@ -112,6 +116,10 @@ func (f *fakeSupervised) ClosePosition(pair string) (model.Order, error) {
 func (f *fakeSupervised) Cancel(o model.Order) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.cancelHeldAt = append(f.cancelHeldAt, f.holds)
+	if f.onCancel != nil {
+		f.onCancel(f, o.ID)
+	}
 	if err := f.cancelErr[o.ID]; err != nil {
 		return err
 	}
@@ -284,6 +292,63 @@ func TestSupervision_Cancel(t *testing.T) {
 		{ID: 3, Pair: "ETHUSDT", Status: SupervisionGone},
 	}, response.Results)
 	require.Equal(t, []int64{2}, controller.canceled, "the leg of the position stays")
+}
+
+// The close canceling the pending entries first, under the same hold as the
+// closes: an entry filled as it is canceled is closed with the rest, the legs
+// of the positions left until then; a cancel failing told; without the cancel
+// asked, nothing canceled and none told.
+func TestSupervision_CloseCancelingPending(t *testing.T) {
+	controller := &fakeSupervised{status: order.StatusRunning, positions: map[string]float64{"BTCUSDT": 1},
+		cancelErr: map[int64]error{3: &exchange.OrderError{Err: exchange.ErrOrderNotOpen},
+			4: errors.New("trade context busy")},
+		onCancel: func(f *fakeSupervised, id int64) {
+			if id == 3 { // filled as it is canceled
+				f.positions["ETHUSDT"] = -2
+			}
+		}}
+	c, url := newSupervisedChart(t, controller)
+	group := int64(7)
+	c.OnOrder(model.Order{ID: 1, Pair: "BTCUSDT", Side: model.SideTypeSell, Type: model.OrderTypeStopLoss,
+		Status: model.OrderStatusTypeNew, Price: 90, Quantity: 1, GroupID: &group})
+	c.OnOrder(model.Order{ID: 2, Pair: "BTCUSDT", Side: model.SideTypeBuy, Type: model.OrderTypeLimit,
+		Status: model.OrderStatusTypeNew, Price: 95, Quantity: 1})
+	c.OnOrder(model.Order{ID: 3, Pair: "ETHUSDT", Side: model.SideTypeSell, Type: model.OrderTypeStopLoss,
+		Status: model.OrderStatusTypeNew, Price: 9, Quantity: 2})
+
+	resp, body := request(t, http.MethodPost, url+"/api/supervision/close",
+		`{"cancel_pending":true,"hold_seconds":60,"reason":"zerar tudo"}`, supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var response SupervisionCloseResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &response))
+	require.ElementsMatch(t, []SupervisionCancelResult{
+		{ID: 2, Pair: "BTCUSDT", Status: SupervisionCanceled},
+		{ID: 3, Pair: "ETHUSDT", Status: SupervisionGone},
+	}, response.Canceled)
+	require.ElementsMatch(t, []SupervisionCloseResult{
+		{Pair: "BTCUSDT", Status: SupervisionClosed, Side: "SELL", Quantity: 1},
+		{Pair: "ETHUSDT", Status: SupervisionClosed, Side: "BUY", Quantity: 2},
+	}, response.Results, "the entry filled as it was canceled closed too")
+	require.Equal(t, []int64{2}, controller.canceled, "the leg of the position left")
+	require.Equal(t, []int{1, 1}, controller.cancelHeldAt, "the entries held as they were canceled")
+	require.Equal(t, []int{1, 1}, controller.heldAt, "and as the positions were closed")
+	require.False(t, controller.blocked, "never blocked for good")
+	require.Equal(t, 1, controller.holds, "held a while after, then released")
+
+	// a cancel failing, told; the close without the cancel tells none
+	c.OnOrder(model.Order{ID: 4, Pair: "BTCUSDT", Side: model.SideTypeBuy, Type: model.OrderTypeLimit,
+		Status: model.OrderStatusTypeNew, Price: 94, Quantity: 1})
+	resp, body = request(t, http.MethodPost, url+"/api/supervision/close", `{"cancel_pending":true}`,
+		supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &response))
+	require.Contains(t, response.Canceled, SupervisionCancelResult{ID: 4, Pair: "BTCUSDT", Status: SupervisionFailed,
+		Error: "trade context busy"})
+	resp, body = request(t, http.MethodPost, url+"/api/supervision/close", `{}`, supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	response = SupervisionCloseResponse{}
+	require.NoError(t, json.Unmarshal([]byte(body), &response))
+	require.Nil(t, response.Canceled)
 }
 
 // fakeProtector is the protection of the positions of a bot: its state, and

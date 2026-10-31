@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { SupervisorActionInfo, SupervisorMessageInfo } from "../api/types";
+import type {
+  SupervisorActionInfo,
+  SupervisorMessageInfo,
+  SupervisorResultItem,
+} from "../api/types";
 import {
   actionLabel,
   actionNote,
   actionStatusLabel,
   actorLabel,
   awaitingDecision,
+  closeOutcome,
   formatInterval,
   intervalError,
   mergeMessages,
@@ -160,5 +165,81 @@ describe("an answer streaming", () => {
   it("names the supervisor XTrader AI, the users as they are", () => {
     expect(actorLabel("supervisor")).toBe("XTrader AI");
     expect(actorLabel("admin")).toBe("admin");
+  });
+});
+
+describe("the outcome of a close of positions", () => {
+  const item = (
+    kind: string,
+    status: string,
+    fields: Partial<SupervisorResultItem> = {},
+  ): SupervisorResultItem => ({ agent: "", kind, status, ...fields });
+  const done = (items: SupervisorResultItem[], status: string): SupervisorActionInfo => ({
+    ...close,
+    status,
+    result: { items, checked_at: 1_760_000_000 },
+  });
+
+  it("tells the positions closed and the orders canceled, checked on the accounts", () => {
+    const outcome = closeOutcome(
+      done(
+        [
+          item("position", "done", { agent: "fibonacci", ticket: 1, pair: "XAUUSDm" }),
+          item("position", "done", { agent: "vwap", pair: "XAUUSDm" }),
+          item("order", "done", { agent: "vwap", ticket: 21, pair: "XAUUSDm" }),
+          item("order", "already", { agent: "emacross", ticket: 31 }),
+          item("orders", "already", { agent: "matrend" }),
+        ],
+        "succeeded",
+      ),
+    );
+    expect(outcome).toEqual({
+      tone: "ok",
+      text: "2 posições fechadas · 1 ordem pendente cancelada.",
+      remaining: [],
+    });
+    expect(closeOutcome(done([item("orders", "already")], "succeeded")).text).toBe(
+      "Nada a encerrar.",
+    );
+  });
+
+  it("tells a partial close as it went, never a success, what remains listed", () => {
+    const outcome = closeOutcome(
+      done(
+        [
+          item("position", "done", { agent: "fibonacci", ticket: 1, pair: "XAUUSDm" }),
+          item("position", "unknown", {
+            agent: "vwap",
+            ticket: 2,
+            pair: "XAUUSDm",
+            detail: "resultado desconhecido",
+          }),
+          item("position", "failed", {
+            agent: "emacross",
+            ticket: 3,
+            pair: "XAUUSDm",
+            detail: "Market closed",
+          }),
+          item("order", "failed", { agent: "emacross", ticket: 31, pair: "XAUUSDm" }),
+        ],
+        "partial",
+      ),
+    );
+    expect(outcome.tone).toBe("warn");
+    expect(outcome.text).toBe(
+      "Parcial: 1 posição fechada · 2 falhas · 1 resultado desconhecido. Confira na conta: nada é reenviado.",
+    );
+    expect(outcome.remaining).toEqual([
+      "vwap · Posição 2 (XAUUSDm): resultado desconhecido",
+      "emacross · Posição 3 (XAUUSDm): Market closed",
+      "emacross · Ordem 31 (XAUUSDm)",
+    ]);
+
+    const failed = closeOutcome(
+      done([item("positions", "failed", { detail: "as contas não puderam ser lidas" })], "failed"),
+    );
+    expect(failed.tone).toBe("error");
+    expect(failed.text).toBe("Falhou: 1 falha. Confira na conta.");
+    expect(failed.remaining).toEqual(["Posições: as contas não puderam ser lidas"]);
   });
 });

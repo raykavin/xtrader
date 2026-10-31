@@ -348,3 +348,65 @@ export function protectionStops(protection: SupervisorProtectionInfo): string {
       : " (não confirmado)";
   return `${level(protection.previous)} → ${level(protection.requested)}${confirmed}`;
 }
+
+/** How a close of positions went, from its result checked on the accounts. */
+export interface CloseOutcome {
+  tone: "ok" | "warn" | "error";
+  /** The outcome in a line, eg: 2 posições fechadas · 1 ordem pendente cancelada. */
+  text: string;
+  /** What remains: each item failed or unknown, eg: Posição 12 (XAUUSDm): a posição continua aberta. */
+  remaining: string[];
+}
+
+/** A count in words, eg: 1 posição fechada, 3 posições fechadas. */
+function counted(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * How a close of positions went (of an agent, or of all of them with their
+ * pending entries), never a success but by its result checked on the
+ * accounts: the positions closed and the orders canceled, then what remains,
+ * failed or unknown, to check on the account; the unknown ones never sent again.
+ */
+export function closeOutcome(action: SupervisorActionInfo): CloseOutcome {
+  const items = action.result?.items ?? [];
+  const of = (kind: string, status: string) =>
+    items.filter((i) => i.kind === kind && i.status === status).length;
+  const unresolved = items.filter((i) => i.status === "failed" || i.status === "unknown");
+  const parts: string[] = [];
+  const closed = of("position", "done");
+  const canceled = of("order", "done");
+  if (closed > 0) parts.push(counted(closed, "posição fechada", "posições fechadas"));
+  if (canceled > 0)
+    parts.push(counted(canceled, "ordem pendente cancelada", "ordens pendentes canceladas"));
+  const failed = unresolved.filter((i) => i.status === "failed").length;
+  const unknown = unresolved.length - failed;
+  if (failed > 0) parts.push(counted(failed, "falha", "falhas"));
+  if (unknown > 0)
+    parts.push(counted(unknown, "resultado desconhecido", "resultados desconhecidos"));
+  const remaining = unresolved.map((i) => {
+    const who = i.agent ? `${i.agent} · ` : "";
+    return `${who}${itemSubject(i)}${i.detail ? `: ${i.detail}` : ""}`;
+  });
+  switch (action.status) {
+    case "succeeded":
+      return {
+        tone: "ok",
+        text: parts.length > 0 ? `${parts.join(" · ")}.` : "Nada a encerrar.",
+        remaining,
+      };
+    case "failed":
+      return {
+        tone: "error",
+        text: `Falhou${parts.length > 0 ? `: ${parts.join(" · ")}` : ""}. Confira na conta.`,
+        remaining,
+      };
+  }
+  const status = actionStatusLabel(action.status).text;
+  return {
+    tone: "warn",
+    text: `${status}${parts.length > 0 ? `: ${parts.join(" · ")}` : ""}. Confira na conta: nada é reenviado.`,
+    remaining,
+  };
+}
