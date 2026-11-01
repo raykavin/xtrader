@@ -7,8 +7,10 @@
 // trend_pullback of the prompt default of the LLM agent, its stop loss moved
 // by the R multiple of the position), and the signal strategies emacross,
 // ema200, ribbon, supertrend, emasupertrend, psarema, atrtrailing, ichimoku,
-// ichimokuadx, mtftrend and mtfema, see strategies.NewSignal. See runner.Run
-// for the shared flags:
+// ichimokuadx, mtftrend and mtfema, see strategies.NewSignal, and consensus
+// (a quorum of the rules of the signal strategies firing the same side within
+// a few candles, none of them the other side), see strategies.NewConsensus.
+// See runner.Run for the shared flags:
 //
 //	# RK Trend Confluence, a stop on the close 3 ATR from the entry, backed up
 //	# by a stop placed at the broker 4 ATR away
@@ -36,6 +38,13 @@
 //	# the Supertrend flips on 1h, next to the bot of 5m of the same strategy
 //	go run ./agents/trendagent -strategy supertrend -mode paper -pair BTCUSDm \
 //		-timeframe 1h -lot 0.01 -mt5-comment nb:supertrend-1h
+//	# 3 of the rules ema200, supertrend, macdtrend, adxema and donchian buying
+//	# within 3 candles of 15m, none of them selling there; then 2 of 3 rules
+//	# on the same candle of 1h, the stop loss trailing 3 ATR behind
+//	go run ./agents/trendagent -strategy consensus -mode paper -pair XAUUSDm -lot 0.01
+//	go run ./agents/trendagent -strategy consensus -mode paper -pair XAUUSDm -lot 0.01 \
+//		-timeframe 1h -consensus-rules ema200,supertrend,donchian -consensus-quorum 2 \
+//		-consensus-window 1 -trailing-atr 3
 //
 // Launched by the controller, the live mode takes the same flags from the
 // settings of the agent in its database.
@@ -45,6 +54,7 @@ import (
 	"flag"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/raykavin/xtrader/agents/internal/runner"
 	"github.com/raykavin/xtrader/agents/strategies"
@@ -60,7 +70,13 @@ func main() {
 func agent() runner.Agent {
 	matrend := strategies.DefaultMATrendConfig()
 	fib := strategies.DefaultFibonacciConfig()
+	cs := strategies.DefaultConsensusConfig()
 	f := flags{
+		cs: consensusFlags{
+			rules:  flag.String("consensus-rules", strings.Join(cs.Rules, ","), "consensus: the signal rules voting, a comma list of names of the signal strategies (eg: ema200, supertrend), at least 2, each once"),
+			quorum: flag.Int("consensus-quorum", cs.Quorum, "consensus: how many of the rules must fire the same side within -consensus-window candles, none of them the other side"),
+			window: flag.Int("consensus-window", cs.Window, "consensus: candles a vote counts for, the last one included (1: the same candle)"),
+		},
 		maxDistance:  flag.Float64("max-distance", matrend.MaxTrendDistancePct, "matrend: how far the close may be from the SMA 200 at an entry, in % of it"),
 		stopBuffer:   flag.Float64("stop-buffer-atr", matrend.StopBufferATR, "matrend: initial stop beyond the SMA 200, in ATR"),
 		brokerStopOn: flag.Bool("broker-stop", false, "matrend: also place the stop at the broker and move it there (mt5 or the paper wallet)"),
@@ -97,8 +113,11 @@ func agent() runner.Agent {
 			Inputs: append(slices.Clone(fibInputs), "trailing-atr", "max-bars", "min-atr-pct")},
 		{Name: "trendpullback", About: "the end of the pullbacks of a trend, confirmed by the momentum",
 			New: f.trendPullback, Inputs: []string{"min-atr-pct"}},
-	}, runner.Signals("emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema", "atrtrailing",
-		"ichimoku", "ichimokuadx", "mtftrend", "mtfema")...)}
+	}, append(runner.Signals("emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema",
+		"atrtrailing", "ichimoku", "ichimokuadx", "mtftrend", "mtfema"),
+		runner.Strategy{Name: "consensus", About: "the consensus of signal rules: a quorum of them firing the " +
+			"same side within a few candles", New: f.consensus,
+			Inputs: append(append(slices.Clone(consensusInputs), "trailing-atr"), runner.BracketInputs...)})...)}
 }
 
 // flags holds the flags of the strategies of the agent.
@@ -108,7 +127,19 @@ type flags struct {
 	brokerStop, brokerTrail *float64
 	fastEMA, slowEMA        *int
 	fib                     fibFlags
+	cs                      consensusFlags
 }
+
+// consensusFlags holds the flags of consensus, named in consensusInputs: its
+// rules, its quorum and its window, the ones of DefaultConsensusConfig unless
+// set.
+type consensusFlags struct {
+	rules          *string
+	quorum, window *int
+}
+
+// consensusInputs are the flags of consensus of its own.
+var consensusInputs = []string{"consensus-rules", "consensus-quorum", "consensus-window"}
 
 // fibFlags holds the flags of fibonacci, named in fibInputs.
 type fibFlags struct {
@@ -202,5 +233,17 @@ func (f flags) trendPullback(in runner.Inputs) (strategy.Strategy, error) {
 	cfg := strategies.DefaultTrendPullbackConfig()
 	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
 	trader, err := strategies.NewTrendPullback(cfg)
+	return trader, err
+}
+
+func (f flags) consensus(in runner.Inputs) (strategy.Strategy, error) {
+	cfg := strategies.DefaultConsensusConfig()
+	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	if in.Set["trailing-atr"] {
+		cfg.TrailingATR = in.TrailingATR
+	}
+	cfg.Rules = strings.Split(*f.cs.rules, ",")
+	cfg.Quorum, cfg.Window = *f.cs.quorum, *f.cs.window
+	trader, err := strategies.NewConsensus(cfg)
 	return trader, err
 }

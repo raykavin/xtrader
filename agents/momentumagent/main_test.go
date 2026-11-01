@@ -102,3 +102,46 @@ func TestAgent_TheStrategiesOfTheSeeds(t *testing.T) {
 	}
 	require.ElementsMatch(t, known, seeded)
 }
+
+// The levels of rsi2 set by their flags, its own only: the ones of its
+// defaults (the book's 10 and 90) unless set, each reaching the strategy (a
+// value out of its bounds refused by it).
+func TestAgent_RSI2Levels(t *testing.T) {
+	a := testAgent()
+	for _, name := range rsi2Inputs {
+		require.NoError(t, a.CheckInputs("rsi2", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("adxema", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy rsi2")
+	}
+	for _, name := range []string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct", "trailing-atr",
+		"timeframe", "lot", "max-risk-pct"} {
+		require.NoError(t, a.CheckInputs("rsi2", map[string]bool{name: true}), name)
+	}
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "rsi2" })
+	require.Greater(t, i, 0, "appended, never the default")
+	in := runner.Inputs{Set: map[string]bool{}, Timeframe: "1h", Direction: strategies.RKDirectionBoth,
+		MinValue: 10, Fraction: 1, Leverage: 1}
+	trader, err := a.Strategies[i].New(in)
+	require.NoError(t, err, "the defaults")
+	require.Equal(t, "1d", trader.Timeframe(), "the daily candles of the book unless -timeframe")
+	// the warmup -print-warmup tells the controller: the SMA 200 and a margin,
+	// the seed of the ATR inside it, held by a warm-up of a year of daily
+	// candles of gold (about 250)
+	require.Equal(t, 210, trader.WarmupPeriod())
+	for name, value := range map[string]string{
+		"rsi2-oversold":   "95", // above the overbought level
+		"rsi2-overbought": "5",  // under the oversold level
+	} {
+		before := flag.Lookup(name).Value.String()
+		require.NoError(t, flag.Set(name, value))
+		_, err := a.Strategies[i].New(in)
+		require.ErrorContains(t, err, "RSI levels", name)
+		require.NoError(t, flag.Set(name, before))
+	}
+	require.NoError(t, flag.Set("rsi2-oversold", "5"))
+	require.NoError(t, flag.Set("rsi2-overbought", "95"))
+	_, err = a.Strategies[i].New(in)
+	require.NoError(t, err, "the deeper levels taken")
+	require.NoError(t, flag.Set("rsi2-oversold", "10"))
+	require.NoError(t, flag.Set("rsi2-overbought", "90"))
+}

@@ -80,13 +80,13 @@ func requireTrailingATR(t *testing.T, a runner.Agent, takes []string, refused st
 }
 
 // M12a: -trailing-atr as before the flags no strategy takes were refused:
-// taken and applied by trendconfluence and matrend, and by fibonacci since,
-// refused with emapullback and the signal strategies, none of which trails its
-// stop loss by default.
+// taken and applied by trendconfluence and matrend, and by fibonacci and
+// consensus since, refused with emapullback and the signal strategies, none of
+// which trails its stop loss by default.
 func TestAgent_TrailingATR(t *testing.T) {
 	a := testAgent()
-	requireTrailingATR(t, a, []string{"trendconfluence", "matrend", "fibonacci"},
-		"-trailing-atr is an input of -strategy fibonacci and matrend and trendconfluence")
+	requireTrailingATR(t, a, []string{"trendconfluence", "matrend", "fibonacci", "consensus"},
+		"-trailing-atr is an input of -strategy consensus and fibonacci and matrend and trendconfluence")
 	require.ErrorContains(t, a.CheckInputs("matrend", map[string]bool{"take-profit-atr": true}),
 		"-take-profit-atr is an input of -strategy")
 	requireOwnFlags(t, a)
@@ -139,4 +139,54 @@ func TestAgent_TheStrategiesOfTheSeeds(t *testing.T) {
 		known = append(known, s.Name)
 	}
 	require.ElementsMatch(t, known, seeded)
+}
+
+// The rules, the quorum and the window of consensus set by their flags, its
+// own only: the ones of its defaults unless set, each reaching the strategy (a
+// value out of its bounds refused by it). It takes the exits of the bracket
+// and -trailing-atr, as the signal strategies trailing their stop loss.
+func TestAgent_ConsensusInputs(t *testing.T) {
+	a := testAgent()
+	for _, name := range consensusInputs {
+		require.NoError(t, a.CheckInputs("consensus", map[string]bool{name: true}), name)
+		require.ErrorContains(t, a.CheckInputs("ema200", map[string]bool{name: true}),
+			"-"+name+" is an input of -strategy consensus")
+	}
+	for _, name := range []string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct", "trailing-atr",
+		"timeframe", "lot", "max-risk-pct"} {
+		require.NoError(t, a.CheckInputs("consensus", map[string]bool{name: true}), name)
+	}
+	for _, name := range []string{"fib-swing", "max-distance", "fast-ema", "broker-stop-atr"} {
+		require.ErrorContains(t, a.CheckInputs("consensus", map[string]bool{name: true}), "-"+name+" is an input of",
+			name)
+	}
+	i := slices.IndexFunc(a.Strategies, func(s runner.Strategy) bool { return s.Name == "consensus" })
+	require.Greater(t, i, 0, "appended, never the default")
+	in := runner.Inputs{Set: map[string]bool{}, Timeframe: "1h", Direction: strategies.RKDirectionBoth,
+		MinValue: 10, Fraction: 1, Leverage: 1}
+	trader, err := a.Strategies[i].New(in)
+	require.NoError(t, err, "the defaults")
+	require.Equal(t, "15m", trader.Timeframe(), "the timeframe of the signal strategies unless -timeframe")
+	for name, c := range map[string]struct{ value, refused string }{
+		"consensus-rules":  {"ema200", "at least 2 rules"},
+		"consensus-quorum": {"6", "the quorum must be between 1 and the number of rules"},
+		"consensus-window": {"0", "the window must be at least 1 candle"},
+	} {
+		before := flag.Lookup(name).Value.String()
+		require.NoError(t, flag.Set(name, c.value))
+		_, err := a.Strategies[i].New(in)
+		require.ErrorContains(t, err, c.refused, name)
+		require.NoError(t, flag.Set(name, before))
+	}
+	require.NoError(t, flag.Set("consensus-rules", "ema200,supertrend,nosuchrule"))
+	_, err = a.Strategies[i].New(in)
+	require.ErrorContains(t, err, `invalid rule "nosuchrule"`)
+	require.NoError(t, flag.Set("consensus-rules", "ema200,supertrend,donchian"))
+	require.NoError(t, flag.Set("consensus-quorum", "2"))
+	require.NoError(t, flag.Set("consensus-window", "1"))
+	_, err = a.Strategies[i].New(in)
+	require.NoError(t, err, "other rules, quorum and window taken")
+	require.NoError(t, flag.Set("consensus-rules", "ema200,supertrend,macdtrend,adxema,donchian"))
+	require.NoError(t, flag.Set("consensus-quorum", "3"))
+	require.NoError(t, flag.Set("consensus-window", "3"))
 }

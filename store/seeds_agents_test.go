@@ -15,9 +15,10 @@ import (
 // The agents of a new database come from sql/seeds/0004_agents.sql: the
 // agents the database had, an LLM agent of the prompt support_resistance, and
 // an agent without LLM of each strategy of the code, all of them off and
-// without secrets, on XAUUSDm and BTCUSDm with a lot of 0.01 on each: inserted
-// once, never overwriting an edit nor bringing back an agent deleted or
-// renamed.
+// without secrets, on XAUUSDm and BTCUSDm with a lot of 0.01 on each, but the
+// two agents of the strategy pairs, last, each on the two legs of its spread
+// with lots of their own: inserted once, never overwriting an edit nor bringing
+// back an agent deleted or renamed.
 func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	dsn := testDatabase(t)
 	pgtest.MigrateSeeded(t, dsn, "..")
@@ -29,8 +30,8 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, append([]string{"llm-trend", "matrend", "llm-smc-liquidity", "fibonacci", "fimathe",
-		"llm-support-resistance"}, codeStrategies...), names(agents), "in the order of the file")
+	require.Equal(t, append(append([]string{"llm-trend", "matrend", "llm-smc-liquidity", "fibonacci", "fimathe",
+		"llm-support-resistance"}, codeStrategies...), pairsAgents...), names(agents), "in the order of the file")
 	for i, agent := range agents {
 		require.False(t, agent.Enabled, "%s: off until its secrets are set", agent.Name)
 		require.Equal(t, "live", agent.Mode)
@@ -39,8 +40,13 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		require.False(t, agent.TradePanel)
 		require.True(t, agent.TelegramControl)
 		require.Equal(t, i, agent.Position)
-		require.Equal(t, "XAUUSDm;BTCUSDm", agent.Params["pair"], "%s: the default pairs", agent.Name)
-		require.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.01", agent.Params["lot"], "%s: 0.01 on each", agent.Name)
+		if legs, ok := pairsLegs[agent.Name]; ok {
+			require.Equal(t, legs.pair, agent.Params["pair"], "%s: the legs of its spread", agent.Name)
+			require.Equal(t, legs.lot, agent.Params["lot"], "%s: the notionals of its legs balanced", agent.Name)
+		} else {
+			require.Equal(t, "XAUUSDm;BTCUSDm", agent.Params["pair"], "%s: the default pairs", agent.Name)
+			require.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.01", agent.Params["lot"], "%s: 0.01 on each", agent.Name)
+		}
 		require.NotNil(t, agent.Account)
 		require.Equal(t, "mt5", agent.Account.Exchange)
 		require.Equal(t, "http://mt5:18812", agent.Account.BridgeURL)
@@ -123,7 +129,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		require.Nil(t, agent.Account.Comment)
 		require.Equal(t, "nb:"+name, agent.MT5Book().Comment, "the default of its strategy")
 	}
-	for kind, count := range map[string]int{"trend": 14, "momentum": 7, "breakout": 11, "intraday": 8} {
+	for kind, count := range map[string]int{"trend": 15, "momentum": 8, "breakout": 11, "intraday": 12} {
 		n := 0
 		for _, name := range codeStrategies {
 			if byName[name].Kind == kind {
@@ -151,6 +157,22 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 		"timeframe": "15m", "leverage": "2000", "fib-swing": "pivot", "fib-pivot": "5", "fib-min-impulse-atr": "3",
 		"fib-entry-low": "0.5", "fib-entry-high": "0.618", "fib-trigger": "close", "fib-stop-level": "0.786",
 		"fib-stop-buffer-atr": "0.25", "fib-target": "extreme"}, fib.Params)
+
+	// the two agents of the strategy pairs, each on the two legs of its spread,
+	// leg A first, with a comment, and so a magic number, of its own
+	for i, name := range pairsAgents {
+		agent := byName[name]
+		legs := pairsLegs[name]
+		require.Equal(t, "intraday", agent.Kind, name)
+		require.Equal(t, fmt.Sprintf("localhost:%d", 5646+i), agent.APIAddress, name)
+		require.Nil(t, agent.LLM, name)
+		require.Nil(t, agent.Reanalysis, name)
+		require.Equal(t, Params{"strategy": "pairs", "pair": legs.pair, "lot": legs.lot, "leverage": "2000"},
+			agent.Params, "%s: on the timeframe of its strategy", name)
+		require.Equal(t, legs.comment, *agent.Account.Comment, name)
+		require.Equal(t, legs.comment, agent.MT5Book().Comment, name)
+	}
+	require.NotEqual(t, byName["pairsgold"].MT5Book().Magic, byName["pairscrypto"].MT5Book().Magic)
 
 	fimathe := byName["fimathe"]
 	require.Equal(t, "breakout", fimathe.Kind)
@@ -193,7 +215,7 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	pgtest.MigrateSeeded(t, dsn, "..")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Len(t, agents, 46)
+	require.Len(t, agents, 54)
 	llm, err = s.AgentByName(ctx, "llm-trend")
 	require.NoError(t, err)
 	require.Equal(t, "XAUUSDm=0.02;BTCUSDm=0.02", llm.Params["lot"], "the edit kept")
@@ -212,8 +234,8 @@ func TestSeeds_TheAgentsOfANewDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "not seeded again")
 	agents, err = s.Agents(ctx)
 	require.NoError(t, err)
-	require.Equal(t, append([]string{"llm-trend", renamed.Name, "fibonacci", "fimathe", "llm-support-resistance"},
-		codeStrategies...), names(agents))
+	require.Equal(t, append(append([]string{"llm-trend", renamed.Name, "fibonacci", "fimathe",
+		"llm-support-resistance"}, codeStrategies...), pairsAgents...), names(agents))
 }
 
 // The prompts of a new database: the ones of the strategies only a language
@@ -263,7 +285,9 @@ func TestSeeds_ThePromptsOfANewDatabase(t *testing.T) {
 // codeStrategies are the strategies of the code the seeds create an agent of,
 // in the order of the file: the ones of agents/trendagent, momentumagent,
 // breakoutagent and intradayagent but matrend, fibonacci and fimathe, seeded
-// before them with settings of their own, the rules of the prompts coded last.
+// before them with settings of their own, and pairs, seeded twice after them
+// (see pairsAgents); the rules of the prompts coded, then the strategies added
+// since, last.
 var codeStrategies = []string{
 	"trendconfluence", "emapullback", "emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema",
 	"atrtrailing", "ichimoku", "ichimokuadx", "mtftrend", "mtfema",
@@ -272,4 +296,16 @@ var codeStrategies = []string{
 	"highlow", "momentumbreakout",
 	"orb", "asialondon", "vwap", "sweep", "zscore",
 	"meanreversion", "scalp1m", "scalp1mbtc", "trendpullback", "squeezebreakout",
+	"consensus", "rsi2", "newsbreakout", "seasonality", "volumeprofile", "cmegap",
 }
+
+// pairsAgents are the agents of the strategy pairs the seeds create, last, in
+// the order of the file, and pairsLegs their legs, leg A first, their lots,
+// balancing the notionals of the two legs, and their comments on MT5.
+var (
+	pairsAgents = []string{"pairsgold", "pairscrypto"}
+	pairsLegs   = map[string]struct{ pair, lot, comment string }{
+		"pairsgold":   {"XAUUSDm;XAGUSDm", "XAUUSDm=0.02;XAGUSDm=0.03", "nb:pairs-gold"},
+		"pairscrypto": {"BTCUSDm;ETHUSDm", "BTCUSDm=0.01;ETHUSDm=0.34", "nb:pairs-crypto"},
+	}
+)
