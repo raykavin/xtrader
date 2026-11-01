@@ -121,7 +121,7 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
    O controller lança os agentes habilitados em até 30 segundos. Depois, cada agente é editado ou excluído (desligado antes) na mesma tela; uma mudança de inicialização num agente rodando fica como "reinício pendente".
 
 2. Entre no painel (`http://127.0.0.1:8082` no servidor, a URL do ngrok ou um túnel SSH; veja "Portas e segurança") com o usuário do bootstrap e abra **Configurações** (ícone de engrenagem):
-   - **Contas MT5:** a conta do terminal (login, servidor, senha, a bridge `http://mt5:18812` e o token dela, o `MT5_BRIDGE_TOKEN` do `services/mt5/.env`), com **Permitir conta real** para uma conta real; **Testar conexão** confere o tipo (real ou demo) e a moeda sem expor credenciais; **Ativar no terminal** faz o terminal logar nela;
+   - **Contas MT5:** a conta do terminal (login, servidor, senha, a bridge `http://mt5:18812` e o token dela, o `MT5_BRIDGE_TOKEN` do `services/mt5/.env`), com **Permitir conta real** para uma conta real; **Testar conexão** confere o tipo (real ou demo) e a moeda sem expor credenciais; a chave **Ativa no terminal** faz o terminal logar nela (desligada, a conta deixa de ser servida e os agentes dela não são iniciados), sempre com confirmação;
    - **Agentes:** a conta MT5 de cada agente (a bridge e o token vêm dela), a chave da API do LLM, o prompt dos agentes LLM, o painel de trading, o controle via Telegram e a reanálise dos agentes LLM (**Permitir reanálise**), além de **Editar** e **Excluir**. Uma troca de segredo fica como "reinício pendente": use **Reiniciar**.
    - **Telegram:** o token do bot, os IDs autorizados e **Bot ativo**.
    - **Usuários:** crie os usuários do painel e troque a senha do primeiro.
