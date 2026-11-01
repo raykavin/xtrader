@@ -222,6 +222,40 @@ describe("the evolution of the closed profit", () => {
     expect(closedCharts(series, 5_000)[0]?.points.at(-1)).toEqual({ time: 7_200, value: 10 });
   });
 
+  it("ends at now on the closed total plus the profit open, in a period not over", () => {
+    const open = [
+      { currency: "BRL", amount: 4.5 },
+      { currency: "USD", amount: -2 },
+    ];
+    const charts = closedCharts(series, 10_000, open);
+    expect(charts[0]).toMatchObject({
+      currency: "BRL",
+      total: 10,
+      open: 4.5,
+      live: { time: 10_000, value: 14.5 },
+    });
+    expect(charts[0]?.points.at(-1), "the closed line unchanged").toEqual({
+      time: 10_000,
+      value: 10,
+    });
+    // a currency open without an exit: a chart of its own from 0
+    expect(charts[1]).toEqual({
+      currency: "USD",
+      points: [
+        { time: 0, value: 0 },
+        { time: 10_000, value: 0 },
+      ],
+      exits: 0,
+      total: 0,
+      open: -2,
+      live: { time: 10_000, value: -2 },
+    });
+    // a period gone: the closed profit only
+    expect(closedCharts(series, 90_000, open)).toEqual(closedCharts(series, 90_000));
+    // nothing open: as before
+    expect(closedCharts(series, 10_000, [])).toEqual(closedCharts(series, 10_000));
+  });
+
   it("draws no line without an exit", () => {
     expect(closedCharts(read(), 10_000)).toEqual([]);
     expect(closedCharts({ ...read(), series: undefined } as never, 10_000)).toEqual([]);

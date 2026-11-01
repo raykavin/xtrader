@@ -339,24 +339,30 @@ function AgentTile({
  * card tells it: the running total from 0 at the start of the period, exit
  * after exit, held until now, a line in steps along the time of the period
  * like the line of the quote card; a chart for each currency, none
- * converted. While the period is read, a placeholder; without an exit, or on
- * a failure, said so: never the read of another period.
+ * converted. In a period not over, with positions open, the line goes on,
+ * dashed, to the closed total plus the profit open now (see closedCharts),
+ * in real time: drawn again each time the open positions are read. While the
+ * period is read, a placeholder; without an exit nor a position open, or on a
+ * failure, said so: never the read of another period.
  */
 function ClosedEvolution({
   read,
   error,
+  open,
   range,
   label,
   theme,
 }: {
   read: ClosedProfitResponse | null;
   error: string | null;
+  open: OpenPositionsResponse | null;
   range: ClosedRange;
   label: string;
   theme: Theme;
 }) {
   const now = Math.floor(Date.now() / 1000);
-  const charts = read ? closedCharts(read, now) : [];
+  const charts = read ? closedCharts(read, now, open?.totals) : [];
+  const live = charts.some((chart) => chart.live);
   const axis = closedAxis(range, now);
   const palette = palettes[theme];
   let body: ReactNode;
@@ -372,24 +378,35 @@ function ClosedEvolution({
     body = (
       <>
         {charts.map((chart) => {
-          const tone = profitTone([{ currency: chart.currency, amount: chart.total }]);
-          const color = tone === "pos" ? palette.up : tone === "neg" ? palette.down : palette.muted;
+          const colorOf = (amount: number) => {
+            const tone = profitTone([{ currency: chart.currency, amount }]);
+            return tone === "pos" ? palette.up : tone === "neg" ? palette.down : palette.muted;
+          };
           const first = chart.points[0]?.time ?? range.from;
-          const last = chart.points[chart.points.length - 1]?.time ?? first;
+          const end = chart.live?.time ?? chart.points[chart.points.length - 1]?.time ?? first;
+          // room after now: the jump to the profit open, and its dot, inside the plot
+          const last = chart.live ? end + Math.max(60, (end - first) * 0.04) : end;
+          const exits = chart.exits === 1 ? "1 saída" : `${chart.exits} saídas`;
+          const now =
+            chart.live && chart.open !== undefined
+              ? `; agora ${formatProfit(chart.live.value)} ${chart.currency} com o P/L aberto (${formatProfit(chart.open)})`
+              : "";
           return (
             <figure
               key={chart.currency}
               className="openpl-chart-plot"
-              aria-label={`P/L fechado acumulado, ${label}: de 0 a ${formatProfit(chart.total)} ${chart.currency} em ${chart.exits === 1 ? "1 saída" : `${chart.exits} saídas`}`}
+              aria-label={`P/L fechado acumulado, ${label}: de 0 a ${formatProfit(chart.total)} ${chart.currency} em ${exits}${now}`}
             >
               <Sparkline
                 points={chart.points}
-                color={color}
+                color={colorOf(chart.total)}
                 width={400}
                 height={72}
                 domain={[first, last]}
                 step
                 zero
+                live={chart.live}
+                liveColor={chart.live ? colorOf(chart.live.value) : undefined}
               />
               {charts.length > 1 && <figcaption>{chart.currency}</figcaption>}
             </figure>
@@ -410,6 +427,26 @@ function ClosedEvolution({
           {label} · saída a saída, de todos os agentes
           {read && !read.complete && " · incompleto"}
         </span>
+        {live && (
+          <span className="openpl-chart-live">
+            <span className="openpl-chart-live-key" aria-hidden="true" />
+            agora, com o P/L aberto:{" "}
+            {charts
+              .filter((chart) => chart.live && chart.open !== undefined)
+              .map((chart, i) => (
+                <span key={chart.currency}>
+                  {i > 0 && " · "}
+                  <strong className={`mono ${signClass(chart.live?.value ?? 0)}`}>
+                    {formatProfit(chart.live?.value ?? 0)} {chart.currency}
+                  </strong>{" "}
+                  <span className="openpl-chart-live-parts mono">
+                    ({formatProfit(chart.total)} fechado {(chart.open ?? 0) < 0 ? "−" : "+"}{" "}
+                    {formatProfit(Math.abs(chart.open ?? 0))} aberto)
+                  </span>
+                </span>
+              ))}
+          </span>
+        )}
       </div>
       {body}
     </div>
@@ -575,6 +612,7 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
           <ClosedEvolution
             read={closed.read}
             error={closed.error}
+            open={read}
             range={range}
             label={label}
             theme={theme}
