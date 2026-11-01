@@ -177,17 +177,6 @@ func (c *CSVFeed) Limit(duration time.Duration) *CSVFeed {
 	return c
 }
 
-func isFistCandlePeriod(t time.Time, fromTimeframe, targetTimeframe string) (bool, error) {
-	fromDuration, err := str2duration.ParseDuration(fromTimeframe)
-	if err != nil {
-		return false, err
-	}
-
-	prev := t.Add(-fromDuration).UTC()
-
-	return isLastCandlePeriod(prev, fromTimeframe, targetTimeframe)
-}
-
 func isLastCandlePeriod(t time.Time, fromTimeframe, targetTimeframe string) (bool, error) {
 	if fromTimeframe == targetTimeframe {
 		return true, nil
@@ -228,44 +217,126 @@ func isLastCandlePeriod(t time.Time, fromTimeframe, targetTimeframe string) (boo
 	return false, fmt.Errorf("invalid timeframe: %s", targetTimeframe)
 }
 
+// periodStart returns the open time of the candle of timeframe holding a
+// candle opened at t, in UTC: the start of its minutes or hours, of its day,
+// or of its week from Sunday (as isLastCandlePeriod ends the weeks on
+// Saturday).
+func periodStart(t time.Time, timeframe string) (time.Time, error) {
+	t = t.UTC()
+	switch timeframe {
+	case "1d":
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
+	case "1w":
+		day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		return day.AddDate(0, 0, -int(day.Weekday())), nil
+	}
+	length, err := str2duration.ParseDuration(timeframe)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if length <= 0 {
+		return time.Time{}, fmt.Errorf("invalid timeframe: %s", timeframe)
+	}
+	return t.Truncate(length), nil
+}
+
+// periodLength returns the length of a candle of timeframe.
+func periodLength(timeframe string) (time.Duration, error) {
+	switch timeframe {
+	case "1d":
+		return 24 * time.Hour, nil
+	case "1w":
+		return 7 * 24 * time.Hour, nil
+	}
+	return str2duration.ParseDuration(timeframe)
+}
+
+// resample builds the candles of targetTimeframe of pair from the ones of
+// sourceTimeframe: each source candle goes to the target candle of its open
+// time (see periodStart), the target candle growing one source candle at a
+// time, every step kept (Complete false, the partial candles of the
+// backtests) until its last source candle (see isLastCandlePeriod), Complete
+// then. A target candle missing its last source candles (a gap in the data:
+// a minute the broker didn't send, the market closed before the end of a
+// day) completes with what it had once a later candle begins, as of its last
+// source candle (its UpdatedAt the time that one would have had): it is never
+// merged with the candles of the next period, whose prices would come into it
+// under its own time, a look into the future. A target candle missing its
+// first source candles keeps the open time of its period. The source candles
+// before the first period beginning in them, and the last target candle if
+// not complete, are left out.
 func (c *CSVFeed) resample(pair, sourceTimeframe, targetTimeframe string) error {
 	sourceKey := c.feedTimeframeKey(pair, sourceTimeframe)
 	targetKey := c.feedTimeframeKey(pair, targetTimeframe)
+	source := c.CandlePairTimeFrame[sourceKey]
+
+	if _, err := isLastCandlePeriod(time.Time{}, sourceTimeframe, targetTimeframe); err != nil {
+		return err
+	}
+	sourceLength, err := periodLength(sourceTimeframe)
+	if err != nil {
+		return err
+	}
+	targetLength, err := periodLength(targetTimeframe)
+	if err != nil {
+		return err
+	}
+	if sourceTimeframe == targetTimeframe {
+		candles := make([]model.Candle, len(source))
+		for i, candle := range source {
+			candle.Complete = true
+			candles[i] = candle
+		}
+		c.CandlePairTimeFrame[targetKey] = candles
+		return nil
+	}
 
 	var i int
-	for ; i < len(c.CandlePairTimeFrame[sourceKey]); i++ {
-		if ok, err := isFistCandlePeriod(c.CandlePairTimeFrame[sourceKey][i].Time, sourceTimeframe,
-			targetTimeframe); err != nil {
+	for ; i < len(source); i++ {
+		start, err := periodStart(source[i].Time, targetTimeframe)
+		if err != nil {
 			return err
-		} else if ok {
+		}
+		if start.Equal(source[i].Time.UTC()) {
 			break
 		}
 	}
 
 	candles := make([]model.Candle, 0)
-	for ; i < len(c.CandlePairTimeFrame[sourceKey]); i++ {
-		candle := c.CandlePairTimeFrame[sourceKey][i]
-		if last, err := isLastCandlePeriod(candle.Time, sourceTimeframe, targetTimeframe); err != nil {
+	var start time.Time // of the target candle growing
+	for ; i < len(source); i++ {
+		candle := source[i]
+		period, err := periodStart(candle.Time, targetTimeframe)
+		if err != nil {
 			return err
-		} else if last {
-			candle.Complete = true
-		} else {
-			candle.Complete = false
+		}
+		last, err := isLastCandlePeriod(candle.Time, sourceTimeframe, targetTimeframe)
+		if err != nil {
+			return err
 		}
 
 		lastIndex := len(candles) - 1
+		if lastIndex >= 0 && !candles[lastIndex].Complete && !period.Equal(start) {
+			// its period over without its last source candle: complete as it was
+			candles[lastIndex].Complete = true
+			candles[lastIndex].UpdatedAt = start.Add(targetLength - sourceLength)
+		}
 		if lastIndex >= 0 && !candles[lastIndex].Complete {
 			candle.Time = candles[lastIndex].Time
 			candle.Open = candles[lastIndex].Open
 			candle.High = math.Max(candles[lastIndex].High, candle.High)
 			candle.Low = math.Min(candles[lastIndex].Low, candle.Low)
 			candle.Volume += candles[lastIndex].Volume
+		} else {
+			start = period
+			candle.Time = period
 		}
+		candle.Complete = last
 		candles = append(candles, candle)
 	}
 
 	// remove last candle if not complete
-	if !candles[len(candles)-1].Complete {
+	if len(candles) > 0 && !candles[len(candles)-1].Complete {
 		candles = candles[:len(candles)-1]
 	}
 
