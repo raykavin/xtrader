@@ -8,6 +8,7 @@ import {
   accountUpdateRequest,
   agentsLabel,
   kindLabel,
+  moveAgentsLabel,
   movesTheTerminal,
   sessionLabel,
   switchQuestion,
@@ -152,7 +153,13 @@ describe("the accounts of MT5", () => {
 
   it("ask before a switch what it does", () => {
     const demo = account({ id: 2, name: "Demo", login: 87654321, active: false });
-    const preview = { active: true, current: ["Real"], running: ["trend", "orb"], exposure: [] };
+    const preview = {
+      active: true,
+      current: ["Real"],
+      linked: ["trend", "orb"],
+      running: ["trend", "orb"],
+      exposure: [],
+    };
     expect(switchQuestion(demo, preview)).toBe(
       "Logar o terminal na conta 87654321 no lugar da conta Real? Os 2 agentes em execução no terminal serão parados.",
     );
@@ -163,14 +170,23 @@ describe("the accounts of MT5", () => {
       switchQuestion(account(), {
         active: false,
         current: ["Real"],
+        linked: ["trend"],
         running: ["trend"],
         exposure: [],
       }),
     ).toBe(
       "Desativar a conta Real? O terminal deixa de servi-la. O agente trend, em execução no terminal, será parado.",
     );
-    expect(switchQuestion(demo, { active: true, current: [], running: [], exposure: [] })).toBe(
-      "Logar o terminal na conta 87654321?",
+    expect(
+      switchQuestion(demo, { active: true, current: [], linked: [], running: [], exposure: [] }),
+    ).toBe("Logar o terminal na conta 87654321?");
+    expect(moveAgentsLabel(preview)).toBe(
+      "Levar os 2 agentes da conta Real para esta conta (voltam a ser iniciados nela)",
     );
+    expect(moveAgentsLabel({ ...preview, linked: ["trend"] })).toBe(
+      "Levar o agente trend da conta Real para esta conta (voltam a ser iniciados nela)",
+    );
+    expect(moveAgentsLabel({ ...preview, active: false })).toBe("");
+    expect(moveAgentsLabel({ ...preview, linked: [] })).toBe("");
   });
 });

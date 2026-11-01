@@ -22,6 +22,7 @@ import {
   accountUpdateRequest,
   agentsLabel,
   kindLabel,
+  moveAgentsLabel,
   movesTheTerminal,
   sessionLabel,
   switchQuestion,
@@ -32,7 +33,6 @@ import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, EmptyState, Loading, Skeleton } from "./States";
-import { StatusIcon } from "./StatusIcon";
 import { Switch } from "./Switch";
 
 /** How often the accounts and their terminals are read again, in ms. */
@@ -310,6 +310,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
   const [turning, setTurning] = useState<boolean | null>(null);
   const [preview, setPreview] = useState<MT5SwitchPreview | null>(null);
   const [pending, setPending] = useState<string[]>([]);
+  const [move, setMove] = useState(true); // the agents of the account leaving the terminal moved to this one
   const session = sessionLabel(account);
   const kind = kindLabel(account.kind);
   const state = accountState(account);
@@ -317,6 +318,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
   const turn = (active: boolean) => {
     setTurning(active);
     setPreview(null);
+    setMove(true);
     setError(null);
     setPending([]);
     fetchMT5Switch(account.id, active)
@@ -340,7 +342,10 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
     setPreview(null);
     setBusy(true);
     setError(null);
-    switchMT5Account(account.id, active, { close_positions: close })
+    switchMT5Account(account.id, active, {
+      close_positions: close,
+      move_agents: active && move && (preview.linked ?? []).length > 0,
+    })
       .then(() => {
         setTurning(null);
         onChange();
@@ -376,13 +381,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
     <article className={`card mt5-card ${state.tone}`} aria-label={`Conta ${account.name}`}>
       <header className="mt5-card-head">
         <div className="mt5-card-title">
-          <div className="mt5-card-name">
-            <h3 className="card-title">{account.name}</h3>
-            <span className={`status-chip ${state.tone}`}>
-              <StatusIcon mark={state.mark} />
-              {state.label}
-            </span>
-          </div>
+          <h3 className="card-title">{account.name}</h3>
           <span className="mono field-hint">
             {account.login} · {account.server}
           </span>
@@ -420,6 +419,12 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
           <fieldset className="confirm mt5-confirm" aria-label="Confirmar">
             <span className="confirm-question">{switchQuestion(account, preview)}</span>
             {preview.exposure.length > 0 && <OpenList items={preview.exposure} />}
+            {moveAgentsLabel(preview) && (
+              <label className="hours-check">
+                <input type="checkbox" checked={move} onChange={(e) => setMove(e.target.checked)} />
+                {moveAgentsLabel(preview)}
+              </label>
+            )}
             <div className="mt5-confirm-actions">
               <button type="button" className="btn btn-sm btn-danger" onClick={confirm}>
                 Sim
@@ -640,7 +645,8 @@ export function MT5AccountsSettings({ intro }: Props) {
             Ao ativar outra conta no mesmo terminal (ou desativar a atual), os agentes dele são
             parados; com posições ou ordens pendentes dos agentes abertas, a troca pede confirmação,
             encerra as posições e cancela as ordens, confere na conta e só então loga o terminal na
-            nova conta. Se algo continuar aberto, a troca não é feita e as pendências são
+            nova conta, levando para ela os agentes da conta anterior (opção marcada na
+            confirmação). Se algo continuar aberto, a troca não é feita e as pendências são
             informadas; se o terminal não logar na nova conta, a anterior volta a ser a ativa.
             Depois, os agentes da conta ativa voltam a ser iniciados.
           </li>

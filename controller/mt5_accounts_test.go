@@ -359,7 +359,8 @@ func TestMT5Accounts_InUse(t *testing.T) {
 // started again to watch it; the account it left active again when the
 // terminal can't log in the new one. The accounts and the agents of another
 // terminal are never touched, on the same host too; two URLs of one terminal
-// are told the same by its instance; a deactivation stops the agents too.
+// are told the same by its instance, the agents of the account left moved to
+// the one activated when asked; a deactivation stops the agents too.
 func TestMT5Accounts_SwitchCoordinated(t *testing.T) {
 	s := newMT5Supervised(t)
 	ctx := context.Background()
@@ -439,18 +440,29 @@ func TestMT5Accounts_SwitchCoordinated(t *testing.T) {
 	third := createMT5Account(t, call, "Outra URL", 77777777, alias.URL, "alias-token")
 	preview = switchPreview(t, call, third.ID, true)
 	assert.Equal(t, []string{current.Name}, preview.Current)
+	assert.Equal(t, []string{"trend"}, preview.Linked)
 	assert.Equal(t, []string{"trend"}, preview.Running)
-	resp, body = activate(third.ID)
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/activate", third.ID),
+		ui.MT5SwitchRequest{ClosePositions: true, MoveAgents: true})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	assert.True(t, active(third.ID))
 	assert.False(t, active(current.ID), "left by the terminal")
 	assert.True(t, active(second.ID))
+	trend, err := s.store.AgentByName(ctx, "trend")
+	require.NoError(t, err)
+	require.NotNil(t, trend.MT5AccountOf())
+	assert.Equal(t, third.ID, trend.MT5AccountOf().ID, "moved with the switch")
+	assert.Equal(t, alias.URL, trend.Account.BridgeURL)
+	assert.Empty(t, s.dashboard.mt5Hold(trend), "started on it")
+	orb, err = s.store.AgentByName(ctx, "orb")
+	require.NoError(t, err)
+	assert.Equal(t, second.ID, orb.MT5AccountOf().ID, "the agent of another terminal never moved")
 
 	// deactivated: its agents stopped, nothing left active on the terminal
 	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/deactivate", second.ID), nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	assert.False(t, active(second.ID))
-	orb, err := s.store.AgentByName(ctx, "orb")
+	orb, err = s.store.AgentByName(ctx, "orb")
 	require.NoError(t, err)
-	assert.Contains(t, s.dashboard.mt5Hold(orb), "está inativa")
+	assert.Contains(t, s.dashboard.mt5Hold(orb), "está inativa", "a deactivation moves none")
 }
