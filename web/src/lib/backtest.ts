@@ -430,6 +430,8 @@ export interface BacktestForm {
   hoursCancel: boolean;
   llmMaxCalls: string;
   llmMaxCost: string;
+  /** Params added to every agent of the batch, eg: the entry filter, "regime=trend; equity-curve=20". */
+  params: string;
 }
 
 /** The limits of a batch, see BacktestsResponse. */
@@ -464,7 +466,52 @@ export function defaultForm(now: Date = new Date()): BacktestForm {
     hoursCancel: false,
     llmMaxCalls: "",
     llmMaxCost: "",
+    params: "",
   };
+}
+
+/** The params a backtest sets itself, refused in the params of a batch (as the controller refuses them). */
+const batchParamsSet = [
+  "pair",
+  "timeframe",
+  "strategy",
+  "mode",
+  "csv",
+  "csv-timeframe",
+  "backtest-config",
+  "print-warmup",
+];
+
+/**
+ * The params of a batch typed as "name=value; name=value" (see
+ * BacktestRequest): a name of a flag, lowercase letters, digits and -, never
+ * one the backtest sets itself nor one of a language model; null for none, or
+ * why they are refused.
+ */
+export function batchParams(text: string): {
+  params: Record<string, string> | null;
+  error?: string;
+} {
+  const params: Record<string, string> = {};
+  for (const item of text.split(";")) {
+    const part = item.trim();
+    if (part === "") continue;
+    const at = part.indexOf("=");
+    const name = (at < 0 ? part : part.slice(0, at)).trim().replace(/^-+/, "");
+    const value = at < 0 ? "" : part.slice(at + 1).trim();
+    if (at < 0 || value === "") return { params: null, error: `${name}: nome=valor.` };
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
+      return {
+        params: null,
+        error: `${name}: o nome de uma flag (letras minúsculas, dígitos e -).`,
+      };
+    if (batchParamsSet.includes(name) || name.startsWith("mt5-"))
+      return { params: null, error: `${name} é definido pelo próprio backtest.` };
+    if (/^(llm|calendar|news)-/.test(name))
+      return { params: null, error: `${name} é de um agente LLM.` };
+    params[name] = value;
+  }
+  return { params: Object.keys(params).length > 0 ? params : null };
 }
 
 /**
@@ -562,6 +609,8 @@ export function formRequest(
     "Um número inteiro, 0 ou mais.",
   );
   const llmMaxCost = number("llmMaxCost", (v) => v >= 0, "0 ou mais dólares.");
+  const params = batchParams(form.params);
+  if (params.error) errors.params = params.error;
   if (form.hours) {
     const refused = hoursError({
       enabled: true,
@@ -606,6 +655,7 @@ export function formRequest(
         : undefined,
       llm_max_calls: llmMaxCalls || undefined,
       llm_max_cost: llmMaxCost || undefined,
+      params: params.params ?? undefined,
     },
     errors,
   };

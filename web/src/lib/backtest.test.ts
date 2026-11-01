@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BacktestBatchInfo, BacktestRunInfo, BacktestSummary } from "../api/types";
 import {
   type BacktestForm,
+  batchParams,
   callFor,
   candlesIn,
   comparisonRows,
@@ -391,5 +392,27 @@ describe("the justification of a trade of an LLM", () => {
     };
     expect(callFor(trade, calls)?.at).toBe(400);
     expect(callFor({ ...trade, side: "SELL" }, calls)).toBeUndefined();
+  });
+});
+
+describe("the params of a batch", () => {
+  it("reads name=value pairs, the dashes of a flag left out", () => {
+    expect(
+      batchParams("regime=trend; -equity-curve=20 ;intermarket-pairs=XAUUSDm;BTCUSDm"),
+    ).toEqual({
+      error: "BTCUSDm: nome=valor.",
+      params: null,
+    });
+    expect(batchParams("regime=trend; -equity-curve=20")).toEqual({
+      params: { regime: "trend", "equity-curve": "20" },
+    });
+    expect(batchParams("  ")).toEqual({ params: null });
+  });
+
+  it("refuses the params the backtest sets and the ones of a language model", () => {
+    expect(batchParams("pair=XAUUSDm").error).toContain("próprio backtest");
+    expect(batchParams("mt5-bridge=x").error).toContain("próprio backtest");
+    expect(batchParams("llm-timeout=1m").error).toContain("LLM");
+    expect(batchParams("Regime=trend").error).toContain("nome de uma flag");
   });
 });

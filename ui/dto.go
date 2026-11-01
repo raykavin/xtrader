@@ -1010,6 +1010,11 @@ type BacktestRequest struct {
 	Hours           *BacktestHours `json:"hours,omitempty"`
 	LLMMaxCalls     int            `json:"llm_max_calls,omitempty"`
 	LLMMaxCost      float64        `json:"llm_max_cost,omitempty"`
+	// Params are params added to every agent of the batch, by name, eg: the
+	// entry filter, regime=trend: a param of the agent of the same name is
+	// replaced; for the agents of a strategy only (not the LLM ones), never a
+	// param a backtest sets itself (the pairs, the timeframe, the mode...).
+	Params map[string]string `json:"params,omitempty"`
 }
 
 // BacktestHours are the trading hours of the runs of a batch, as the ones of
@@ -1049,6 +1054,9 @@ type BacktestAssumptions struct {
 	EndPolicy          string         `json:"end_policy"`
 	LLMMaxCalls        int            `json:"llm_max_calls"`
 	LLMMaxCost         float64        `json:"llm_max_cost"`
+	// Params are the params added to every agent of the batch, see
+	// BacktestRequest.
+	Params map[string]string `json:"params,omitempty"`
 }
 
 // BacktestBatchInfo is a batch of backtests and its runs, see

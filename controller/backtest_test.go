@@ -419,6 +419,24 @@ func TestBacktests_PlanRefused(t *testing.T) {
 	require.NoError(t, json.Unmarshal(runs[0].Config, &hoursSnap))
 	assert.Equal(t, hours.Hours, hoursSnap.Assumptions.Hours)
 
+	// the params of the batch added to the agent, one of the same name
+	// replaced, copied to the assumptions
+	params := ok
+	params.Params = map[string]string{"regime": "trend", "equity-curve": "20", "lot": "0.02"}
+	_, runs, err = b.plan(context.Background(), params, "admin", time.Now())
+	require.NoError(t, err)
+	var paramsSnap backtestSnapshot
+	require.NoError(t, json.Unmarshal(runs[0].Config, &paramsSnap))
+	assert.Equal(t, params.Params, paramsSnap.Assumptions.Params)
+	assert.Contains(t, paramsSnap.Args, "-regime=trend")
+	assert.Contains(t, paramsSnap.Args, "-equity-curve=20")
+	assert.Contains(t, paramsSnap.Args, "-lot=0.02")
+	assert.NotContains(t, paramsSnap.Args, "-lot=0.01", "the agent's replaced")
+	withLLM := params
+	withLLM.Agents = []string{"trend", "llm"}
+	_, _, err = b.plan(context.Background(), withLLM, "admin", time.Now())
+	assert.ErrorIs(t, err, store.ErrInvalid, "not for an LLM agent")
+
 	// an LLM agent: its model, its ceilings and its prompt copied, flagged
 	llmRequest := ok
 	llmRequest.Agents = []string{"llm"}
@@ -446,7 +464,16 @@ func TestBacktests_PlanRefused(t *testing.T) {
 		"the hours apart": func(r *ui.BacktestRequest) {
 			r.Hours = &ui.BacktestHours{Start: "09:00", End: "09:00"}
 		},
-		"the hours HH:MM": func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{Start: "9:00", End: "17:00"} },
+		"the hours HH:MM":    func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{Start: "9:00", End: "17:00"} },
+		"a param not a flag": func(r *ui.BacktestRequest) { r.Params = map[string]string{"Regime": "trend"} },
+		"a param the backtest sets": func(r *ui.BacktestRequest) {
+			r.Params = map[string]string{"pair": "BTCUSDm"}
+		},
+		"a param of the mode":     func(r *ui.BacktestRequest) { r.Params = map[string]string{"mode": "live"} },
+		"a param of an LLM":       func(r *ui.BacktestRequest) { r.Params = map[string]string{"llm-timeout": "1m"} },
+		"a param of two lines":    func(r *ui.BacktestRequest) { r.Params = map[string]string{"regime": "a\nb"} },
+		"a param of the strategy": func(r *ui.BacktestRequest) { r.Params = map[string]string{"strategy": "orb"} },
+		"a param of the warmup":   func(r *ui.BacktestRequest) { r.Params = map[string]string{"print-warmup": "1"} },
 	} {
 		request := ok
 		change(&request)

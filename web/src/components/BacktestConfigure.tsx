@@ -347,6 +347,30 @@ export function BacktestConfigure({ read, onCreated }: Props) {
         </p>
       </fieldset>
 
+      <fieldset className="form-section">
+        <legend>Parâmetros dos agentes</legend>
+        <div className="field" data-invalid={errors.params ? "" : undefined}>
+          <label className="field-label" htmlFor={`${id}-params`}>
+            Parâmetros somados a todos os agentes do lote
+          </label>
+          <input
+            id={`${id}-params`}
+            className="input mono"
+            autoComplete="off"
+            spellCheck={false}
+            value={form.params}
+            placeholder="regime=trend; equity-curve=20"
+            aria-invalid={errors.params ? true : undefined}
+            aria-describedby={`${id}-params-hint`}
+            onChange={(e) => set("params", e.target.value)}
+          />
+          <p className="field-hint" id={`${id}-params-hint`}>
+            {errors.params ??
+              "nome=valor, separados por ;, ex.: o filtro de entradas (regime, equity-curve, intermarket-symbol). Uma lista dentro de um valor vai com vírgula (ex.: intermarket-pairs=XAUUSDm,BTCUSDm). Um parâmetro do agente com o mesmo nome é substituído só neste lote. Em branco, os agentes como estão; não vale para os agentes LLM."}
+          </p>
+        </div>
+      </fieldset>
+
       {llm && (
         <fieldset className="form-section">
           <legend>Agentes LLM</legend>
