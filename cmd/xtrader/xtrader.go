@@ -17,6 +17,8 @@ func main() {
 		HelpName: "xtrader",
 		Usage:    "Utilities for bot creation",
 		Commands: []*cli.Command{
+			seasonalityCommand,
+			metalabelCommand,
 			{
 				Name:     "download",
 				HelpName: "download",
