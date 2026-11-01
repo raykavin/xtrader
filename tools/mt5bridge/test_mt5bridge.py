@@ -703,6 +703,21 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertEqual((478378599, True), (session["login"], session["connected"]))
 
+    def test_the_instance_kept_apart_from_other_terminals(self):
+        terminal = self.serve(self.args())
+        status, health = self.request("GET", "/health")
+        self.assertEqual(200, status)
+        status, session = self.request("GET", "/session")
+        self.assertEqual(200, status)
+        self.assertTrue(terminal.instance)
+        self.assertEqual(terminal.instance, health["instance"])
+        self.assertEqual(terminal.instance, session["instance"])
+        again = mt5bridge.Terminal(self.args())
+        self.assertEqual(terminal.instance, again.instance, "the same across its restarts")
+        other = self.enterContext(__import__("tempfile").TemporaryDirectory())
+        apart = mt5bridge.Terminal(self.args(session=os.path.join(other, "session.json")))
+        self.assertNotEqual(terminal.instance, apart.instance, "another terminal, on the same host too")
+
     def test_legacy_login_until_a_session(self):
         terminal = self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
         self.assertTrue(terminal.session["legacy"])
