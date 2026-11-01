@@ -582,12 +582,11 @@ A stack tem quatro serviços:
 deploy/docker/build.sh                          # imagens xtrader-controller e xtrader-mt5
 # depois, para atualizar: make docker-rebuild    # pergunta quais imagens e se recria o compose
 sudo deploy/docker/install.sh                   # instala em /var/containers/xtrader e gera a senha do banco e a chave dos segredos
-sudo nano /var/containers/xtrader/services/mt5/.env         # conta MT5: MT5_LOGIN, MT5_SERVER, MT5_PASSWORD
 sudo nano /var/containers/xtrader/services/controller/.env  # primeiro usuário do painel (XTRADER_BOOTSTRAP_*)
 cd /var/containers/xtrader && sudo docker compose up -d
 ```
 
-O painel fica em `http://127.0.0.1:8082`, só no loopback do servidor: de fora, pelo ngrok (ou um proxy reverso com HTTPS) do host, ou por um túnel SSH (`ssh -N -L 8082:127.0.0.1:8082 <usuário>@<servidor>`). Depois do login, crie os agentes em **Configurações > Agentes > Novo agente**. O passo a passo completo, com calendário econômico, portas, backup e migração, está em [deploy/docker/README.md](deploy/docker/README.md).
+O painel fica em `http://127.0.0.1:8082`, só no loopback do servidor: de fora, pelo ngrok (ou um proxy reverso com HTTPS) do host, ou por um túnel SSH (`ssh -N -L 8082:127.0.0.1:8082 <usuário>@<servidor>`). Depois do login, cadastre a conta do terminal em **Configurações > Contas MT5** (login, servidor, senha, a bridge `http://mt5:18812` e o `MT5_BRIDGE_TOKEN` do `.env` do mt5 como token) e ative-a; depois, crie os agentes em **Configurações > Agentes > Novo agente**, cada um com a conta dele. O passo a passo completo, com calendário econômico, portas, backup e migração, está em [deploy/docker/README.md](deploy/docker/README.md).
 
 ## Execução local (host)
 
@@ -652,6 +651,19 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
   - A reanálise de um agente LLM (**Reanalisar agora**) depende só do switch **Permitir reanálise** dele, com o painel de trading ligado ou não.
   - O seletor de timeframe do gráfico troca só a visualização (veja [Timeframe do gráfico](#painel-web)); a estratégia e o LLM seguem no timeframe de execução do agente.
 - **Configurações (`/settings`):** seções Agentes, Prompts, Telegram e Usuários, no menu lateral, que também abrem por link (`/settings#prompts`).
+
+### Contas MT5
+
+As contas do MetaTrader 5 ficam no banco, gerenciadas em **Configurações > Contas MT5**.
+
+- **Cadastro:** identificação, login, servidor e senha, a bridge do terminal que serve a conta e o token dela, **Permitir conta real** e **Somente leitura**. A senha e o token são cifrados (AES-GCM, com a `XTRADER_SECRETS_KEY`, que fica fora do banco), presos à conta: nunca são exibidos, devolvidos pela API nem registrados. Um campo de segredo deixado em branco mantém o valor; remover é explícito.
+- **Um terminal, uma conta por vez:** a conta **ativa** de cada bridge é a que o terminal loga. O controller entrega a conta à bridge (`POST /session`), que a guarda sem a senha. Ativar outra conta na mesma bridge é recusado (`409`) com algum agente rodando nesse terminal, ou com posições ou ordens pendentes dos agentes abertas na conta atual, para nada ficar sem acompanhamento. O mesmo vale para trocar o login, o servidor ou a bridge da conta ativa, e para desativá-la. Trocar só a senha, o token, o nome ou as opções é permitido a qualquer momento.
+- **Agentes:** cada agente opera a conta associada a ele (no formulário do agente), recebendo da conta a bridge e o token. Trocar a conta de um agente exige o agente parado e sem posições ou ordens na conta atual. Um agente de uma conta inativa não é lançado, com o motivo no card.
+- **Teste de conexão:** confere a bridge, o token e a conta em que o terminal está; sendo esta, o tipo (real, demo ou concurso), a moeda e a empresa confirmados pela bridge. Nunca troca a conta do terminal para testar.
+- **Reconciliação:** na subida, antes de lançar os agentes, e a cada 30 s, o controller confere cada terminal e, sem agentes rodando nele, loga-o na conta ativa (ou atualiza as opções). Sem a senha, quando o terminal pede, a conta mostra "o terminal pede a senha".
+- **Importação:** na subida, cada bridge com agentes ainda sem conta vira uma conta (login, servidor, tipo e moeda lidos da própria bridge; o token dos agentes; permitir conta real se ela já serve uma conta real), ativa, com os agentes associados. Nunca duplica (mesmo login e servidor) nem sobrescreve uma conta existente.
+- **Registro:** criação, alterações (com os segredos só como definidos ou não), ativação, desativação, exclusão, importação, associação de agentes, testes e sessões enviadas ficam em `mt5_account_events`.
+- **API:** `GET`/`POST /api/settings/mt5-accounts`, `PATCH`/`DELETE /api/settings/mt5-accounts/{id}`, `POST .../{id}/activate`, `POST .../{id}/test` e `GET .../{id}/events`; o agente ganha `mt5_account_id` em `/api/settings/agents`.
 
 ### Agentes e parâmetros
 
@@ -978,6 +990,6 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 - **Conexões lentas:** o painel, a API interna e a API de cada agente dão 10 s para os headers (no máximo 32 KiB) e 30 s para a requisição inteira, corpo incluído, e fecham uma conexão keep-alive ociosa depois de 2 min. A resposta não tem prazo, porque os eventos (SSE) e a espera longa da API interna duram mais que isso.
 - **Logs:** uma mensagem de quem não é usuário do bot do Telegram é recusada e registrada só pelo ID do remetente, no máximo uma linha por minuto (com a contagem das recusadas no intervalo), nunca o conteúdo. Um erro HTTP do servidor MCP do calendário guarda só o início do corpo (1 KiB), sem o token nem nada parecido com uma chave.
 - **XTrader AI:** o modelo nunca recebe chaves, tokens, a URL da bridge, o login da conta nem o número mágico (as contas vão por apelido). Uma leitura que falha entra no retrato só como o motivo (`unreachable`, `refused`, `failed`, "its API doesn't answer"); o erro completo vai só para o log. Ele age só por ferramentas com argumentos validados no backend: nenhuma abre posição, aumenta uma posição, afrouxa um stop, libera entradas ou religa um agente. O canal `supervisor` da API do agente só reduz risco e não é alcançável pelo painel. Fechar posições, parar agora e liberar entradas exigem um usuário logado, com a sessão e o CSRF de sempre. Uma bridge em modo só leitura ou numa conta real sem **Permitir conta real** recusa os fechamentos diretos.
-- **Conta real:** exige **Permitir conta real** no agente. No container `mt5`, a bridge também tem `MT5_ALLOW_REAL` e `MT5_READ_ONLY`.
+- **Conta real:** exige **Permitir conta real** no agente e na conta MT5 (Configurações > Contas MT5), que a bridge aplica junto com **Somente leitura**.
 - **Portas publicadas no Docker:** só no loopback do host, `127.0.0.1:8082` (painel, para onde o ngrok do host tunela), `127.0.0.1:5900` (VNC, que só sobe com senha) e `127.0.0.1:5432` (PostgreSQL). O Docker publica as portas por fora do firewall do host (ufw), então uma porta em `0.0.0.0` ficaria aberta para a rede mesmo "fechada" no firewall. De outra máquina, use um túnel SSH, ex.: `ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` para o VNC e `ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>` para o `psql -h 127.0.0.1 -p 5433` (detalhes em [deploy/docker/README.md](deploy/docker/README.md#acesso-de-outra-máquina)).
 - **Dependências:** o `go.mod` fixa o toolchain (`toolchain go1.25.14`), com as correções de segurança da biblioteca padrão, e a imagem compila com o Go 1.26.8. Para conferir as vulnerabilidades conhecidas: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`.
