@@ -69,6 +69,8 @@ class Package:
         self.initialized = 0
         self.sends = []  # the requests of order_send, with when
         self.send_none = False
+        self.logins = []  # the calls of login, with their arguments
+        self.login_fails = False
 
     def module(self):
         mt5 = types.ModuleType("MetaTrader5")
@@ -88,6 +90,8 @@ class Package:
             time.sleep(self.initialize_delay)
             self.initialized += 1
             self.connected = True
+            if not self.login and kwargs.get("login"):  # a terminal logged in no account takes the one given
+                self.login = kwargs["login"]
             return True
 
         def order_send(request):
@@ -97,7 +101,16 @@ class Package:
                 return None
             return Result(10009, 680000001, 530000001, request.get("volume", 0.0), 4286.5, "Request executed")
 
+        def login(account, password=None, server=None, timeout=None):
+            self.logins.append((account, password, server))
+            if self.login_fails:
+                self.error = (-6, "Terminal: Authorization failed")
+                return False
+            self.login = account
+            return True
+
         mt5.initialize = initialize
+        mt5.login = login
         mt5.shutdown = lambda: None
         mt5.last_error = lambda: self.error
         mt5.version = lambda: (500, 5200, "01 Jan 2026")
@@ -409,7 +422,7 @@ class AccountTest(BridgeTest):
         status, answer = self.order()
         self.assertEqual(409, status)
         self.assertIs(False, answer["sent"])
-        self.assertIn("--allow-real", answer["error"])
+        self.assertIn("allow the real account", answer["error"])
         self.assertEqual([], PACKAGE.sends)
 
 
@@ -607,3 +620,135 @@ class EncodingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SessionTest(unittest.TestCase):
+    """The account given by the controller: POST /session logs the terminal in
+    it and keeps it, without its password, over the legacy --login; without
+    any, the bridge serves /health and waits."""
+
+    def serve(self, args):
+        terminal = mt5bridge.Terminal(args)
+        try:
+            terminal.call(lambda: None)
+        except mt5bridge.BridgeError:
+            pass  # waiting for the session
+        mt5bridge.Handler.terminal, mt5bridge.Handler.token, mt5bridge.Handler.read_only = terminal, TOKEN, False
+        server = QuietServer(("127.0.0.1", 0), mt5bridge.Handler)
+        server.verbose = False
+        threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.port = server.server_address[1]
+        return terminal
+
+    def request(self, method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        request = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path), method=method, data=data,
+                                         headers={"X-Bridge-Token": TOKEN})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def args(self, login=0, server="", **extra):
+        values = dict(login=login, server=server, path="", portable=False, allow_real=False, timeout=1,
+                      startup=0, session=os.path.join(self.dir, "session.json"))
+        values.update(extra)
+        return types.SimpleNamespace(**values)
+
+    def setUp(self):
+        PACKAGE.reset()
+        self.dir = self.enterContext(__import__("tempfile").TemporaryDirectory())
+
+    def test_waits_then_takes_the_session(self):
+        self.serve(self.args())
+        status, health = self.request("GET", "/health")
+        self.assertEqual(200, status, health)
+        self.assertEqual("session", health["waiting"])
+        self.assertFalse(health["connected"])
+        status, answer = self.request("GET", "/account")
+        self.assertEqual(503, status)
+        self.assertIn("Contas MT5", answer["error"])
+
+        PACKAGE.login = 0
+        status, session = self.request("POST", "/session", {"login": 478378599, "server": "Exness-MT5Real11",
+                                                            "password": "s3cret!", "allow_real": True})
+        self.assertEqual(200, status, session)
+        self.assertEqual(478378599, session["login"])
+        self.assertEqual(478378599, session["logged_login"])
+        self.assertTrue(session["connected"])
+        self.assertEqual("", session["waiting"])
+        self.assertNotIn("s3cret!", json.dumps(session), "never the password")
+        with open(os.path.join(self.dir, "session.json"), encoding="utf-8") as f:
+            kept = f.read()
+        self.assertNotIn("s3cret!", kept, "never on the disk")
+        self.assertEqual({"login": 478378599, "server": "Exness-MT5Real11", "allow_real": True,
+                          "read_only": False}, json.loads(kept))
+        self.assertEqual(0o600, os.stat(os.path.join(self.dir, "session.json")).st_mode & 0o777)
+        status, health = self.request("GET", "/health")
+        self.assertEqual(200, status)
+        self.assertTrue(health["connected"])
+        self.assertNotIn("waiting", health)
+
+    def test_the_kept_session_over_the_legacy_login(self):
+        mt5bridge.save_session(os.path.join(self.dir, "session.json"),
+                               {"login": 478378599, "server": "Exness-MT5Real11", "allow_real": True,
+                                "read_only": False})
+        PACKAGE.login = 478378599
+        terminal = self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
+        self.assertEqual(478378599, terminal.session["login"], "the controller's, not the legacy one")
+        self.assertFalse(terminal.session.get("legacy"))
+        status, session = self.request("GET", "/session")
+        self.assertEqual(200, status)
+        self.assertEqual((478378599, True), (session["login"], session["connected"]))
+
+    def test_legacy_login_until_a_session(self):
+        terminal = self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
+        self.assertTrue(terminal.session["legacy"])
+        status, session = self.request("GET", "/session")
+        self.assertEqual((LOGIN, True, True), (session["login"], session["legacy"], session["connected"]))
+
+    def test_refusals_leave_the_account_served(self):
+        self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
+        for body, code in (({"login": 0, "server": "x"}, 400), ({"login": 5, "server": " "}, 400),
+                           ({"login": 5, "server": "x", "allow_real": "yes"}, 400),
+                           ({"login": 5, "server": "x", "password": 7}, 400)):
+            status, _ = self.request("POST", "/session", body)
+            self.assertEqual(code, status, body)
+
+        # a real account without allow_real: refused, the session not kept
+        PACKAGE.trade_mode = 2
+        status, answer = self.request("POST", "/session", {"login": 478378599, "server": "Exness-MT5Real11"})
+        self.assertEqual(409, status, answer)
+        self.assertIn("real", answer["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "session.json")))
+
+        # the login refused by the terminal
+        PACKAGE.trade_mode, PACKAGE.login_fails = 0, True
+        status, answer = self.request("POST", "/session", {"login": 87654321, "server": "Exness-MT5Trial11",
+                                                           "password": "wrong"})
+        self.assertEqual(502, status)
+        self.assertIn("Authorization failed", answer["error"])
+        self.assertNotIn("wrong", answer["error"])
+
+    def test_the_same_account_changes_its_switches_only(self):
+        self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
+        status, session = self.request("POST", "/session", {"login": LOGIN, "server": "Exness-MT5Trial11",
+                                                            "read_only": True})
+        self.assertEqual(200, status, session)
+        self.assertTrue(session["read_only"])
+        self.assertEqual([], PACKAGE.logins, "no login again")
+        status, answer = self.request("POST", "/order", {"action": 1, "symbol": "XAUUSDm", "volume": 0.01})
+        self.assertEqual(403, status, "read-only")
+        self.assertFalse(answer.get("sent", True))
+        status, _ = self.request("POST", "/session", {"login": LOGIN, "server": "Exness-MT5Trial11"})
+        self.assertEqual(200, status)
+
+    def test_switches_the_account_of_the_open_terminal(self):
+        self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
+        status, session = self.request("POST", "/session", {"login": 87654321, "server": "Exness-MT5Trial11",
+                                                            "password": "pw"})
+        self.assertEqual(200, status, session)
+        self.assertEqual([(87654321, "pw", "Exness-MT5Trial11")], PACKAGE.logins)
+        self.assertEqual(87654321, session["logged_login"])

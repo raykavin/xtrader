@@ -28,6 +28,8 @@ Endpoints (JSON):
     GET  /history_orders?from=<s>&to=<s>   orders of the history
     POST /order                        order_send, body: the MT5 trade request
     POST /check                        order_check, body: the MT5 trade request
+    GET  /session                      the account the bridge serves, never its password
+    POST /session                      the account to serve, from the controller (see below)
 Errors: {"error": "...", "retcode": n} with an HTTP status. A list the package
 fails to read (None) is an error (502), never an empty list. Candles are the
 exception for a range the terminal holds none of, eg: before the start of its
@@ -50,6 +52,15 @@ than --login, or a real one without --allow-real, eg: switched by hand, refuses
 it (409). A POST /order refused before order_send answers "sent": false (504
 for its deadline passed), so the client knows it was not executed; without it,
 an error after order_send (500, 502, 503) leaves the outcome unknown.
+
+The account comes from the controller (Configurações > Contas MT5): POST /session
+{login, server, password, allow_real, read_only} logs the terminal in it
+(mt5.login, or initialize when the terminal isn't open) and, once it is, keeps
+it in --session, a JSON file without the password (the terminal keeps its own),
+taken at the next start over --login/--server, which only serve until the
+controller first gives one. Without any, the bridge serves all the same: /health
+answers 200 telling it waits for the session (or for the password, when the
+password the terminal kept no longer logs it in), and the other routes 503.
 """
 
 import argparse
@@ -125,6 +136,53 @@ def check_deadline(deadline, what):
         raise BridgeError(504, "the deadline of the request passed %s: not sent to the terminal" % what)
 
 
+def load_session(path):
+    """The account of the session file path, None without one."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return session_of(data)
+
+
+def save_session(path, session):
+    """Keeps session in path, without the password, atomically, readable by its
+    owner only."""
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary = path + ".tmp"
+    with open(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+        json.dump({k: session[k] for k in ("login", "server", "allow_real", "read_only")}, f)
+    os.replace(temporary, path)
+
+
+def legacy_session(args):
+    """The account of --login/--server, the legacy one, None without them."""
+    login, server = getattr(args, "login", None), getattr(args, "server", "")
+    if not login or not server:
+        return None
+    return {"login": int(login), "server": server, "allow_real": bool(getattr(args, "allow_real", False)),
+            "read_only": bool(getattr(args, "read_only", False)), "legacy": True}
+
+
+def session_of(data):
+    """The account of a JSON object: login (an integer above 0), server, and the
+    switches allow_real and read_only; a BridgeError (400) else."""
+    if not isinstance(data, dict):
+        raise BridgeError(400, "the session must be an object")
+    login, server = data.get("login"), data.get("server")
+    if isinstance(login, bool) or not isinstance(login, int) or login <= 0:
+        raise BridgeError(400, "login must be an integer above 0")
+    if not isinstance(server, str) or not server.strip():
+        raise BridgeError(400, "server is required")
+    for name in ("allow_real", "read_only"):
+        if not isinstance(data.get(name, False), bool):
+            raise BridgeError(400, "%s must be true or false" % name)
+    return {"login": login, "server": server.strip(), "allow_real": bool(data.get("allow_real", False)),
+            "read_only": bool(data.get("read_only", False))}
+
+
 class Terminal:
     """The terminal, used by one thread at a time: the MetaTrader5 package keeps a
     single connection per process."""
@@ -136,6 +194,15 @@ class Terminal:
         self.process = None  # the terminal the bridge opened, if any
         self.info = None  # terminal_info() of the request under the lock
         self.selected = set()  # the symbols selected in the Market Watch since connecting
+        # the account served: the one of --session, else of --login/--server
+        # (legacy), else none until POST /session; its password in memory only
+        self.session = load_session(getattr(args, "session", "")) or legacy_session(args)
+        self.password = os.environ.get("MT5_PASSWORD", "") if self.session and self.session.get("legacy") else ""
+        self.waiting = "" if self.session else "session"  # why no account is served: session or password
+
+    def read_only(self):
+        """Whether the account served refuses every trading request."""
+        return bool(self.session and self.session.get("read_only"))
 
     def launch(self):
         """Opens the terminal of --path, unless the one the bridge opened still
@@ -150,17 +217,23 @@ class Terminal:
         time.sleep(self.args.startup)
 
     def connect(self):
+        if not self.session:
+            self.waiting = "session"
+            raise BridgeError(503, "no account: set it in Configurações > Contas MT5 (POST /session)")
         self.selected = set()
         self.launch()
-        kwargs = {"login": self.args.login, "server": self.args.server, "timeout": self.args.timeout * 1000}
+        kwargs = {"login": self.session["login"], "server": self.session["server"],
+                  "timeout": self.args.timeout * 1000}
         if self.args.path:
             kwargs["path"] = self.args.path
         if self.args.portable:
             kwargs["portable"] = True
-        password = os.environ.get("MT5_PASSWORD", "")
-        if password:
-            kwargs["password"] = password
+        if self.password:
+            kwargs["password"] = self.password
         if not mt5.initialize(**kwargs):
+            # the password the terminal kept no longer logs it in: the
+            # controller gives it again
+            self.waiting = "" if self.password else "password"
             raise BridgeError(503, "initialize: %s" % (mt5.last_error(),))
         account = mt5.account_info()
         if account is None:
@@ -170,16 +243,53 @@ class Terminal:
         if problem:
             mt5.shutdown()
             raise BridgeError(503, problem)
-        self.connected = True
+        self.connected, self.waiting = True, ""
 
-    def account_problem(self, account):
-        """Why the account the terminal is logged in is not the one to trade,
-        None when it is."""
-        if account.login != self.args.login:
-            return "the terminal is logged in %d, not %d" % (account.login, self.args.login)
-        if account.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not self.args.allow_real:
-            return "the account %d is real: start the bridge with --allow-real" % account.login
+    def account_problem(self, account, session=None):
+        """Why the account the terminal is logged in is not the one to trade
+        (of session, the one served by default), None when it is."""
+        session = session or self.session
+        if not session:
+            return "no account: set it in Configurações > Contas MT5"
+        if account.login != session["login"]:
+            return "the terminal is logged in %d, not %d" % (account.login, session["login"])
+        if account.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not session.get("allow_real"):
+            return "the account %d is real: allow the real account in Configurações > Contas MT5" % account.login
         return None
+
+    def login(self, session, password):
+        """Logs the terminal in the account of session with password (the one
+        it kept when empty), served and kept in --session once it is: on the
+        terminal open, mt5.login; else initialize. Raises a BridgeError, the
+        account served unchanged, when it can't. Under the lock."""
+        if self.connected and mt5.terminal_info() is None:
+            self.connected = False
+            mt5.shutdown()
+        if self.connected:
+            kwargs = {"server": session["server"], "timeout": self.args.timeout * 1000}
+            if password:
+                kwargs["password"] = password
+            if not mt5.login(session["login"], **kwargs):
+                code, message = mt5.last_error()
+                raise BridgeError(502, "login %d: %s" % (session["login"], message), code)
+        else:
+            previous, previous_password = self.session, self.password
+            self.session, self.password = session, password
+            try:
+                self.connect()
+            except BridgeError:
+                self.session, self.password = previous, previous_password
+                raise
+        account = mt5.account_info()
+        if account is None:
+            raise terminal_error("account_info")
+        problem = self.account_problem(account, session)
+        if problem:
+            raise BridgeError(409, problem)
+        self.session, self.password, self.waiting, self.connected = session, password, "", True
+        self.selected = set()
+        save_session(getattr(self.args, "session", ""), session)
+
 
     def check_account(self):
         """Refuses a trade request (409) when the terminal is no longer logged in
@@ -468,12 +578,76 @@ class Handler(BaseHTTPRequestHandler):
                 "build": version[1] if version else 0,
                 "login": account.login if account else 0,
                 "server": account.server if account else "",
-                "read_only": self.read_only,
+                "read_only": self.is_read_only(),
                 "deadline": True,  # X-Bridge-Deadline is honored
                 "timeout": True,  # and X-Bridge-Timeout
                 "time": time.time(),
             }
-        return self.run(fn)
+        try:
+            return self.run(fn)
+        except BridgeError as exc:
+            # waiting for the account or its password from the controller: up
+            # all the same, so that the controller starts and gives it
+            if exc.status != 503 or not self.terminal.waiting:
+                raise
+            return {"connected": False, "trade_allowed": False, "build": 0, "login": 0, "server": "",
+                    "read_only": self.is_read_only(), "waiting": self.terminal.waiting, "error": str(exc),
+                    "deadline": True, "timeout": True, "time": time.time()}
+
+    def is_read_only(self):
+        """Whether every trading request is refused: --read-only, or the
+        account served read-only."""
+        return bool(self.read_only or self.terminal.read_only())
+
+    def session(self, query, body):
+        """The account the bridge serves: never its password."""
+        terminal = self.terminal
+        current = terminal.session or {}
+        logged = 0
+        if terminal.connected and terminal.lock.acquire(timeout=5):
+            try:
+                account = mt5.account_info()
+                logged = account.login if account else 0
+            finally:
+                terminal.lock.release()
+        return {"login": current.get("login", 0), "server": current.get("server", ""),
+                "allow_real": bool(current.get("allow_real")), "read_only": bool(current.get("read_only")),
+                "legacy": bool(current.get("legacy")), "connected": terminal.connected, "logged_login": logged,
+                "waiting": terminal.waiting}
+
+    def set_session(self, query, body):
+        """Logs the terminal in the account of the body, from the controller:
+        {login, server, password, allow_real, read_only}, the password the one
+        the terminal kept when empty; the switches of the account served
+        changed alone when it is the same. Its answer is GET /session."""
+        session = session_of(body)
+        password = body.get("password") or ""
+        if not isinstance(password, str):
+            raise BridgeError(400, "password must be a string")
+        terminal = self.terminal
+        if not terminal.lock.acquire(timeout=max(self.args_timeout(), 1)):
+            raise BridgeError(504, "the terminal is busy: try again")
+        try:
+            current = terminal.session or {}
+            same = (terminal.connected and current.get("login") == session["login"]
+                    and current.get("server") == session["server"])
+            if same:
+                account = mt5.account_info()
+                problem = terminal.account_problem(account, session) if account else "account_info failed"
+                if problem:
+                    raise BridgeError(409, problem)
+                terminal.session = session
+                if password:
+                    terminal.password = password
+                save_session(getattr(terminal.args, "session", ""), session)
+            else:
+                terminal.login(session, password)
+        finally:
+            terminal.lock.release()
+        return self.session(query, None)
+
+    def args_timeout(self):
+        return getattr(self.terminal.args, "timeout", 120)
 
     def account(self, query, body):
         def fn():
@@ -565,8 +739,8 @@ class Handler(BaseHTTPRequestHandler):
         return record(self.run(lambda: listing("history_orders_get", mt5.history_orders_get(start, end))))
 
     def trade_request(self, body):
-        if self.read_only:
-            raise BridgeError(403, "the bridge is read-only (--read-only)")
+        if self.is_read_only():
+            raise BridgeError(403, "the bridge is read-only (--read-only, or the account read-only)")
         if not isinstance(body, dict):
             raise BridgeError(400, "the body must be a trade request object")
         unknown = set(body) - REQUEST_FIELDS
@@ -628,6 +802,8 @@ ROUTES = {
     ("GET", "/history_orders"): Handler.history_orders,
     ("POST", "/order"): Handler.order,
     ("POST", "/check"): Handler.check,
+    ("GET", "/session"): Handler.session,
+    ("POST", "/session"): Handler.set_session,
 }
 
 
@@ -643,8 +819,11 @@ def loopback(host):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--login", type=int, required=True, help="account the terminal must be logged in")
-    parser.add_argument("--server", required=True, help="trade server, eg: Exness-MT5Trial11")
+    parser.add_argument("--login", type=int, default=0,
+                        help="account the terminal must be logged in until the controller gives one (legacy)")
+    parser.add_argument("--server", default="", help="trade server, eg: Exness-MT5Trial11 (legacy, with --login)")
+    parser.add_argument("--session", default="",
+                        help="file keeping the account the controller gave (POST /session), without its password")
     parser.add_argument("--path", default="", help="terminal64.exe, when not the one already running")
     parser.add_argument("--host", default="127.0.0.1",
                         help="address to listen on, eg: 0.0.0.0 in a container; off the loopback, a token is required")
@@ -672,6 +851,9 @@ def main():
             terminal.call(lambda: None)
             break
         except BridgeError as exc:
+            if terminal.waiting:  # the account, or its password, comes from the controller
+                print("mt5bridge: waiting for the %s from the controller: %s" % (terminal.waiting, exc), flush=True)
+                break
             if time.time() >= deadline:
                 raise
             print("mt5bridge: %s, trying again in 5s" % exc, flush=True)
@@ -679,9 +861,10 @@ def main():
     Handler.terminal, Handler.token, Handler.read_only = terminal, args.token, args.read_only
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.verbose = args.verbose
-    print("mt5bridge: account %d on %s, http://%s:%d%s%s" % (
-        args.login, args.server, args.host, args.port, " (read-only)" if args.read_only else "",
-        "" if orjson is not None else " (without orjson)"), flush=True)
+    served = terminal.session or {}
+    print("mt5bridge: account %s on %s, http://%s:%d%s%s" % (
+        served.get("login") or "(none yet)", served.get("server") or "-", args.host, args.port,
+        " (read-only)" if args.read_only else "", "" if orjson is not None else " (without orjson)"), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:  # Ctrl+C, or the controller stopping it
