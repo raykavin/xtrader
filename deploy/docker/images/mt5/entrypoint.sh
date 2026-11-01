@@ -7,11 +7,14 @@
 # the MCP server of the terminal when asked, then tools/mt5bridge/run.sh, the
 # bridge listening on the network of the compose with its token.
 #
-# The environment (services/mt5/.env): MT5_LOGIN, MT5_SERVER, MT5_PASSWORD
-# (the terminal logs in with it), MT5_BRIDGE_TOKEN, MT5_ALLOW_REAL,
-# MT5_READ_ONLY, MT5_VNC_PASSWORD, MT5_ALGO_TRADING, MT5_MCP_FORWARD. The
-# switches take 1/true/yes or 0/false/no (any case; empty for their default):
-# any other value stops the container, never read as off.
+# The account of the terminal comes from the controller (Configurações > Contas
+# MT5): the bridge keeps it in /data/xtrader-bridge/session.json, without its
+# password (the terminal keeps its own). The environment (services/mt5/.env):
+# MT5_BRIDGE_TOKEN, MT5_VNC_PASSWORD, MT5_ALGO_TRADING, MT5_MCP_FORWARD; and,
+# legacy, until the controller gives the account: MT5_LOGIN, MT5_SERVER,
+# MT5_PASSWORD, MT5_ALLOW_REAL, MT5_READ_ONLY. The switches take 1/true/yes or
+# 0/false/no (any case; empty for their default): any other value stops the
+# container, never read as off.
 set -euo pipefail
 
 # switch NAME DEFAULT prints 1 or 0 for the switch NAME of the environment, or
@@ -160,8 +163,14 @@ if [[ "$mcp_forward" == 1 ]]; then
 	socat TCP-LISTEN:22347,fork,reuseaddr TCP:127.0.0.1:22346 &
 fi
 
-args=(--host 0.0.0.0 --portable)
+args=(--host 0.0.0.0 --portable --session /data/xtrader-bridge/session.json)
 [[ "$allow_real" == 1 ]] && args+=(--allow-real)
 [[ "$read_only" == 1 ]] && args+=(--read-only)
-log "the bridge of the account ${MT5_LOGIN:-?} on ${MT5_SERVER:-?}"
+if [[ -f /data/xtrader-bridge/session.json ]]; then
+	log "the bridge of the account given by the controller"
+elif [[ -n "${MT5_LOGIN:-}" ]]; then
+	log "the bridge of the legacy account $MT5_LOGIN on ${MT5_SERVER:-?}, until the controller gives one"
+else
+	log "the bridge waits for the account from the controller (Configurações > Contas MT5)"
+fi
 exec /opt/xtrader/mt5bridge/run.sh "${args[@]}"

@@ -4,10 +4,13 @@
 # closed, logged in the account with its saved password. Keep it running while
 # the agents trade; Ctrl+C stops it.
 #
-#	tools/mt5bridge/run.sh                   # the Exness demo 198974329
-#	MT5_LOGIN=87654321 MT5_SERVER=Exness-MT5Real11 tools/mt5bridge/run.sh --allow-real
+#	tools/mt5bridge/run.sh --session ~/.local/state/xtrader/mt5bridge.json
+#	MT5_LOGIN=87654321 MT5_SERVER=Exness-MT5Real11 tools/mt5bridge/run.sh --allow-real   # legacy
 #
-# Extra arguments go to the bridge, eg: --read-only, --port 18813.
+# The account comes from the controller (Configurações > Contas MT5, POST
+# /session), kept in --session; MT5_LOGIN and MT5_SERVER, the legacy account,
+# only serve until it gives one. Extra arguments go to the bridge, eg:
+# --read-only, --port 18813.
 #
 # The terminal the bridge opens is headless: drawn on a virtual X display,
 # Xvfb $MT5_DISPLAY (:99 by default), started here when not running; it trades
@@ -16,8 +19,6 @@
 # open already is used as it is, where it is.
 set -euo pipefail
 
-login="${MT5_LOGIN:-198974329}"
-server="${MT5_SERVER:-Exness-MT5Trial11}"
 terminal="${MT5_TERMINAL:-C:\\Program Files\\MetaTrader 5 EXNESS\\terminal64.exe}"
 python="${WINEPREFIX:-$HOME/.wine}/drive_c/Python312/python.exe"
 export WINEDEBUG=-all
@@ -65,4 +66,9 @@ if curl -s -m 2 http://127.0.0.1:18812/health >/dev/null 2>&1 && [[ " $* " != *"
 	exit 1
 fi
 
-exec wine "$python" -u "$bridge" --login "$login" --server "$server" --path "$terminal" "$@"
+# the legacy account, until the controller gives one
+account=()
+if [[ -n "${MT5_LOGIN:-}" ]]; then
+	account=(--login "$MT5_LOGIN" --server "${MT5_SERVER:-}")
+fi
+exec wine "$python" -u "$bridge" "${account[@]}" --path "$terminal" "$@"
