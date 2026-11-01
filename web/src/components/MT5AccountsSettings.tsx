@@ -1,13 +1,15 @@
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import {
-  activateMT5Account,
   createMT5Account,
   deleteMT5Account,
   fetchMT5Accounts,
+  fetchMT5Switch,
+  switchMT5Account,
+  switchRefusalOf,
   testMT5Account,
   updateMT5Account,
 } from "../api/client";
-import type { MT5AccountInfo, MT5AccountTest } from "../api/types";
+import type { MT5AccountInfo, MT5AccountTest, MT5SwitchPreview } from "../api/types";
 import { formatTime } from "../lib/format";
 import {
   type AccountField,
@@ -16,10 +18,13 @@ import {
   accountCreateRequest,
   accountErrors,
   accountForm,
+  accountState,
   accountUpdateRequest,
+  agentsLabel,
   kindLabel,
   movesTheTerminal,
   sessionLabel,
+  switchQuestion,
 } from "../lib/mt5Accounts";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
@@ -27,6 +32,7 @@ import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, EmptyState, Loading, Skeleton } from "./States";
+import { StatusIcon } from "./StatusIcon";
 import { Switch } from "./Switch";
 
 /** How often the accounts and their terminals are read again, in ms. */
@@ -281,16 +287,77 @@ function TestResult({ test }: { test: MT5AccountTest }) {
   );
 }
 
+/** The positions and the pending orders open on an account, the first ones. */
+function OpenList({ items }: { items: string[] }) {
+  const shown = items.slice(0, 5);
+  return (
+    <ul className="mt5-open">
+      {shown.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+      {items.length > shown.length && <li>e mais {items.length - shown.length}</li>}
+    </ul>
+  );
+}
+
 /** The card of an account: how it stands, its agents, and its actions. */
 function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<MT5AccountTest | null>(null);
-  // the switch turned, asked before: activating logs the terminal in the account
+  // the switch turned: what it does read, then asked before (see switchQuestion)
   const [turning, setTurning] = useState<boolean | null>(null);
+  const [preview, setPreview] = useState<MT5SwitchPreview | null>(null);
+  const [pending, setPending] = useState<string[]>([]);
   const session = sessionLabel(account);
   const kind = kindLabel(account.kind);
+  const state = accountState(account);
+
+  const turn = (active: boolean) => {
+    setTurning(active);
+    setPreview(null);
+    setError(null);
+    setPending([]);
+    fetchMT5Switch(account.id, active)
+      .then((read) => {
+        if (read.error) {
+          setTurning(null);
+          setError(read.error);
+          return;
+        }
+        setPreview(read);
+      })
+      .catch((err) => {
+        setTurning(null);
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
+  const confirm = () => {
+    if (turning === null || preview === null) return;
+    const active = turning;
+    const close = preview.exposure.length > 0;
+    setPreview(null);
+    setBusy(true);
+    setError(null);
+    switchMT5Account(account.id, active, { close_positions: close })
+      .then(() => {
+        setTurning(null);
+        onChange();
+      })
+      .catch((err) => {
+        const refusal = switchRefusalOf(err);
+        if (refusal?.confirm) {
+          turn(active); // something opened meanwhile: asked again with it
+          return;
+        }
+        setTurning(null);
+        setError(refusal?.error ?? (err instanceof Error ? err.message : String(err)));
+        setPending(refusal?.pending ?? []);
+        onChange();
+      })
+      .finally(() => setBusy(false));
+  };
 
   const run = (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -306,19 +373,27 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
   };
 
   return (
-    <article className="card mt5-card" aria-label={`Conta ${account.name}`}>
+    <article className={`card mt5-card ${state.tone}`} aria-label={`Conta ${account.name}`}>
       <header className="mt5-card-head">
         <div className="mt5-card-title">
-          <h3 className="card-title">{account.name}</h3>
+          <div className="mt5-card-name">
+            <h3 className="card-title">{account.name}</h3>
+            <span className={`status-chip ${state.tone}`}>
+              <StatusIcon mark={state.mark} />
+              {state.label}
+            </span>
+          </div>
           <span className="mono field-hint">
             {account.login} · {account.server}
           </span>
         </div>
         <div className="mt5-card-chips">
           <span className={chip(kind)}>{kind.text}</span>
-          <span className={chip(session)} title={session.text}>
-            {session.text}
-          </span>
+          {account.active && (
+            <span className={chip(session)} title={session.text}>
+              {session.text}
+            </span>
+          )}
         </div>
       </header>
       <div className="mt5-active">
@@ -327,43 +402,50 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
           checked={turning ?? account.active}
           disabled={busy || turning !== null}
           title="Ligada, o terminal desta bridge fica logado nela e os agentes dela são iniciados"
-          onChange={setTurning}
+          onChange={turn}
         />
-        {turning !== null && (
-          <fieldset className="confirm" aria-label="Confirmar">
-            <span className="confirm-question">
-              {turning
-                ? `Logar o terminal desta bridge na conta ${account.login}? Só é permitido sem agentes rodando nele e sem posições abertas dos agentes.`
-                : "Desativar a conta? O terminal deixa de servi-la e os agentes dela param de ser iniciados."}
-            </span>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger"
-              onClick={() => {
-                const active = turning;
-                setTurning(null);
-                run(() =>
-                  active
-                    ? activateMT5Account(account.id)
-                    : updateMT5Account(account.id, { active: false }),
-                );
-              }}
-            >
-              Sim
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              // biome-ignore lint/a11y/noAutofocus: the switch asked from leaves, the safe answer takes its focus
-              autoFocus
-              onClick={() => setTurning(null)}
-            >
-              Não
-            </button>
+        {busy && turning !== null && (
+          <span className="field-hint" role="status">
+            {turning
+              ? "Trocando de conta: parando os agentes, encerrando o que estiver aberto e logando o terminal…"
+              : "Desativando: parando os agentes e encerrando o que estiver aberto…"}
+          </span>
+        )}
+        {turning !== null && !busy && preview === null && (
+          <span className="field-hint" role="status">
+            Conferindo o terminal…
+          </span>
+        )}
+        {preview && (
+          <fieldset className="confirm mt5-confirm" aria-label="Confirmar">
+            <span className="confirm-question">{switchQuestion(account, preview)}</span>
+            {preview.exposure.length > 0 && <OpenList items={preview.exposure} />}
+            <div className="mt5-confirm-actions">
+              <button type="button" className="btn btn-sm btn-danger" onClick={confirm}>
+                Sim
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                // biome-ignore lint/a11y/noAutofocus: the switch asked from leaves, the safe answer takes its focus
+                autoFocus
+                onClick={() => {
+                  setTurning(null);
+                  setPreview(null);
+                }}
+              >
+                Não
+              </button>
+            </div>
           </fieldset>
         )}
       </div>
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && (
+        <Alert tone="error">
+          {error}
+          {pending.length > 0 && <OpenList items={pending} />}
+        </Alert>
+      )}
       {test && <TestResult test={test} />}
       {editing ? (
         <AccountEditor
@@ -378,8 +460,11 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
         <>
           <dl className="mt5-facts">
             <div>
-              <dt>Bridge</dt>
-              <dd className="mono">{account.bridge_url}</dd>
+              <dt>Terminal</dt>
+              <dd className="mono">
+                {account.bridge_url}
+                {account.instance ? ` · instância ${account.instance}` : ""}
+              </dd>
             </div>
             <div>
               <dt>Opções</dt>
@@ -394,7 +479,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
             </div>
             <div>
               <dt>Agentes</dt>
-              <dd>{account.agents.length > 0 ? account.agents.join(", ") : "nenhum"}</dd>
+              <dd>{agentsLabel(account.agents.length)}</dd>
             </div>
             <div>
               <dt>Confirmada</dt>
@@ -546,9 +631,18 @@ export function MT5AccountsSettings({ intro }: Props) {
         <h2 className="card-title">Como funciona</h2>
         <ul className="daily-notes">
           <li>
-            Cada terminal MT5 (a bridge) fica logado numa conta por vez: a conta ativa dele. Ativar
-            outra conta faz o terminal logar nela, só sem agentes rodando nele e sem posições ou
-            ordens dos agentes abertas.
+            Cada terminal MT5 fica logado numa conta por vez: a conta ativa dele. O terminal é
+            identificado pelo host e pela porta da bridge e pela instância que ela informa: vários
+            terminais num mesmo host são independentes, e contas em terminais diferentes ficam
+            ativas e operando ao mesmo tempo.
+          </li>
+          <li>
+            Ao ativar outra conta no mesmo terminal (ou desativar a atual), os agentes dele são
+            parados; com posições ou ordens pendentes dos agentes abertas, a troca pede confirmação,
+            encerra as posições e cancela as ordens, confere na conta e só então loga o terminal na
+            nova conta. Se algo continuar aberto, a troca não é feita e as pendências são
+            informadas; se o terminal não logar na nova conta, a anterior volta a ser a ativa.
+            Depois, os agentes da conta ativa voltam a ser iniciados.
           </li>
           <li>
             A senha e o token ficam cifrados no banco, com a chave fora dele, e nunca são exibidos

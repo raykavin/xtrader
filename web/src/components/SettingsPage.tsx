@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import {
   fetchAgentSettings,
+  fetchMT5Accounts,
   fetchPrompts,
   fetchSessionInfo,
   fetchSupervisorSettings,
@@ -9,11 +10,13 @@ import {
 } from "../api/client";
 import type {
   AgentSettings,
+  MT5AccountInfo,
   PromptInfo,
   SupervisorSettingsResponse,
   TelegramSettingsResponse,
   UserInfo,
 } from "../api/types";
+import { terminalsOf } from "../lib/mt5Accounts";
 import { type SettingsTab, settingsTabFromHash } from "../lib/settings";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { AgentsSettings } from "./AgentsSettings";
@@ -47,7 +50,7 @@ const intros: Record<SettingsTab, SectionIntro> = {
   contas: {
     title: "Contas MT5",
     description:
-      "As contas do MetaTrader 5: login, servidor e senha (cifrada), o terminal que serve cada uma e os agentes que a operam. Um terminal fica numa conta por vez; a conta de um terminal em uso não é trocada.",
+      "As contas do MetaTrader 5: login, servidor e senha (cifrada), o terminal que serve cada uma e os agentes que a operam. Um terminal fica numa conta por vez; trocar a conta dele para os agentes e encerra o que estiver aberto, com confirmação.",
   },
   limites: {
     title: "Limites",
@@ -105,6 +108,7 @@ export function SettingsPage() {
   const [telegram, setTelegram] = useState<TelegramSettingsResponse | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorSettingsResponse | null>(null);
   const [users, setUsers] = useState<UserInfo[] | null>(null);
+  const [accounts, setAccounts] = useState<MT5AccountInfo[] | null>(null);
   const [current, setCurrent] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -152,6 +156,11 @@ export function SettingsPage() {
         .catch((e) => {
           if (!controller.signal.aborted) fail(e);
         });
+      fetchMT5Accounts(controller.signal)
+        .then((response) => setAccounts(response.accounts))
+        .catch(() => {
+          // the count only: the tab tells its own error
+        });
     };
     poll();
     const timer = window.setInterval(poll, POLL);
@@ -195,9 +204,16 @@ export function SettingsPage() {
 
   /** What each section holds, once loaded: how many, or whether the bot runs. */
   const running = agents?.filter((a) => a.running).length ?? 0;
+  const terminals = accounts && terminalsOf(accounts);
   const hints: Partial<Record<SettingsTab, NavHint>> = {
     ...(agents && {
       agentes: { text: `${running}/${agents.length}`, tone: running > 0 ? "on" : undefined },
+    }),
+    ...(terminals && {
+      contas: {
+        text: `${terminals.active}/${terminals.total}`,
+        tone: terminals.active > 0 ? "on" : undefined,
+      },
     }),
     ...(prompts && { prompts: { text: String(prompts.length) } }),
     ...(supervisor && {

@@ -1,7 +1,8 @@
 // The accounts of MetaTrader 5 on the dashboard (Configurações > Contas MT5):
 // how each stands, what the bridge confirmed of it, and the form that sets it.
 
-import type { MT5AccountInfo, MT5AccountRequest } from "../api/types";
+import type { MT5AccountInfo, MT5AccountRequest, MT5SwitchPreview } from "../api/types";
+import type { StatusMark } from "../components/StatusIcon";
 import { httpURLError } from "./settings";
 
 /** A label and its tone, as the chips of the dashboard show them. */
@@ -40,6 +41,66 @@ export function sessionLabel(account: MT5AccountInfo): AccountLabel {
     return { tone: "warn", text: `O terminal está na conta ${session.logged_login}` };
   }
   return { tone: "warn", text: "O terminal não está conectado" };
+}
+
+/**
+ * Whether an account is the one of its terminal, as the cards of the agents
+ * tell whether they run: active and served by its terminal, active and not
+ * served yet (see sessionLabel), or inactive.
+ */
+export function accountState(account: MT5AccountInfo): {
+  label: string;
+  tone: "on" | "warn" | "off";
+  mark?: StatusMark;
+} {
+  if (!account.active) return { label: "Inativa", tone: "off" };
+  if (account.session?.current) return { label: "Ativa", tone: "on", mark: "play" };
+  return { label: "Ativa", tone: "warn", mark: "stop" };
+}
+
+/** How many agents an account has, in words. */
+export function agentsLabel(count: number): string {
+  if (count === 0) return "nenhum";
+  return count === 1 ? "1 agente" : `${count} agentes`;
+}
+
+/**
+ * The terminals of the accounts and how many serve their account active, as
+ * the navigation tells the agents running: a terminal told by the instance its
+ * bridge tells, else by the host and the port of its bridge.
+ */
+export function terminalsOf(accounts: MT5AccountInfo[]): { active: number; total: number } {
+  const key = (a: MT5AccountInfo) => a.instance || a.terminal || a.bridge_url;
+  const total = new Set(accounts.map(key));
+  const active = new Set(accounts.filter((a) => a.active && a.session?.current).map(key));
+  return { active: active.size, total: total.size };
+}
+
+/**
+ * The question asked before switching an account on its terminal (active) or
+ * deactivating it, of what the switch does (see MT5SwitchPreview): the
+ * positions and the pending orders of the account leaving the terminal
+ * closed and canceled; else the agents running on it stopped.
+ */
+export function switchQuestion(account: MT5AccountInfo, preview: MT5SwitchPreview): string {
+  const leaving = preview.current.join(", ");
+  if (preview.exposure.length > 0) {
+    return `Existem posições abertas ou ordens pendentes na conta ${leaving}. Ao trocar de conta, todas as posições serão encerradas e as ordens pendentes serão canceladas. Deseja continuar?`;
+  }
+  const running = preview.running.length;
+  const stopped =
+    running === 0
+      ? ""
+      : running === 1
+        ? `O agente ${preview.running[0]}, em execução no terminal, será parado.`
+        : `Os ${running} agentes em execução no terminal serão parados.`;
+  if (!preview.active) {
+    return [`Desativar a conta ${account.name}? O terminal deixa de servi-la.`, stopped]
+      .filter(Boolean)
+      .join(" ");
+  }
+  const from = leaving ? ` no lugar da conta ${leaving}` : "";
+  return [`Logar o terminal na conta ${account.login}${from}?`, stopped].filter(Boolean).join(" ");
 }
 
 /** The form of an account of MT5, as typed: its secrets apart (written only). */
