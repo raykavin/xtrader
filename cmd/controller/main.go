@@ -172,6 +172,10 @@ func run() int {
 	if _, err := controller.StartServices(ctx, services, cfg.Services, cfg.Agents.Dir); err != nil {
 		life.fail(err)
 	}
+	// the accounts of MT5 of the bridges imported, and the terminals logged in
+	// the active ones, before the agents are launched; kept so meanwhile
+	dashboard.PrepareMT5Accounts(ctx)
+	go dashboard.RunMT5Accounts(ctx)
 	managed := make(chan struct{})
 	go func() {
 		manager.Run(ctx) // until ctx is done, then stops the agents

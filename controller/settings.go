@@ -35,6 +35,7 @@ type settings struct {
 	closed    *closedProfits // of the agents on their accounts, see GET /api/positions/closed
 	trades    *performance   // of the agents on their accounts, see GET /api/performance
 	paths     *excursions    // of their trades, see GET /api/performance/excursions
+	mt5       *mt5Accounts   // the accounts of MT5 and their terminals, see GET /api/settings/mt5-accounts
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
@@ -44,6 +45,7 @@ func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState
 	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth },
 		positions: positions, closed: newClosedProfits(positions)}
 	d.settings.trades = newPerformance(positions)
+	d.settings.mt5 = newMT5Accounts(s, manager, positions)
 	d.settings.paths = newExcursions(d.settings.trades)
 }
 
@@ -73,6 +75,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Post("/users", s.handleCreateUser)
 	r.Patch("/users/{id}", s.handleUpdateUser)
 	r.Delete("/users/{id}", s.handleDeleteUser)
+	s.mt5Routes(r)
 }
 
 // decode decodes the JSON payload of the request into v, answering 400 when
@@ -156,6 +159,10 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
 		settings.Secrets.BridgeToken = len(acc.BridgeToken) > 0
 	}
+	if account := a.MT5AccountOf(); account != nil {
+		settings.MT5AccountID = account.ID
+		settings.Secrets.BridgeToken = len(account.BridgeToken) > 0
+	}
 	if l := a.LLM; l != nil {
 		settings.Model = l.Provider + " " + l.Model
 		settings.LLM = &ui.AgentLLMSettings{Provider: l.Provider, Model: l.Model, BaseURL: l.BaseURL,
@@ -178,6 +185,16 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	account := request.Account
+	var linked *store.MT5Account
+	if id := request.MT5AccountID; id != nil && *id != 0 {
+		mt5, err := s.store.MT5Account(ctx, *id)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		linked, account.BridgeURL = &mt5, mt5.BridgeURL // the bridge of its account
+		request.BridgeToken = nil
+	}
 	agent := store.Agent{Name: request.Name, Kind: request.Kind, Enabled: request.Enabled, Mode: request.Mode,
 		APIAddress: request.APIAddress, Launched: request.Launched == nil || *request.Launched,
 		Restart: request.Restart == nil || *request.Restart, TradePanel: request.TradePanel,
@@ -199,6 +216,16 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if linked != nil {
+		if err := s.store.SetAgentMT5Account(ctx, created.ID, &linked.ID, changeOf(r, "")); err != nil {
+			s.fail(w, err)
+			return
+		}
+		if created, err = s.store.Agent(ctx, created.ID); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
 	log.Infof("ui: the agent %s created by %s", created.Name, userOf(ctx))
 	if err := s.manager.Reconcile(ctx); err != nil {
 		log.Errorf("ui: %v", err)
@@ -217,6 +244,18 @@ func (s *settings) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var request ui.AgentSettingsRequest
 	if !decode(w, r, &request) {
+		return
+	}
+	linked := a.MT5AccountOf() != nil
+	if request.MT5AccountID != nil {
+		linked = *request.MT5AccountID != 0
+	}
+	if linked && (request.BridgeToken != nil || request.Account != nil && request.Account.BridgeURL != nil) {
+		writeJSONError(w, http.StatusBadRequest,
+			"a bridge e o token do agente vêm da conta MT5 dele: troque-os em Configurações › Contas MT5")
+		return
+	}
+	if request.MT5AccountID != nil && s.linkAgent(w, r, a, *request.MT5AccountID) {
 		return
 	}
 	update := store.AgentUpdate{Enabled: request.Enabled, TradePanel: request.TradePanel,

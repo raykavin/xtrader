@@ -429,6 +429,10 @@ func (m *Manager) start(a store.Agent) error {
 	if m.fenced(a.Name) {
 		return errFenced
 	}
+	if account := a.MT5AccountOf(); account != nil && !account.Active {
+		return fmt.Errorf("a conta MT5 %s não é a ativa do terminal: ative-a ou associe outra conta ao agente "+
+			"em Configurações › Contas MT5", account.Name)
+	}
 	m.starting.Lock()
 	defer m.starting.Unlock()
 	live, book := a.Mode == "live", a.MT5Book()

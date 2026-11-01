@@ -193,6 +193,10 @@ func SameMT5Bridge(a, b string) bool {
 	return bridgeKey(a) == bridgeKey(b)
 }
 
+// MT5BridgeKey returns the key of the bridge at the URL raw, the same for
+// two URLs reaching it, see SameMT5Bridge: its host and its port.
+func MT5BridgeKey(raw string) string { return bridgeKey(raw) }
+
 // bridgeKey returns the host and the port of the bridge at the URL raw, the
 // URL itself, trimmed and in lowercase, when it has no host.
 func bridgeKey(raw string) string {

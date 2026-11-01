@@ -58,9 +58,9 @@ func migrations(t *testing.T) []migration {
 }
 
 var (
-	createTable = regexp.MustCompile(`^CREATE TABLE IF NOT EXISTS ([a-z_]+) \(`)
-	createIndex = regexp.MustCompile(`^CREATE (UNIQUE )?INDEX IF NOT EXISTS [a-z_]+ ON ([a-z_]+) `)
-	references  = regexp.MustCompile(`REFERENCES ([a-z_]+) \(`)
+	createTable = regexp.MustCompile(`^CREATE TABLE IF NOT EXISTS ([a-z0-9_]+) \(`)
+	createIndex = regexp.MustCompile(`^CREATE (UNIQUE )?INDEX IF NOT EXISTS [a-z0-9_]+ ON ([a-z0-9_]+) `)
+	references  = regexp.MustCompile(`REFERENCES ([a-z0-9_]+) \(`)
 )
 
 // The schema of a new database: each migration creates a table whole, its

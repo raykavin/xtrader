@@ -64,6 +64,7 @@ type Agent struct {
 	Position        int               `json:"position"`
 	OrderIDNext     int64             `gorm:"column:order_id_next" json:"-"`
 	Account         *Account          `gorm:"foreignKey:AgentID" json:"account,omitempty"`
+	MT5Link         *AgentMT5Account  `gorm:"foreignKey:AgentID" json:"mt5_link,omitempty"` // the account of MT5 it trades, see MT5AccountOf
 	LLM             *LLMSettings      `gorm:"foreignKey:AgentID" json:"llm,omitempty"`
 	Supervision     *AgentSupervision `gorm:"foreignKey:AgentID" json:"supervision,omitempty"` // see SupervisionOf
 	Protection      *AgentProtection  `gorm:"foreignKey:AgentID" json:"protection,omitempty"`  // see ProtectionOf

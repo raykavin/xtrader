@@ -1,0 +1,261 @@
+//go:build unix
+
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+
+	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/raykavin/xtrader/store"
+	"github.com/raykavin/xtrader/ui"
+)
+
+// newMT5Supervised returns a supervisor of the tests whose accounts of MT5
+// tell the agents running by its running map.
+func newMT5Supervised(t *testing.T) *supervised {
+	t.Helper()
+	s := newSupervised(t)
+	s.dashboard.settings.mt5.stateOf = func(name string) AgentState {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var state AgentState
+		state.Running = s.running[name]
+		return state
+	}
+	return s
+}
+
+func listMT5Accounts(t *testing.T, call func(string, string, any) (*http.Response, string)) ui.MT5AccountsResponse {
+	t.Helper()
+	resp, body := call(http.MethodGet, "/api/settings/mt5-accounts", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var accounts ui.MT5AccountsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &accounts))
+	return accounts
+}
+
+// The accounts of the bridges imported at the start of the controller, once:
+// the account of the terminal (its login, server, kind and currency, as the
+// bridge tells them; the token its agents reach it with), active, its agents
+// linked; its legacy session made the controller's; its secrets never
+// answered nor logged; kept as the controller starts again, its changes never
+// overwritten.
+func TestMT5Accounts_ImportAndSettings(t *testing.T) {
+	var logs syncBuffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	s := newMT5Supervised(t)
+	ctx := context.Background()
+	s.liveAgent(t, "trend", 101, false)
+	s.liveAgent(t, "orb", 102, false)
+	s.bridge.mu.Lock()
+	s.bridge.tradeMode = 2 // a real account, served: allowed by the terminal
+	s.bridge.mu.Unlock()
+	call, _ := settingsSession(t, s.managed)
+
+	s.dashboard.PrepareMT5Accounts(ctx)
+	got := listMT5Accounts(t, call)
+	require.Len(t, got.Accounts, 1)
+	account := got.Accounts[0]
+	assert.Equal(t, "Conta 198974329", account.Name)
+	assert.Equal(t, int64(198974329), account.Login)
+	assert.Equal(t, s.bridge.URL, account.BridgeURL)
+	assert.True(t, account.Active)
+	assert.True(t, account.AllowReal, "served real already")
+	assert.Equal(t, "real", account.Kind)
+	assert.Equal(t, "BRL", account.Currency)
+	assert.True(t, account.TokenSet)
+	assert.False(t, account.PasswordSet, "the password isn't on the bridge")
+	assert.Equal(t, []string{"trend", "orb"}, account.Agents)
+	require.NotNil(t, account.Session)
+	assert.True(t, account.Session.Current)
+	sessions := s.bridge.sessionsGiven()
+	require.Len(t, sessions, 1, "the legacy session made the controller's")
+	assert.Equal(t, true, sessions[0]["allow_real"])
+
+	// the agents take the bridge and the token of their account
+	trend, err := s.store.AgentByName(ctx, "trend")
+	require.NoError(t, err)
+	cfg, err := configOf(ctx, s.store, trend)
+	require.NoError(t, err)
+	assert.Equal(t, s.bridge.URL, cfg.Account.BridgeURL)
+	assert.Equal(t, "bridge-token", cfg.Account.BridgeToken)
+
+	// once: started again, nothing duplicated, a change kept
+	resp, body := call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", account.ID),
+		ui.MT5AccountRequest{Name: secret("Real Exness"), Password: secret("pass-W0rd!"), Reason: "a senha"})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	assert.NotContains(t, body, "pass-W0rd!", "never the password")
+	s.dashboard.PrepareMT5Accounts(ctx)
+	restarted := newMT5Accounts(s.store, s.manager, newOpenPositions(s.store, s.manager))
+	accounts, err := s.store.MT5Accounts(ctx)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1, "imported once")
+	assert.Equal(t, "Real Exness", accounts[0].Name, "never overwritten")
+	assert.True(t, restarted.infoOf(accounts[0], nil).PasswordSet)
+	password, token, err := s.store.MT5AccountSecrets(accounts[0])
+	require.NoError(t, err)
+	assert.Equal(t, [2]string{"pass-W0rd!", "bridge-token"}, [2]string{password, token})
+
+	resp, body = call(http.MethodGet, "/api/settings/mt5-accounts", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "pass-W0rd!")
+	assert.NotContains(t, body, "bridge-token")
+	resp, body = call(http.MethodGet, fmt.Sprintf("/api/settings/mt5-accounts/%d/events", account.ID), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, `"kind":"imported"`)
+	assert.Contains(t, body, `"kind":"linked"`)
+	assert.Contains(t, body, `"password_set":true`)
+	assert.NotContains(t, body, "pass-W0rd!", "never in the record")
+	assert.NotContains(t, logs.String(), "pass-W0rd!", "never logged")
+	assert.Contains(t, logs.String(), "its password replaced")
+
+	// refused out of their rules, and without the required fields
+	for _, refused := range []ui.MT5AccountRequest{
+		{Name: secret("x"), Login: ptrTo(int64(0)), Server: secret("s"), BridgeURL: secret("http://mt5:18812")},
+		{Name: secret("x"), Server: secret("s"), BridgeURL: secret("http://mt5:18812")},
+		{Name: secret("x"), Login: ptrTo(int64(7)), Server: secret("s"), BridgeURL: secret("mt5:18812")},
+	} {
+		resp, body := call(http.MethodPost, "/api/settings/mt5-accounts", refused)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	}
+}
+
+// The account of a terminal in use is never switched under its agents: the
+// change of its login, its deactivation, or another account activated on its
+// terminal refused while an agent runs on it, or holds positions or pending
+// orders there; then the terminal logged in the new account; an agent
+// linked to another account only stopped and flat, its bridge never set by
+// hand once linked; an agent of an account inactive not launched.
+func TestMT5Accounts_InUse(t *testing.T) {
+	s := newMT5Supervised(t)
+	ctx := context.Background()
+	s.liveAgent(t, "trend", 101, true)
+	call, _ := settingsSession(t, s.managed)
+	s.dashboard.PrepareMT5Accounts(ctx)
+	accounts := listMT5Accounts(t, call).Accounts
+	require.Len(t, accounts, 1)
+	current := accounts[0]
+
+	resp, body := call(http.MethodPost, "/api/settings/mt5-accounts", ui.MT5AccountRequest{Name: secret("Demo"),
+		Login: ptrTo(int64(87654321)), Server: secret("Exness-MT5Trial11"), BridgeURL: &s.bridge.URL,
+		BridgeToken: secret("bridge-token")})
+	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+	var demo ui.MT5AccountInfo
+	require.NoError(t, json.Unmarshal([]byte(body), &demo))
+	assert.False(t, demo.Active, "created inactive")
+	activate := fmt.Sprintf("/api/settings/mt5-accounts/%d/activate", demo.ID)
+
+	resp, body = call(http.MethodPost, activate, nil)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	assert.Contains(t, body, "senha", "the terminal needs its password")
+	resp, body = call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", demo.ID),
+		ui.MT5AccountRequest{Password: secret("demo-pass")})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+
+	// an agent running on the terminal
+	resp, body = call(http.MethodPost, activate, nil)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "trend")
+	resp, body = call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", current.ID),
+		ui.MT5AccountRequest{Login: ptrTo(int64(5))})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	resp, body = call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", current.ID),
+		ui.MT5AccountRequest{Active: boolPtr(false)})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+
+	// stopped, a position and an order of it open: still refused
+	s.mu.Lock()
+	s.running["trend"] = false
+	s.mu.Unlock()
+	s.bridge.set(protected(1, 101), position(9, 0, "EURUSDm", false, 0.1, 5, 0))
+	s.bridge.mu.Lock()
+	s.bridge.orders = []bridgeOrder{{Ticket: 31, Type: 2, Magic: 101, Symbol: "XAUUSDm", PriceOpen: 4100,
+		VolumeCurrent: 0.01}}
+	s.bridge.mu.Unlock()
+	resp, body = call(http.MethodPost, activate, nil)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "#1")
+	assert.Contains(t, body, "#31")
+	assert.NotContains(t, body, "#9", "a position by hand isn't the agents'")
+
+	// flat: the terminal logged in the account activated
+	s.bridge.set(position(9, 0, "EURUSDm", false, 0.1, 5, 0))
+	s.bridge.mu.Lock()
+	s.bridge.orders = nil
+	s.bridge.mu.Unlock()
+	resp, body = call(http.MethodPost, activate, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &demo))
+	assert.True(t, demo.Active)
+	sessions := s.bridge.sessionsGiven()
+	last := sessions[len(sessions)-1]
+	assert.Equal(t, float64(87654321), last["login"])
+	assert.Equal(t, "demo-pass", last["password"], "given to the terminal")
+	former, err := s.store.MT5Account(ctx, current.ID)
+	require.NoError(t, err)
+	assert.False(t, former.Active, "the former one deactivated")
+
+	// the agent of the former account not launched, told why
+	trend, err := s.store.AgentByName(ctx, "trend")
+	require.NoError(t, err)
+	err = s.manager.start(trend)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "não é a ativa do terminal")
+
+	// linked to the demo: refused while running, its bridge never by hand
+	s.mu.Lock()
+	s.running["trend"] = true
+	s.mu.Unlock()
+	agentPath := "/api/settings/agents/trend"
+	resp, body = call(http.MethodPatch, agentPath, ui.AgentSettingsRequest{MT5AccountID: &demo.ID})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	assert.Contains(t, body, "pare o agente")
+	s.mu.Lock()
+	s.running["trend"] = false
+	s.mu.Unlock()
+	resp, body = call(http.MethodPatch, agentPath, ui.AgentSettingsRequest{MT5AccountID: &demo.ID})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var settings ui.AgentSettings
+	require.NoError(t, json.Unmarshal([]byte(body), &settings))
+	assert.Equal(t, demo.ID, settings.MT5AccountID)
+	resp, body = call(http.MethodPatch, agentPath, ui.AgentSettingsRequest{
+		Account: &ui.AgentAccountRequest{BridgeURL: secret("http://other:18812")}})
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	assert.Contains(t, body, "Contas MT5")
+
+	// the test of the account active: as the bridge confirms it, no credential
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/test", demo.ID), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var test ui.MT5AccountTest
+	require.NoError(t, json.Unmarshal([]byte(body), &test))
+	assert.True(t, test.Reachable && test.TokenOK && test.Current, body)
+	assert.Equal(t, "demo", test.Kind)
+	assert.Equal(t, "BRL", test.Currency)
+	assert.False(t, strings.Contains(body, "demo-pass") || strings.Contains(body, "bridge-token"))
+
+	// the former, inactive: its test never switches the terminal
+	given := len(s.bridge.sessionsGiven())
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/test", current.ID), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.NoError(t, json.Unmarshal([]byte(body), &test))
+	assert.False(t, test.Current)
+	assert.Contains(t, test.Detail, "exigiria trocar")
+	assert.Len(t, s.bridge.sessionsGiven(), given, "nothing given to the terminal")
+
+	// deleted: only inactive and without agents
+	resp, _ = call(http.MethodDelete, fmt.Sprintf("/api/settings/mt5-accounts/%d", demo.ID), nil)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	resp, _ = call(http.MethodDelete, fmt.Sprintf("/api/settings/mt5-accounts/%d", current.ID), nil)
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = store.MT5KindDemo
+}
