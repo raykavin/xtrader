@@ -43,6 +43,7 @@ type switchPlan struct {
 	m       *mt5Accounts
 	leaving []store.MT5Account
 	agents  []string
+	linked  []store.Agent // the agents of the accounts leaving it
 }
 
 // running returns the agents of the plan running.
@@ -98,6 +99,10 @@ func (m *mt5Accounts) planSwitch(ctx context.Context, target store.MT5Account, a
 		return plan, err
 	}
 	for _, a := range agents {
+		if account := a.MT5AccountOf(); account != nil && slices.ContainsFunc(plan.leaving,
+			func(l store.MT5Account) bool { return l.ID == account.ID }) {
+			plan.linked = append(plan.linked, a)
+		}
 		if a.Account == nil || a.Account.BridgeURL == "" {
 			continue
 		}
@@ -130,14 +135,16 @@ func (m *mt5Accounts) exposureOf(ctx context.Context, leaving []store.MT5Account
 //     leaving it closed and canceled, only confirmed (closeConfirmed), then
 //     checked on the account: anything still open refuses the switch;
 //  3. target made the account of the terminal, and the terminal logged in
-//     it: the account it left made active again when it can't log in;
+//     it: the account it left made active again when it can't log in; the
+//     agents of the accounts it left moved to target once logged in, asked
+//     (moveAgents);
 //  4. the agents released: the ones of the account active started again.
 //
 // A refusal (switchRefusal) leaves the accounts as they were, the agents of
 // the account active started again to watch what it holds. The accounts of
 // another terminal are never touched, on the same host too.
-func (m *mt5Accounts) switchAccount(ctx context.Context, target store.MT5Account, active, closeConfirmed bool,
-	change store.MT5Change) error {
+func (m *mt5Accounts) switchAccount(ctx context.Context, target store.MT5Account, active, closeConfirmed,
+	moveAgents bool, change store.MT5Change) error {
 	ctx = context.WithoutCancel(ctx) // a switch begun ends, whatever the request
 	m.switching.Lock()
 	defer m.switching.Unlock()
@@ -214,6 +221,17 @@ func (m *mt5Accounts) switchAccount(ctx context.Context, target store.MT5Account
 	if failure == "" {
 		log.Infof("mt5 accounts: the terminal of %s serves %d on %s", target.BridgeURL, target.Login, target.Server)
 		m.status(ctx, target)
+		if moveAgents {
+			for _, a := range plan.linked { // stopped, flat: started on target once released
+				if err := m.store.SetAgentMT5Account(ctx, a.ID, &target.ID, change); err != nil {
+					return err
+				}
+			}
+			if len(plan.linked) > 0 {
+				log.Infof("mt5 accounts: %d agents of %s moved to %s by %s", len(plan.linked),
+					namesOf(plan.leaving), target.Name, change.By)
+			}
+		}
 		return nil
 	}
 	// the account it left made active again, its agents launched again

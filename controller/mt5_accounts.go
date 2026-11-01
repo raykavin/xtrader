@@ -775,11 +775,15 @@ func (s *settings) handleMT5Switch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := r.URL.Query().Get("active") != "false"
-	preview := ui.MT5SwitchPreview{Active: active, Current: []string{}, Running: []string{}, Exposure: []string{}}
+	preview := ui.MT5SwitchPreview{Active: active, Current: []string{}, Linked: []string{}, Running: []string{},
+		Exposure: []string{}}
 	plan, err := s.mt5.planSwitch(r.Context(), account, active)
 	if err == nil {
 		for _, leaving := range plan.leaving {
 			preview.Current = append(preview.Current, leaving.Name)
+		}
+		for _, a := range plan.linked {
+			preview.Linked = append(preview.Linked, a.Name)
 		}
 		preview.Running = append(preview.Running, plan.running()...)
 		var open []string
@@ -797,7 +801,8 @@ func (s *settings) handleMT5Switch(w http.ResponseWriter, r *http.Request) {
 // logged in it at once, see mt5Accounts.switchAccount: the agents of the
 // terminal stopped first, the positions and the pending orders of the agents
 // of the account leaving it closed and canceled once confirmed (see
-// ui.MT5SwitchRequest), then the agents of the account started.
+// ui.MT5SwitchRequest), then the agents of the account started: the ones of
+// the account it left too, moved to it when asked.
 func (s *settings) handleActivateMT5Account(w http.ResponseWriter, r *http.Request) {
 	s.switchMT5Account(w, r, true)
 }
@@ -828,7 +833,7 @@ func (s *settings) switchMT5Account(w http.ResponseWriter, r *http.Request, acti
 		return
 	}
 	err := s.mt5.switchAccount(r.Context(), account, active, request.ClosePositions,
-		changeOf(r, request.Reason))
+		active && request.MoveAgents, changeOf(r, request.Reason))
 	var refusal *switchRefusal
 	if errors.As(err, &refusal) {
 		writeJSONStatus(w, refusal.status, refusal.answer)

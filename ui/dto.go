@@ -2405,13 +2405,15 @@ type MT5SessionStatus struct {
 // MT5SwitchPreview answers GET /api/settings/mt5-accounts/{id}/switch: what
 // activating the account (Active) or deactivating it does on its terminal,
 // as read now. Current names the accounts active on the terminal that leave
-// it; Running the agents running on it, stopped first; Exposure the
+// it; Linked their agents, moved to the account activated when asked (see
+// MT5SwitchRequest); Running the agents running on it, stopped first; Exposure the
 // positions and the pending orders of its agents on the accounts that leave
 // it, closed and canceled once confirmed, eg: "posição de matrend em
 // XAUUSDm #123"; Error why it can't be read, nothing switched then.
 type MT5SwitchPreview struct {
 	Active   bool     `json:"active"`
 	Current  []string `json:"current"`
+	Linked   []string `json:"linked"`
 	Running  []string `json:"running"`
 	Exposure []string `json:"exposure"`
 	Error    string   `json:"error,omitempty"`
@@ -2420,9 +2422,12 @@ type MT5SwitchPreview struct {
 // MT5SwitchRequest is the body of POST .../activate and .../deactivate of an
 // account of MT5: ClosePositions confirms closing the positions and canceling
 // the pending orders of the agents on the account leaving the terminal (see
-// MT5SwitchPreview), refused (409, Confirm) without it when there are some.
+// MT5SwitchPreview), refused (409, Confirm) without it when there are some;
+// MoveAgents moves the agents of the accounts leaving the terminal to the
+// account activated, started there once it is logged in.
 type MT5SwitchRequest struct {
 	ClosePositions bool   `json:"close_positions,omitempty"`
+	MoveAgents     bool   `json:"move_agents,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 }
 

@@ -7817,13 +7817,6 @@ h3.md-heading {
   box-shadow: 0 0 10px color-mix(in srgb, var(--warn) 60%, transparent);
 }
 
-.mt5-card-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
 .mt5-card-title {
   display: flex;
   flex-direction: column;
