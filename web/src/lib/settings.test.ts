@@ -220,6 +220,7 @@ describe("the tabs of the settings", () => {
   it("reads the tab of the hash of the URL, the agents by default", () => {
     expect(settingsTabs).toEqual([
       "agentes",
+      "contas",
       "limites",
       "noticias",
       "prompts",
@@ -474,6 +475,35 @@ describe("the fields of an agent", () => {
   });
 });
 
+describe("the account of MT5 of an agent", () => {
+  it("takes its bridge and token from its account, its own bridge only without one", () => {
+    const base = {
+      ...agentFormValues(),
+      name: "trend",
+      kind: "trend",
+      apiAddress: "localhost:5570",
+    };
+    expect(agentFormErrors(base, true).bridgeURL).toBe(
+      "Escolha a conta MT5, ou informe a URL da bridge.",
+    );
+    const linked = { ...base, mt5AccountID: "3", bridgeToken: "typed" };
+    expect(agentFormErrors(linked, true).bridgeURL).toBeUndefined();
+    const created = agentCreateRequest(linked);
+    expect(created.mt5_account_id).toBe(3);
+    expect(created.bridge_token).toBeUndefined();
+    expect(created.account.bridge_url).toBe("");
+
+    const initial = { ...base, mt5AccountID: "3", bridgeURL: "http://mt5:18812" };
+    expect(agentUpdateRequest(initial, { ...initial, mt5AccountID: "4" })).toEqual({
+      mt5_account_id: 4,
+    });
+    expect(agentUpdateRequest(initial, { ...initial, mt5AccountID: "" })).toEqual({
+      mt5_account_id: 0,
+    });
+    expect(agentUpdateRequest(initial, { ...initial, bridgeURL: "http://x:1" })).toBeNull();
+  });
+});
+
 describe("the form of an agent", () => {
   const gold = agent({
     name: "gold",
@@ -511,6 +541,7 @@ describe("the form of an agent", () => {
       tradePanel: false,
       telegramControl: false,
       reanalysis: false,
+      mt5AccountID: "",
       bridgeURL: "",
       magic: "",
       comment: "",

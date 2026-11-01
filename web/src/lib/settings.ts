@@ -191,6 +191,7 @@ export function agentSummary(agent: AgentSettings): { label: string; value: stri
 /** The tabs of the page of the settings, by the hash of their URL, eg: #prompts. */
 export const settingsTabs = [
   "agentes",
+  "contas",
   "limites",
   "noticias",
   "prompts",
@@ -503,6 +504,8 @@ export interface AgentFormValues {
   telegramControl: boolean;
   /** Whether the LLM of an LLM agent may be asked again (Permitir reanálise), off for a new one. */
   reanalysis: boolean;
+  /** The account of MT5 it trades, its ID; "" for its own bridge (legacy). */
+  mt5AccountID: string;
   bridgeURL: string;
   magic: string;
   comment: string;
@@ -546,6 +549,7 @@ export function agentFormValues(agent?: AgentSettings): AgentFormValues {
     tradePanel: agent?.trade_panel ?? false,
     telegramControl: agent?.telegram_control ?? false,
     reanalysis: agent?.reanalysis ?? false,
+    mt5AccountID: agent?.mt5_account_id ? String(agent.mt5_account_id) : "",
     bridgeURL: account?.bridge_url ?? "",
     magic: account?.magic ? String(account.magic) : "",
     comment: account?.comment ?? "",
@@ -600,10 +604,15 @@ export function agentFormErrors(values: AgentFormValues, creating: boolean): Age
     "apiAddress",
     blank(values.apiAddress) ? "Informe o endereço da API." : addressError(values.apiAddress),
   );
-  check(
-    "bridgeURL",
-    blank(values.bridgeURL) ? "Informe a URL da bridge." : httpURLError(values.bridgeURL),
-  );
+  if (values.mt5AccountID === "") {
+    // its own bridge, without an account of MT5
+    check(
+      "bridgeURL",
+      blank(values.bridgeURL)
+        ? "Escolha a conta MT5, ou informe a URL da bridge."
+        : httpURLError(values.bridgeURL),
+    );
+  }
   check("magic", magicError(values.magic));
   check("comment", commentError(values.comment));
   if (values.kind === "llm") {
@@ -651,12 +660,13 @@ export function agentCreateRequest(values: AgentFormValues): AgentCreateRequest 
     telegram_control: values.telegramControl,
     params: formParams(values.params),
     account: {
-      bridge_url: values.bridgeURL.trim(),
+      bridge_url: values.mt5AccountID ? "" : values.bridgeURL.trim(),
       magic: parseCount(values.magic),
       comment: filled(values.comment),
       real_allowed: values.realAllowed,
     },
-    bridge_token: filled(values.bridgeToken),
+    bridge_token: values.mt5AccountID ? undefined : filled(values.bridgeToken),
+    mt5_account_id: values.mt5AccountID ? Number(values.mt5AccountID) : undefined,
   };
   if (values.kind === "llm") {
     request.llm = {
@@ -703,8 +713,10 @@ export function agentUpdateRequest(
   if (changed("launched")) request.launched = values.launched;
   if (changed("restart")) request.restart = values.restart;
 
+  if (changed("mt5AccountID")) request.mt5_account_id = Number(values.mt5AccountID || 0);
   const account: AgentAccountRequest = {};
-  if (changed("bridgeURL")) account.bridge_url = values.bridgeURL.trim();
+  if (changed("bridgeURL") && values.mt5AccountID === "")
+    account.bridge_url = values.bridgeURL.trim();
   if (changed("magic")) account.magic = parseCount(values.magic) ?? 0;
   if (changed("comment")) account.comment = values.comment.trim();
   if (changed("realAllowed")) account.real_allowed = values.realAllowed;

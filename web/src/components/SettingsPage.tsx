@@ -20,6 +20,7 @@ import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
 import { DailyLimitsSettings } from "./DailyLimitsSettings";
 import { LayoutSettings } from "./LayoutSettings";
+import { MT5AccountsSettings } from "./MT5AccountsSettings";
 import { NewsSettings } from "./NewsSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
@@ -42,6 +43,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
     title: "Agentes",
     description:
       "Ligue, configure e reinicie cada agente. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt mudam na hora; o resto vale depois de reiniciar.",
+  },
+  contas: {
+    title: "Contas MT5",
+    description:
+      "As contas do MetaTrader 5: login, servidor e senha (cifrada), o terminal que serve cada uma e os agentes que a operam. Um terminal fica numa conta por vez; a conta de um terminal em uso não é trocada.",
   },
   limites: {
     title: "Limites",
@@ -233,6 +239,9 @@ export function SettingsPage() {
             onReload={loadAgents}
           />
         )}
+      </Panel>
+      <Panel tab="contas" shown={tab}>
+        <MT5AccountsSettings intro={intros.contas} />
       </Panel>
       <Panel tab="limites" shown={tab}>
         <DailyLimitsSettings intro={intros.limites} />

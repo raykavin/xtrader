@@ -35,6 +35,7 @@ interface Props {
 
 const sections: { tab: SettingsTab; label: string; icon: IconName }[] = [
   { tab: "agentes", label: "Agentes", icon: "bot" },
+  { tab: "contas", label: "Contas MT5", icon: "key" },
   { tab: "limites", label: "Limites", icon: "alert" },
   { tab: "noticias", label: "Notícias", icon: "news" },
   { tab: "prompts", label: "Prompts", icon: "prompt" },

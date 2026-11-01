@@ -389,12 +389,18 @@ function AgentCard({
               onSave={secret("llm_api_key")}
             />
           )}
-          <SecretField
-            label="Token da bridge MT5"
-            set={agent.secrets.bridge_token}
-            disabled={busy}
-            onSave={secret("bridge_token")}
-          />
+          {agent.mt5_account_id ? (
+            <p className="field-hint">
+              Bridge e token da conta MT5 associada (Configurações › Contas MT5).
+            </p>
+          ) : (
+            <SecretField
+              label="Token da bridge MT5"
+              set={agent.secrets.bridge_token}
+              disabled={busy}
+              onSave={secret("bridge_token")}
+            />
+          )}
         </div>
       </div>
 

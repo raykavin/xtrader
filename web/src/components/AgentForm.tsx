@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { createAgent, updateAgentSettings } from "../api/client";
-import type { AgentSettings, PromptInfo } from "../api/types";
+import { createAgent, fetchMT5Accounts, updateAgentSettings } from "../api/client";
+import type { AgentSettings, MT5AccountInfo, PromptInfo } from "../api/types";
 import {
   type AgentFormField,
   type AgentFormValues,
@@ -85,6 +85,17 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // the accounts of MT5 an agent may trade, see Configurações > Contas MT5
+  const [mt5Accounts, setMT5Accounts] = useState<MT5AccountInfo[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchMT5Accounts(controller.signal)
+      .then((response) => setMT5Accounts(response.accounts))
+      .catch(() => {
+        // without them, the agent keeps the bridge of its own settings
+      });
+    return () => controller.abort();
+  }, []);
   const nextRow = useRef(initial.params.length);
 
   useEffect(() => {
@@ -349,14 +360,30 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
             hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ativos em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
           >
             <div className="form-grid">
-              <TextField
-                label="URL da bridge"
-                {...text("bridgeURL")}
-                mono
-                inputMode="url"
-                placeholder="http://mt5:18812"
+              <SelectField
+                label="Conta MT5"
+                value={values.mt5AccountID}
+                options={[
+                  { value: "", label: "Nenhuma: bridge informada no agente" },
+                  ...mt5Accounts.map((account) => ({
+                    value: String(account.id),
+                    label: account.name,
+                    hint: `${account.login}${account.active ? "" : " · inativa"}`,
+                  })),
+                ]}
+                onChange={(value) => set("mt5AccountID", value)}
+                hint="A bridge e o token vêm da conta (Configurações › Contas MT5). Trocar a conta exige o agente parado e sem posições na conta atual."
               />
-              {creating && (
+              {values.mt5AccountID === "" && (
+                <TextField
+                  label="URL da bridge"
+                  {...text("bridgeURL")}
+                  mono
+                  inputMode="url"
+                  placeholder="http://mt5:18812"
+                />
+              )}
+              {creating && values.mt5AccountID === "" && (
                 <TextField
                   label="Token da bridge"
                   {...text("bridgeToken")}

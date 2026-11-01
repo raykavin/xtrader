@@ -32,6 +32,11 @@ import type {
   DecisionEvent,
   DecisionsResponse,
   LoginRequest,
+  MT5AccountEventsResponse,
+  MT5AccountInfo,
+  MT5AccountRequest,
+  MT5AccountsResponse,
+  MT5AccountTest,
   NewsSettingsRequest,
   NewsSettingsResponse,
   NewsTestResponse,
@@ -717,6 +722,44 @@ export function updateNewsSettings(request: NewsSettingsRequest): Promise<NewsSe
 /** The trading hours of all the agents and how they stand. */
 export function fetchTradingHours(signal?: AbortSignal): Promise<TradingHoursResponse> {
   return getJSON<TradingHoursResponse>("/settings/trading-hours", signal);
+}
+
+/** The accounts of MetaTrader 5, never their password nor their token. */
+export function fetchMT5Accounts(signal?: AbortSignal): Promise<MT5AccountsResponse> {
+  return getJSON<MT5AccountsResponse>("/settings/mt5-accounts", signal);
+}
+
+/** Creates an account of MT5, inactive: 400 when refused. */
+export function createMT5Account(request: MT5AccountRequest): Promise<MT5AccountInfo> {
+  return postJSON<MT5AccountInfo>("/settings/mt5-accounts", request);
+}
+
+/** Changes an account of MT5, of the fields set: 409 while in use for its login, server, bridge or deactivation. */
+export function updateMT5Account(id: number, request: MT5AccountRequest): Promise<MT5AccountInfo> {
+  return sendJSON<MT5AccountInfo>("PATCH", `/settings/mt5-accounts/${id}`, request);
+}
+
+/** Deletes an account of MT5, inactive and without agents: 409 else. */
+export function deleteMT5Account(id: number): Promise<void> {
+  return sendJSON<void>("DELETE", `/settings/mt5-accounts/${id}`);
+}
+
+/** Makes an account of MT5 the one of its terminal, logged in it at once: 409 while the terminal is in use. */
+export function activateMT5Account(id: number): Promise<MT5AccountInfo> {
+  return postJSON<MT5AccountInfo>(`/settings/mt5-accounts/${id}/activate`);
+}
+
+/** Tests an account of MT5 on its bridge, never logging the terminal in another account. */
+export function testMT5Account(id: number): Promise<MT5AccountTest> {
+  return postJSON<MT5AccountTest>(`/settings/mt5-accounts/${id}/test`);
+}
+
+/** The last events of an account of MT5, never a secret. */
+export function fetchMT5AccountEvents(
+  id: number,
+  signal?: AbortSignal,
+): Promise<MT5AccountEventsResponse> {
+  return getJSON<MT5AccountEventsResponse>(`/settings/mt5-accounts/${id}/events`, signal);
 }
 
 /** Sets the trading hours of all the agents, applied at once: 400 when refused. */

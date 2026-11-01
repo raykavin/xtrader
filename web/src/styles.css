@@ -7775,6 +7775,86 @@ h3.md-heading {
   border-top: 0;
 }
 
+/* the accounts of MT5, on the tab Contas MT5: a card each */
+.mt5-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(460px, 100%), 1fr));
+  gap: var(--sp-4);
+}
+
+.mt5-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.mt5-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.mt5-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mt5-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mt5-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px var(--sp-4);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.mt5-facts div {
+  display: contents;
+}
+
+.mt5-facts dt {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mt5-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mt5-secrets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--glass-border);
+}
+
+.mt5-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mt5-editor,
+.mt5-switches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
 /* the trading hours, on the tab Limites */
 .hours-body {
   display: flex;
