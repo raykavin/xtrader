@@ -106,7 +106,9 @@ if [[ "$(id -u)" == 0 ]]; then
 	chown -R 1000:1000 "$target/services/controller/data" "$target/services/mt5/data"
 fi
 
-echo "install: $target ready; fill in the .env of mt5 and the first user of the dashboard in the one of"
-echo "the controller (XTRADER_BOOTSTRAP_USERNAME and XTRADER_BOOTSTRAP_PASSWORD), then: cd $target && docker compose up -d"
+echo "install: $target ready; fill in the first user of the dashboard in the .env of the controller"
+echo "(XTRADER_BOOTSTRAP_USERNAME and XTRADER_BOOTSTRAP_PASSWORD), then: cd $target && docker compose up -d;"
+echo "then add the account of MT5 in the dashboard (Configurações > Contas MT5), with the MT5_BRIDGE_TOKEN of the"
+echo ".env of mt5 as the token of its bridge, and activate it"
 echo "install: the ports are published on the loopback of this host only (the dashboard on http://127.0.0.1:8082,"
 echo "VNC on 5900, PostgreSQL on 5432): from another machine, through an SSH tunnel (see deploy/docker/README.md)"

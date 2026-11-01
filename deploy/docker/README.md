@@ -9,7 +9,7 @@ Quatro serviços, no padrão de `/var/containers`:
 | `postgres` | PostgreSQL 18: agentes, prompts, usuários, Telegram, ordens, decisões e journal | `services/postgres/data` |
 | `mt5` | terminal MetaTrader 5 da Exness no Wine, numa tela virtual (Xvfb), e a bridge HTTP (`tools/mt5bridge`) que os agentes usam | `services/mt5/data` (prefixo do Wine: Python, terminal e os dados dele) |
 
-Os agentes de uma mesma conta dividem o mesmo `mt5`, separados pelo magic number: o controller recusa dois agentes ativos em live com o mesmo magic e um par em comum (veja "Magic e comentário" no README da raiz). Uma segunda conta seria outro serviço `mt5`.
+Os agentes de uma mesma conta dividem o mesmo `mt5`, separados pelo magic number: o controller recusa dois agentes ativos em live com o mesmo magic e um par em comum (veja "Magic e comentário" no README da raiz). Um terminal fica numa conta por vez; outras contas cadastradas no painel ficam inativas até serem ativadas nele. Duas contas ao mesmo tempo pedem outro serviço `mt5` (copie o serviço com outro nome, volume e token, por exemplo `mt5-2`, e cadastre a conta com a bridge `http://mt5-2:18812`).
 
 ## Estrutura
 
@@ -85,13 +85,12 @@ Ao rodar de novo, ele preserva os `.env`, os dados e as configurações existent
 
 ## 3. Preencher os `.env`
 
-- **`services/mt5/.env`:**
-  - `MT5_LOGIN`, `MT5_SERVER` e `MT5_PASSWORD`: o terminal loga sozinho com eles. A senha é lida do ambiente, nunca da linha de comando. Ela é obrigatória num terminal novo, porque a senha salva de outro terminal não funciona nele;
-  - `MT5_ALLOW_REAL=1` somente se for conta real, porque a bridge recusa conta real sem isso;
-  - as chaves `MT5_ALLOW_REAL`, `MT5_READ_ONLY`, `MT5_ALGO_TRADING` e `MT5_MCP_FORWARD` aceitam `1`/`true`/`yes` e `0`/`false`/`no` (maiúsculas ou minúsculas; vazio é o padrão). Qualquer outro valor impede o container de subir, com o erro no log (`docker compose logs mt5`), em vez de valer como desligado.
+- **`services/mt5/.env`:** só o que a subida do container precisa: o `MT5_BRIDGE_TOKEN` (gerado pelo install.sh), `MT5_ALGO_TRADING`, `MT5_MCP_FORWARD` e `MT5_VNC_PASSWORD`. As chaves aceitam `1`/`true`/`yes` e `0`/`false`/`no` (maiúsculas ou minúsculas; vazio é o padrão); qualquer outro valor impede o container de subir, com o erro no log (`docker compose logs mt5`), em vez de valer como desligado.
+  - **A conta não vai mais aqui.** Login, servidor, senha, "permitir conta real" e "somente leitura" são cadastrados no painel, em **Configurações > Contas MT5** (passo 5), cifrados no banco. O controller entrega a conta ativa à bridge, que a guarda em `services/mt5/data/xtrader-bridge/session.json`, sem a senha. Sem conta, a bridge sobe mesmo assim (saudável, aguardando a conta), e o painel continua acessível.
+  - `MT5_LOGIN`, `MT5_SERVER`, `MT5_PASSWORD`, `MT5_ALLOW_REAL` e `MT5_READ_ONLY` são legadas: valem só até o controller entregar a primeira conta. Numa instalação anterior, o controller importa a conta da bridge na subida; depois de conferir a conta e a senha no painel, apague-as do `.env`.
 - **`services/controller/.env`:** `XTRADER_BOOTSTRAP_USERNAME` e `XTRADER_BOOTSTRAP_PASSWORD` (8 caracteres ao menos), o primeiro usuário do painel, criado enquanto o banco não tem nenhum. Apague os dois depois do primeiro login.
 
-As chaves dos LLMs, o token e os usuários do Telegram e os tokens da bridge e do MCP não vão mais nos `.env`: ficam no banco, cifrados, definidos na página **Configurações** do painel.
+As contas MT5, as chaves dos LLMs, o token e os usuários do Telegram e o token do MCP não vão mais nos `.env`: ficam no banco, cifrados, definidos na página **Configurações** do painel. No ambiente ficam só o que a subida precisa: a senha do banco, a chave dos segredos (`XTRADER_SECRETS_KEY`, fora do banco), o primeiro usuário, o `TZ` e, no `mt5`, o token da bridge e as chaves do container.
 
 ## 4. Subir
 
@@ -111,9 +110,9 @@ docker compose logs migrator
 docker compose exec mt5 sh -c 'curl -s -H "X-Bridge-Token: $MT5_BRIDGE_TOKEN" http://127.0.0.1:18812/health'
 ```
 
-Na resposta da bridge, `connected` e `trade_allowed` precisam estar `true`. O `MT5_ALGO_TRADING=1` liga o Algo Trading a cada subida. Ele também o mantém ligado depois de uma troca de conta, porque o padrão do terminal o desliga nesse caso, e o primeiro login de um terminal novo conta como troca.
+Na resposta da bridge, `connected` e `trade_allowed` precisam estar `true` depois de a conta ser ativada no painel; antes disso, ela responde `"waiting": "session"` (aguardando a conta) ou `"waiting": "password"` (o terminal pede a senha). O `MT5_ALGO_TRADING=1` liga o Algo Trading a cada subida. Ele também o mantém ligado depois de uma troca de conta, porque o padrão do terminal o desliga nesse caso, e o primeiro login de um terminal novo conta como troca.
 
-Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os dois headers do prazo das ordens (`X-Bridge-Deadline` e `X-Bridge-Timeout`, este contado pelo relógio da bridge). Atualize as duas imagens juntas (`build.sh` sem argumento): um agente novo com uma bridge antiga avisa no log e não consegue confirmar que uma ordem sem resposta deixou de ser executada. Com o terminal logado em outra conta que não a do `MT5_LOGIN` (ex.: trocada pelo VNC), a bridge recusa as ordens e os agentes param de operar até a conta voltar.
+Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os dois headers do prazo das ordens (`X-Bridge-Deadline` e `X-Bridge-Timeout`, este contado pelo relógio da bridge). Atualize as duas imagens juntas (`build.sh` sem argumento): um agente novo com uma bridge antiga avisa no log e não consegue confirmar que uma ordem sem resposta deixou de ser executada. Com o terminal logado em outra conta que não a ativa no painel (ex.: trocada pelo VNC), a bridge recusa as ordens e os agentes param de operar; o controller loga o terminal de volta na conta ativa assim que nenhum agente roda nele.
 
 ## 5. Agentes, Telegram e usuários
 
@@ -122,7 +121,8 @@ Os campos `deadline` e `timeout` em `true` indicam uma bridge que respeita os do
    O controller lança os agentes habilitados em até 30 segundos. Depois, cada agente é editado ou excluído (desligado antes) na mesma tela; uma mudança de inicialização num agente rodando fica como "reinício pendente".
 
 2. Entre no painel (`http://127.0.0.1:8082` no servidor, a URL do ngrok ou um túnel SSH; veja "Portas e segurança") com o usuário do bootstrap e abra **Configurações** (ícone de engrenagem):
-   - **Agentes:** a chave da API do LLM e o token da bridge de cada agente (o `MT5_BRIDGE_TOKEN` do `services/mt5/.env`), o prompt dos agentes LLM, o painel de trading, o controle via Telegram e a reanálise dos agentes LLM (**Permitir reanálise**), além de **Editar** e **Excluir**. Uma troca de segredo fica como "reinício pendente": use **Reiniciar**.
+   - **Contas MT5:** a conta do terminal (login, servidor, senha, a bridge `http://mt5:18812` e o token dela, o `MT5_BRIDGE_TOKEN` do `services/mt5/.env`), com **Permitir conta real** para uma conta real; **Testar conexão** confere o tipo (real ou demo) e a moeda sem expor credenciais; **Ativar no terminal** faz o terminal logar nela;
+   - **Agentes:** a conta MT5 de cada agente (a bridge e o token vêm dela), a chave da API do LLM, o prompt dos agentes LLM, o painel de trading, o controle via Telegram e a reanálise dos agentes LLM (**Permitir reanálise**), além de **Editar** e **Excluir**. Uma troca de segredo fica como "reinício pendente": use **Reiniciar**.
    - **Telegram:** o token do bot, os IDs autorizados e **Bot ativo**.
    - **Usuários:** crie os usuários do painel e troque a senha do primeiro.
 

@@ -106,7 +106,8 @@ backtest:
 
 # the processes the agents need, launched before them and stopped after them:
 # the bridge of MT5 on the host, the token it requires (the agents have theirs
-# in the database). Their environment is PATH, HOME, USER, LOGNAME, TZ, LANG,
+# in the database). Its account comes from the dashboard (Configurações >
+# Contas MT5): add --session <file> to its args to keep it across restarts. Their environment is PATH, HOME, USER, LOGNAME, TZ, LANG,
 # LC_ALL and TMPDIR plus their env, never the env of the agents nor the rest
 # of the environment of the controller
 services:
