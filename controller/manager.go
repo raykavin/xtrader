@@ -295,9 +295,20 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	for _, a := range agents {
 		wanted := a.Enabled && a.Launched
-		m.apply(a, wanted)
-		if err := unserved[a.Name]; !wanted && m.noteLaunch(a.Name, err) {
-			log.Errorf("controller: agent %s: %v", a.Name, err)
+		held := "" // why its account of MT5 keeps it stopped: inactive, or its terminal switching
+		if wanted {
+			held = m.dashboard.mt5Hold(a)
+		}
+		m.apply(a, wanted && held == "")
+		switch {
+		case held != "":
+			if m.noteLaunch(a.Name, errors.New(held)) {
+				log.Infof("controller: agent %s stopped: %s", a.Name, held)
+			}
+		case !wanted:
+			if err := unserved[a.Name]; m.noteLaunch(a.Name, err) {
+				log.Errorf("controller: agent %s: %v", a.Name, err)
+			}
 		}
 	}
 	m.mu.Lock()

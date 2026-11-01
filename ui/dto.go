@@ -2381,6 +2381,11 @@ type MT5AccountInfo struct {
 	Session     *MT5SessionStatus `json:"session,omitempty"`
 	UpdatedBy   string            `json:"updated_by,omitempty"`
 	UpdatedAt   int64             `json:"updated_at"`
+	// Terminal is the host and the port of its bridge, Instance the one its
+	// terminal tells (once read): together, the terminal of the account, many
+	// on a host told apart, two URLs of one terminal told the same
+	Terminal string `json:"terminal"`
+	Instance string `json:"instance,omitempty"`
 }
 
 // MT5SessionStatus is how the terminal of an account active stands: its
@@ -2395,6 +2400,39 @@ type MT5SessionStatus struct {
 	Waiting     string `json:"waiting,omitempty"`
 	Error       string `json:"error,omitempty"`
 	At          int64  `json:"at"`
+}
+
+// MT5SwitchPreview answers GET /api/settings/mt5-accounts/{id}/switch: what
+// activating the account (Active) or deactivating it does on its terminal,
+// as read now. Current names the accounts active on the terminal that leave
+// it; Running the agents running on it, stopped first; Exposure the
+// positions and the pending orders of its agents on the accounts that leave
+// it, closed and canceled once confirmed, eg: "posição de matrend em
+// XAUUSDm #123"; Error why it can't be read, nothing switched then.
+type MT5SwitchPreview struct {
+	Active   bool     `json:"active"`
+	Current  []string `json:"current"`
+	Running  []string `json:"running"`
+	Exposure []string `json:"exposure"`
+	Error    string   `json:"error,omitempty"`
+}
+
+// MT5SwitchRequest is the body of POST .../activate and .../deactivate of an
+// account of MT5: ClosePositions confirms closing the positions and canceling
+// the pending orders of the agents on the account leaving the terminal (see
+// MT5SwitchPreview), refused (409, Confirm) without it when there are some.
+type MT5SwitchRequest struct {
+	ClosePositions bool   `json:"close_positions,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// MT5SwitchRefusal answers a switch of the account of a terminal refused:
+// Error why, Confirm when it waits for ClosePositions (see
+// MT5SwitchRequest), Pending what remains open on the account.
+type MT5SwitchRefusal struct {
+	Error   string   `json:"error"`
+	Confirm bool     `json:"confirm,omitempty"`
+	Pending []string `json:"pending,omitempty"`
 }
 
 // MT5AccountsResponse answers GET /api/settings/mt5-accounts.

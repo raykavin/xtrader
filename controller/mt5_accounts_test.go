@@ -20,15 +20,25 @@ import (
 )
 
 // newMT5Supervised returns a supervisor of the tests whose accounts of MT5
-// tell the agents running by its running map.
+// tell the agents running by its running map: stopped while held, see
+// mt5Accounts.hold, as the manager stops them.
 func newMT5Supervised(t *testing.T) *supervised {
 	t.Helper()
 	s := newSupervised(t)
-	s.dashboard.settings.mt5.stateOf = func(name string) AgentState {
+	mt5 := s.dashboard.settings.mt5
+	running := func(name string) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		return s.running[name] && !mt5.isHeld(name)
+	}
+	mt5.stateOf = func(name string) AgentState {
 		var state AgentState
-		state.Running = s.running[name]
+		state.Running = running(name)
+		return state
+	}
+	s.sup.stateOf = func(name string) AgentState {
+		state := s.manager.State(name)
+		state.Running = running(name)
 		return state
 	}
 	return s
@@ -41,6 +51,32 @@ func listMT5Accounts(t *testing.T, call func(string, string, any) (*http.Respons
 	var accounts ui.MT5AccountsResponse
 	require.NoError(t, json.Unmarshal([]byte(body), &accounts))
 	return accounts
+}
+
+// switchPreview returns what activating (active) or deactivating the account
+// of id does on its terminal.
+func switchPreview(t *testing.T, call func(string, string, any) (*http.Response, string), id int64,
+	active bool) ui.MT5SwitchPreview {
+	t.Helper()
+	resp, body := call(http.MethodGet, fmt.Sprintf("/api/settings/mt5-accounts/%d/switch?active=%t", id, active), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var preview ui.MT5SwitchPreview
+	require.NoError(t, json.Unmarshal([]byte(body), &preview))
+	return preview
+}
+
+// createMT5Account creates an account of the tests, inactive, on the bridge
+// at url reached with token.
+func createMT5Account(t *testing.T, call func(string, string, any) (*http.Response, string), name string,
+	login int64, url, token string) ui.MT5AccountInfo {
+	t.Helper()
+	resp, body := call(http.MethodPost, "/api/settings/mt5-accounts", ui.MT5AccountRequest{Name: secret(name),
+		Login: ptrTo(login), Server: secret("Exness-MT5Trial11"), BridgeURL: &url, BridgeToken: secret(token),
+		Password: secret(name + "-pass")})
+	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+	var account ui.MT5AccountInfo
+	require.NoError(t, json.Unmarshal([]byte(body), &account))
+	return account
 }
 
 // The accounts of the bridges imported at the start of the controller, once:
@@ -205,10 +241,11 @@ func TestMT5Accounts_InUse(t *testing.T) {
 		ui.MT5AccountRequest{Password: secret("demo-pass")})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	// an agent running on the terminal
-	resp, body = call(http.MethodPost, activate, nil)
-	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "trend")
+	// an agent running on the terminal: told, stopped by the switch
+	preview := switchPreview(t, call, demo.ID, true)
+	assert.Equal(t, []string{current.Name}, preview.Current)
+	assert.Equal(t, []string{"trend"}, preview.Running)
+	assert.Empty(t, preview.Exposure)
 	resp, body = call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", current.ID),
 		ui.MT5AccountRequest{Login: ptrTo(int64(5))})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
@@ -216,30 +253,37 @@ func TestMT5Accounts_InUse(t *testing.T) {
 		ui.MT5AccountRequest{Active: boolPtr(false)})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
 
-	// stopped, a position and an order of it open: still refused
-	s.mu.Lock()
-	s.running["trend"] = false
-	s.mu.Unlock()
+	// a position and an order of it open: asked first, nothing stopped
 	s.bridge.set(protected(1, 101), position(9, 0, "EURUSDm", false, 0.1, 5, 0))
 	s.bridge.mu.Lock()
 	s.bridge.orders = []bridgeOrder{{Ticket: 31, Type: 2, Magic: 101, Symbol: "XAUUSDm", PriceOpen: 4100,
 		VolumeCurrent: 0.01}}
 	s.bridge.mu.Unlock()
+	preview = switchPreview(t, call, demo.ID, true)
+	assert.Len(t, preview.Exposure, 2)
 	resp, body = call(http.MethodPost, activate, nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "#1")
-	assert.Contains(t, body, "#31")
+	var refusal ui.MT5SwitchRefusal
+	require.NoError(t, json.Unmarshal([]byte(body), &refusal))
+	assert.True(t, refusal.Confirm)
+	assert.Contains(t, refusal.Error, "Existem posições abertas ou ordens pendentes na conta "+current.Name)
+	assert.Contains(t, strings.Join(refusal.Pending, " "), "#1")
+	assert.Contains(t, strings.Join(refusal.Pending, " "), "#31")
 	assert.NotContains(t, body, "#9", "a position by hand isn't the agents'")
+	assert.True(t, s.dashboard.settings.mt5.isRunning("trend"), "nothing stopped")
+	assert.Empty(t, s.bridge.tradeRequests(), "nothing closed")
 
-	// flat: the terminal logged in the account activated
-	s.bridge.set(position(9, 0, "EURUSDm", false, 0.1, 5, 0))
-	s.bridge.mu.Lock()
-	s.bridge.orders = nil
-	s.bridge.mu.Unlock()
-	resp, body = call(http.MethodPost, activate, nil)
+	// confirmed: the agent stopped, its position closed and its order canceled,
+	// then the terminal logged in the account activated
+	resp, body = call(http.MethodPost, activate, ui.MT5SwitchRequest{ClosePositions: true})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	require.NoError(t, json.Unmarshal([]byte(body), &demo))
 	assert.True(t, demo.Active)
+	assert.Equal(t, []bridgePosition{position(9, 0, "EURUSDm", false, 0.1, 5, 0)}, s.bridge.held(),
+		"the one by hand left")
+	s.bridge.mu.Lock()
+	assert.Empty(t, s.bridge.orders, "its order canceled")
+	s.bridge.mu.Unlock()
 	sessions := s.bridge.sessionsGiven()
 	last := sessions[len(sessions)-1]
 	assert.Equal(t, float64(87654321), last["login"])
@@ -247,10 +291,17 @@ func TestMT5Accounts_InUse(t *testing.T) {
 	former, err := s.store.MT5Account(ctx, current.ID)
 	require.NoError(t, err)
 	assert.False(t, former.Active, "the former one deactivated")
+	actions, err := s.store.SupervisorActions(ctx, 5)
+	require.NoError(t, err)
+	require.NotEmpty(t, actions)
+	assert.Equal(t, store.ActionClosePositions, actions[0].Action, "recorded")
+	assert.Contains(t, actions[0].Reason, "troca da conta MT5")
 
-	// the agent of the former account not launched, told why
+	// the agent of the former account kept stopped, told why
 	trend, err := s.store.AgentByName(ctx, "trend")
 	require.NoError(t, err)
+	assert.False(t, s.dashboard.settings.mt5.isHeld("trend"), "released")
+	assert.Contains(t, s.dashboard.mt5Hold(trend), "está inativa")
 	err = s.manager.start(trend)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "não é a ativa do terminal")
@@ -301,4 +352,105 @@ func TestMT5Accounts_InUse(t *testing.T) {
 	resp, _ = call(http.MethodDelete, fmt.Sprintf("/api/settings/mt5-accounts/%d", current.ID), nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	_ = store.MT5KindDemo
+}
+
+// A switch of the account of a terminal refused leaves the accounts as they
+// were: what stays open after the closes told, the agents of the account
+// started again to watch it; the account it left active again when the
+// terminal can't log in the new one. The accounts and the agents of another
+// terminal are never touched, on the same host too; two URLs of one terminal
+// are told the same by its instance; a deactivation stops the agents too.
+func TestMT5Accounts_SwitchCoordinated(t *testing.T) {
+	s := newMT5Supervised(t)
+	ctx := context.Background()
+	s.liveAgent(t, "trend", 101, true)
+	s.bridge.mu.Lock()
+	s.bridge.instance = "terminal-1"
+	s.bridge.mu.Unlock()
+	call, _ := settingsSession(t, s.managed)
+	s.dashboard.PrepareMT5Accounts(ctx)
+	current := listMT5Accounts(t, call).Accounts[0]
+	demo := createMT5Account(t, call, "Demo", 87654321, s.bridge.URL, "bridge-token")
+	activate := func(id int64) (*http.Response, string) {
+		return call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/activate", id),
+			ui.MT5SwitchRequest{ClosePositions: true})
+	}
+	active := func(id int64) bool {
+		account, err := s.store.MT5Account(ctx, id)
+		require.NoError(t, err)
+		return account.Active
+	}
+
+	// another terminal: its account active, its agent running
+	other := newFakeBridge(t, "other-token", 55555555, "USD")
+	other.mu.Lock()
+	other.instance, other.legacy, other.sessionLogin = "terminal-2", false, 0
+	other.mu.Unlock()
+	second := createMT5Account(t, call, "Segunda", 55555555, other.URL, "other-token")
+	resp, body := activate(second.ID)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	orb := s.agent(t, "orb", "trend", true, onBridge(other.URL, 202, "XAUUSDm"))
+	require.NoError(t, s.store.SetAgentMT5Account(ctx, orb.ID, &second.ID, store.MT5Change{By: "test"}))
+	s.mu.Lock()
+	s.running["orb"] = true
+	s.mu.Unlock()
+	preview := switchPreview(t, call, demo.ID, true)
+	assert.Equal(t, []string{"trend"}, preview.Running, "the agents of its terminal only")
+
+	// a close refused by the terminal: told, nothing switched
+	s.bridge.set(protected(1, 101))
+	s.bridge.mu.Lock()
+	s.bridge.tradeAnswer = func(map[string]any) (int, any) {
+		return http.StatusOK, map[string]any{"retcode": 10018, "comment": "Market closed"}
+	}
+	s.bridge.mu.Unlock()
+	resp, body = activate(demo.ID)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
+	var refusal ui.MT5SwitchRefusal
+	require.NoError(t, json.Unmarshal([]byte(body), &refusal))
+	assert.Contains(t, refusal.Error, "nem tudo foi encerrado")
+	assert.Contains(t, strings.Join(refusal.Pending, " "), "#1")
+	assert.True(t, active(current.ID), "nothing switched")
+	assert.False(t, active(demo.ID))
+	assert.False(t, s.dashboard.settings.mt5.isHeld("trend"), "started again to watch it")
+	assert.True(t, active(second.ID), "the other terminal untouched")
+	assert.Len(t, other.sessionsGiven(), 1, "nothing given to the other terminal")
+
+	// the terminal refusing the new account: the account it left active again
+	s.bridge.mu.Lock()
+	s.bridge.tradeAnswer = nil
+	s.bridge.sessionStatus, s.bridge.sessionOnce = http.StatusBadGateway, true
+	s.bridge.mu.Unlock()
+	resp, body = activate(demo.ID)
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode, body)
+	assert.Contains(t, body, "voltou a ser a ativa")
+	assert.True(t, active(current.ID))
+	assert.False(t, active(demo.ID))
+	assert.Empty(t, s.bridge.held(), "its position closed, confirmed")
+	sessions := s.bridge.sessionsGiven()
+	assert.Equal(t, float64(current.Login), sessions[len(sessions)-1]["login"], "logged in it again")
+
+	// another URL of the same terminal, told by its instance: the account
+	// active on it left, the other terminal untouched
+	alias := newFakeBridge(t, "alias-token", 77777777, "BRL")
+	alias.mu.Lock()
+	alias.instance = "terminal-1"
+	alias.mu.Unlock()
+	third := createMT5Account(t, call, "Outra URL", 77777777, alias.URL, "alias-token")
+	preview = switchPreview(t, call, third.ID, true)
+	assert.Equal(t, []string{current.Name}, preview.Current)
+	assert.Equal(t, []string{"trend"}, preview.Running)
+	resp, body = activate(third.ID)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	assert.True(t, active(third.ID))
+	assert.False(t, active(current.ID), "left by the terminal")
+	assert.True(t, active(second.ID))
+
+	// deactivated: its agents stopped, nothing left active on the terminal
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/deactivate", second.ID), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	assert.False(t, active(second.ID))
+	orb, err := s.store.AgentByName(ctx, "orb")
+	require.NoError(t, err)
+	assert.Contains(t, s.dashboard.mt5Hold(orb), "está inativa")
 }

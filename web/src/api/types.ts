@@ -2722,6 +2722,13 @@ export interface MT5AccountInfo {
   session?: MT5SessionStatus;
   updated_by?: string;
   updated_at: number /* int64 */;
+  /**
+   * Terminal is the host and the port of its bridge, Instance the one its
+   * terminal tells (once read): together, the terminal of the account, many
+   * on a host told apart, two URLs of one terminal told the same
+   */
+  terminal: string;
+  instance?: string;
 }
 /**
  * MT5SessionStatus is how the terminal of an account active stands: its
@@ -2737,6 +2744,42 @@ export interface MT5SessionStatus {
   waiting?: string;
   error?: string;
   at: number /* int64 */;
+}
+/**
+ * MT5SwitchPreview answers GET /api/settings/mt5-accounts/{id}/switch: what
+ * activating the account (Active) or deactivating it does on its terminal,
+ * as read now. Current names the accounts active on the terminal that leave
+ * it; Running the agents running on it, stopped first; Exposure the
+ * positions and the pending orders of its agents on the accounts that leave
+ * it, closed and canceled once confirmed, eg: "posição de matrend em
+ * XAUUSDm #123"; Error why it can't be read, nothing switched then.
+ */
+export interface MT5SwitchPreview {
+  active: boolean;
+  current: string[];
+  running: string[];
+  exposure: string[];
+  error?: string;
+}
+/**
+ * MT5SwitchRequest is the body of POST .../activate and .../deactivate of an
+ * account of MT5: ClosePositions confirms closing the positions and canceling
+ * the pending orders of the agents on the account leaving the terminal (see
+ * MT5SwitchPreview), refused (409, Confirm) without it when there are some.
+ */
+export interface MT5SwitchRequest {
+  close_positions?: boolean;
+  reason?: string;
+}
+/**
+ * MT5SwitchRefusal answers a switch of the account of a terminal refused:
+ * Error why, Confirm when it waits for ClosePositions (see
+ * MT5SwitchRequest), Pending what remains open on the account.
+ */
+export interface MT5SwitchRefusal {
+  error: string;
+  confirm?: boolean;
+  pending?: string[];
 }
 /**
  * MT5AccountsResponse answers GET /api/settings/mt5-accounts.

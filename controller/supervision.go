@@ -96,6 +96,7 @@ func (d *Dashboard) ServeSupervision(s *store.Store, manager *Manager) *Supervis
 		bridges: newBridgeTrader(), newChat: chatOf, stateOf: manager.State, now: time.Now, wake: make(chan struct{}, 1),
 		locks: make(map[string]*sync.Mutex), flat: make(map[int64]time.Time), stopping: make(map[int64]stopTarget)}
 	sup.daily = newDailyLimiter(sup)
+	d.settings.mt5.supervision = sup // closes the positions of an account leaving its terminal
 	d.supervision = sup
 	return sup
 }
