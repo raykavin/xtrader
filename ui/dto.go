@@ -783,6 +783,7 @@ type AgentSettings struct {
 	Outbox          *AgentOutbox          `json:"outbox,omitempty"`
 	Params          map[string]string     `json:"params"`
 	Account         *AgentAccountSettings `json:"account,omitempty"`
+	MT5AccountID    int64                 `json:"mt5_account_id,omitempty"` // the account of MT5 it trades, see MT5AccountInfo
 	LLM             *AgentLLMSettings     `json:"llm,omitempty"`
 	Model           string                `json:"model,omitempty"`
 	PromptID        *int64                `json:"prompt_id,omitempty"`
@@ -898,6 +899,9 @@ type AgentSettingsRequest struct {
 	BridgeToken     *string              `json:"bridge_token,omitempty"`
 	// Protection replaces the protection of the open positions, applied live
 	Protection *ProtectionSettings `json:"protection,omitempty"`
+	// MT5AccountID links the agent to an account of MT5 (0 unlinks it): only
+	// with the agent stopped and flat on its former one
+	MT5AccountID *int64 `json:"mt5_account_id,omitempty"`
 }
 
 // OpenPositionsResponse is the payload of GET /api/positions/open: the open
@@ -1360,6 +1364,7 @@ type AgentCreateRequest struct {
 	Reanalysis      bool                 `json:"reanalysis,omitempty"`
 	Params          map[string]string    `json:"params,omitempty"`
 	Account         AgentAccountSettings `json:"account"`
+	MT5AccountID    *int64               `json:"mt5_account_id,omitempty"` // its account of MT5, its bridge and token then
 	LLM             *AgentLLMSettings    `json:"llm,omitempty"`
 	PromptID        *int64               `json:"prompt_id,omitempty"`
 	LLMAPIKey       *string              `json:"llm_api_key,omitempty"`
@@ -2349,4 +2354,105 @@ type NewsTestResult struct {
 	Agents []string `json:"agents"`
 	Status string   `json:"status"`
 	Detail string   `json:"detail,omitempty"`
+}
+
+// MT5AccountInfo is an account of MetaTrader 5 on the dashboard
+// (Configurações > Contas MT5): never its password nor the token of its
+// bridge, only whether they are set; its kind, currency and company as the
+// bridge confirmed them; the agents linked to it; and how its terminal stands
+// (Session), as the controller last read it.
+type MT5AccountInfo struct {
+	ID          int64             `json:"id"`
+	Name        string            `json:"name"`
+	Login       int64             `json:"login"`
+	Server      string            `json:"server"`
+	BridgeURL   string            `json:"bridge_url"`
+	AllowReal   bool              `json:"allow_real"`
+	ReadOnly    bool              `json:"read_only"`
+	Active      bool              `json:"active"`
+	Kind        string            `json:"kind,omitempty"`
+	Currency    string            `json:"currency,omitempty"`
+	Company     string            `json:"company,omitempty"`
+	CheckedAt   int64             `json:"checked_at,omitempty"`
+	CheckError  string            `json:"check_error,omitempty"`
+	PasswordSet bool              `json:"password_set"`
+	TokenSet    bool              `json:"token_set"`
+	Agents      []string          `json:"agents"`
+	Session     *MT5SessionStatus `json:"session,omitempty"`
+	UpdatedBy   string            `json:"updated_by,omitempty"`
+	UpdatedAt   int64             `json:"updated_at"`
+}
+
+// MT5SessionStatus is how the terminal of an account active stands: its
+// bridge reached, the account it is logged in (LoggedLogin) and whether it is
+// this one (Current), what it waits for (session, password) and the last
+// error, at At (Unix seconds).
+type MT5SessionStatus struct {
+	Reachable   bool   `json:"reachable"`
+	Connected   bool   `json:"connected"`
+	LoggedLogin int64  `json:"logged_login,omitempty"`
+	Current     bool   `json:"current"`
+	Waiting     string `json:"waiting,omitempty"`
+	Error       string `json:"error,omitempty"`
+	At          int64  `json:"at"`
+}
+
+// MT5AccountsResponse answers GET /api/settings/mt5-accounts.
+type MT5AccountsResponse struct {
+	Accounts []MT5AccountInfo `json:"accounts"`
+}
+
+// MT5AccountRequest is the body of POST /api/settings/mt5-accounts (an
+// account, its name, login, server and bridge required) and of PATCH
+// /api/settings/mt5-accounts/{id} (the fields set): the password and the
+// token of the bridge written only ("" removes them, absent keeps them);
+// Active deactivates it (see POST .../activate to make it the account of its
+// terminal); Reason recorded.
+type MT5AccountRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Login       *int64  `json:"login,omitempty"`
+	Server      *string `json:"server,omitempty"`
+	Password    *string `json:"password,omitempty"`
+	BridgeURL   *string `json:"bridge_url,omitempty"`
+	BridgeToken *string `json:"bridge_token,omitempty"`
+	AllowReal   *bool   `json:"allow_real,omitempty"`
+	ReadOnly    *bool   `json:"read_only,omitempty"`
+	Active      *bool   `json:"active,omitempty"`
+	Reason      string  `json:"reason,omitempty"`
+}
+
+// MT5AccountTest answers POST /api/settings/mt5-accounts/{id}/test: the
+// bridge reached and its token taken, the account its terminal is logged in
+// and whether it is this one (Current), then what the bridge confirmed of it
+// (kind: demo, real or contest; currency, company, server), or why not
+// (Error), never a credential; Detail what to do.
+type MT5AccountTest struct {
+	Reachable   bool   `json:"reachable"`
+	TokenOK     bool   `json:"token_ok"`
+	Connected   bool   `json:"connected"`
+	LoggedLogin int64  `json:"logged_login,omitempty"`
+	Current     bool   `json:"current"`
+	Kind        string `json:"kind,omitempty"`
+	Currency    string `json:"currency,omitempty"`
+	Company     string `json:"company,omitempty"`
+	Server      string `json:"server,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	At          int64  `json:"at"`
+}
+
+// MT5AccountEventInfo is an event of an account of MT5, never a secret.
+type MT5AccountEventInfo struct {
+	At       int64  `json:"at"`
+	Kind     string `json:"kind"`
+	By       string `json:"by"`
+	Reason   string `json:"reason,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Previous any    `json:"previous,omitempty"`
+	Next     any    `json:"next,omitempty"`
+}
+
+// MT5AccountEventsResponse answers GET /api/settings/mt5-accounts/{id}/events.
+type MT5AccountEventsResponse struct {
+	Events []MT5AccountEventInfo `json:"events"`
 }

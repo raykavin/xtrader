@@ -564,7 +564,7 @@ func oneLine(text string) bool {
 // order of the dashboard.
 func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 	var agents []Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Order("position, name").
+	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Order("position, name").
 		Find(&agents).Error
 	return agents, err
 }
@@ -572,14 +572,14 @@ func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 // Agent returns the agent of id.
 func (s *Store) Agent(ctx context.Context, id int64) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").First(&agent, id).Error
+	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").First(&agent, id).Error
 	return agent, notFound(err, fmt.Sprintf("agent %d", id))
 }
 
 // AgentByName returns the agent of name.
 func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 	var agent Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Where("name = ?", name).
+	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Where("name = ?", name).
 		First(&agent).Error
 	return agent, notFound(err, "agent "+name)
 }
@@ -716,7 +716,7 @@ func (s *Store) checkBookFree(ctx context.Context, id int64, a Agent) error {
 		return err
 	}
 	var others []Agent
-	err := s.conn(ctx).Preload("Account").Preload("LLM").
+	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").
 		Where("id <> ? AND enabled AND mode = ?", id, "live").Order("position, name").Find(&others).Error
 	if err != nil {
 		return err
@@ -779,7 +779,7 @@ func (s *Store) sealInto(column *[]byte, place string, secret Secret) error {
 func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (Agent, error) {
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
-		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
+		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
 			First(&agent, id).Error
 		if err != nil {
 			return notFound(err, fmt.Sprintf("agent %d", id))
@@ -996,6 +996,15 @@ func (s *Store) AgentSecrets(ctx context.Context, id int64) (AgentSecretValues, 
 	return s.SecretsOf(agent)
 }
 
+// MT5AccountOf returns the account of MT5 the agent a trades, as read, nil
+// when it isn't linked to one (its own bridge then, see Account).
+func (a Agent) MT5AccountOf() *MT5Account {
+	if a.MT5Link == nil {
+		return nil
+	}
+	return a.MT5Link.Account
+}
+
 // SecretsOf returns the secrets of agent, as read, decrypted, eg: the ones it
 // was launched with: only for the agent itself, see AgentSecrets.
 func (s *Store) SecretsOf(agent Agent) (AgentSecretValues, error) {
@@ -1003,7 +1012,12 @@ func (s *Store) SecretsOf(agent Agent) (AgentSecretValues, error) {
 		values AgentSecretValues
 		err    error
 	)
-	if agent.Account != nil {
+	switch account := agent.MT5AccountOf(); {
+	case account != nil: // the token of the bridge of its account of MT5
+		if values.BridgeToken, err = s.open(mt5TokenOf(account.ID), account.BridgeToken); err != nil {
+			return AgentSecretValues{}, err
+		}
+	case agent.Account != nil:
 		if values.BridgeToken, err = s.open(bridgeTokenOf(agent.ID), agent.Account.BridgeToken); err != nil {
 			return AgentSecretValues{}, err
 		}

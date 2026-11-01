@@ -45,13 +45,29 @@ type fakeBridge struct {
 	// is called with each trade request, before it, the bridge unlocked
 	tradeAnswer func(request map[string]any) (int, any)
 	onTrade     func(request map[string]any)
+	// the session of the bridge (GET and POST /session): the account it
+	// serves, legacy (from its flags) until one is given, what it waits for,
+	// the sessions given; noSession for a bridge before the sessions (404)
+	sessionLogin  int64
+	sessionServer string
+	legacy        bool
+	waiting       string
+	allowReal     bool
+	readOnly      bool
+	sessions      []map[string]any
+	noSession     bool
+	sessionStatus int // answered to POST /session instead, when set
 }
 
 func newFakeBridge(t *testing.T, token string, login int64, currency string) *fakeBridge {
 	t.Helper()
-	b := &fakeBridge{token: token, login: login, currency: currency, balance: 1000}
+	b := &fakeBridge{token: token, login: login, currency: currency, balance: 1000, sessionLogin: login,
+		sessionServer: "Exness-MT5Trial11", legacy: true}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var trade map[string]any
+		if r.Method == http.MethodPost && r.URL.Path == "/session" {
+			_ = json.NewDecoder(r.Body).Decode(&trade)
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/order" {
 			_ = json.NewDecoder(r.Body).Decode(&trade)
 			b.mu.Lock()
@@ -72,9 +88,28 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 		case b.status != 0:
 			w.WriteHeader(b.status)
 			_, _ = w.Write([]byte(`{"error":"account_info: terminal disconnected"}`))
+		case r.URL.Path == "/session" && b.noSession:
+			http.NotFound(w, r)
+		case r.URL.Path == "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"connected": b.waiting == "", "login": b.login,
+				"server": b.sessionServer, "read_only": b.readOnly, "waiting": b.waiting})
+		case r.URL.Path == "/session" && r.Method == http.MethodPost:
+			b.sessions = append(b.sessions, trade)
+			if b.sessionStatus != 0 {
+				w.WriteHeader(b.sessionStatus)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "login: Authorization failed"})
+				break
+			}
+			login, _ := trade["login"].(float64)
+			b.login, b.sessionLogin, b.sessionServer = int64(login), int64(login), trade["server"].(string)
+			b.allowReal, b.readOnly = trade["allow_real"] == true, trade["read_only"] == true
+			b.legacy, b.waiting = false, ""
+			_ = json.NewEncoder(w).Encode(b.sessionAnswer())
+		case r.URL.Path == "/session":
+			_ = json.NewEncoder(w).Encode(b.sessionAnswer())
 		case r.URL.Path == "/account":
 			_ = json.NewEncoder(w).Encode(map[string]any{"login": b.login, "currency": b.currency, "balance": b.balance,
-				"trade_mode": b.tradeMode})
+				"trade_mode": b.tradeMode, "server": b.sessionServer, "company": "Exness Technologies Ltd"})
 		case r.URL.Path == "/orders":
 			orders := b.orders
 			if orders == nil {
@@ -158,6 +193,20 @@ func (b *fakeBridge) trade(request map[string]any) map[string]any {
 		}
 	}
 	return map[string]any{"retcode": 10013, "comment": "Invalid request"}
+}
+
+// sessionAnswer is the answer of GET /session. The caller holds b.mu.
+func (b *fakeBridge) sessionAnswer() map[string]any {
+	return map[string]any{"login": b.sessionLogin, "server": b.sessionServer, "allow_real": b.allowReal,
+		"read_only": b.readOnly, "legacy": b.legacy, "connected": b.waiting == "", "logged_login": b.login,
+		"waiting": b.waiting}
+}
+
+// sessionsGiven returns the sessions given to the bridge.
+func (b *fakeBridge) sessionsGiven() []map[string]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]map[string]any(nil), b.sessions...)
 }
 
 // tradeRequests returns the trade requests the bridge got.

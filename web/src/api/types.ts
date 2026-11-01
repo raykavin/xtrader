@@ -904,6 +904,7 @@ export interface AgentSettings {
   outbox?: AgentOutbox;
   params: { [key: string]: string};
   account?: AgentAccountSettings;
+  mt5_account_id?: number /* int64 */; // the account of MT5 it trades, see MT5AccountInfo
   llm?: AgentLLMSettings;
   model?: string;
   prompt_id?: number /* int64 */;
@@ -1033,6 +1034,11 @@ export interface AgentSettingsRequest {
    * Protection replaces the protection of the open positions, applied live
    */
   protection?: ProtectionSettings;
+  /**
+   * MT5AccountID links the agent to an account of MT5 (0 unlinks it): only
+   * with the agent stopped and flat on its former one
+   */
+  mt5_account_id?: number /* int64 */;
 }
 /**
  * OpenPositionsResponse is the payload of GET /api/positions/open: the open
@@ -1526,6 +1532,7 @@ export interface AgentCreateRequest {
   reanalysis?: boolean;
   params?: { [key: string]: string};
   account: AgentAccountSettings;
+  mt5_account_id?: number /* int64 */; // its account of MT5, its bridge and token then
   llm?: AgentLLMSettings;
   prompt_id?: number /* int64 */;
   llm_api_key?: string;
@@ -2687,4 +2694,112 @@ export interface NewsTestResult {
   agents: string[];
   status: string;
   detail?: string;
+}
+/**
+ * MT5AccountInfo is an account of MetaTrader 5 on the dashboard
+ * (Configurações > Contas MT5): never its password nor the token of its
+ * bridge, only whether they are set; its kind, currency and company as the
+ * bridge confirmed them; the agents linked to it; and how its terminal stands
+ * (Session), as the controller last read it.
+ */
+export interface MT5AccountInfo {
+  id: number /* int64 */;
+  name: string;
+  login: number /* int64 */;
+  server: string;
+  bridge_url: string;
+  allow_real: boolean;
+  read_only: boolean;
+  active: boolean;
+  kind?: string;
+  currency?: string;
+  company?: string;
+  checked_at?: number /* int64 */;
+  check_error?: string;
+  password_set: boolean;
+  token_set: boolean;
+  agents: string[];
+  session?: MT5SessionStatus;
+  updated_by?: string;
+  updated_at: number /* int64 */;
+}
+/**
+ * MT5SessionStatus is how the terminal of an account active stands: its
+ * bridge reached, the account it is logged in (LoggedLogin) and whether it is
+ * this one (Current), what it waits for (session, password) and the last
+ * error, at At (Unix seconds).
+ */
+export interface MT5SessionStatus {
+  reachable: boolean;
+  connected: boolean;
+  logged_login?: number /* int64 */;
+  current: boolean;
+  waiting?: string;
+  error?: string;
+  at: number /* int64 */;
+}
+/**
+ * MT5AccountsResponse answers GET /api/settings/mt5-accounts.
+ */
+export interface MT5AccountsResponse {
+  accounts: MT5AccountInfo[];
+}
+/**
+ * MT5AccountRequest is the body of POST /api/settings/mt5-accounts (an
+ * account, its name, login, server and bridge required) and of PATCH
+ * /api/settings/mt5-accounts/{id} (the fields set): the password and the
+ * token of the bridge written only ("" removes them, absent keeps them);
+ * Active deactivates it (see POST .../activate to make it the account of its
+ * terminal); Reason recorded.
+ */
+export interface MT5AccountRequest {
+  name?: string;
+  login?: number /* int64 */;
+  server?: string;
+  password?: string;
+  bridge_url?: string;
+  bridge_token?: string;
+  allow_real?: boolean;
+  read_only?: boolean;
+  active?: boolean;
+  reason?: string;
+}
+/**
+ * MT5AccountTest answers POST /api/settings/mt5-accounts/{id}/test: the
+ * bridge reached and its token taken, the account its terminal is logged in
+ * and whether it is this one (Current), then what the bridge confirmed of it
+ * (kind: demo, real or contest; currency, company, server), or why not
+ * (Error), never a credential; Detail what to do.
+ */
+export interface MT5AccountTest {
+  reachable: boolean;
+  token_ok: boolean;
+  connected: boolean;
+  logged_login?: number /* int64 */;
+  current: boolean;
+  kind?: string;
+  currency?: string;
+  company?: string;
+  server?: string;
+  error?: string;
+  detail?: string;
+  at: number /* int64 */;
+}
+/**
+ * MT5AccountEventInfo is an event of an account of MT5, never a secret.
+ */
+export interface MT5AccountEventInfo {
+  at: number /* int64 */;
+  kind: string;
+  by: string;
+  reason?: string;
+  agent?: string;
+  previous?: any;
+  next?: any;
+}
+/**
+ * MT5AccountEventsResponse answers GET /api/settings/mt5-accounts/{id}/events.
+ */
+export interface MT5AccountEventsResponse {
+  events: MT5AccountEventInfo[];
 }

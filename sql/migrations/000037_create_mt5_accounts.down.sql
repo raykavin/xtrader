@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS mt5_accounts;
