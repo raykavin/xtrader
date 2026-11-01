@@ -7796,6 +7796,34 @@ h3.md-heading {
   gap: var(--sp-2) var(--sp-3);
 }
 
+.mt5-card::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  left: 0;
+  width: 3px;
+  height: 40px;
+  border-radius: 0 3px 3px 0;
+  background: var(--text-3);
+}
+
+.mt5-card.on::before {
+  background: var(--pos);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--pos) 70%, transparent);
+}
+
+.mt5-card.warn::before {
+  background: var(--warn);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--warn) 60%, transparent);
+}
+
+.mt5-card-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .mt5-card-title {
   display: flex;
   flex-direction: column;
@@ -7852,6 +7880,24 @@ h3.md-heading {
 
 .mt5-active .confirm {
   justify-content: flex-start;
+}
+
+.mt5-confirm {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-basis: 100%;
+}
+
+.mt5-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mt5-open {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
 }
 
 .mt5-actions {

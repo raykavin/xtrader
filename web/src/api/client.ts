@@ -37,6 +37,9 @@ import type {
   MT5AccountRequest,
   MT5AccountsResponse,
   MT5AccountTest,
+  MT5SwitchPreview,
+  MT5SwitchRefusal,
+  MT5SwitchRequest,
   NewsSettingsRequest,
   NewsSettingsResponse,
   NewsTestResponse,
@@ -744,9 +747,35 @@ export function deleteMT5Account(id: number): Promise<void> {
   return sendJSON<void>("DELETE", `/settings/mt5-accounts/${id}`);
 }
 
-/** Makes an account of MT5 the one of its terminal, logged in it at once: 409 while the terminal is in use. */
-export function activateMT5Account(id: number): Promise<MT5AccountInfo> {
-  return postJSON<MT5AccountInfo>(`/settings/mt5-accounts/${id}/activate`);
+/** What activating (active) or deactivating an account of MT5 does on its terminal, nothing changed. */
+export function fetchMT5Switch(id: number, active: boolean): Promise<MT5SwitchPreview> {
+  return getJSON<MT5SwitchPreview>(`/settings/mt5-accounts/${id}/switch?active=${active}`);
+}
+
+/**
+ * Makes an account of MT5 the one of its terminal (active), or deactivates
+ * it: the agents of the terminal stopped, the positions and the pending orders
+ * of the account leaving it closed and canceled when confirmed, then the
+ * terminal logged in it. Refused (see switchRefusalOf) with nothing switched.
+ */
+export function switchMT5Account(
+  id: number,
+  active: boolean,
+  request: MT5SwitchRequest,
+): Promise<MT5AccountInfo> {
+  const action = active ? "activate" : "deactivate";
+  return postJSON<MT5AccountInfo>(`/settings/mt5-accounts/${id}/${action}`, request);
+}
+
+/** The refusal of a switch of the account of a terminal, of its error: null for another error. */
+export function switchRefusalOf(error: unknown): MT5SwitchRefusal | null {
+  if (!(error instanceof APIError) || !error.body) return null;
+  try {
+    const refusal = JSON.parse(error.body) as MT5SwitchRefusal;
+    return typeof refusal.error === "string" ? refusal : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Tests an account of MT5 on its bridge, never logging the terminal in another account. */
