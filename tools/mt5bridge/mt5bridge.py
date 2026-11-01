@@ -16,7 +16,7 @@ as the terminal reports them. Connections persist (HTTP/1.1): a body comes with
 its Content-Length, never chunked. With orjson installed, it encodes the answers.
 
 Endpoints (JSON):
-    GET  /health                       terminal and account state
+    GET  /health                       terminal and account state, the instance of the terminal
     GET  /account                      account_info
     GET  /symbol?symbol=XAUUSDm        symbol_info (selects the symbol)
     GET  /tick?symbol=XAUUSDm          symbol_info_tick
@@ -70,6 +70,7 @@ import ipaddress
 import json
 import math
 import os
+import secrets
 import subprocess
 import threading
 import time
@@ -157,6 +158,30 @@ def save_session(path, session):
     os.replace(temporary, path)
 
 
+def instance_of(session_path):
+    """The instance of the terminal: an identifier made once and kept next to
+    the session file, the same across the restarts of its container, apart
+    from any other terminal, on the same host too; one of the process without
+    a session file."""
+    if not session_path:
+        return secrets.token_hex(8)
+    path = os.path.join(os.path.dirname(session_path) or ".", "instance")
+    try:
+        with open(path, encoding="utf-8") as f:
+            instance = f.read().strip()
+        if instance:
+            return instance
+    except FileNotFoundError:
+        pass
+    instance = secrets.token_hex(8)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as f:
+        f.write(instance)
+    os.replace(temporary, path)
+    return instance
+
+
 def legacy_session(args):
     """The account of --login/--server, the legacy one, None without them."""
     login, server = getattr(args, "login", None), getattr(args, "server", "")
@@ -199,6 +224,7 @@ class Terminal:
         self.session = load_session(getattr(args, "session", "")) or legacy_session(args)
         self.password = os.environ.get("MT5_PASSWORD", "") if self.session and self.session.get("legacy") else ""
         self.waiting = "" if self.session else "session"  # why no account is served: session or password
+        self.instance = instance_of(getattr(args, "session", ""))  # tells this terminal apart, see instance_of
 
     def read_only(self):
         """Whether the account served refuses every trading request."""
@@ -579,6 +605,7 @@ class Handler(BaseHTTPRequestHandler):
                 "login": account.login if account else 0,
                 "server": account.server if account else "",
                 "read_only": self.is_read_only(),
+                "instance": self.terminal.instance,
                 "deadline": True,  # X-Bridge-Deadline is honored
                 "timeout": True,  # and X-Bridge-Timeout
                 "time": time.time(),
@@ -592,6 +619,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise
             return {"connected": False, "trade_allowed": False, "build": 0, "login": 0, "server": "",
                     "read_only": self.is_read_only(), "waiting": self.terminal.waiting, "error": str(exc),
+                    "instance": self.terminal.instance,
                     "deadline": True, "timeout": True, "time": time.time()}
 
     def is_read_only(self):
@@ -613,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
         return {"login": current.get("login", 0), "server": current.get("server", ""),
                 "allow_real": bool(current.get("allow_real")), "read_only": bool(current.get("read_only")),
                 "legacy": bool(current.get("legacy")), "connected": terminal.connected, "logged_login": logged,
-                "waiting": terminal.waiting}
+                "waiting": terminal.waiting, "instance": terminal.instance}
 
     def set_session(self, query, body):
         """Logs the terminal in the account of the body, from the controller:
