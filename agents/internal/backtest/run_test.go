@@ -564,11 +564,11 @@ func TestRun_AReferenceReadNeverTraded(t *testing.T) {
 }
 
 // A reference file of 1m missing the last minute of an hour (03:59): the
-// resample of the feed never completes that hour and merges the next one into
-// it, kept at 03:00 with the close of 04:59, which the feed answers as soon as
-// 03:00 closed; the source of Hooks.Candles never answers it, on the timeframe
-// resampled at once nor on another, every candle it answers ending by the
-// simulated now.
+// resample of the feed used to never complete that hour and to merge the next
+// one into it, kept at 03:00 with the close of 04:59, answered as soon as
+// 03:00 closed; the feed now completes it with its own minutes, and the source
+// of Hooks.Candles answers no candle holding data of after the simulated now,
+// on the timeframe resampled at once nor on another.
 func TestRun_AReferenceCandleMergedWithTheNextNeverAnswered(t *testing.T) {
 	const minutes = 300
 	var b strings.Builder
@@ -615,7 +615,7 @@ func TestRun_AReferenceCandleMergedWithTheNextNeverAnswered(t *testing.T) {
 	report := runScript(t, context.Background(), s, flat(minutes, 100), cfg,
 		Hooks{Candles: func(c CandleSource) { source = c }})
 	require.Equal(t, StatusSucceeded, report.Status, report.Error)
-	assert.Positive(t, feedAhead, "the feed of the core answers the merged candle")
+	assert.Zero(t, feedAhead, "the feed of the core no longer merges the next hour into the candle of the gap")
 	assert.Positive(t, reads, "the candles after the gap answered")
 	assert.Empty(t, ahead, "never a candle holding data of after the simulated now")
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,41 +185,121 @@ func TestIsLastCandlePeriod(t *testing.T) {
 	})
 }
 
-func TestIsFistCandlePeriod(t *testing.T) {
-	t.Run("valid", func(t *testing.T) {
-		tt := []struct {
-			sourceTimeFrame string
-			targetTimeFrame string
-			time            time.Time
-			last            bool
-		}{
-			{"1d", "1w", time.Date(2021, 11, 6, 0, 0, 0, 0, time.UTC), false}, // sunday
-			{"1d", "1w", time.Date(2021, 11, 7, 0, 0, 0, 0, time.UTC), true},  // monday
-			{"1d", "1w", time.Date(2021, 11, 8, 0, 0, 0, 0, time.UTC), false}, // monday
-			{"1h", "1d", time.Date(2021, 11, 8, 0, 0, 0, 0, time.UTC), true},  // monday
-			{"1h", "1d", time.Date(2021, 11, 8, 1, 0, 0, 0, time.UTC), false}, // monday
+func TestPeriodStart(t *testing.T) {
+	tt := []struct {
+		timeframe string
+		time      time.Time
+		start     time.Time
+	}{
+		{"1w", time.Date(2021, 11, 6, 13, 0, 0, 0, time.UTC), time.Date(2021, 10, 31, 0, 0, 0, 0, time.UTC)}, // saturday
+		{"1w", time.Date(2021, 11, 7, 0, 0, 0, 0, time.UTC), time.Date(2021, 11, 7, 0, 0, 0, 0, time.UTC)},   // sunday
+		{"1w", time.Date(2021, 11, 8, 5, 0, 0, 0, time.UTC), time.Date(2021, 11, 7, 0, 0, 0, 0, time.UTC)},   // monday
+		{"1d", time.Date(2021, 11, 8, 23, 59, 0, 0, time.UTC), time.Date(2021, 11, 8, 0, 0, 0, 0, time.UTC)},
+		{"4h", time.Date(2021, 11, 8, 7, 59, 0, 0, time.UTC), time.Date(2021, 11, 8, 4, 0, 0, 0, time.UTC)},
+		{"1h", time.Date(2021, 11, 8, 10, 59, 0, 0, time.UTC), time.Date(2021, 11, 8, 10, 0, 0, 0, time.UTC)},
+		{"15m", time.Date(2021, 11, 8, 10, 44, 0, 0, time.UTC), time.Date(2021, 11, 8, 10, 30, 0, 0, time.UTC)},
+	}
+	for _, tc := range tt {
+		start, err := periodStart(tc.time, tc.timeframe)
+		require.NoError(t, err)
+		require.Equal(t, tc.start, start, "%s of %s", tc.timeframe, tc.time)
+	}
+	_, err := periodStart(time.Now(), "invalid")
+	require.Error(t, err)
+}
+
+// writeMinutes writes a CSV of 1m candles at the times given, each of close
+// its index, and returns its path.
+func writeMinutes(t *testing.T, times ...time.Time) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("time,open,close,low,high,volume\n")
+	for i, at := range times {
+		fmt.Fprintf(&b, "%d,%d,%d,%d,%d,1\n", at.Unix(), i, i, i, i)
+	}
+	return writeCSV(t, b.String())
+}
+
+// minutes returns the minutes from from to to, to excluded, but the ones of
+// skip.
+func minutes(from, to time.Time, skip ...time.Time) []time.Time {
+	var out []time.Time
+	for at := from; at.Before(to); at = at.Add(time.Minute) {
+		if !slices.ContainsFunc(skip, func(s time.Time) bool { return s.Equal(at) }) {
+			out = append(out, at)
 		}
+	}
+	return out
+}
 
-		for _, tc := range tt {
-			t.Run(fmt.Sprintf("%s to %s", tc.sourceTimeFrame, tc.targetTimeFrame), func(t *testing.T) {
-				first, err := isFistCandlePeriod(tc.time, tc.sourceTimeFrame, tc.targetTimeFrame)
-				require.NoError(t, err)
-				require.Equal(t, tc.last, first)
-			})
+// completed returns the complete candles of feed for pair and timeframe.
+func completed(feed *CSVFeed, pair, timeframe string) []model.Candle {
+	var out []model.Candle
+	for _, candle := range feed.CandlePairTimeFrame[feed.feedTimeframeKey(pair, timeframe)] {
+		if candle.Complete {
+			out = append(out, candle)
 		}
-	})
+	}
+	return out
+}
 
-	t.Run("invalid source", func(t *testing.T) {
-		last, err := isFistCandlePeriod(time.Now(), "invalid", "1h")
-		require.Error(t, err)
-		require.False(t, last)
-	})
+// A candle missing its last minute completes with the minutes it had, as of
+// that minute, and the next hour never comes into it: before, the minutes of
+// 11:00 were merged into the candle of 10:00, its close the one of 11:59
+// under the time of 10:00, a look into the future in every backtest with a
+// gap in its file.
+func TestCSVFeed_resampleGapAtTheEnd(t *testing.T) {
+	ten := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	times := minutes(ten, ten.Add(3*time.Hour), ten.Add(59*time.Minute))
+	feed, err := NewCSVFeed("1h", PairFeed{Pair: "DXYm", Timeframe: "1m", File: writeMinutes(t, times...)})
+	require.NoError(t, err)
 
-	t.Run("not supported interval", func(t *testing.T) {
-		last, err := isFistCandlePeriod(time.Now(), "1d", "1y")
-		require.EqualError(t, err, "invalid timeframe: 1y")
-		require.False(t, last)
-	})
+	hours := completed(feed, "DXYm", "1h")
+	require.Len(t, hours, 3)
+	assert.Equal(t, ten, hours[0].Time)
+	assert.Equal(t, 58.0, hours[0].Close, "the close of 10:58, the last minute it had")
+	assert.Equal(t, ten.Add(59*time.Minute), hours[0].UpdatedAt, "as of its last minute")
+	assert.Equal(t, ten.Add(time.Hour), hours[1].Time)
+	assert.Equal(t, 59.0, hours[1].Open, "11:00 opens its own hour")
+	assert.Equal(t, 118.0, hours[1].Close)
+	for _, candle := range feed.CandlePairTimeFrame["DXYm--1h"] {
+		assert.True(t, candle.UpdatedAt.Before(candle.Time.Add(time.Hour)), "no candle holds a later hour: %v", candle)
+	}
+}
+
+// A candle missing its first minutes keeps the open time of its period.
+func TestCSVFeed_resampleGapAtTheStart(t *testing.T) {
+	ten := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	times := minutes(ten, ten.Add(2*time.Hour), ten.Add(time.Hour), ten.Add(61*time.Minute))
+	feed, err := NewCSVFeed("1h", PairFeed{Pair: "DXYm", Timeframe: "1m", File: writeMinutes(t, times...)})
+	require.NoError(t, err)
+
+	hours := completed(feed, "DXYm", "1h")
+	require.Len(t, hours, 2)
+	assert.Equal(t, ten.Add(time.Hour), hours[1].Time, "the hour of 11:00, opened at 11:02")
+	assert.Equal(t, 60.0, hours[1].Open)
+}
+
+// A market closed at the end of a Friday (gold from 21:00 UTC) has a daily
+// candle of the Friday alone, and the Sunday a candle of its own: before,
+// the Friday took the Sunday in, its close the one of Sunday night.
+func TestCSVFeed_resampleWeekendGap(t *testing.T) {
+	friday := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	times := minutes(friday, friday.Add(21*time.Hour)) // the first period of the file whole: kept
+	sunday := friday.AddDate(0, 0, 2)
+	times = append(times, minutes(sunday.Add(22*time.Hour), sunday.Add(24*time.Hour))...)
+	monday := sunday.AddDate(0, 0, 1)
+	times = append(times, minutes(monday, monday.Add(24*time.Hour))...)
+	feed, err := NewCSVFeed("1d", PairFeed{Pair: "XAUUSDm", Timeframe: "1m", File: writeMinutes(t, times...)})
+	require.NoError(t, err)
+
+	days := completed(feed, "XAUUSDm", "1d")
+	require.Len(t, days, 3)
+	assert.Equal(t, friday, days[0].Time)
+	assert.Equal(t, float64(21*60-1), days[0].Close, "the close of Friday 20:59")
+	assert.Equal(t, friday.Add(24*time.Hour-time.Minute), days[0].UpdatedAt, "as of its last minute")
+	assert.Equal(t, sunday, days[1].Time)
+	assert.Equal(t, monday, days[2].Time)
 }
 
 // newDailyFeed loads the BTC daily fixture.
