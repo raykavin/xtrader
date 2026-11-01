@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -820,6 +822,56 @@ func filterArgs(args []string, pairs []string, timeframe string, llm bool) []str
 	return kept
 }
 
+// batchParamsMax is the number of params a batch adds to its agents at most.
+const batchParamsMax = 20
+
+// batchParamName is the name of a param: the one of a flag.
+var batchParamName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// batchParamsError returns why the params a batch adds to its agents are
+// refused (see ui.BacktestRequest), "" when they aren't: a name of a flag,
+// none a backtest sets itself (backtestFlagsDropped, the pairs, the
+// timeframe, the strategy, the warmup probe) nor one of a language model, the
+// value a line of text of 1024 bytes at most.
+func batchParamsError(params map[string]string) string {
+	if len(params) > batchParamsMax {
+		return fmt.Sprintf("no máximo %d", batchParamsMax)
+	}
+	for _, name := range slices.Sorted(maps.Keys(params)) {
+		value := params[name]
+		switch {
+		case !batchParamName.MatchString(name):
+			return fmt.Sprintf("%q: o nome de uma flag, letras minúsculas, dígitos e -", name)
+		case slices.Contains(backtestFlagsDropped, name) || slices.Contains([]string{"pair", "timeframe", "strategy",
+			agentapi.PrintWarmupFlag}, name):
+			return fmt.Sprintf("%s é definido pelo próprio backtest", name)
+		case strings.HasPrefix(name, "llm-") || strings.HasPrefix(name, "calendar-") ||
+			strings.HasPrefix(name, "news-"):
+			return fmt.Sprintf("%s é de um agente LLM", name)
+		case len(value) > 1024 || strings.ContainsAny(value, "\r\n"):
+			return fmt.Sprintf("%s: uma linha de até 1024 bytes", name)
+		}
+	}
+	return ""
+}
+
+// withParams returns args with params added, by name, sorted: an arg of the
+// same name replaced.
+func withParams(args []string, params map[string]string) []string {
+	if len(params) == 0 {
+		return args
+	}
+	kept := slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		_, replaced := params[name]
+		return replaced
+	})
+	for _, name := range slices.Sorted(maps.Keys(params)) {
+		kept = append(kept, "-"+name+"="+params[name])
+	}
+	return kept
+}
+
 // plan returns the batch request asks for, and its runs, each with its
 // config copied (see backtestSnapshot): refused (store.ErrInvalid) out of the
 // limits of the controller or for an agent that can't be backtested.
@@ -858,6 +910,9 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 	case request.Timeframe != "" && !slices.Contains(backtestTimeframesAllowed, request.Timeframe):
 		return store.BacktestBatch{}, nil, invalid("o timeframe: um de %s", strings.Join(backtestTimeframesAllowed, ", "))
 	}
+	if why := batchParamsError(request.Params); why != "" {
+		return store.BacktestBatch{}, nil, invalid("os parâmetros do lote: %s", why)
+	}
 	segments := []struct {
 		name     string
 		from, to time.Time
@@ -880,7 +935,7 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		GapFills:     true,
 		Conservative: true, EndPolicy: "mark_to_market",
 		LLMMaxCalls: cmpOr(request.LLMMaxCalls, b.cfg.LLMMaxCalls),
-		LLMMaxCost:  cmpOr(request.LLMMaxCost, b.cfg.LLMMaxCost)}
+		LLMMaxCost:  cmpOr(request.LLMMaxCost, b.cfg.LLMMaxCost), Params: request.Params}
 
 	var runs []store.BacktestRun
 	seen := make(map[string]bool)
@@ -896,6 +951,10 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		compat := b.compatibility(a)
 		if !compat.Compatible {
 			return store.BacktestBatch{}, nil, invalid("%s não pode ser testado: %s", name, compat.Reason)
+		}
+		if len(request.Params) > 0 && a.Kind == "llm" {
+			return store.BacktestBatch{}, nil, invalid("os parâmetros do lote não valem para o agente LLM %s: "+
+				"tire-o do lote ou os parâmetros", name)
 		}
 		pairs := compat.Pairs
 		if len(request.Pairs) > 0 {
@@ -917,9 +976,10 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		command := strings.Fields(b.agents.Command(a.Kind))
 		timeframe := cmpOr(request.Timeframe, compat.Timeframe)
 		snap := backtestSnapshot{Agent: a.Name, Kind: a.Kind, Mode: a.Mode, Strategy: compat.Strategy, Pairs: pairs,
-			Timeframe: timeframe, Args: filterArgs(cfg.Args(), pairs, request.Timeframe, a.Kind == "llm"),
-			Command: command,
-			Code:    codeOf(command, b.agents.Dir), Protection: cfg.ProtectionSettings, Bridge: a.Account.BridgeURL,
+			Timeframe: timeframe,
+			Args:      withParams(filterArgs(cfg.Args(), pairs, request.Timeframe, a.Kind == "llm"), request.Params),
+			Command:   command,
+			Code:      codeOf(command, b.agents.Dir), Protection: cfg.ProtectionSettings, Bridge: a.Account.BridgeURL,
 			Assumptions: assumptions}
 		if limits := a.DailyLimitOf(); limits.Enabled && request.DailyLoss == 0 && request.DailyGain == 0 {
 			snap.Notes = append(snap.Notes, "os limites diários do agente estão na moeda da conta e não foram "+

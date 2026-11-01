@@ -1152,6 +1152,13 @@ export interface BacktestRequest {
   hours?: BacktestHours;
   llm_max_calls?: number /* int */;
   llm_max_cost?: number /* float64 */;
+  /**
+   * Params are params added to every agent of the batch, by name, eg: the
+   * entry filter, regime=trend: a param of the agent of the same name is
+   * replaced; for the agents of a strategy only (not the LLM ones), never a
+   * param a backtest sets itself (the pairs, the timeframe, the mode...).
+   */
+  params?: { [key: string]: string};
 }
 /**
  * BacktestHours are the trading hours of the runs of a batch, as the ones of
@@ -1195,6 +1202,11 @@ export interface BacktestAssumptions {
   end_policy: string;
   llm_max_calls: number /* int */;
   llm_max_cost: number /* float64 */;
+  /**
+   * Params are the params added to every agent of the batch, see
+   * BacktestRequest.
+   */
+  params?: { [key: string]: string};
 }
 /**
  * BacktestBatchInfo is a batch of backtests and its runs, see

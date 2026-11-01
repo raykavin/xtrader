@@ -162,6 +162,11 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
           ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
           : " · sem limites diários"}
         {a.hours ? ` · horário ${hoursAssumption(a.hours)}` : ""}
+        {a.params && Object.keys(a.params).length > 0
+          ? ` · parâmetros ${Object.entries(a.params)
+              .map(([name, value]) => `${name}=${value}`)
+              .join("; ")}`
+          : ""}
         {" · abertas no fim: a mercado, à parte"}
       </p>
 
