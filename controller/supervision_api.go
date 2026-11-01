@@ -708,28 +708,40 @@ func (s *Supervision) handleCloseAll(w http.ResponseWriter, r *http.Request) {
 		names = append(names, a.Name)
 	}
 	by := userOf(r.Context())
-	action := store.SupervisorAction{Source: store.SourceUser, Action: store.ActionClosePositions,
-		Reason: strings.TrimSpace(request.Reason), Category: store.CategoryRisk, Status: store.ActionExecuting,
-		RequestedBy: by, ConfirmedBy: by}
-	if action.Reason == "" {
-		action.Reason = "todas as posições zeradas e as pendentes canceladas por " + by
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = "todas as posições zeradas e as pendentes canceladas por " + by
 	}
-	if userID := userIDOf(r.Context()); userID != 0 {
-		action.UserID = &userID
+	var userID *int64
+	if id := userIDOf(r.Context()); id != 0 {
+		userID = &id
 	}
-	action.Scope, _ = json.Marshal(ui.SupervisorScope{Agents: names})
-	action.Options, _ = json.Marshal(ui.SupervisorOptions{Whole: true, CancelPending: true})
-	created, err := s.store.CreateSupervisorAction(r.Context(), action)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	status, _ := s.execute(r.Context(), created)
-	created, err = s.store.SupervisorAction(r.Context(), created.ID)
+	created, status, err := s.flattenAgents(r.Context(), names, reason, by, userID)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	log.Warnf("ui: every position of the agents closed and their pending entries canceled by %s: %s", by, status)
 	writeJSON(w, confirmResponse{Action: actionInfo(created)})
+}
+
+// flattenAgents closes every open position of the agents names and cancels
+// their pending entries, for reason, asked and confirmed by by (of userID),
+// through a close_positions recorded (see Supervision.execute), and returns
+// it as it ended, with its status: what was closed, canceled, and what
+// remains, checked on the accounts.
+func (s *Supervision) flattenAgents(ctx context.Context, names []string, reason, by string,
+	userID *int64) (store.SupervisorAction, string, error) {
+	action := store.SupervisorAction{Source: store.SourceUser, Action: store.ActionClosePositions,
+		Reason: reason, Category: store.CategoryRisk, Status: store.ActionExecuting, RequestedBy: by,
+		ConfirmedBy: by, UserID: userID}
+	action.Scope, _ = json.Marshal(ui.SupervisorScope{Agents: names})
+	action.Options, _ = json.Marshal(ui.SupervisorOptions{Whole: true, CancelPending: true})
+	created, err := s.store.CreateSupervisorAction(ctx, action)
+	if err != nil {
+		return store.SupervisorAction{}, "", err
+	}
+	status, _ := s.execute(ctx, created)
+	created, err = s.store.SupervisorAction(ctx, created.ID)
+	return created, status, err
 }

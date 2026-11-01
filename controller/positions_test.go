@@ -55,8 +55,10 @@ type fakeBridge struct {
 	allowReal     bool
 	readOnly      bool
 	sessions      []map[string]any
+	instance      string // of its terminal, told by GET /session
 	noSession     bool
-	sessionStatus int // answered to POST /session instead, when set
+	sessionStatus int  // answered to POST /session instead, when set
+	sessionOnce   bool // sessionStatus answered once only
 }
 
 func newFakeBridge(t *testing.T, token string, login int64, currency string) *fakeBridge {
@@ -97,6 +99,9 @@ func newFakeBridge(t *testing.T, token string, login int64, currency string) *fa
 			b.sessions = append(b.sessions, trade)
 			if b.sessionStatus != 0 {
 				w.WriteHeader(b.sessionStatus)
+				if b.sessionOnce {
+					b.sessionStatus = 0
+				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"error": "login: Authorization failed"})
 				break
 			}
@@ -204,7 +209,7 @@ func (b *fakeBridge) sessionAnswer() map[string]any {
 	}
 	return map[string]any{"login": b.sessionLogin, "server": b.sessionServer, "allow_real": b.allowReal,
 		"read_only": b.readOnly, "legacy": b.legacy, "connected": b.waiting == "", "logged_login": logged,
-		"waiting": b.waiting}
+		"waiting": b.waiting, "instance": b.instance}
 }
 
 // sessionsGiven returns the sessions given to the bridge.

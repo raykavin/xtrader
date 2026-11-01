@@ -680,3 +680,42 @@ func TestManager_StartedAgainWithTheSecretsOfNow(t *testing.T) {
 	assert.Equal(t, "mcp-shared", cfg.News.Token)
 	assert.False(t, c.manager.State("llm").RestartPending)
 }
+
+// An agent of an account of MT5 inactive, or whose terminal switches account,
+// is stopped and not launched, told why: launched again once its account is
+// the active one, the switch done.
+func TestManager_AgentHeldByItsMT5Account(t *testing.T) {
+	c := newManaged(t)
+	ctx := context.Background()
+	trend := c.agent(t, "matrend", "trend", true)
+	account, err := c.store.CreateMT5Account(ctx, store.MT5AccountInput{Name: ptrTo("Real"),
+		Login: ptrTo(int64(478378599)), Server: ptrTo("Exness-MT5Real11"),
+		BridgeURL: ptrTo("http://127.0.0.1:18812")}, true, "", store.MT5Change{By: "test"})
+	require.NoError(t, err)
+	require.NoError(t, c.store.SetAgentMT5Account(ctx, trend.ID, &account.ID, store.MT5Change{By: "test"}))
+	running := func(want bool) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			_ = c.manager.Reconcile(ctx)
+			return c.manager.supervisor.Running("matrend") == want
+		}, 5*time.Second, 20*time.Millisecond)
+	}
+
+	running(true)
+	_, err = c.store.ActivateMT5Account(ctx, account.ID, false, store.MT5Change{By: "test"})
+	require.NoError(t, err)
+	running(false)
+	assert.Contains(t, c.manager.State("matrend").LaunchError, "está inativa")
+
+	_, err = c.store.ActivateMT5Account(ctx, account.ID, true, store.MT5Change{By: "test"})
+	require.NoError(t, err)
+	running(true)
+	assert.Empty(t, c.manager.State("matrend").LaunchError)
+
+	release := c.dashboard.settings.mt5.hold([]string{"matrend"})
+	running(false)
+	assert.Contains(t, c.manager.State("matrend").LaunchError, "trocando de conta")
+	release()
+	running(true)
+	assert.Empty(t, c.manager.State("matrend").LaunchError)
+}

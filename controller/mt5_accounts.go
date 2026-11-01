@@ -26,6 +26,8 @@ import (
 var (
 	mt5ReconcileEvery = 30 * time.Second // between two looks at the terminals of the accounts active
 	mt5SessionTimeout = 2 * time.Minute  // a bridge has to log its terminal in an account
+	mt5StopTimeout    = 90 * time.Second // the agents of a terminal have to stop, its account switched
+	mt5StopPoll       = 300 * time.Millisecond
 )
 
 // mt5Accounts manages the accounts of MetaTrader 5 (Configurações > Contas
@@ -43,15 +45,23 @@ type mt5Accounts struct {
 	// answer in its place
 	stateOf func(name string) AgentState
 
-	mu       sync.Mutex
-	sessions map[int64]ui.MT5SessionStatus // by account
-	running  sync.Mutex                    // a reconciliation at a time
+	// supervision closes the positions and cancels the pending orders of the
+	// agents of an account leaving its terminal, see switchAccount
+	supervision *Supervision
+	switching   sync.Mutex // a switch of the account of a terminal at a time
+
+	mu        sync.Mutex
+	sessions  map[int64]ui.MT5SessionStatus // by account
+	instances map[string]string             // the instance each bridge told, by its key (see store.MT5Account)
+	held      map[string]int                // the agents kept stopped while their terminal switches, by name
+	running   sync.Mutex                    // a reconciliation at a time
 }
 
 func newMT5Accounts(s *store.Store, manager *Manager, positions *openPositions) *mt5Accounts {
 	m := &mt5Accounts{store: s, manager: manager, positions: positions,
 		client: &http.Client{Timeout: mt5SessionTimeout}, reads: &http.Client{Timeout: 10 * time.Second},
-		now: time.Now, sessions: make(map[int64]ui.MT5SessionStatus)}
+		now: time.Now, sessions: make(map[int64]ui.MT5SessionStatus), instances: make(map[string]string),
+		held: make(map[string]int)}
 	m.stateOf = func(name string) AgentState {
 		if m.manager == nil {
 			return AgentState{}
@@ -75,6 +85,7 @@ type bridgeSession struct {
 	Connected   bool   `json:"connected"`
 	LoggedLogin int64  `json:"logged_login"`
 	Waiting     string `json:"waiting"`
+	Instance    string `json:"instance"` // of its terminal, see the instance of ui.MT5AccountInfo
 }
 
 // bridgeAccountInfo is what GET /account of a bridge tells of its account.
@@ -189,9 +200,37 @@ func (m *mt5Accounts) status(ctx context.Context, account store.MT5Account) (ui.
 		status.Reachable, status.Connected, status.LoggedLogin = true, session.Connected, session.LoggedLogin
 		status.Waiting = session.Waiting
 		status.Current = session.Connected && session.LoggedLogin == account.Login
+		m.noteInstance(account.BridgeKey, session.Instance)
 	}
 	m.keep(account.ID, status)
 	return status, session
+}
+
+// noteInstance keeps the instance the bridge of key told, if any.
+func (m *mt5Accounts) noteInstance(key, instance string) {
+	if instance == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instances[key] = instance
+}
+
+// instanceOf reads the instance of the terminal of account now.
+func (m *mt5Accounts) instanceOf(ctx context.Context, account store.MT5Account) (string, error) {
+	var session bridgeSession
+	if err := m.get(ctx, account, "/session", &session); err != nil {
+		return "", err
+	}
+	m.noteInstance(account.BridgeKey, session.Instance)
+	return session.Instance, nil
+}
+
+// knownInstance returns the instance the bridge of key last told, "" before.
+func (m *mt5Accounts) knownInstance(key string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instances[key]
 }
 
 func (m *mt5Accounts) keep(id int64, status ui.MT5SessionStatus) {
@@ -313,12 +352,33 @@ func (m *mt5Accounts) reconcile(ctx context.Context) {
 		log.Errorf("mt5 accounts: %v", err)
 		return
 	}
+	type read struct {
+		account store.MT5Account
+		status  ui.MT5SessionStatus
+		session bridgeSession
+	}
+	var reads []read
+	byInstance := make(map[string][]string) // the accounts active of each terminal, by its instance
 	for _, account := range accounts {
 		if !account.Active {
 			continue
 		}
 		status, session := m.status(ctx, account)
+		reads = append(reads, read{account, status, session})
+		if status.Error == "" && session.Instance != "" {
+			byInstance[session.Instance] = append(byInstance[session.Instance], account.Name)
+		}
+	}
+	for _, r := range reads {
+		account, status, session := r.account, r.status, r.session
 		if status.Error != "" { // unreachable, the token refused, or a bridge without sessions yet
+			continue
+		}
+		if names := byInstance[session.Instance]; len(names) > 1 { // two URLs of one terminal
+			others := slices.DeleteFunc(slices.Clone(names), func(name string) bool { return name == account.Name })
+			status.Error = fmt.Sprintf("o terminal desta conta é o mesmo de %s, também ativa: desative uma delas",
+				strings.Join(others, ", "))
+			m.keep(account.ID, status)
 			continue
 		}
 		same := session.Login == account.Login && strings.EqualFold(session.Server, account.Server) &&
@@ -505,7 +565,8 @@ func (m *mt5Accounts) infoOf(account store.MT5Account, agents []string) ui.MT5Ac
 		Active: account.Active, Kind: account.Kind, Currency: account.Currency, Company: account.Company,
 		CheckError: account.CheckError, PasswordSet: len(account.Password) > 0,
 		TokenSet: len(account.BridgeToken) > 0, Agents: agents, UpdatedBy: account.UpdatedBy,
-		UpdatedAt: account.UpdatedAt.Unix()}
+		UpdatedAt: account.UpdatedAt.Unix(), Terminal: account.BridgeKey,
+		Instance: m.knownInstance(account.BridgeKey)}
 	if info.Agents == nil {
 		info.Agents = []string{}
 	}
@@ -543,7 +604,9 @@ func (s *settings) mt5Routes(r chi.Router) {
 	r.Post("/settings/mt5-accounts", s.handleCreateMT5Account)
 	r.Patch("/settings/mt5-accounts/{id}", s.handleUpdateMT5Account)
 	r.Delete("/settings/mt5-accounts/{id}", s.handleDeleteMT5Account)
+	r.Get("/settings/mt5-accounts/{id}/switch", s.handleMT5Switch)
 	r.Post("/settings/mt5-accounts/{id}/activate", s.handleActivateMT5Account)
+	r.Post("/settings/mt5-accounts/{id}/deactivate", s.handleDeactivateMT5Account)
 	r.Post("/settings/mt5-accounts/{id}/test", s.handleTestMT5Account)
 	r.Get("/settings/mt5-accounts/{id}/events", s.handleMT5AccountEvents)
 }
@@ -703,42 +766,81 @@ func (s *settings) handleDeleteMT5Account(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleActivateMT5Account makes an account of MT5 the one of its terminal,
-// logged in it at once: refused (409) while the account active of the
-// terminal is in use (see mt5Accounts.inUse).
-func (s *settings) handleActivateMT5Account(w http.ResponseWriter, r *http.Request) {
+// handleMT5Switch answers what activating the account of the path
+// (?active=true) or deactivating it (?active=false) does on its terminal,
+// see ui.MT5SwitchPreview: nothing changed.
+func (s *settings) handleMT5Switch(w http.ResponseWriter, r *http.Request) {
 	account, ok := s.mt5Account(w, r)
 	if !ok {
 		return
 	}
-	if account.Active {
+	active := r.URL.Query().Get("active") != "false"
+	preview := ui.MT5SwitchPreview{Active: active, Current: []string{}, Running: []string{}, Exposure: []string{}}
+	plan, err := s.mt5.planSwitch(r.Context(), account, active)
+	if err == nil {
+		for _, leaving := range plan.leaving {
+			preview.Current = append(preview.Current, leaving.Name)
+		}
+		preview.Running = append(preview.Running, plan.running()...)
+		var open []string
+		open, err = s.mt5.exposureOf(r.Context(), plan.leaving)
+		preview.Exposure = append(preview.Exposure, open...)
+	}
+	if err != nil {
+		preview.Error = err.Error()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, preview)
+}
+
+// handleActivateMT5Account makes an account of MT5 the one of its terminal,
+// logged in it at once, see mt5Accounts.switchAccount: the agents of the
+// terminal stopped first, the positions and the pending orders of the agents
+// of the account leaving it closed and canceled once confirmed (see
+// ui.MT5SwitchRequest), then the agents of the account started.
+func (s *settings) handleActivateMT5Account(w http.ResponseWriter, r *http.Request) {
+	s.switchMT5Account(w, r, true)
+}
+
+// handleDeactivateMT5Account deactivates an account of MT5, see
+// handleActivateMT5Account: its agents stopped, their positions and pending
+// orders closed and canceled once confirmed.
+func (s *settings) handleDeactivateMT5Account(w http.ResponseWriter, r *http.Request) {
+	s.switchMT5Account(w, r, false)
+}
+
+func (s *settings) switchMT5Account(w http.ResponseWriter, r *http.Request, active bool) {
+	account, ok := s.mt5Account(w, r)
+	if !ok {
+		return
+	}
+	var request ui.MT5SwitchRequest
+	if r.ContentLength != 0 && !decode(w, r, &request) {
+		return
+	}
+	if account.Active == active {
 		s.answerMT5Account(w, r, account.ID)
 		return
 	}
-	if len(account.Password) == 0 {
+	if active && len(account.Password) == 0 {
 		writeJSONError(w, http.StatusBadRequest,
 			"defina a senha da conta antes de ativá-la: o terminal precisa dela para logar")
 		return
 	}
-	accounts, err := s.store.MT5Accounts(r.Context())
+	err := s.mt5.switchAccount(r.Context(), account, active, request.ClosePositions,
+		changeOf(r, request.Reason))
+	var refusal *switchRefusal
+	if errors.As(err, &refusal) {
+		writeJSONStatus(w, refusal.status, refusal.answer)
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	for _, other := range accounts {
-		if other.Active && other.BridgeKey == account.BridgeKey &&
-			s.refuseInUse(w, r, other, "o terminal está em uso pela conta "+other.Name) {
-			return
-		}
-	}
-	if _, err := s.store.ActivateMT5Account(r.Context(), account.ID, true, changeOf(r, "")); err != nil {
-		s.fail(w, err)
-		return
-	}
-	log.Warnf("ui: the account of MT5 %s (%d) activated on %s by %s", account.Name, account.Login,
+	word := map[bool]string{true: "activated", false: "deactivated"}[active]
+	log.Warnf("ui: the account of MT5 %s (%d) %s on %s by %s", account.Name, account.Login, word,
 		account.BridgeURL, userOf(r.Context()))
-	s.mt5.reconcile(context.WithoutCancel(r.Context()))
-	s.manager.Trigger()
 	s.answerMT5Account(w, r, account.ID)
 }
 
