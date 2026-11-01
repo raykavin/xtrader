@@ -130,6 +130,49 @@ func TestMT5Accounts_ImportAndSettings(t *testing.T) {
 	}
 }
 
+// The terminal of the account active restarted, logged in none and asking for
+// its password, is given it again under its agents running: logging in the
+// same account again isn't switching it; without the password, told so.
+func TestMT5Accounts_PasswordAgainUnderAgents(t *testing.T) {
+	s := newMT5Supervised(t)
+	ctx := context.Background()
+	s.liveAgent(t, "trend", 101, true)
+	call, _ := settingsSession(t, s.managed)
+	s.dashboard.PrepareMT5Accounts(ctx)
+	given := len(s.bridge.sessionsGiven())
+	restarted := func() {
+		s.bridge.mu.Lock()
+		s.bridge.legacy, s.bridge.waiting = false, "password"
+		s.bridge.mu.Unlock()
+	}
+
+	// without the password: nothing given, told so
+	restarted()
+	s.dashboard.settings.mt5.reconcile(ctx)
+	assert.Len(t, s.bridge.sessionsGiven(), given)
+	account := listMT5Accounts(t, call).Accounts[0]
+	require.NotNil(t, account.Session)
+	assert.Contains(t, account.Session.Error, "senha")
+
+	resp, body := call(http.MethodPatch, fmt.Sprintf("/api/settings/mt5-accounts/%d", account.ID),
+		ui.MT5AccountRequest{Password: secret("pass-W0rd!")})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	s.dashboard.settings.mt5.reconcile(ctx)
+	sessions := s.bridge.sessionsGiven()
+	require.Len(t, sessions, given+1, "given again under the agent running")
+	assert.Equal(t, float64(account.Login), sessions[given]["login"])
+	assert.Equal(t, "pass-W0rd!", sessions[given]["password"])
+	account = listMT5Accounts(t, call).Accounts[0]
+	assert.True(t, account.Session.Current)
+
+	// another account on the terminal: never switched under the agent
+	s.bridge.mu.Lock()
+	s.bridge.sessionLogin, s.bridge.waiting = 5, "password"
+	s.bridge.mu.Unlock()
+	s.dashboard.settings.mt5.reconcile(ctx)
+	assert.Len(t, s.bridge.sessionsGiven(), given+1)
+}
+
 // The account of a terminal in use is never switched under its agents: the
 // change of its login, its deactivation, or another account activated on its
 // terminal refused while an agent runs on it, or holds positions or pending

@@ -195,10 +195,15 @@ func (b *fakeBridge) trade(request map[string]any) map[string]any {
 	return map[string]any{"retcode": 10013, "comment": "Invalid request"}
 }
 
-// sessionAnswer is the answer of GET /session. The caller holds b.mu.
+// sessionAnswer is the answer of GET /session, logged in none while waiting.
+// The caller holds b.mu.
 func (b *fakeBridge) sessionAnswer() map[string]any {
+	logged := b.login
+	if b.waiting != "" {
+		logged = 0
+	}
 	return map[string]any{"login": b.sessionLogin, "server": b.sessionServer, "allow_real": b.allowReal,
-		"read_only": b.readOnly, "legacy": b.legacy, "connected": b.waiting == "", "logged_login": b.login,
+		"read_only": b.readOnly, "legacy": b.legacy, "connected": b.waiting == "", "logged_login": logged,
 		"waiting": b.waiting}
 }
 

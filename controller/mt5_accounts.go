@@ -302,7 +302,8 @@ func (m *mt5Accounts) inUse(ctx context.Context, account store.MT5Account) (stri
 
 // reconcile logs the terminal of each account active in it when it isn't, or
 // gives the bridge its switches (allow_real, read_only) when they differ: only
-// with no agent running on its terminal for a change of account; one at a
+// with no agent running on its terminal for a change of account, never for the
+// terminal of the account logged in none (its password given again); one at a
 // time. A terminal waiting for a password the account lacks is told so.
 func (m *mt5Accounts) reconcile(ctx context.Context) {
 	m.running.Lock()
@@ -327,20 +328,27 @@ func (m *mt5Accounts) reconcile(ctx context.Context) {
 		if current {
 			continue
 		}
-		switching := !(status.Current && session.LoggedLogin == account.Login)
+		// the terminal of this account logged in none (restarted, its password
+		// asked for) is logged in it again, not switched: under agents too
+		relogin := session.Login == account.Login && strings.EqualFold(session.Server, account.Server) &&
+			session.LoggedLogin == 0
+		switching := !(status.Current && session.LoggedLogin == account.Login) && !relogin
 		if switching {
 			running, err := m.runningOn(ctx, account)
 			if err != nil || len(running) > 0 {
 				continue // never switched under agents running
 			}
 		}
-		if switching && len(account.Password) == 0 && session.Waiting == "password" {
+		if len(account.Password) == 0 && session.Waiting == "password" {
 			status.Error = "o terminal pede a senha da conta: defina-a em Configurações › Contas MT5"
 			m.keep(account.ID, status)
 			continue
 		}
 		reason := "a conta ativa do terminal"
-		if !switching {
+		switch {
+		case relogin:
+			reason = "o login de novo do terminal na conta, a senha pedida por ele"
+		case !switching:
 			reason = "as opções da conta (permitir conta real, somente leitura)"
 		}
 		_, err = m.postSession(ctx, account)
