@@ -7842,6 +7842,18 @@ h3.md-heading {
   border-top: 1px solid var(--glass-border);
 }
 
+.mt5-active {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px var(--sp-3);
+}
+
+.mt5-active .confirm {
+  justify-content: flex-start;
+}
+
 .mt5-actions {
   display: flex;
   flex-wrap: wrap;

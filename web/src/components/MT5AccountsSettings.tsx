@@ -287,6 +287,8 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<MT5AccountTest | null>(null);
+  // the switch turned, asked before: activating logs the terminal in the account
+  const [turning, setTurning] = useState<boolean | null>(null);
   const session = sessionLabel(account);
   const kind = kindLabel(account.kind);
 
@@ -319,6 +321,48 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
           </span>
         </div>
       </header>
+      <div className="mt5-active">
+        <Switch
+          label="Ativa no terminal"
+          checked={turning ?? account.active}
+          disabled={busy || turning !== null}
+          title="Ligada, o terminal desta bridge fica logado nela e os agentes dela são iniciados"
+          onChange={setTurning}
+        />
+        {turning !== null && (
+          <fieldset className="confirm" aria-label="Confirmar">
+            <span className="confirm-question">
+              {turning
+                ? `Logar o terminal desta bridge na conta ${account.login}? Só é permitido sem agentes rodando nele e sem posições abertas dos agentes.`
+                : "Desativar a conta? O terminal deixa de servi-la e os agentes dela param de ser iniciados."}
+            </span>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              onClick={() => {
+                const active = turning;
+                setTurning(null);
+                run(() =>
+                  active
+                    ? activateMT5Account(account.id)
+                    : updateMT5Account(account.id, { active: false }),
+                );
+              }}
+            >
+              Sim
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              // biome-ignore lint/a11y/noAutofocus: the switch asked from leaves, the safe answer takes its focus
+              autoFocus
+              onClick={() => setTurning(null)}
+            >
+              Não
+            </button>
+          </fieldset>
+        )}
+      </div>
       {error && <Alert tone="error">{error}</Alert>}
       {test && <TestResult test={test} />}
       {editing ? (
@@ -403,31 +447,16 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
             >
               <Icon name="edit" size={14} /> Editar
             </button>
-            {account.active ? (
+            {!account.active && (
               <ConfirmButton
-                label="Desativar"
-                question="Desativar a conta? O terminal deixa de servi-la e os agentes dela param de ser iniciados."
-                disabled={busy}
-                onConfirm={() => run(() => updateMT5Account(account.id, { active: false }))}
+                label="Excluir"
+                question="Excluir a conta? O histórico dela é mantido."
+                disabled={busy || account.agents.length > 0}
+                title={
+                  account.agents.length > 0 ? "Associe os agentes a outra conta antes" : undefined
+                }
+                onConfirm={() => run(() => deleteMT5Account(account.id))}
               />
-            ) : (
-              <>
-                <ConfirmButton
-                  label="Ativar no terminal"
-                  question={`Logar o terminal desta bridge na conta ${account.login}? Só é permitido sem agentes rodando nele e sem posições abertas dos agentes.`}
-                  disabled={busy}
-                  onConfirm={() => run(() => activateMT5Account(account.id))}
-                />
-                <ConfirmButton
-                  label="Excluir"
-                  question="Excluir a conta? O histórico dela é mantido."
-                  disabled={busy || account.agents.length > 0}
-                  title={
-                    account.agents.length > 0 ? "Associe os agentes a outra conta antes" : undefined
-                  }
-                  onConfirm={() => run(() => deleteMT5Account(account.id))}
-                />
-              </>
             )}
           </div>
         </>
