@@ -16,6 +16,10 @@ interface Props {
   step?: boolean;
   /** Whether 0 is marked by a dashed line, when within the values. */
   zero?: boolean;
+  /** A point after the last one drawn apart, dashed to a dot: eg, the closed profit plus the one open now. */
+  live?: Point;
+  /** CSS color of the live point, else the one of the line. */
+  liveColor?: string;
 }
 
 /** Downsamples to at most `max` points, keeping the first and last. */
@@ -41,6 +45,8 @@ export function Sparkline({
   domain,
   step = false,
   zero = false,
+  live,
+  liveColor,
 }: Props) {
   const id = useId();
   const data = sample(points, 160);
@@ -48,7 +54,7 @@ export function Sparkline({
 
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
-  for (const p of data) {
+  for (const p of live ? [...data, live] : data) {
     if (p.value < min) min = p.value;
     if (p.value > max) max = p.value;
   }
@@ -75,6 +81,8 @@ export function Sparkline({
   const first = coords[0]?.[0] ?? 0;
   const last = coords[coords.length - 1]?.[0] ?? width;
   const area = `${line} L${last.toFixed(1)} ${height} L${first.toFixed(1)} ${height} Z`;
+  const tail = coords[coords.length - 1];
+  const tip = live ? ([xOf(live, data.length - 1), yOf(live.value)] as const) : undefined;
 
   return (
     <svg
@@ -114,6 +122,28 @@ export function Sparkline({
         strokeWidth="1.5"
         vectorEffect="non-scaling-stroke"
       />
+      {tip && tail && (
+        <>
+          <path
+            className="sparkline-live"
+            d={`M${tail[0].toFixed(1)} ${tail[1].toFixed(1)} L${tip[0].toFixed(1)} ${tip[1].toFixed(1)}`}
+            fill="none"
+            stroke={liveColor ?? color}
+            strokeWidth="1.5"
+            strokeDasharray="4 3"
+            vectorEffect="non-scaling-stroke"
+          />
+          {/* a dot that stays round in the stretched box: a stroke of no length, round */}
+          <path
+            className="sparkline-live-dot"
+            d={`M${tip[0].toFixed(1)} ${tip[1].toFixed(1)} l0 0`}
+            stroke={liveColor ?? color}
+            strokeWidth="6"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </>
+      )}
     </svg>
   );
 }

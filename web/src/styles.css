@@ -3219,6 +3219,47 @@ fieldset.seg {
   font-size: 10.5px;
 }
 
+/* the closed total plus the profit open now, the end of the line, dashed */
+.openpl-chart-live {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.openpl-chart-live strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.openpl-chart-live strong.pos {
+  color: var(--pos);
+}
+
+.openpl-chart-live strong.neg {
+  color: var(--neg);
+}
+
+.openpl-chart-live-key {
+  align-self: center;
+  width: 12px;
+  border-top: 1.5px dashed currentColor;
+}
+
+.openpl-chart-live-parts {
+  color: var(--text-3);
+}
+
+@media (max-width: 520px) {
+  .openpl-chart-live-parts {
+    display: none;
+  }
+}
+
 .openpl-chart-axis {
   display: flex;
   justify-content: space-between;

@@ -182,6 +182,10 @@ export interface ClosedChart {
   exits: number;
   /** The total of the currency, the last running total. */
   total: number;
+  /** The profit open now in the currency, with open positions in a range not over. */
+  open?: number;
+  /** The closed total plus the profit open, at now: where the line goes if the positions closed now. */
+  live?: Point;
 }
 
 /**
@@ -189,10 +193,20 @@ export interface ClosedChart {
  * (see ClosedProfitResponse), as the chart of the card draws it: from 0 at the
  * start of its range, the running total after each exit, held until now (at
  * now, in Unix seconds) or the end of the range; none for a currency without
- * an exit.
+ * an exit. With the profit open now of each currency (open, the totals of the
+ * open positions) and the range not over, the chart of a currency with
+ * positions open also ends at now on the closed total plus that profit (live),
+ * in real time as the open positions are read again: a currency open without
+ * an exit yet gets a chart of its own, its closed total 0.
  */
-export function closedCharts(read: ClosedProfitResponse, now: number): ClosedChart[] {
+export function closedCharts(
+  read: ClosedProfitResponse,
+  now: number,
+  open?: CurrencyAmount[],
+): ClosedChart[] {
   const charts: ClosedChart[] = [];
+  const ongoing = now < read.to;
+  const opened = new Map((ongoing ? (open ?? []) : []).map((a) => [a.currency, a.amount]));
   for (const series of read.series ?? []) {
     const last = series.points[series.points.length - 1];
     if (!last) continue;
@@ -200,11 +214,32 @@ export function closedCharts(read: ClosedProfitResponse, now: number): ClosedCha
     for (const point of series.points) points.push({ time: point.at, value: point.amount });
     const end = Math.max(Math.min(now, read.to), last.at);
     if (end > last.at) points.push({ time: end, value: last.amount });
-    charts.push({
+    const chart: ClosedChart = {
       currency: series.currency,
       points,
       exits: series.points.length,
       total: last.amount,
+    };
+    const amount = opened.get(series.currency);
+    if (amount !== undefined) {
+      chart.open = amount;
+      chart.live = { time: Math.max(now, last.at), value: last.amount + amount };
+      opened.delete(series.currency);
+    }
+    charts.push(chart);
+  }
+  for (const [currency, amount] of opened) {
+    if (now <= read.from) continue;
+    charts.push({
+      currency,
+      points: [
+        { time: read.from, value: 0 },
+        { time: now, value: 0 },
+      ],
+      exits: 0,
+      total: 0,
+      open: amount,
+      live: { time: now, value: amount },
     });
   }
   return charts;
