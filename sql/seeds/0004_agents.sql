@@ -9,7 +9,9 @@ SELECT pg_advisory_xact_lock(hashtext('xtrader.seeds'));
 -- the dashboard, or renamed since, see agent_former_names, included), so the
 -- seeds, run again on every migration, never overwrite an edit nor bring back
 -- an agent deleted or renamed. Each trades XAUUSDm and BTCUSDm, a lot of 0.01
--- on each. An agent finds its prompt by its name, never by an ID.
+-- on each, but the two agents of the strategy pairs, last, each on the two
+-- legs of its spread with lots of their own. An agent finds its prompt by its
+-- name, never by an ID.
 --
 -- Their secrets never go here: set the API key of the LLM and the token of
 -- the bridge (MT5_BRIDGE_TOKEN of services/mt5/.env) on the page of the
@@ -179,7 +181,8 @@ SELECT agent.id, 'openai', 'gpt-6-astra', 'high',
 FROM agent;
 
 -- The strategies of the code, an agent each, without LLM, named after its
--- strategy (matrend, fibonacci and fimathe have theirs above): the ones that
+-- strategy (matrend, fibonacci and fimathe have theirs above, pairs its two
+-- below): the ones that
 -- had a prompt for the LLM agent, and the rules of prompts of the LLM agent
 -- coded since: on the timeframe of each strategy by default, a leverage of
 -- 2000, operated from Telegram. The comment of each, the default of its
@@ -272,7 +275,20 @@ WITH strategy (name, kind, api_address, number) AS (
         -- trendpullback: the end of the pullbacks of a trend (the setup trend_pullback of the prompt default)
         ('trendpullback', 'trend', 'localhost:5638', 38),
         -- squeezebreakout: the release of a compression with the volume (the prompt breakout)
-        ('squeezebreakout', 'breakout', 'localhost:5639', 39)
+        ('squeezebreakout', 'breakout', 'localhost:5639', 39),
+        -- the strategies added since, each with its source in the README
+        -- consensus: a quorum of 3 of the rules ema200, supertrend, macdtrend, adxema and donchian firing the same side within 3 candles, none the other
+        ('consensus', 'trend', 'localhost:5640', 40),
+        -- rsi2: the RSI 2 at its extreme on the side of the SMA 200, out beyond the SMA 5 (Connors & Alvarez), daily candles
+        ('rsi2', 'momentum', 'localhost:5641', 41),
+        -- newsbreakout: the breakout of the range of the 15 minutes after the scheduled releases of high importance, the rules of orb on it
+        ('newsbreakout', 'intraday', 'localhost:5642', 42),
+        -- seasonality: the bias of the London fixes of gold and of the New York open, measured walk-forward on the last 60 days
+        ('seasonality', 'intraday', 'localhost:5643', 43),
+        -- volumeprofile: the 80% rule of the value area of the volume profile of the previous session (Steidlmayer, Dalton)
+        ('volumeprofile', 'intraday', 'localhost:5644', 44),
+        -- cmegap: the weekend gap of the CME faded back to its Friday close
+        ('cmegap', 'intraday', 'localhost:5645', 45)
 ), agent AS (
     INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
                         params, position)
@@ -287,3 +303,49 @@ WITH strategy (name, kind, api_address, number) AS (
 )
 INSERT INTO agent_accounts (agent_id, exchange, bridge_url)
 SELECT id, 'mt5', 'http://mt5:18812' FROM agent;
+
+-- pairsgold: the strategy pairs (agents/intradayagent), without LLM, on its
+-- 1h: the spread of gold (leg A, XAUUSDm, the first pair) against silver (leg
+-- B, XAGUSDm) traded back to its mean on its Z-Score (Gatev, Goetzmann and
+-- Rouwenhorst), both legs at the market, no stop loss nor take profit at the
+-- broker. The lots balance the notionals of the two legs as closely as the
+-- volume step of 0.01 lot allows, the contract sizes read from the bridge of
+-- Exness: XAUUSDm 100 oz a lot, 0.02 lot = 2 oz, about US$7.8k; XAGUSDm 5000
+-- oz a lot, 0.03 lot = 150 oz, about US$7.4k (6% apart; 0.01 against 0.02
+-- would be 26% apart). Its breakeven and trailing protection must stay off:
+-- they would move and close
+-- each leg alone, breaking the hedge. Its comment of its own, nb:pairs-gold,
+-- gives it a magic number of its own, apart from pairscrypto.
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'pairsgold', 'intraday', FALSE, 'live', 'localhost:5646', TRUE, TRUE, FALSE, TRUE,
+           '{"strategy": "pairs", "pair": "XAUUSDm;XAGUSDm", "lot": "XAUUSDm=0.02;XAGUSDm=0.03",
+             "leverage": "2000"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'pairsgold')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'pairsgold')
+    RETURNING id
+)
+INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+SELECT id, 'mt5', 'http://mt5:18812', 'nb:pairs-gold' FROM agent;
+
+-- pairscrypto: the strategy pairs as pairsgold, on bitcoin (leg A, BTCUSDm)
+-- against ether (leg B, ETHUSDm). The lots balance the notionals of the two
+-- legs, the contract sizes read from the bridge of Exness: BTCUSDm 1 coin a
+-- lot, 0.01 lot about US$780; ETHUSDm 1 coin a lot, its min volume 0.1, 0.34
+-- lot about US$770. Its protection must stay off, as for pairsgold. Its comment
+-- of its own, nb:pairs-crypto, gives it a magic number of its own.
+WITH agent AS (
+    INSERT INTO agents (name, kind, enabled, mode, api_address, launched, restart, trade_panel, telegram_control,
+                        params, position)
+    SELECT 'pairscrypto', 'intraday', FALSE, 'live', 'localhost:5647', TRUE, TRUE, FALSE, TRUE,
+           '{"strategy": "pairs", "pair": "BTCUSDm;ETHUSDm", "lot": "BTCUSDm=0.01;ETHUSDm=0.34",
+             "leverage": "2000"}'::jsonb,
+           (SELECT COALESCE(MAX(position) + 1, 0) FROM agents WHERE deleted_at IS NULL)
+    WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'pairscrypto')
+      AND NOT EXISTS (SELECT 1 FROM agent_former_names WHERE name = 'pairscrypto')
+    RETURNING id
+)
+INSERT INTO agent_accounts (agent_id, exchange, bridge_url, comment)
+SELECT id, 'mt5', 'http://mt5:18812', 'nb:pairs-crypto' FROM agent;
