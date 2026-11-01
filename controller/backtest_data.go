@@ -65,14 +65,17 @@ type bridgeRate struct {
 }
 
 // bridgeSymbol is what GET /symbol of the bridge tells of a symbol for a
-// backtest: its point, its volume step and least volume, in lots, and its
-// contract size (the units of a lot).
+// backtest: its point, its volume step and least volume, in lots, its
+// contract size (the units of a lot), and its base and profit currencies (the
+// ones of the economic calendar of the pair).
 type bridgeSymbol struct {
-	Point        float64 `json:"point"`
-	VolumeStep   float64 `json:"volume_step"`
-	VolumeMin    float64 `json:"volume_min"`
-	ContractSize float64 `json:"trade_contract_size"`
-	Digits       int     `json:"digits"`
+	Point          float64 `json:"point"`
+	VolumeStep     float64 `json:"volume_step"`
+	VolumeMin      float64 `json:"volume_min"`
+	ContractSize   float64 `json:"trade_contract_size"`
+	Digits         int     `json:"digits"`
+	CurrencyBase   string  `json:"currency_base"`
+	CurrencyProfit string  `json:"currency_profit"`
 }
 
 // candleData is the candles of a pair a backtest reads: the file, its

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/raykavin/xtrader"
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/service"
@@ -493,4 +494,128 @@ func TestRun_WarmupInTheTimeframeOfTheStrategy(t *testing.T) {
 	for _, w := range warnings(5) {
 		assert.NotContains(t, w, "aquecimento incompleto")
 	}
+}
+
+// A reference symbol of the config (eg: the one of an intermarket filter) is
+// loaded in the feed, never subscribed nor traded: the strategy reads it
+// through the source of Hooks.Candles, the candles closed by the candle
+// processed only, the same as the feed answers; the report keeps the
+// references, never the releases of the config.
+func TestRun_AReferenceReadNeverTraded(t *testing.T) {
+	bars := make([]bar, 90)
+	refs := make([]bar, 90)
+	for i := range bars {
+		p := 100 + float64(i%7)
+		bars[i] = bar{p, p + 0.5, p - 0.5, p, 0}
+		r := 50 + float64(i)
+		refs[i] = bar{r, r, r, r, 0}
+	}
+	cfg := config(t, len(bars))
+	cfg.From = start.Add(30 * time.Minute).Unix()
+	cfg.References = map[string]string{"DXYm": writeBars(t, refs)}
+	cfg.Releases = map[string][]agentapi.BacktestRelease{testPair: {{Time: start.Unix(), Currency: "USD",
+		Code: "cpi", Importance: 3, Timed: true}}}
+	var source CandleSource
+	var reads, mismatches int
+	var ahead []string
+	s := &script{timeframe: "5m", warmup: 2}
+	s.onCandle = func(df *model.Dataframe, broker service.Broker) {
+		at := df.Time[len(df.Time)-1]
+		for _, tf := range []string{"1m", "5m", "15m"} {
+			got, err := source.CandlesByLimit(context.Background(), "DXYm", tf, 3)
+			want, wantErr := s.feed.CandlesByLimit(context.Background(), "DXYm", tf, 3)
+			if (err == nil) != (wantErr == nil) || fmt.Sprint(got) != fmt.Sprint(want) {
+				mismatches++
+			}
+			if err != nil {
+				continue
+			}
+			reads++
+			length, _ := time.ParseDuration(tf)
+			for _, c := range got {
+				if c.Time.Add(length).After(at.Add(5 * time.Minute)) {
+					ahead = append(ahead, c.Time.String())
+				}
+			}
+			if tf == "5m" && got[2].Time != at {
+				mismatches++ // the candle of the reference closed with the one processed
+			}
+		}
+		if len(df.Time) == 10 {
+			_, err := broker.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+			s.fail(err)
+		}
+	}
+	report := runScript(t, context.Background(), s, bars, cfg, Hooks{Candles: func(c CandleSource) { source = c }})
+	require.Equal(t, StatusSucceeded, report.Status, report.Error)
+	assert.Positive(t, reads)
+	assert.Zero(t, mismatches, "as the feed answers")
+	assert.Empty(t, ahead, "never a candle closed after the one processed")
+	assert.Equal(t, []string{testPair}, report.Pairs)
+	for _, trade := range report.Trades {
+		assert.Equal(t, testPair, trade.Pair, "the reference never traded")
+	}
+	for _, open := range report.Open {
+		assert.Equal(t, testPair, open.Pair, "the reference never traded")
+	}
+	assert.Equal(t, cfg.References, report.Assumptions.References)
+	assert.Nil(t, report.Assumptions.Releases, "the releases left out of the report")
+	assert.Empty(t, s.errs)
+}
+
+// A reference file of 1m missing the last minute of an hour (03:59): the
+// resample of the feed never completes that hour and merges the next one into
+// it, kept at 03:00 with the close of 04:59, which the feed answers as soon as
+// 03:00 closed; the source of Hooks.Candles never answers it, on the timeframe
+// resampled at once nor on another, every candle it answers ending by the
+// simulated now.
+func TestRun_AReferenceCandleMergedWithTheNextNeverAnswered(t *testing.T) {
+	const minutes = 300
+	var b strings.Builder
+	b.WriteString("time,open,close,low,high,volume\n")
+	for i := range minutes {
+		if i == 59 {
+			continue // 03:59 missing
+		}
+		price := 1000 + float64(i) // the close tells the minute it is of
+		fmt.Fprintf(&b, "%d,%g,%g,%g,%g,1\n", start.Add(time.Duration(i)*time.Minute).Unix(), price, price, price,
+			price)
+	}
+	reference := filepath.Join(t.TempDir(), "dxy.csv")
+	require.NoError(t, os.WriteFile(reference, []byte(b.String()), 0o600))
+
+	cfg := config(t, minutes)
+	cfg.References = map[string]string{"DXYm": reference}
+	var source CandleSource
+	var reads, feedAhead int
+	var ahead []string
+	s := &script{timeframe: "1h"}
+	s.onCandle = func(df *model.Dataframe, broker service.Broker) {
+		now := s.feed.Now()
+		known := 1000 + now.Sub(start).Minutes() - 1 // the close of the last minute closed by now
+		for _, tf := range []string{"1h", "30m"} {
+			length, _ := time.ParseDuration(tf)
+			if candles, err := s.feed.CandlesByLimit(context.Background(), "DXYm", tf, 1); err == nil &&
+				candles[0].Close > known {
+				feedAhead++
+			}
+			got, err := source.CandlesByLimit(context.Background(), "DXYm", tf, 1)
+			if err != nil {
+				continue
+			}
+			reads++
+			for _, c := range got {
+				if c.Close > known || !c.UpdatedAt.Before(c.Time.Add(length)) {
+					ahead = append(ahead, fmt.Sprintf("%s %s: close %g at %s", tf, c.Time.Format("15:04"), c.Close,
+						now.Format("15:04")))
+				}
+			}
+		}
+	}
+	report := runScript(t, context.Background(), s, flat(minutes, 100), cfg,
+		Hooks{Candles: func(c CandleSource) { source = c }})
+	require.Equal(t, StatusSucceeded, report.Status, report.Error)
+	assert.Positive(t, feedAhead, "the feed of the core answers the merged candle")
+	assert.Positive(t, reads, "the candles after the gap answered")
+	assert.Empty(t, ahead, "never a candle holding data of after the simulated now")
 }

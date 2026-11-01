@@ -23,7 +23,9 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/agents/llm"
 	"github.com/raykavin/xtrader/config"
+	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
@@ -39,6 +41,7 @@ const (
 	backtestWarmupCap     = 365 * 24 * time.Hour // the most read before the period for the warmup of a strategy
 	backtestWarmupProbe   = 2 * time.Minute      // the agent has to tell the warmup of its strategy
 	backtestBatchesShown  = 30
+	backtestReleasesRead  = 5 * time.Minute // the releases of the calendar of a run may take, a call a day
 )
 
 // backtestFlagsDropped are the flags of an agent a backtest never passes:
@@ -116,10 +119,11 @@ type Backtests struct {
 	candles *candleCache
 	wake    chan struct{}
 
-	mu       sync.Mutex
-	running  map[int64]context.CancelFunc
-	canceled map[int64]bool // the runs canceled by a user, apart from a stop of the controller
-	wg       sync.WaitGroup
+	mu        sync.Mutex
+	running   map[int64]context.CancelFunc
+	canceled  map[int64]bool              // the runs canceled by a user, apart from a stop of the controller
+	calendars map[string]*llm.MCPCalendar // the calendars of the news read, by the URL of their MCP server
+	wg        sync.WaitGroup
 }
 
 // ServeBacktests serves the backtests on the dashboard, see Backtests: Run
@@ -130,7 +134,8 @@ func (d *Dashboard) ServeBacktests(s *store.Store, agents config.Agents, cfg con
 		dir = filepath.Join(agents.Dir, dir)
 	}
 	b := &Backtests{store: s, agents: agents, cfg: cfg, dir: dir, candles: newCandleCache(dir),
-		wake: make(chan struct{}, 1), running: make(map[int64]context.CancelFunc), canceled: make(map[int64]bool)}
+		wake: make(chan struct{}, 1), running: make(map[int64]context.CancelFunc), canceled: make(map[int64]bool),
+		calendars: make(map[string]*llm.MCPCalendar)}
 	d.backtests = b
 	return b
 }
@@ -274,7 +279,7 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	warm, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, secrets))
+	warm, told, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, secrets))
 	dataFrom := run.From.Add(-warm)
 	// the finest timeframe of the period, else a coarser one when the broker
 	// keeps the finer candles of a pair for less time than the period, eg: M1
@@ -283,11 +288,13 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 	start := slices.IndexFunc(backtestTimeframes, func(tf backtestTimeframe) bool { return tf.file == file })
 	var files, contracts, warnings []string
 	var symbols map[string]agentapi.BacktestSymbol
+	var specs map[string]bridgeSymbol
 	var gaps int
 	var short string // the pair whose candles start after the period, and when, at the last timeframe tried
+	var chosen backtestTimeframe
 	for _, tf := range backtestTimeframes[start:] {
 		files, contracts, warnings, short, gaps = nil, nil, nil, "", 0
-		symbols = make(map[string]agentapi.BacktestSymbol)
+		symbols, specs = make(map[string]agentapi.BacktestSymbol), make(map[string]bridgeSymbol)
 		for _, pair := range snap.Pairs {
 			data, err := b.candles.read(ctx, snap.Bridge, secrets.BridgeToken, pair, tf.file, tf.mt5, tf.length,
 				dataFrom, run.To)
@@ -303,6 +310,7 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 			contracts = append(contracts, strconv.FormatFloat(contract, 'f', -1, 64))
 			symbols[pair] = agentapi.BacktestSymbol{Point: data.Symbol.Point,
 				VolumeStep: data.Symbol.VolumeStep * contract, VolumeMin: data.Symbol.VolumeMin * contract}
+			specs[pair] = data.Symbol
 			warnings = append(warnings, data.Gaps...)
 			gaps += len(data.Gaps)
 		}
@@ -311,19 +319,29 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 				warnings = append([]string{fmt.Sprintf("execução em %s: a corretora não tem candles de %s de todo "+
 					"o período", tf.mt5, backtestTimeframes[start].mt5)}, warnings...)
 			}
-			file = tf.file
+			file, chosen = tf.file, tf
 			break
 		}
 	}
 	if short != "" {
 		return failed("dados insuficientes: %s, depois do início do período", short)
 	}
+	references, referenceWarnings := b.referencesOf(ctx, snap, told.References, secrets.BridgeToken, chosen,
+		dataFrom, run)
+	warnings = append(warnings, referenceWarnings...)
+	var releases map[string][]agentapi.BacktestRelease
+	if told.Releases {
+		var warning string
+		releases, warning = b.releasesOf(ctx, snap.Pairs, specs, dataFrom, run.To)
+		warnings = append(warnings, warning)
+	}
 
 	a := snap.Assumptions
 	cfg := agentapi.BacktestConfig{From: run.From.Unix(), To: run.To.Unix(), Balance: a.Balance, Leverage: 1,
 		Fee: a.Fee, SlippagePoints: a.SlippagePoints, SpreadPoints: a.SpreadPoints, Conservative: a.Conservative,
 		GapFills: a.GapFills, Symbols: symbols, Protection: snap.Protection, DailyLoss: a.DailyLoss,
-		DailyGain: a.DailyGain, Hours: a.Hours, Report: filepath.Join(dir, "report.json"), Progress: true}
+		DailyGain: a.DailyGain, Hours: a.Hours, Report: filepath.Join(dir, "report.json"), Progress: true,
+		Agent: snap.Agent, Run: run.ID, Segment: run.Segment, References: references, Releases: releases}
 	var extra []string
 	if snap.LLM != nil {
 		cfg.LLMMaxCalls, cfg.LLMMaxCost = snap.LLM.MaxCalls, snap.LLM.MaxCost
@@ -404,11 +422,14 @@ func (b *Backtests) runProcess(ctx context.Context, run store.BacktestRun) (stri
 // day), the default at least (backtestWarmupCandles of the timeframe of the
 // agent, backtestWarmupMax at most), backtestWarmupCap at most; the default
 // for an LLM agent (its warmup set by its prompt, the candles it keeps) or one
-// that can't tell it, and why then.
-func (b *Backtests) warmupOf(ctx context.Context, snap backtestSnapshot, env []string) (time.Duration, string) {
+// that can't tell it, and why then. It returns what the agent told too: the
+// symbols its strategy reads but doesn't trade, and whether it trades around
+// the releases of the calendar.
+func (b *Backtests) warmupOf(ctx context.Context, snap backtestSnapshot, env []string) (time.Duration,
+	agentapi.Warmup, string) {
 	warm := min(time.Duration(backtestWarmupCandles)*timeframeLength(snap.Timeframe), backtestWarmupMax)
 	if snap.LLM != nil || len(snap.Command) == 0 {
-		return warm, ""
+		return warm, agentapi.Warmup{}, ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, backtestWarmupProbe)
 	defer cancel()
@@ -424,15 +445,132 @@ func (b *Backtests) warmupOf(ctx context.Context, snap backtestSnapshot, env []s
 	length := timeframeLength(told.Timeframe)
 	if err != nil || told.Candles <= 0 || length <= 0 {
 		log.Warnf("backtests: the warmup of %s: %v", snap.Agent, err)
-		return warm, fmt.Sprintf("o aquecimento da estratégia não pôde ser lido do agente: %s antes do período, o padrão",
-			durationText(warm))
+		return warm, agentapi.Warmup{}, fmt.Sprintf("o aquecimento da estratégia não pôde ser lido do agente: %s "+
+			"antes do período, o padrão", durationText(warm))
 	}
 	needed := time.Duration(told.Candles)*length*3/2 + 24*time.Hour
 	if needed > backtestWarmupCap {
-		return backtestWarmupCap, fmt.Sprintf("a estratégia pede %d candles de %s de aquecimento: lidos %s antes "+
-			"do período, o máximo", told.Candles, told.Timeframe, durationText(backtestWarmupCap))
+		return backtestWarmupCap, told, fmt.Sprintf("a estratégia pede %d candles de %s de aquecimento: lidos %s "+
+			"antes do período, o máximo", told.Candles, told.Timeframe, durationText(backtestWarmupCap))
 	}
-	return max(warm, needed), ""
+	return max(warm, needed), told, ""
+}
+
+// referencesOf reads the candles of the symbols the strategy of a run of snap
+// reads but doesn't trade (references, eg: the one of -intermarket-symbol) at
+// the bridge of the agent, with the same cache, timeframe (tf) and range as
+// its pairs: their files by symbol, and the warnings of the reads. A reference
+// that can't be read, or starting after the period, is a warning, not a
+// failure: the filter refuses the entries without it, as it does live.
+func (b *Backtests) referencesOf(ctx context.Context, snap backtestSnapshot, references []string, token string,
+	tf backtestTimeframe, dataFrom time.Time, run store.BacktestRun) (map[string]string, []string) {
+	var files map[string]string
+	var warnings []string
+	for _, symbol := range references {
+		if slices.Contains(snap.Pairs, symbol) {
+			continue // traded: read already
+		}
+		data, err := b.candles.read(ctx, snap.Bridge, token, symbol, tf.file, tf.mt5, tf.length, dataFrom, run.To)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("os candles da referência %s não puderam ser lidos na ponte: "+
+				"%v; sem eles, o filtro recusa as entradas", symbol, err))
+			continue
+		}
+		if data.First.After(run.From) {
+			warnings = append(warnings, fmt.Sprintf("os candles da referência %s começam em %s, depois do início "+
+				"do período: até lá, o filtro recusa as entradas", symbol, data.First.Format(time.DateOnly)))
+		}
+		warnings = append(warnings, data.Gaps...)
+		if files == nil {
+			files = make(map[string]string)
+		}
+		files[symbol] = data.File
+	}
+	return files, warnings
+}
+
+// releasesOf reads the scheduled releases of the economic calendar of the
+// pairs from from to to, from the news of the dashboard (the MCP server of its
+// URL with its token, one calendar a URL kept across the runs, so the days
+// read stay cached a day), the currencies of each pair by its symbol (its base
+// and profit currencies, else its name): their times, codes, names,
+// importance and whether timed, never a value released (the forecasts and
+// revisions came after the releases). It returns them by pair and a warning
+// telling what was read; the news off, without a server or a token, or the
+// calendar unreadable, none and why.
+func (b *Backtests) releasesOf(ctx context.Context, pairs []string, specs map[string]bridgeSymbol, from,
+	to time.Time) (map[string][]agentapi.BacktestRelease, string) {
+	none := func(why string) (map[string][]agentapi.BacktestRelease, string) {
+		return nil, "calendário econômico: " + why + "; a estratégia roda sem as divulgações"
+	}
+	news, err := newsOf(ctx, b.store)
+	switch {
+	case err != nil:
+		return none("as notícias do painel não puderam ser lidas: " + err.Error())
+	case !news.Enabled:
+		return none("as notícias estão desligadas no painel")
+	case strings.TrimSpace(news.URL) == "":
+		return none("sem o endereço do servidor MCP das notícias")
+	case strings.TrimSpace(news.Token) == "":
+		return none("sem o token do servidor MCP das notícias")
+	}
+	calendar, err := b.calendar(news.URL, news.Token)
+	if err != nil {
+		return none(err.Error())
+	}
+	read, cancel := context.WithTimeout(ctx, backtestReleasesRead)
+	defer cancel()
+	releases := make(map[string][]agentapi.BacktestRelease, len(pairs))
+	count := 0
+	for _, pair := range pairs {
+		releases[pair] = []agentapi.BacktestRelease{}
+		currencies := calendarCurrencies(pair, specs[pair])
+		if len(currencies) == 0 {
+			continue
+		}
+		events, err := calendar.Events(read, currencies, from, to)
+		if err != nil {
+			return none(fmt.Sprintf("o calendário de %s não pôde ser lido: %v", pair, err))
+		}
+		for _, e := range events {
+			releases[pair] = append(releases[pair], agentapi.BacktestRelease{Time: e.Time.Unix(),
+				Currency: e.Currency, Code: e.Code, Name: e.Name, Importance: int(e.Importance), Timed: e.Timed(),
+				Tentative: e.TimeMode == llm.TimeTentative || e.TimeMode == llm.TimeNone})
+		}
+		count += len(events)
+	}
+	return releases, fmt.Sprintf("calendário econômico: %d divulgações de %s a %s lidas das notícias do painel "+
+		"(horários e importância, sem os valores divulgados)", count, from.UTC().Format(time.DateOnly),
+		to.UTC().Format(time.DateOnly))
+}
+
+// calendar returns the calendar of the MCP server at url, with token: the one
+// kept for url (its token replaced when another), else a new one.
+func (b *Backtests) calendar(url, token string) (*llm.MCPCalendar, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if calendar, ok := b.calendars[url]; ok {
+		calendar.SetToken(token)
+		return calendar, nil
+	}
+	calendar, err := llm.NewMCPCalendar(url, token)
+	if err != nil {
+		return nil, err
+	}
+	b.calendars[url] = calendar
+	return calendar, nil
+}
+
+// calendarCurrencies returns the currencies of the economic calendar of pair,
+// as the agents read them (llm.CalendarCurrencies, eg: USD for XAUUSDm), the
+// pair registered with the currencies of its symbol, else the ones of its name.
+func calendarCurrencies(pair string, symbol bridgeSymbol) []string {
+	base, profit := symbol.CurrencyBase, symbol.CurrencyProfit
+	if base == "" || profit == "" {
+		base, profit = splitQuote(pair)
+	}
+	exchange.RegisterMT5Pair(pair, base, profit)
+	return llm.CalendarCurrencies(pair)
 }
 
 // lastLine returns the last line of out not blank, eg: the JSON a program

@@ -32,9 +32,10 @@ type historyBridge struct {
 	*httptest.Server
 	start time.Time
 
-	mu    sync.Mutex
-	paths []string
-	since map[string]time.Time // the first candle the broker keeps of a timeframe of MT5, eg: M1
+	mu      sync.Mutex
+	paths   []string
+	symbols map[string]int       // the requests of each symbol
+	since   map[string]time.Time // the first candle the broker keeps of a timeframe of MT5, eg: M1
 }
 
 // keep makes the broker keep the candles of the timeframes of MT5 since at
@@ -49,10 +50,11 @@ func (b *historyBridge) keep(at time.Time, timeframes ...string) {
 
 func newHistoryBridge(t *testing.T, start time.Time, minutes int) *historyBridge {
 	t.Helper()
-	b := &historyBridge{start: start, since: map[string]time.Time{}}
+	b := &historyBridge{start: start, since: map[string]time.Time{}, symbols: map[string]int{}}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.paths = append(b.paths, r.Method+" "+r.URL.Path)
+		b.symbols[r.URL.Query().Get("symbol")]++
 		b.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -91,6 +93,13 @@ func (b *historyBridge) requested() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.paths...)
+}
+
+// asked returns how many requests of symbol the bridge got.
+func (b *historyBridge) asked(symbol string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.symbols[symbol]
 }
 
 // newBacktested returns a controller of the tests running backtests with the
@@ -356,6 +365,11 @@ func TestBacktests_FilterArgs(t *testing.T) {
 		"-llm-higher-trend-required=true", "-llm-correlated=XAUUSDm=DXYm", "-llm-consult-interval=15m"}
 	assert.Equal(t, []string{"-llm-provider=openai", "-llm-consult-interval=15m"},
 		filterArgs(llm, []string{"XAUUSDm"}, "", true), "the context a backtest can't rebuild left out")
+	// the entry filter of the agent goes with it, its reference and its samples included
+	filters := []string{"-regime=trend", "-regime-method=adx", "-regime-max-atr-pct=90", "-equity-curve=20",
+		"-meta-model=models/gold.json", "-meta-record=samples/gold.jsonl", "-intermarket-symbol=DXYm",
+		"-intermarket-pairs=XAUUSDm"}
+	assert.Equal(t, filters, filterArgs(filters, []string{"XAUUSDm"}, "", false))
 }
 
 // The environment of a run: never a token of the controller nor of a bridge;
@@ -455,24 +469,286 @@ func TestBacktests_WarmupOfTheStrategy(t *testing.T) {
 	ctx := context.Background()
 	snap := backtestSnapshot{Agent: "trend", Kind: "trend", Pairs: []string{"XAUUSDm"}, Timeframe: "15m",
 		Command: strings.Fields(b.agents.Command("trend")), Args: []string{"-strategy=mtfema", "-lot=XAUUSDm=0.01"}}
-	warm, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, store.AgentSecretValues{}))
+	warm, told, note := b.warmupOf(ctx, snap, backtestEnv(b.agents, snap, store.AgentSecretValues{}))
 	assert.Equal(t, 8832*15*time.Minute*3/2+24*time.Hour, warm, "about 139 days")
 	assert.Empty(t, note)
+	assert.Equal(t, agentapi.Warmup{Timeframe: "15m", Candles: 8832}, told)
+
+	// the entry filter of the agent: its warmup and its reference told
+	filtered := snap
+	filtered.Args = []string{"-strategy=emacross", "-lot=XAUUSDm=0.01", "-regime=trend", "-regime-method=adx",
+		"-intermarket-symbol=DXYm"}
+	_, told, note = b.warmupOf(ctx, filtered, backtestEnv(b.agents, filtered, store.AgentSecretValues{}))
+	assert.Empty(t, note)
+	assert.Equal(t, []string{"DXYm"}, told.References)
+	assert.Equal(t, 232, told.Candles, "the strategy's, more than the filters' (the ADX 154, the reference 160)")
+	assert.False(t, told.Releases)
 
 	short := snap
 	short.Args = []string{"-strategy=emacross", "-lot=XAUUSDm=0.01"}
-	warm, _ = b.warmupOf(ctx, short, backtestEnv(b.agents, short, store.AgentSecretValues{}))
+	warm, _, _ = b.warmupOf(ctx, short, backtestEnv(b.agents, short, store.AgentSecretValues{}))
 	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm, "the default when larger")
 
 	llm := snap
 	llm.LLM = &backtestLLM{}
-	warm, note = b.warmupOf(ctx, llm, nil)
+	warm, _, note = b.warmupOf(ctx, llm, nil)
 	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm)
 	assert.Empty(t, note)
 
 	broken := snap
 	broken.Args = []string{"-strategy=nonexistent"}
-	warm, note = b.warmupOf(ctx, broken, backtestEnv(b.agents, broken, store.AgentSecretValues{}))
+	warm, _, note = b.warmupOf(ctx, broken, backtestEnv(b.agents, broken, store.AgentSecretValues{}))
 	assert.Equal(t, time.Duration(backtestWarmupCandles)*15*time.Minute, warm)
 	assert.Contains(t, note, "não pôde ser lido do agente")
+}
+
+// fakeCalendar is the MCP server of the economic calendar of a MetaTrader 5
+// terminal, for the tests: USD only, a release of the payrolls (high, exact) at
+// 12:30 and of the FOMC (medium, its time known once released) at 18:00 every
+// day, their values set (never to be carried into a backtest); every call
+// recorded.
+type fakeCalendar struct {
+	*httptest.Server
+	mu    sync.Mutex
+	calls []string
+}
+
+func newFakeCalendar(t *testing.T, token string) *fakeCalendar {
+	t.Helper()
+	f := &fakeCalendar{}
+	answer := func(w http.ResponseWriter, id int64, result any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	}
+	text := func(w http.ResponseWriter, id int64, value any) {
+		data, _ := json.Marshal(value)
+		answer(w, id, map[string]any{"isError": false, "content": []map[string]any{{"type": "text",
+			"text": string(data)}}})
+	}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var message struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch message.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "session")
+			answer(w, message.ID, map[string]any{"protocolVersion": "2025-06-18"})
+			return
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		f.mu.Lock()
+		f.calls = append(f.calls, message.Params.Name)
+		f.mu.Unlock()
+		switch message.Params.Name {
+		case "economic_calendar_list_events_by_currency":
+			if message.Params.Arguments["currency_code"] != "USD" {
+				answer(w, message.ID, map[string]any{"isError": true, "content": []map[string]any{{"type": "text",
+					"text": "unknown currency code"}}})
+				return
+			}
+			text(w, message.ID, map[string]any{"ok": true, "events": []map[string]any{
+				{"id": "1", "name": "Payrolls", "event_code": "nfp", "importance": "High importance",
+					"unit": "Thousands", "time_mode": "Source publishes an exact time of an event"},
+				{"id": "2", "name": "FOMC", "event_code": "fomc", "importance": "Medium importance",
+					"unit": "None", "time_mode": "Source publishes a day of an event rather than its exact time."},
+			}})
+		case "economic_calendar_list_values":
+			from, _ := time.Parse("2006-01-02T15:04:05", fmt.Sprint(message.Params.Arguments["datetime_from"]))
+			to, _ := time.Parse("2006-01-02T15:04:05", fmt.Sprint(message.Params.Arguments["datetime_to"]))
+			values := []map[string]any{}
+			for day := from.Truncate(24 * time.Hour); day.Before(to); day = day.Add(24 * time.Hour) {
+				for id, at := range map[string]time.Duration{"1": 12*time.Hour + 30*time.Minute, "2": 18 * time.Hour} {
+					if when := day.Add(at); !when.Before(from) && when.Before(to) {
+						values = append(values, map[string]any{"event_id": id,
+							"time": when.Format("2006-01-02T15:04:05"), "actual_value": 250.0,
+							"forecast_value": 180.0, "prev_value": 150.0})
+					}
+				}
+			}
+			text(w, message.ID, map[string]any{"ok": true, "values": values})
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(f.Close)
+	return f
+}
+
+// called returns how many calls the calendar got.
+func (f *fakeCalendar) called() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// referenceAgent writes a program of the tests standing for an agent whose
+// strategy reads DXYm and the releases of the calendar: it tells so with its
+// warmup, and its run copies the config of its backtest to copy, then writes a
+// report succeeded.
+func referenceAgent(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "referenceagent")
+	script := `#!/bin/sh
+case " $* " in *' -print-warmup '*)
+	echo '{"timeframe":"15m","candles":100,"references":["DXYm"],"releases":true}'; exit 0;; esac
+for arg in "$@"; do case "$arg" in -backtest-config=*) config="${arg#-backtest-config=}";; esac; done
+cp "$config" "$CONFIG_COPY"
+echo '{"status":"succeeded","currency":"USD","pairs":["XAUUSDm"],"timeframe":"15m","trades":[],"open":[],"equity":[],"warnings":[]}' > "$(dirname "$config")/report.json"
+`
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
+}
+
+// The run of an agent whose strategy reads a symbol it doesn't trade and the
+// releases of the calendar, as it tells with its warmup: the candles of the
+// reference read at its bridge with the same timeframe and range as the pairs,
+// their file in the config of the run; the releases of the period read from
+// the news of the dashboard (one calendar a URL, its days read once across the
+// runs), their times and importance only, never a value; the news off, a
+// warning and none.
+func TestBacktests_ReferencesAndReleases(t *testing.T) {
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -12)
+	bridge := newHistoryBridge(t, start, 12*24*60)
+	c, b := newBacktested(t, bridge, 1)
+	copied := filepath.Join(t.TempDir(), "config.json")
+	b.agents.Commands = map[string]string{"trend": referenceAgent(t)}
+	b.agents.Env = append(b.agents.Env, "CONFIG_COPY="+copied)
+	calendar := newFakeCalendar(t, "mcp-token")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := c.store.SetNews(ctx, store.NewsUpdate{Enabled: boolPtr(true), Token: secret("mcp-token"),
+		URL: secret(calendar.URL + "/mcp"), By: "test"})
+	require.NoError(t, err)
+	call, _ := settingsSession(t, c)
+	done := make(chan struct{})
+	go func() {
+		b.Run(ctx)
+		close(done)
+	}()
+	request := ui.BacktestRequest{Agents: []string{"trend"}, From: start.Add(4 * 24 * time.Hour).Unix(),
+		To: start.Add(11 * 24 * time.Hour).Unix(), Balance: 10000}
+	runOnce := func() (agentapi.BacktestConfig, agentapi.BacktestReport, store.BacktestRun) {
+		t.Helper()
+		resp, body := call(http.MethodPost, "/api/backtests", request)
+		require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+		var batch ui.BacktestBatchInfo
+		require.NoError(t, json.Unmarshal([]byte(body), &batch))
+		runs := waitRuns(t, c, batch.ID)
+		require.Len(t, runs, 1)
+		require.Equal(t, store.BacktestSucceeded, runs[0].Status, runs[0].Error)
+		data, err := os.ReadFile(copied)
+		require.NoError(t, err)
+		var cfg agentapi.BacktestConfig
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		var report agentapi.BacktestReport
+		require.NoError(t, json.Unmarshal(runs[0].Result, &report))
+		return cfg, report, runs[0]
+	}
+
+	cfg, report, run := runOnce()
+	assert.Equal(t, "trend", cfg.Agent)
+	assert.Equal(t, run.ID, cfg.Run, "the run, for the samples it records")
+	assert.Equal(t, store.SegmentFit, cfg.Segment)
+	require.Contains(t, cfg.References, "DXYm")
+	assert.Contains(t, filepath.Base(cfg.References["DXYm"]), "DXYm_1m_", "the timeframe of the pairs")
+	assert.FileExists(t, cfg.References["DXYm"])
+	assert.Positive(t, bridge.asked("DXYm"), "read at the bridge of the agent")
+	releases := cfg.Releases["XAUUSDm"]
+	require.NotEmpty(t, releases)
+	dataFrom := cfg.From - int64((250*time.Hour)/time.Second) // the default warmup of 1000 candles of 15m
+	codes := map[string]int{}
+	for _, r := range releases {
+		codes[r.Code]++
+		assert.GreaterOrEqual(t, r.Time, dataFrom, "within the candles read")
+		assert.LessOrEqual(t, r.Time, cfg.To)
+		assert.Equal(t, "USD", r.Currency)
+		switch r.Code {
+		case "nfp":
+			assert.Equal(t, [3]any{3, true, false}, [3]any{r.Importance, r.Timed, r.Tentative}, r.Name)
+		case "fomc":
+			assert.Equal(t, [3]any{2, true, true}, [3]any{r.Importance, r.Timed, r.Tentative}, r.Name)
+		}
+	}
+	assert.InDelta(t, codes["nfp"], codes["fomc"], 1, "one a day each, the edges of the range aside")
+	assert.Positive(t, codes["nfp"])
+	data, err := os.ReadFile(copied)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "250", "never a value released")
+	assert.Contains(t, strings.Join(report.Warnings, "\n"), "calendário econômico: ")
+	asked := calendar.called()
+
+	cfg, _, again := runOnce()
+	assert.Equal(t, asked, calendar.called(), "the days of the period read once across the runs, over and cached")
+	assert.Equal(t, again.ID, cfg.Run, "the run of its own")
+	assert.NotEqual(t, run.ID, again.ID)
+
+	_, err = c.store.SetNews(ctx, store.NewsUpdate{Enabled: boolPtr(false), By: "test"})
+	require.NoError(t, err)
+	cfg, report, _ = runOnce()
+	assert.Nil(t, cfg.Releases)
+	assert.Contains(t, strings.Join(report.Warnings, "\n"), "as notícias estão desligadas no painel")
+	assert.Contains(t, cfg.References, "DXYm", "the reference still read")
+
+	cancel()
+	<-done
+}
+
+// A real agent filtered by a reference it doesn't trade runs on the candles of
+// both: the reference read at the bridge, never traded, the run succeeded.
+func TestBacktests_AnAgentFilteredByAReference(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the agents")
+	}
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -12)
+	bridge := newHistoryBridge(t, start, 12*24*60)
+	c, b := newBacktested(t, bridge, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.agent(t, "filtered", "trend", true, onBridge(bridge.URL, 102, "XAUUSDm"), func(a *store.Agent) {
+		a.Params = store.Params{"pair": "XAUUSDm", "lot": "XAUUSDm=0.01", "strategy": "emapullback",
+			"timeframe": "15m", "intermarket-symbol": "DXYm", "intermarket-ema": "20", "regime": "trend"}
+	})
+	a, err := c.store.AgentByName(ctx, "filtered")
+	require.NoError(t, err)
+	require.NoError(t, c.store.SetAgentSecrets(ctx, a.ID, store.AgentSecrets{BridgeToken: secret("bridge-token")}))
+	call, _ := settingsSession(t, c)
+	done := make(chan struct{})
+	go func() {
+		b.Run(ctx)
+		close(done)
+	}()
+	request := ui.BacktestRequest{Agents: []string{"filtered"}, From: start.Add(4 * 24 * time.Hour).Unix(),
+		To: start.Add(11 * 24 * time.Hour).Unix(), Balance: 10000, SpreadPoints: 20}
+	resp, body := call(http.MethodPost, "/api/backtests", request)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
+	var batch ui.BacktestBatchInfo
+	require.NoError(t, json.Unmarshal([]byte(body), &batch))
+	runs := waitRuns(t, c, batch.ID)
+	require.Len(t, runs, 1)
+	require.Equal(t, store.BacktestSucceeded, runs[0].Status, runs[0].Error)
+	var report agentapi.BacktestReport
+	require.NoError(t, json.Unmarshal(runs[0].Result, &report))
+	assert.Contains(t, report.Assumptions.References, "DXYm")
+	assert.Equal(t, []string{"XAUUSDm"}, report.Pairs)
+	for _, trade := range report.Trades {
+		assert.Equal(t, "XAUUSDm", trade.Pair, "the reference never traded")
+	}
+	assert.Positive(t, bridge.asked("DXYm"))
+	cancel()
+	<-done
 }

@@ -15,15 +15,18 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/raykavin/xtrader"
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/internal/backtest"
+	"github.com/raykavin/xtrader/agents/internal/entryfilter"
 	"github.com/raykavin/xtrader/agents/internal/flaglist"
 	"github.com/raykavin/xtrader/agents/internal/newsguard"
 	"github.com/raykavin/xtrader/agents/internal/protect"
 	"github.com/raykavin/xtrader/agents/internal/remote"
 	"github.com/raykavin/xtrader/agents/llm"
+	"github.com/raykavin/xtrader/agents/metalabel"
 	"github.com/raykavin/xtrader/agents/strategies"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/service"
@@ -271,6 +274,8 @@ func run(agent Agent) error {
 		telegramCtl  = flag.Bool("telegram-control", false, "live: enable the Telegram controls of the controller (/start, /stop, /buy, /sell, /status, /balance)")
 		quarantine   = flag.Bool("outbox-quarantine", false, "launched by the controller: an outbox that can't be read (data/outbox/<agent>-<id>.db, eg: written over in the middle) is moved aside to <file>.corrupt-<time>, kept for a look, and the agent starts with an empty one, its records never sent to the controller (default: the agent doesn't start, telling which file)")
 	)
+	// the entry filter, shared by every strategy (see entryfilter.Config)
+	filterConfig := entryfilter.RegisterFlags(flag.CommandLine)
 	// launched by the controller, the flags and the token of its settings
 	ctx := context.Background()
 	remoteAgent, err := remote.Connect(ctx)
@@ -314,6 +319,12 @@ func run(agent Agent) error {
 		return errors.New("the controller runs the agents in paper and live modes only")
 	case *btConfig != "" && *mode != "backtest":
 		return errors.New("-backtest-config is for -mode backtest")
+	}
+	var btCfg backtest.Config
+	if *btConfig != "" {
+		if btCfg, err = backtest.ReadConfig(*btConfig); err != nil {
+			return err
+		}
 	}
 
 	// the inputs of each strategy are refused with the others
@@ -373,9 +384,31 @@ func run(agent Agent) error {
 	if err != nil {
 		return err
 	}
+	// filtered, its warmup the filters' too, before -print-warmup tells it
+	filters, err := filterConfig()
+	if err != nil {
+		return err
+	}
+	if err := checkFilter(chosen.Name, pairs, filters); err != nil {
+		return err
+	}
+	filters.Agent, filters.Strategy, filters.Source = agent.Name, chosen.Name, sampleSource(*mode)
+	switch {
+	case remoteAgent != nil:
+		filters.Agent = remoteAgent.Config.Name
+	case btCfg.Agent != "":
+		filters.Agent = btCfg.Agent
+	}
+	if *btConfig != "" {
+		filters.RecordFrom = time.Unix(btCfg.From, 0).UTC() // the samples of the period, not of its warm-up
+		filters.Run, filters.Segment = btCfg.Run, btCfg.Segment
+	}
+	if trader, err = entryfilter.Wrap(trader, filters); err != nil {
+		return err
+	}
 	if *printWarmup { // nothing connected, nothing run
 		return json.NewEncoder(os.Stdout).Encode(agentapi.Warmup{Timeframe: trader.Timeframe(),
-			Candles: trader.WarmupPeriod()})
+			Candles: trader.WarmupPeriod(), References: filters.References(), Releases: usesReleases(trader)})
 	}
 
 	settings := xtrader.Settings{
@@ -424,23 +457,152 @@ func run(agent Agent) error {
 			}
 		}
 		if *btConfig != "" {
-			cfg, err := backtest.ReadConfig(*btConfig)
-			if err != nil {
+			if err := checkInSample(filters.MetaModel, btCfg); err != nil {
 				return err
 			}
+			cfg := btCfg
 			cfg.Leverage = max(*leverage, 1) // the margin of the leverage the strategy sizes with
+			hooks := backtestHooks(trader, cfg)
+			if chosen.Name == pairsStrategy {
+				cfg, hooks = withoutProtection(cfg, hooks)
+			}
 			// canceled by the controller: the report of what ran, then the exit
 			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return backtest.Run(ctx, settings, trader, list(*csvFiles), *csvTimeframe, cfg, backtest.Hooks{})
+			return backtest.Run(ctx, settings, trader, list(*csvFiles), *csvTimeframe, cfg, hooks)
+		}
+		if len(filters.References()) > 0 {
+			return errors.New("-intermarket-symbol reads the candles of its reference as the strategy runs, which " +
+				"a backtest of -csv files can't without looking ahead: run it through -backtest-config (the " +
+				"backtests of the controller), or in paper mode")
+		}
+		if usesReleases(trader) {
+			return fmt.Errorf("-strategy %s trades around the releases of the economic calendar, which a backtest "+
+				"of -csv files doesn't have: they come only in the backtests of the controller (-backtest-config), "+
+				"and in paper and live modes launched by the controller, from the news of its dashboard; here it "+
+				"would never enter", chosen.Name)
 		}
 		return backtestRun(ctx, settings, trader, dash, list(*csvFiles), *csvTimeframe, *fee)
 	case "paper":
-		return paper(ctx, settings, trader, dash, venue, *fee, remoteAgent)
+		return paper(ctx, settings, trader, chosen.Name, dash, venue, *fee, remoteAgent)
 	case "live":
-		return live(ctx, settings, trader, dash, venue, remoteAgent)
+		return live(ctx, settings, trader, chosen.Name, dash, venue, remoteAgent)
 	}
 	return fmt.Errorf("invalid mode %q: backtest, paper or live (a real account needs -mt5-live)", *mode)
+}
+
+// backtestHooks returns the hooks of a backtest of s as the controller asks for
+// it (see backtest.Run): the candles of the symbols it reads but doesn't trade
+// (the references of cfg, closed by the simulated now only), and the releases
+// of the calendar of cfg on the clock of the run, when it reads them; none
+// read by the controller (the news off or unreadable), it waits for them.
+func backtestHooks(s strategy.Strategy, cfg backtest.Config) backtest.Hooks {
+	return backtest.Hooks{
+		Candles: func(source backtest.CandleSource) { giveCandles(s, source) },
+		Prepare: func(feed *exchange.BacktestFeed) {
+			if cfg.Releases != nil {
+				giveReleases(s, backtestReleases{byPair: cfg.Releases, now: feed.Now})
+			}
+		},
+	}
+}
+
+// pairsStrategy is the strategy of intradayagent trading the spread of two
+// cointegrated legs (strategies.Pairs): its legs, a pair each, are one
+// position, opened and closed together at the market, without a stop loss of
+// their own.
+const pairsStrategy = "pairs"
+
+// checkFilter fails on an entry filter (see entryfilter.Config) the strategy
+// name can't take on pairs, the pairs of the agent: any for the pairs
+// strategy, which the filter would judge leg by leg, as two strategies (the
+// intermarket filter would refuse every entry of its second leg, the strategy
+// then opening the first and closing it alone on every signal; the equity
+// curve and the samples would follow a leg apart from the other); and a pair
+// of -intermarket-pairs not in pairs, a typo filtering none of them.
+func checkFilter(name string, pairs []string, filters entryfilter.Config) error {
+	if name == pairsStrategy && filters.Enabled() {
+		return errors.New("-strategy pairs trades two legs as one position, which the entry filter can't judge: " +
+			"it would judge each leg apart (eg: the intermarket filter refusing every entry of the second leg, " +
+			"the first opened and closed alone on every signal): run it without -regime, -regime-max-atr-pct, " +
+			"-equity-curve, -meta-model, -meta-record and -intermarket-symbol")
+	}
+	for _, pair := range filters.IntermarketPairs {
+		if !slices.Contains(pairs, pair) {
+			return fmt.Errorf("-intermarket-pairs: %q isn't a pair of -pair (%s): the filter would filter none of "+
+				"the pairs it names", pair, strings.Join(pairs, ";"))
+		}
+	}
+	return nil
+}
+
+// sampleSource returns where the samples of the entry filter are recorded in
+// mode (see metalabel.Sample.Source): live, paper, else a backtest.
+func sampleSource(mode string) string {
+	switch mode {
+	case "live":
+		return metalabel.SourceLive
+	case "paper":
+		return metalabel.SourcePaper
+	}
+	return metalabel.SourceBacktest
+}
+
+// checkInSample fails a backtest of cfg whose entries the model of path
+// (-meta-model, "" for none) filters, on a period starting before the newest
+// outcome the model learned (metalabel.Model.TrainedThrough): the model would
+// judge the entries it was trained on, in-sample, and the backtest tell
+// nothing of how it does on entries it never saw. A model written before it
+// kept that time passes.
+func checkInSample(path string, cfg backtest.Config) error {
+	if path == "" {
+		return nil
+	}
+	model, err := metalabel.Load(path)
+	if err != nil {
+		return fmt.Errorf("-meta-model: %w", err)
+	}
+	if cfg.From < model.TrainedThrough {
+		through := time.Unix(model.TrainedThrough, 0).UTC().Format(time.RFC3339)
+		return fmt.Errorf("-meta-model: the model %s learned the outcomes of entries until %s, after the start of "+
+			"the backtest (%s): the period would be in-sample, the model judging the entries it was trained on; "+
+			"backtest from %s on, or train it on the samples before the period", path, through,
+			time.Unix(cfg.From, 0).UTC().Format(time.RFC3339), through)
+	}
+	return nil
+}
+
+// withoutProtection returns cfg without the protection of the agent (the
+// breakeven and the trailing stop of the batch) and hooks with a warning of
+// the report when the batch set one: for the pairs strategy, whose legs carry
+// no stop loss, a stop of the protection on one leg closing it apart from the
+// other (see attachProtection).
+func withoutProtection(cfg backtest.Config, hooks backtest.Hooks) (backtest.Config, backtest.Hooks) {
+	if cfg.Protection != nil && cfg.Protection.Active() {
+		hooks.Warnings = append(hooks.Warnings, "a proteção do lote (breakeven e trailing stop) foi ignorada: a "+
+			"estratégia pairs opera duas pernas como uma posição, sem stop, e a proteção encerraria uma perna "+
+			"sozinha")
+	}
+	cfg.Protection = nil
+	return cfg, hooks
+}
+
+// attachProtection protects the positions of bot with the breakeven and the
+// trailing stop of the agent (see protect.Attach), but for the pairs strategy
+// (named name): its legs carry no stop loss and are one position, which a
+// stop moved on one leg alone would close apart from the other; told once, at
+// the start, the settings of the agent left unapplied. It returns the
+// protection, nil for none.
+func attachProtection(ctx context.Context, bot *xtrader.XTrader, market protect.Market, s strategy.Strategy,
+	name string, live bool, agent *remote.Agent, chart *ui.Chart) *protect.Manager {
+	if name == pairsStrategy {
+		if agent != nil {
+			log.Warnf("[SETUP] -strategy pairs: the breakeven and the trailing stop of the agent stay off, its " +
+				"legs carrying no stop loss: a stop moved on one leg would close it alone")
+		}
+		return nil
+	}
+	return protect.Attach(ctx, bot, market, s.Timeframe(), live, agent, chart)
 }
 
 // CheckInputs fails on a flag set that the strategy name of the agent doesn't
@@ -533,7 +695,7 @@ func backtestRun(ctx context.Context, settings xtrader.Settings, strategy strate
 	return nil
 }
 
-func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
+func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy, name string,
 	dash dashboard, venue venue, fee float64, agent *remote.Agent) error {
 
 	feed, err := venue.connect(ctx, settings.Pairs, false)
@@ -543,6 +705,7 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 	if err := venue.checkSizes(feed); err != nil {
 		return err
 	}
+	giveCandles(strategy, feed) // the symbols it reads but doesn't trade, from the market data of MT5
 
 	storage, err := storage.FromMemory()
 	if err != nil {
@@ -572,7 +735,7 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 		agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not
 	}
 	// the protection of its positions, the costs those of the paper wallet
-	protect.Attach(ctx, bot, wallet, strategy.Timeframe(), false, agent, chart)
+	attachProtection(ctx, bot, wallet, strategy, name, false, agent, chart)
 
 	if chart != nil {
 		chart.SetOrderController(bot.Controller()) // its orders are simulated too: every channel
@@ -585,13 +748,14 @@ func paper(ctx context.Context, settings xtrader.Settings, strategy strategy.Str
 		// the news of the dashboard: held out of the market around the releases
 		news := llm.NewNewsSwitch(newsguard.ConfigOf(agent.Config.News))
 		newsguard.Start(ctx, agent.Config, news, bot.Controller(), storage, settings.Pairs)
+		giveReleases(strategy, newsReleases{news: news}) // their calendar, for a strategy trading around them
 		apply := func(runtime agentapi.Runtime) { newsguard.Apply(news, runtime) }
 		return agent.Serve(ctx, apply, bot.Run) // the switches of the channels are the ones of the live mode
 	}
 	return bot.Run(ctx)
 }
 
-func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy,
+func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Strategy, name string,
 	dash dashboard, venue venue, agent *remote.Agent) error {
 
 	broker, err := venue.connect(ctx, settings.Pairs, true)
@@ -601,6 +765,7 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 	if err := venue.checkSizes(broker); err != nil {
 		return err
 	}
+	giveCandles(strategy, broker) // the symbols it reads but doesn't trade, from the broker
 
 	// the orders of the bot, kept by the controller
 	orders, err := agent.Orders(ctx)
@@ -620,10 +785,11 @@ func live(ctx context.Context, settings xtrader.Settings, strategy strategy.Stra
 	}
 	agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not, before it trades
 	// the protection of its positions
-	protect.Attach(ctx, bot, broker, strategy.Timeframe(), true, agent, chart)
+	attachProtection(ctx, bot, broker, strategy, name, true, agent, chart)
 	// the news of the dashboard: held out of the market around the releases
 	news := llm.NewNewsSwitch(newsguard.ConfigOf(agent.Config.News))
 	newsguard.Start(ctx, agent.Config, news, bot.Controller(), orders, settings.Pairs)
+	giveReleases(strategy, newsReleases{news: news}) // their calendar, for a strategy trading around them
 
 	apply := func(runtime agentapi.Runtime) { newsguard.Apply(news, runtime) }
 	if chart != nil {
