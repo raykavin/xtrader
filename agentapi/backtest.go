@@ -65,10 +65,46 @@ type BacktestConfig struct {
 	LLMPriceInput  float64 `json:"llm_price_input,omitempty"`
 	LLMPriceOutput float64 `json:"llm_price_output,omitempty"`
 
+	// Agent is the name of the agent backtested, for what the run records,
+	// eg: the samples of its -meta-record; "" for none. Run is the id of the
+	// run at the controller (0 for none) and Segment its segment of the
+	// period (fit or validation, "" for none), written in those samples too,
+	// so that a training tells the runs and their segments apart.
+	Agent   string `json:"agent,omitempty"`
+	Run     int64  `json:"run,omitempty"`
+	Segment string `json:"segment,omitempty"`
+	// References are the candles of the symbols the strategy reads but never
+	// trades (see Warmup.References), by symbol: a CSV of the same timeframe
+	// and period as the pairs, loaded in the feed of the run, never
+	// subscribed nor traded.
+	References map[string]string `json:"references,omitempty"`
+	// Releases are the scheduled releases of the economic calendar of the
+	// period, by pair (the ones of its currencies), for a strategy trading
+	// around them (see Warmup.Releases): their times and importance, never a
+	// value released; nil for none (the news off or unreadable).
+	Releases map[string][]BacktestRelease `json:"releases,omitempty"`
+
 	// Report is the file the report is written to; Progress prints the
 	// progress on the standard error (PROGRESS done total).
 	Report   string `json:"report"`
 	Progress bool   `json:"progress"`
+}
+
+// BacktestRelease is a scheduled release of the economic calendar a backtest
+// hands its strategy: its time (Unix seconds, UTC), the currency of the event,
+// its code (the MQL5 event_code) and name, its importance (0 none, 1 low, 2
+// medium, 3 high), and whether its time is exact (Timed: an all-day release
+// has none). Tentative tells a release whose time the calendar knows only once
+// it is released (tentative, or published without a time): the run tells it
+// untimed, at the start of its day, until then, as the calendar did live.
+type BacktestRelease struct {
+	Time       int64  `json:"time"`
+	Currency   string `json:"currency"`
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	Importance int    `json:"importance"`
+	Timed      bool   `json:"timed"`
+	Tentative  bool   `json:"tentative,omitempty"`
 }
 
 // BacktestSymbol is what a backtest knows of a symbol: the price of a point (the unit
@@ -89,10 +125,15 @@ const PrintWarmupFlag = "print-warmup"
 
 // Warmup is the warmup of the strategy of an agent, as -print-warmup prints
 // it: the candles of Timeframe its indicators need before it trades (the
-// engine hands it a candle only once it holds that many).
+// engine hands it a candle only once it holds that many); the symbols it reads
+// but never trades (References, eg: the one of -intermarket-symbol), whose
+// candles a backtest reads too; and whether it trades around the releases of
+// the economic calendar (Releases), which a backtest reads then.
 type Warmup struct {
-	Timeframe string `json:"timeframe"`
-	Candles   int    `json:"candles"`
+	Timeframe  string   `json:"timeframe"`
+	Candles    int      `json:"candles"`
+	References []string `json:"references,omitempty"`
+	Releases   bool     `json:"releases,omitempty"`
 }
 
 // ReadBacktestConfig reads the config of a backtest from path, validated.
@@ -138,6 +179,18 @@ func (c *BacktestConfig) Validate() error {
 		if !positive(s.Point) || !positive(s.VolumeStep) || !positive(s.VolumeMin) || !positive(s.SpreadPoint) {
 			return fmt.Errorf("backtest: the symbol %s: its point, volume step and least volume must be 0 or more",
 				pair)
+		}
+	}
+	for symbol, file := range c.References {
+		if symbol == "" || file == "" {
+			return errors.New("backtest: a reference: its symbol and the file of its candles")
+		}
+	}
+	for pair, releases := range c.Releases {
+		for _, r := range releases {
+			if pair == "" || r.Time <= 0 || r.Importance < 0 || r.Importance > 3 {
+				return fmt.Errorf("backtest: a release of %q: its time and an importance from 0 to 3", pair)
+			}
 		}
 	}
 	return nil

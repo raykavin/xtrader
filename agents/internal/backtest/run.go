@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"time"
@@ -26,12 +27,24 @@ const maxWarnings = 20
 
 // Hooks are what a strategy adds to its backtest: options of the bot (eg:
 // the decisions of an LLM); Prepare, told the feed before the run (eg: the
-// clock of an LLM); and Extra, the extra of the report and a status replacing
-// the one of the run (eg: StatusBudgetExhausted), "" for none.
+// clock of an LLM); Candles, told before the run what reads the candles closed
+// by the simulated now of any symbol of the run, the references included (see
+// CandleSource), eg: the reference of an intermarket filter; Extra, the
+// extra of the report and a status replacing the one of the run (eg:
+// StatusBudgetExhausted), "" for none; and Warnings, the warnings of the
+// report the agent adds, eg: a setting of the config it ignores.
 type Hooks struct {
-	Options []xtrader.Option
-	Prepare func(feed *exchange.BacktestFeed)
-	Extra   func() (json.RawMessage, string)
+	Options  []xtrader.Option
+	Prepare  func(feed *exchange.BacktestFeed)
+	Candles  func(source CandleSource)
+	Extra    func() (json.RawMessage, string)
+	Warnings []string
+}
+
+// CandleSource reads the last candles of a symbol, complete ones only: in a
+// backtest, the ones closed by its simulated now.
+type CandleSource interface {
+	CandlesByLimit(ctx context.Context, pair, period string, limit int) ([]model.Candle, error)
 }
 
 // Run runs strat over files, a CSV of the candles of each pair of settings in
@@ -48,9 +61,11 @@ func Run(ctx context.Context, settings xtrader.Settings, strat strategy.Strategy
 		fileTimeframe = strat.Timeframe()
 	}
 	_, quote := exchange.SplitAssetQuote(settings.Pairs[0])
+	assumptions := cfg
+	assumptions.Releases = nil // the data of the run, not an assumption: too many to repeat
 	report := Report{Status: StatusFailed, Currency: quote, Pairs: settings.Pairs, Timeframe: strat.Timeframe(),
-		From: cfg.From, To: cfg.To, Assumptions: cfg, Trades: []Trade{}, Open: []OpenPosition{}, Equity: []Point{},
-		Warnings: []string{}}
+		From: cfg.From, To: cfg.To, Assumptions: assumptions, Trades: []Trade{}, Open: []OpenPosition{},
+		Equity: []Point{}, Warnings: append([]string{}, hooks.Warnings...)}
 	err := run(ctx, settings, strat, files, fileTimeframe, cfg, hooks, &report)
 	switch {
 	case errors.Is(err, xtrader.ErrBacktestCanceled) || (err != nil && ctx.Err() != nil):
@@ -94,9 +109,18 @@ func run(ctx context.Context, settings xtrader.Settings, strat strategy.Strategy
 		return fmt.Errorf("backtest: the timeframe %q: %w", strat.Timeframe(), err)
 	}
 
-	feeds := make([]exchange.PairFeed, 0, len(files))
+	feeds := make([]exchange.PairFeed, 0, len(files)+len(cfg.References))
 	for i, file := range files {
 		feeds = append(feeds, exchange.PairFeed{Pair: settings.Pairs[i], File: file, Timeframe: fileTimeframe})
+	}
+	// the references, read by the strategy, never subscribed nor traded (the
+	// bot subscribes the pairs of settings only), their candles of the same
+	// timeframe as the pairs, trimmed at the end of the period with them
+	for _, symbol := range slices.Sorted(maps.Keys(cfg.References)) {
+		if slices.Contains(settings.Pairs, symbol) {
+			continue // traded: its own file already
+		}
+		feeds = append(feeds, exchange.PairFeed{Pair: symbol, File: cfg.References[symbol], Timeframe: fileTimeframe})
 	}
 	csvFeed, err := exchange.NewCSVFeed(strat.Timeframe(), feeds...)
 	if err != nil {
@@ -114,6 +138,9 @@ func run(ctx context.Context, settings xtrader.Settings, strat strategy.Strategy
 	feed := exchange.NewBacktestFeed(csvFeed)
 	if hooks.Prepare != nil {
 		hooks.Prepare(feed)
+	}
+	if hooks.Candles != nil {
+		hooks.Candles(closedCandles{feed: feed, csv: csvFeed})
 	}
 	point := func(pair string) float64 { return cfg.Symbols[pair].Point }
 	spreadPoints := func(pair string) float64 {
