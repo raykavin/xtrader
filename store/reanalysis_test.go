@@ -43,7 +43,7 @@ func TestCreateAgent_TheReanalysisOfAnLLMAgentOnly(t *testing.T) {
 
 	_, err = trend("trend-on", 5603, &AgentReanalysis{Allowed: true})
 	require.ErrorIs(t, err, ErrInvalid)
-	require.ErrorContains(t, err, "an agent of kind trend has none")
+	require.ErrorContains(t, err, "o agente trend-on é do tipo trend e não tem LLM")
 	plain, err := trend("trend-off", 5604, &AgentReanalysis{})
 	require.NoError(t, err)
 	require.False(t, plain.ReanalysisAllowed())
@@ -144,5 +144,5 @@ func TestCreateAgent_TheReanalysisIsNoParam(t *testing.T) {
 		APIAddress: "localhost:5580", Launched: true, Params: Params{"reanalysis": "true"},
 		LLM: &LLMSettings{Provider: "openai", Model: "gpt-5"}}, AgentSecrets{})
 	require.ErrorIs(t, err, ErrInvalid)
-	require.ErrorContains(t, err, "param reanalysis is a setting of its own")
+	require.ErrorContains(t, err, "o parâmetro reanalysis do agente llm tem campo próprio")
 }

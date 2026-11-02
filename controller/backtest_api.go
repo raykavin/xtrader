@@ -161,7 +161,7 @@ func (b *Backtests) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		writeJSONError(w, http.StatusConflict, "a execução já terminou")
+		writeJSONError(w, http.StatusConflict, "A execução já terminou.")
 		return
 	}
 	log.Infof("backtests: run %d canceled by %s", id, userOf(r.Context()))
@@ -187,13 +187,14 @@ func (b *Backtests) handleDelete(w http.ResponseWriter, r *http.Request) {
 func (b *Backtests) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrInvalid):
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+		writeJSONError(w, http.StatusBadRequest, userMessage(err))
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, err.Error())
+		writeJSONError(w, http.StatusNotFound, userMessage(err))
 	case errors.Is(err, store.ErrBacktestBusy):
-		writeJSONError(w, http.StatusConflict, "o lote tem execuções na fila ou em andamento: cancele-as antes")
+		writeJSONError(w, http.StatusConflict, "O lote tem execuções na fila ou em andamento: cancele-as antes.")
 	default:
 		log.Errorf("backtests: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "os backtests não puderam ser lidos agora")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler os backtests agora. "+
+			"Tente de novo em instantes.")
 	}
 }

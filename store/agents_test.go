@@ -108,89 +108,90 @@ func TestCreateAgent_RefusesTheInvalidOnes(t *testing.T) {
 		is      error
 		want    string
 	}{
-		{"taken", trend(func(a *Agent) { a.Name = "llm" }), AgentSecrets{}, ErrConflict, "already exists: agent llm"},
-		{"bad name", trend(func(a *Agent) { a.Name = "a b" }), AgentSecrets{}, ErrInvalid, "agent name"},
-		{"bad kind", trend(func(a *Agent) { a.Kind = "grid" }), AgentSecrets{}, ErrInvalid, `kind "grid"`},
-		{"bad mode", trend(func(a *Agent) { a.Mode = "backtest" }), AgentSecrets{}, ErrInvalid, "live or paper"},
+		{"taken", trend(func(a *Agent) { a.Name = "llm" }), AgentSecrets{}, ErrConflict,
+			"already exists: o agente llm já existe"},
+		{"bad name", trend(func(a *Agent) { a.Name = "a b" }), AgentSecrets{}, ErrInvalid, "nome de agente"},
+		{"bad kind", trend(func(a *Agent) { a.Kind = "grid" }), AgentSecrets{}, ErrInvalid, `o tipo "grid"`},
+		{"bad mode", trend(func(a *Agent) { a.Mode = "backtest" }), AgentSecrets{}, ErrInvalid, "use live ou paper"},
 		{"no address", trend(func(a *Agent) { a.APIAddress = " " }), AgentSecrets{}, ErrInvalid,
-			"the address of its API is required"},
+			"informe o endereço da API"},
 		{"address without a port", trend(func(a *Agent) { a.APIAddress = "localhost" }), AgentSecrets{}, ErrInvalid,
-			"host:port"},
-		{"port 0", trend(func(a *Agent) { a.APIAddress = "localhost:0" }), AgentSecrets{}, ErrInvalid, "host:port"},
+			"host:porta"},
+		{"port 0", trend(func(a *Agent) { a.APIAddress = "localhost:0" }), AgentSecrets{}, ErrInvalid, "host:porta"},
 		{"port too high", trend(func(a *Agent) { a.APIAddress = "localhost:65536" }), AgentSecrets{}, ErrInvalid,
-			"host:port"},
+			"host:porta"},
 		{"named port", trend(func(a *Agent) { a.APIAddress = "localhost:http" }), AgentSecrets{}, ErrInvalid,
-			"host:port"},
-		{"no host", trend(func(a *Agent) { a.APIAddress = ":5580" }), AgentSecrets{}, ErrInvalid, "host:port"},
+			"host:porta"},
+		{"no host", trend(func(a *Agent) { a.APIAddress = ":5580" }), AgentSecrets{}, ErrInvalid, "host:porta"},
 		{"URL", trend(func(a *Agent) { a.APIAddress = "http://localhost:5580" }), AgentSecrets{}, ErrInvalid,
-			"host:port"},
+			"host:porta"},
 		{"address taken", trend(func(a *Agent) { a.APIAddress = "LOCALHOST:5580" }), AgentSecrets{}, ErrConflict,
-			"the one of the agent llm"},
+			"já é do agente llm"},
 		{"address of the loopback taken", trend(func(a *Agent) { a.APIAddress = "127.0.0.1:5580" }), AgentSecrets{},
-			ErrConflict, "the one of the agent llm"},
+			ErrConflict, "já é do agente llm"},
 		{"address of every interface", trend(func(a *Agent) { a.APIAddress = "0.0.0.0:5580" }),
-			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+			AgentSecrets{}, ErrInvalid, "o host no loopback"},
 		{"address of every IPv6 interface", trend(func(a *Agent) { a.APIAddress = "[::]:5581" }),
-			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+			AgentSecrets{}, ErrInvalid, "o host no loopback"},
 		{"address of another machine", trend(func(a *Agent) { a.APIAddress = "10.0.0.5:5581" }),
-			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+			AgentSecrets{}, ErrInvalid, "o host no loopback"},
 		{"address of the metadata of a cloud", trend(func(a *Agent) { a.APIAddress = "169.254.169.254:80" }),
-			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+			AgentSecrets{}, ErrInvalid, "o host no loopback"},
 		{"name of another machine", trend(func(a *Agent) { a.APIAddress = "bot.lan:5581" }),
-			AgentSecrets{}, ErrInvalid, "the host on the loopback"},
+			AgentSecrets{}, ErrInvalid, "o host no loopback"},
 		{"model of another kind", trend(func(a *Agent) { a.LLM = &LLMSettings{Provider: "openai", Model: "gpt-5"} }),
-			AgentSecrets{}, ErrInvalid, "language model for an agent of kind trend"},
+			AgentSecrets{}, ErrInvalid, "é do tipo trend, que não usa LLM"},
 		{"llm without model", llm(func(a *Agent) { a.LLM = nil }), AgentSecrets{}, ErrInvalid,
-			"needs its language model"},
-		{"empty model", llm(func(a *Agent) { a.LLM.Model = " " }), AgentSecrets{}, ErrInvalid, "needs a model"},
+			"um agente LLM precisa dele"},
+		{"empty model", llm(func(a *Agent) { a.LLM.Model = " " }), AgentSecrets{}, ErrInvalid, "informe o modelo do LLM"},
 		{"max tokens beyond the column", llm(func(a *Agent) { a.LLM.MaxTokens = ptr(math.MaxInt32 + 1) }),
-			AgentSecrets{}, ErrInvalid, "max tokens"},
+			AgentSecrets{}, ErrInvalid, "o máximo de tokens"},
 		{"model of two lines", llm(func(a *Agent) { a.LLM.Model = "gpt\n5" }), AgentSecrets{}, ErrInvalid,
-			"a line of text"},
+			"deve ficar numa linha só"},
 		{"bad provider", llm(func(a *Agent) { a.LLM.Provider = "google" }), AgentSecrets{}, ErrInvalid,
-			`provider "google"`},
+			`o provedor "google"`},
 		{"bad reasoning effort", llm(func(a *Agent) { a.LLM.ReasoningEffort = ptr("extreme") }), AgentSecrets{},
-			ErrInvalid, `reasoning effort "extreme"`},
+			ErrInvalid, `o esforço de raciocínio "extreme"`},
 		{"negative max tokens", llm(func(a *Agent) { a.LLM.MaxTokens = ptr(-1) }), AgentSecrets{}, ErrInvalid,
-			"max tokens -1"},
+			"o máximo de tokens -1"},
 		{"bad base URL", llm(func(a *Agent) { a.LLM.BaseURL = ptr("api.openai.com/v1") }), AgentSecrets{},
-			ErrInvalid, "the base URL of its language model"},
+			ErrInvalid, "a URL base do LLM"},
 		{"no bridge URL", trend(func(a *Agent) { a.Account.BridgeURL = "" }), AgentSecrets{}, ErrInvalid,
-			"the URL of its bridge is required"},
+			"informe a URL da bridge"},
 		{"bad bridge URL", trend(func(a *Agent) { a.Account.BridgeURL = "127.0.0.1:18812" }), AgentSecrets{},
-			ErrInvalid, "the URL of its bridge"},
+			ErrInvalid, "a URL da bridge do agente x deve ser http(s)"},
 		{"bridge URL with credentials", trend(func(a *Agent) {
 			a.Account.BridgeURL = "http://user:hunter2@127.0.0.1:18812"
-		}), AgentSecrets{}, ErrInvalid, "without credentials"},
+		}), AgentSecrets{}, ErrInvalid, "sem credenciais"},
 		{"negative magic", trend(func(a *Agent) { a.Account.Magic = ptr(int64(-7)) }), AgentSecrets{}, ErrInvalid,
-			"magic number -7"},
+			"o magic number -7"},
 		{"long comment", trend(func(a *Agent) { a.Account.Comment = ptr(strings.Repeat("x", 32)) }), AgentSecrets{},
-			ErrInvalid, "1 to 31 printable ASCII characters"},
+			ErrInvalid, "de 1 a 31 caracteres ASCII imprimíveis"},
 		{"comment of the exits", trend(func(a *Agent) { a.Account.Comment = ptr("[sl 4173]") }), AgentSecrets{},
-			ErrInvalid, "not starting with ["},
+			ErrInvalid, "sem começar com ["},
 		{"comment not ASCII", trend(func(a *Agent) { a.Account.Comment = ptr("nb:ação") }), AgentSecrets{},
-			ErrInvalid, "printable ASCII"},
+			ErrInvalid, "ASCII imprimíveis"},
 		{"param name", trend(func(a *Agent) { a.Params = Params{"Pair": "XAUUSDm"} }), AgentSecrets{}, ErrInvalid,
-			`param "Pair"`},
+			`o nome do parâmetro "Pair"`},
 		{"param name of _", trend(func(a *Agent) { a.Params = Params{"max_bars": "5"} }), AgentSecrets{},
-			ErrInvalid, `param "max_bars"`},
+			ErrInvalid, `o nome do parâmetro "max_bars"`},
 		{"param name of -", trend(func(a *Agent) { a.Params = Params{"-pair": "XAUUSDm"} }), AgentSecrets{},
-			ErrInvalid, `param "-pair"`},
+			ErrInvalid, `o nome do parâmetro "-pair"`},
 		{"param value of two lines", trend(func(a *Agent) { a.Params = Params{"pair": "XAUUSDm\n-mode=paper"} }),
-			AgentSecrets{}, ErrInvalid, "param pair, a line of text"},
+			AgentSecrets{}, ErrInvalid, "o parâmetro pair do agente x deve ficar numa linha só"},
 		{"param value too long", trend(func(a *Agent) { a.Params = Params{"pair": strings.Repeat("x", 1025)} }),
-			AgentSecrets{}, ErrInvalid, "1024 bytes at most"},
+			AgentSecrets{}, ErrInvalid, "com até 1024 bytes"},
 		{"param of a language model", trend(func(a *Agent) { a.Params = Params{"llm-min-stop-atr": "1"} }),
-			AgentSecrets{}, ErrInvalid, "for an LLM agent only"},
+			AgentSecrets{}, ErrInvalid, "só para agentes LLM"},
 		{"param of a model missing", llm(func(a *Agent) {
 			a.LLM, a.Launched, a.Params = nil, false, Params{"calendar-importance": "high"}
-		}), AgentSecrets{}, ErrInvalid, "which the agent lacks"},
+		}), AgentSecrets{}, ErrInvalid, "que o agente não tem"},
 		{"bridge token without an account", trend(func(a *Agent) { a.Account = nil }),
-			AgentSecrets{BridgeToken: secret("bridge")}, ErrInvalid, "without an account"},
+			AgentSecrets{BridgeToken: secret("bridge")}, ErrInvalid, "não tem conta para receber o token da bridge"},
 		{"key without a language model", trend(func(*Agent) {}), AgentSecrets{LLMAPIKey: secret("sk")}, ErrInvalid,
-			"a secret of a language model"},
+			"não tem LLM para receber a chave da API"},
 		{"prompt missing", llm(func(a *Agent) { a.LLM.PromptID = ptr(int64(999999)) }), AgentSecrets{}, ErrInvalid,
-			"prompt 999999 doesn't exist"},
+			"o prompt 999999 do agente x não existe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.CreateAgent(ctx, tc.agent, tc.secrets)
@@ -202,7 +203,7 @@ func TestCreateAgent_RefusesTheInvalidOnes(t *testing.T) {
 	for name := range columnFlags {
 		_, err := s.CreateAgent(ctx, llm(func(a *Agent) { a.Params = Params{name: "x"} }), AgentSecrets{})
 		require.ErrorIs(t, err, ErrInvalid, name)
-		require.ErrorContains(t, err, "param "+name+" is a setting of its own", "set by its field")
+		require.ErrorContains(t, err, "o parâmetro "+name+" do agente x tem campo próprio", "set by its field")
 	}
 	agents, err := s.Agents(ctx)
 	require.NoError(t, err)
@@ -361,7 +362,7 @@ func TestUpdateAgent_CreatesTheAccountAndTheModelMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, trend.Account)
 	_, err = s.UpdateAgent(ctx, trend.ID, AgentUpdate{Account: &AccountUpdate{Magic: ptr(int64(7))}})
-	require.ErrorContains(t, err, "the URL of its bridge is required", "a new account")
+	require.ErrorContains(t, err, "informe a URL da bridge", "a new account")
 	updated, err := s.UpdateAgent(ctx, trend.ID, AgentUpdate{Account: &AccountUpdate{
 		BridgeURL: ptr("http://127.0.0.1:18812"), Magic: ptr(int64(7))}})
 	require.NoError(t, err)
@@ -370,17 +371,17 @@ func TestUpdateAgent_CreatesTheAccountAndTheModelMissing(t *testing.T) {
 	require.NoError(t, s.SetAgentSecrets(ctx, trend.ID, AgentSecrets{BridgeToken: secret("bridge")}),
 		"an account for its token now")
 	_, err = s.UpdateAgent(ctx, trend.ID, AgentUpdate{LLM: &LLMUpdate{Provider: ptr("openai"), Model: ptr("gpt-5")}})
-	require.ErrorContains(t, err, "a language model for an agent of kind trend")
+	require.ErrorContains(t, err, "o agente matrend é do tipo trend, que não usa LLM")
 
 	llm, err := s.CreateAgent(ctx, Agent{Name: "llm", Kind: "llm", Mode: "live", APIAddress: "localhost:5580"},
 		AgentSecrets{})
 	require.NoError(t, err, "not launched: without its language model")
 	_, err = s.UpdateAgent(ctx, llm.ID, AgentUpdate{Launched: ptr(true)})
-	require.ErrorContains(t, err, "needs its language model")
+	require.ErrorContains(t, err, "um agente LLM precisa dele")
 	_, err = s.UpdateAgent(ctx, llm.ID, AgentUpdate{Params: Params{"llm-candles": "60"}})
-	require.ErrorContains(t, err, "which the agent lacks")
+	require.ErrorContains(t, err, "que o agente não tem")
 	_, err = s.UpdateAgent(ctx, llm.ID, AgentUpdate{LLM: &LLMUpdate{Model: ptr("gpt-5")}})
-	require.ErrorContains(t, err, `provider ""`, "a new language model")
+	require.ErrorContains(t, err, `o provedor ""`, "a new language model")
 	updated, err = s.UpdateAgent(ctx, llm.ID, AgentUpdate{Launched: ptr(true),
 		Params: Params{"pair": "XAUUSDm", "llm-candles": "60"},
 		LLM:    &LLMUpdate{Provider: ptr("openai"), Model: ptr("gpt-5")}})
@@ -404,24 +405,24 @@ func TestUpdateAgent_RefusesTheInvalidOnes(t *testing.T) {
 		is     error
 		want   string
 	}{
-		{"mode", AgentUpdate{Mode: ptr("backtest")}, ErrInvalid, "live or paper"},
-		{"address", AgentUpdate{APIAddress: ptr("localhost")}, ErrInvalid, "host:port"},
-		{"address taken", AgentUpdate{APIAddress: ptr(other.APIAddress)}, ErrConflict, "the one of the agent other"},
-		{"param of a field", AgentUpdate{Params: Params{"mt5-magic": "7"}}, ErrInvalid, "a setting of its own"},
-		{"param value", AgentUpdate{Params: Params{"pair": "a\r\nb"}}, ErrInvalid, "a line of text"},
+		{"mode", AgentUpdate{Mode: ptr("backtest")}, ErrInvalid, "use live ou paper"},
+		{"address", AgentUpdate{APIAddress: ptr("localhost")}, ErrInvalid, "host:porta"},
+		{"address taken", AgentUpdate{APIAddress: ptr(other.APIAddress)}, ErrConflict, "já é do agente other"},
+		{"param of a field", AgentUpdate{Params: Params{"mt5-magic": "7"}}, ErrInvalid, "tem campo próprio"},
+		{"param value", AgentUpdate{Params: Params{"pair": "a\r\nb"}}, ErrInvalid, "deve ficar numa linha só"},
 		{"param value with its name", AgentUpdate{Params: Params{"lot": "lot = BTCUSDm=0.03,XAUUSDm=0.01"}},
-			ErrInvalid, "its value repeats its name"},
+			ErrInvalid, "repete o nome"},
 		{"bridge URL removed", AgentUpdate{Account: &AccountUpdate{BridgeURL: ptr("")}}, ErrInvalid,
-			"the URL of its bridge is required"},
-		{"magic", AgentUpdate{Account: &AccountUpdate{Magic: ptr(int64(-1))}}, ErrInvalid, "magic number -1"},
+			"informe a URL da bridge"},
+		{"magic", AgentUpdate{Account: &AccountUpdate{Magic: ptr(int64(-1))}}, ErrInvalid, "o magic number -1"},
 		{"comment", AgentUpdate{Account: &AccountUpdate{Comment: ptr(strings.Repeat("c", 32))}}, ErrInvalid,
-			"comment"},
-		{"provider", AgentUpdate{LLM: &LLMUpdate{Provider: ptr("mistral")}}, ErrInvalid, `provider "mistral"`},
-		{"model removed", AgentUpdate{LLM: &LLMUpdate{Model: ptr("")}}, ErrInvalid, "needs a model"},
+			"o comentário"},
+		{"provider", AgentUpdate{LLM: &LLMUpdate{Provider: ptr("mistral")}}, ErrInvalid, `o provedor "mistral"`},
+		{"model removed", AgentUpdate{LLM: &LLMUpdate{Model: ptr("")}}, ErrInvalid, "informe o modelo do LLM"},
 		{"reasoning effort", AgentUpdate{LLM: &LLMUpdate{ReasoningEffort: ptr("max")}}, ErrInvalid,
-			`reasoning effort "max"`},
-		{"max tokens", AgentUpdate{LLM: &LLMUpdate{MaxTokens: ptr(-10)}}, ErrInvalid, "max tokens -10"},
-		{"base URL", AgentUpdate{LLM: &LLMUpdate{BaseURL: ptr("file:///etc/passwd")}}, ErrInvalid, "base URL"},
+			`o esforço de raciocínio "max"`},
+		{"max tokens", AgentUpdate{LLM: &LLMUpdate{MaxTokens: ptr(-10)}}, ErrInvalid, "o máximo de tokens -10"},
+		{"base URL", AgentUpdate{LLM: &LLMUpdate{BaseURL: ptr("file:///etc/passwd")}}, ErrInvalid, "a URL base"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.UpdateAgent(ctx, agent.ID, tc.update)
@@ -442,7 +443,7 @@ func TestUpdateAgent_RefusesTheInvalidOnes(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, updated.Enabled)
 	_, err = s.UpdateAgent(ctx, agent.ID, AgentUpdate{Restart: ptr(false)})
-	require.ErrorContains(t, err, "param mode is a setting of its own")
+	require.ErrorContains(t, err, "o parâmetro mode do agente llm tem campo próprio")
 }
 
 func TestDeleteAgent_SoftlyTheDisabledOnes(t *testing.T) {
@@ -463,7 +464,7 @@ func TestDeleteAgent_SoftlyTheDisabledOnes(t *testing.T) {
 
 	err = s.DeleteAgent(ctx, agent.ID)
 	require.ErrorIs(t, err, ErrConflict)
-	require.ErrorContains(t, err, "enabled: disable it first")
+	require.ErrorContains(t, err, "desligue o agente llm antes")
 	_, err = s.UpdateAgent(ctx, agent.ID, AgentUpdate{Enabled: ptr(false)})
 	require.NoError(t, err)
 	require.NoError(t, s.DeleteAgent(ctx, agent.ID))
@@ -563,7 +564,7 @@ func TestUpdateAgent_APIOnTheLoopbackOnly(t *testing.T) {
 	for _, address := range []string{"0.0.0.0:5590", "10.0.0.5:5590", "bot.lan:5590"} {
 		_, err := s.UpdateAgent(ctx, agent.ID, AgentUpdate{APIAddress: &address})
 		require.ErrorIs(t, err, ErrInvalid, address)
-		require.ErrorContains(t, err, "the host on the loopback", address)
+		require.ErrorContains(t, err, "o host no loopback", address)
 	}
 	for _, address := range []string{"127.0.0.2:5590", "[::1]:5591", "localhost:5592"} {
 		updated, err := s.UpdateAgent(ctx, agent.ID, AgentUpdate{APIAddress: &address})
@@ -658,7 +659,8 @@ func TestCreateAgent_RefusesTheSamePositions(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, ErrConflict)
-			require.ErrorContains(t, err, "agent "+name+": the agent "+tc.conflict+", enabled in live mode, trades")
+			require.ErrorContains(t, err, "o agente "+tc.conflict+", ligado no modo live, já opera")
+			require.ErrorContains(t, err, "ao agente "+name+" um comentário")
 			_, err = s.AgentByName(ctx, name)
 			require.ErrorIs(t, err, ErrNotFound, "nothing written")
 		})
@@ -677,7 +679,7 @@ func TestCreateAgent_RefusesThePositionsOfAnAgentRunningApart(t *testing.T) {
 
 	_, err = s.CreateAgent(ctx, tradingAgent("launched", "llm", 5601, nil), AgentSecrets{})
 	require.ErrorIs(t, err, ErrConflict)
-	require.ErrorContains(t, err, "the agent apart, enabled in live mode, trades XAUUSDm")
+	require.ErrorContains(t, err, "o agente apart, ligado no modo live, já opera XAUUSDm")
 	_, err = s.CreateAgent(ctx, tradingAgent("apart-too", "llm", 5602, func(a *Agent) { a.Launched = false }),
 		AgentSecrets{})
 	require.ErrorIs(t, err, ErrConflict, "two of them apart")
@@ -712,7 +714,7 @@ func TestUpdateAgent_RefusesTheSamePositions(t *testing.T) {
 		t.Helper()
 		_, err := s.UpdateAgent(ctx, other.ID, update)
 		require.ErrorIs(t, err, ErrConflict)
-		require.ErrorContains(t, err, "the agent trading, enabled in live mode, trades XAUUSDm")
+		require.ErrorContains(t, err, "o agente trading, ligado no modo live, já opera XAUUSDm")
 	}
 	refused(AgentUpdate{Enabled: ptr(true)})
 	unchanged, err := s.Agent(ctx, other.ID)
@@ -736,7 +738,7 @@ func TestUpdateAgent_RefusesTheSamePositions(t *testing.T) {
 	require.NoError(t, err, "the agent trading trades another pair now")
 	_, err = s.UpdateAgent(ctx, trading.ID, AgentUpdate{Params: Params{"pair": "BTCUSDm;XAUUSDm"}})
 	require.ErrorIs(t, err, ErrConflict, "both ways")
-	require.ErrorContains(t, err, "the agent other, enabled in live mode, trades XAUUSDm")
+	require.ErrorContains(t, err, "o agente other, ligado no modo live, já opera XAUUSDm")
 
 	// two agents sharing them already, set in SQL: the switches apply, and
 	// disabling one of them

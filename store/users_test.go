@@ -25,10 +25,10 @@ func TestCreateUser_HashesThePasswordWithBcrypt(t *testing.T) {
 	require.Equal(t, bcryptCost, cost)
 
 	for _, tc := range []struct{ name, username, password, want string }{
-		{"taken, whatever the case", "XTRADER", "another password", "already exists"},
-		{"invalid username", "no spaces", "a strong password", "username"},
-		{"short password", "other", "short", "8 characters"},
-		{"long password", "other", strings.Repeat("x", 73), "72 bytes"},
+		{"taken, whatever the case", "XTRADER", "another password", "o usuário XTRADER já existe"},
+		{"invalid username", "no spaces", "a strong password", "nome de usuário"},
+		{"short password", "other", "short", "ao menos 8 caracteres"},
+		{"long password", "other", strings.Repeat("x", 73), "até 72 bytes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.CreateUser(ctx, tc.username, tc.password)

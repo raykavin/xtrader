@@ -883,7 +883,7 @@ func TestSupervisionAPI_ClosePositions(t *testing.T) {
 
 	resp, body = call(http.MethodPost, "/api/supervisor/agents/fibonacci/close", ui.SupervisorCloseRequest{})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "o agente não tem posição aberta")
+	assert.Contains(t, body, "O agente não tem posição aberta.")
 	resp, _ = call(http.MethodPost, "/api/supervisor/agents/nobody/close", ui.SupervisorCloseRequest{})
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 

@@ -137,13 +137,13 @@ func (s *Supervision) setDailyLimit(w http.ResponseWriter, r *http.Request, a *s
 func (s *Supervision) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, err.Error())
+		writeJSONError(w, http.StatusNotFound, userMessage(err))
 	case errors.Is(err, errAnalyzing):
 		writeJSONError(w, http.StatusConflict, analyzingMessage)
 	case errors.Is(err, store.ErrDecided):
-		writeJSONError(w, http.StatusConflict, err.Error())
+		writeJSONError(w, http.StatusConflict, userMessage(err))
 	case errors.Is(err, store.ErrExpired):
-		writeJSONError(w, http.StatusGone, "a proposta expirou: peça uma nova ao XTrader AI")
+		writeJSONError(w, http.StatusGone, "A proposta expirou: peça uma nova ao XTrader AI.")
 	case errors.Is(err, errEmptyMessage):
 		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Escreva uma mensagem de 1 a %d caracteres.",
 			maxMessageLength))
@@ -151,7 +151,7 @@ func (s *Supervision) fail(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, "O XTrader AI ainda não tem um LLM configurado: defina o "+
 			"provedor, o modelo e a chave em Configurações › XTrader AI.")
 	case errors.Is(err, store.ErrInvalid):
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+		writeJSONError(w, http.StatusBadRequest, userMessage(err))
 	case errors.Is(err, context.Canceled):
 		writeJSONError(w, http.StatusServiceUnavailable, stoppingMessage)
 	default:
@@ -651,7 +651,7 @@ func (s *Supervision) handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(v.positions[a.Name]) == 0 {
-		writeJSONError(w, http.StatusConflict, "o agente não tem posição aberta")
+		writeJSONError(w, http.StatusConflict, "O agente não tem posição aberta.")
 		return
 	}
 	by := userOf(r.Context())
@@ -730,7 +730,7 @@ func (s *Supervision) handleCloseAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(agents) == 0 {
-		writeJSONError(w, http.StatusConflict, "nenhum agente cadastrado")
+		writeJSONError(w, http.StatusConflict, "Nenhum agente cadastrado.")
 		return
 	}
 	names := make([]string, 0, len(agents))

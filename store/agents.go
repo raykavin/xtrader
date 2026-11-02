@@ -387,21 +387,24 @@ func nullable[T any](p *T) interface{} {
 func checkAgent(a Agent) error {
 	switch {
 	case !agentNameRegexp.MatchString(a.Name):
-		return fmt.Errorf("%w: agent name %q: letters, digits and . _ -, 64 at most", ErrInvalid, a.Name)
+		return fmt.Errorf("%w: nome de agente %q inválido: use letras, números e . _ -, até 64 caracteres", ErrInvalid,
+			a.Name)
 	case !slices.Contains(config.Kinds, a.Kind):
-		return fmt.Errorf("%w: agent %s: kind %q, of %s", ErrInvalid, a.Name, a.Kind, strings.Join(config.Kinds, ", "))
+		return fmt.Errorf("%w: o tipo %q do agente %s não existe, use um destes: %s", ErrInvalid, a.Kind, a.Name,
+			strings.Join(config.Kinds, ", "))
 	case a.Mode != "live" && a.Mode != "paper":
-		return fmt.Errorf("%w: agent %s: mode %q, live or paper", ErrInvalid, a.Name, a.Mode)
+		return fmt.Errorf("%w: o modo %q do agente %s não existe, use live ou paper", ErrInvalid, a.Mode, a.Name)
 	case a.APIAddress == "":
-		return fmt.Errorf("%w: agent %s: the address of its API is required", ErrInvalid, a.Name)
+		return fmt.Errorf("%w: informe o endereço da API do agente %s", ErrInvalid, a.Name)
 	case !validAddress(a.APIAddress):
-		return fmt.Errorf("%w: agent %s: address %q, host:port with a port of 1 to 65535, the host on the loopback "+
-			"(localhost, 127.0.0.0/8 or [::1]): the controller reaches the API of its agents on its machine only, "+
-			"unauthenticated", ErrInvalid, a.Name, a.APIAddress)
+		return fmt.Errorf("%w: o endereço %q do agente %s deve ser host:porta, com a porta de 1 a 65535 e o host "+
+			"no loopback (localhost, 127.0.0.0/8 ou [::1]): o controller só acessa a API dos agentes na própria "+
+			"máquina, sem autenticação", ErrInvalid, a.APIAddress, a.Name)
 	case a.LLM != nil && a.Kind != "llm":
-		return fmt.Errorf("%w: agent %s: a language model for an agent of kind %s", ErrInvalid, a.Name, a.Kind)
+		return fmt.Errorf("%w: o agente %s é do tipo %s, que não usa LLM: só os do tipo llm usam", ErrInvalid, a.Name,
+			a.Kind)
 	case a.Kind == "llm" && a.Launched && a.LLM == nil:
-		return fmt.Errorf("%w: agent %s: an LLM agent needs its language model", ErrInvalid, a.Name)
+		return fmt.Errorf("%w: configure o LLM do agente %s: um agente LLM precisa dele", ErrInvalid, a.Name)
 	}
 	if err := checkReanalysis(a); err != nil {
 		return err
@@ -420,8 +423,8 @@ func checkAgent(a Agent) error {
 // kind there is none to ask.
 func checkReanalysis(a Agent) error {
 	if a.Reanalysis != nil && a.Reanalysis.Allowed && a.Kind != "llm" {
-		return fmt.Errorf("%w: agent %s: the reanalysis asks the language model of an LLM agent again, an agent "+
-			"of kind %s has none", ErrInvalid, a.Name, a.Kind)
+		return fmt.Errorf("%w: o agente %s é do tipo %s e não tem LLM: a reanálise, que pergunta de novo ao LLM, "+
+			"é só para agentes LLM", ErrInvalid, a.Name, a.Kind)
 	}
 	return nil
 }
@@ -435,14 +438,14 @@ func checkAccount(name string, account *Account) error {
 	}
 	switch {
 	case account.BridgeURL == "":
-		return fmt.Errorf("%w: agent %s: the URL of its bridge is required", ErrInvalid, name)
+		return fmt.Errorf("%w: informe a URL da bridge do agente %s", ErrInvalid, name)
 	case !httpURL(account.BridgeURL):
-		return fmt.Errorf("%w: agent %s: the URL of its bridge, an http(s) URL without credentials", ErrInvalid, name)
+		return fmt.Errorf("%w: a URL da bridge do agente %s deve ser http(s), sem credenciais", ErrInvalid, name)
 	case account.Magic != nil && *account.Magic < 1:
-		return fmt.Errorf("%w: agent %s: magic number %d, above 0", ErrInvalid, name, *account.Magic)
+		return fmt.Errorf("%w: o magic number %d do agente %s deve ser maior que 0", ErrInvalid, *account.Magic, name)
 	case account.Comment != nil && !validComment(*account.Comment):
-		return fmt.Errorf("%w: agent %s: comment %q, 1 to %d printable ASCII characters not starting with [",
-			ErrInvalid, name, *account.Comment, maxComment)
+		return fmt.Errorf("%w: o comentário %q do agente %s deve ter de 1 a %d caracteres ASCII imprimíveis, sem "+
+			"começar com [", ErrInvalid, *account.Comment, name, maxComment)
 	}
 	return nil
 }
@@ -454,20 +457,20 @@ func checkLLM(name string, llm *LLMSettings) error {
 	}
 	switch {
 	case !slices.Contains(providers, llm.Provider):
-		return fmt.Errorf("%w: agent %s: provider %q, openai or anthropic", ErrInvalid, name, llm.Provider)
+		return fmt.Errorf("%w: o provedor %q do agente %s não existe, use openai ou anthropic", ErrInvalid, llm.Provider,
+			name)
 	case llm.Model == "":
-		return fmt.Errorf("%w: agent %s: its language model needs a model, eg: gpt-5", ErrInvalid, name)
+		return fmt.Errorf("%w: informe o modelo do LLM do agente %s, ex.: gpt-5", ErrInvalid, name)
 	case !oneLine(llm.Model):
-		return fmt.Errorf("%w: agent %s: the model of its language model, a line of text", ErrInvalid, name)
+		return fmt.Errorf("%w: o modelo do LLM do agente %s deve ficar numa linha só", ErrInvalid, name)
 	case llm.BaseURL != nil && !httpURL(*llm.BaseURL):
-		return fmt.Errorf("%w: agent %s: the base URL of its language model, an http(s) URL without credentials",
-			ErrInvalid, name)
+		return fmt.Errorf("%w: a URL base do LLM do agente %s deve ser http(s), sem credenciais", ErrInvalid, name)
 	case llm.ReasoningEffort != nil && !slices.Contains(reasoningEfforts, *llm.ReasoningEffort):
-		return fmt.Errorf("%w: agent %s: reasoning effort %q, minimal, low, medium or high", ErrInvalid, name,
-			*llm.ReasoningEffort)
+		return fmt.Errorf("%w: o esforço de raciocínio %q do agente %s não existe, use minimal, low, medium ou high",
+			ErrInvalid, *llm.ReasoningEffort, name)
 	case llm.MaxTokens != nil && (*llm.MaxTokens < 1 || *llm.MaxTokens > math.MaxInt32):
-		return fmt.Errorf("%w: agent %s: max tokens %d, from 1 to %d", ErrInvalid, name, *llm.MaxTokens,
-			math.MaxInt32) // an INTEGER column
+		return fmt.Errorf("%w: o máximo de tokens %d do agente %s deve ficar entre 1 e %d", ErrInvalid,
+			*llm.MaxTokens, name, math.MaxInt32) // an INTEGER column
 	}
 	return nil
 }
@@ -482,22 +485,22 @@ func checkParams(a Agent) error {
 		value := params[name]
 		switch {
 		case !paramNameRegexp.MatchString(name):
-			return fmt.Errorf("%w: agent %s: param %q, the name of a flag: lowercase letters, digits and -",
-				ErrInvalid, a.Name, name)
+			return fmt.Errorf("%w: o nome do parâmetro %q do agente %s deve ser o de uma flag: letras minúsculas, "+
+				"números e -", ErrInvalid, name, a.Name)
 		case columnFlags[name]:
-			return fmt.Errorf("%w: agent %s: param %s is a setting of its own, not a param", ErrInvalid, a.Name, name)
+			return fmt.Errorf("%w: o parâmetro %s do agente %s tem campo próprio: altere-o lá, não nos parâmetros",
+				ErrInvalid, name, a.Name)
 		case len(value) > maxParamValue || !oneLine(value):
-			return fmt.Errorf("%w: agent %s: param %s, a line of text of %d bytes at most", ErrInvalid, a.Name, name,
-				maxParamValue)
+			return fmt.Errorf("%w: o parâmetro %s do agente %s deve ficar numa linha só, com até %d bytes", ErrInvalid,
+				name, a.Name, maxParamValue)
 		case repeatsName(name, value):
-			return fmt.Errorf("%w: agent %s: param %s: its value repeats its name, only what follows the = is its value",
-				ErrInvalid, a.Name, name)
+			return fmt.Errorf("%w: o valor do parâmetro %s do agente %s repete o nome: informe só o que vem depois "+
+				"do =", ErrInvalid, name, a.Name)
 		case llmParam(name) && a.Kind != "llm":
-			return fmt.Errorf("%w: agent %s: param %s of a language model, for an LLM agent only", ErrInvalid,
-				a.Name, name)
+			return fmt.Errorf("%w: o parâmetro %s do agente %s é só para agentes LLM", ErrInvalid, name, a.Name)
 		case llmParam(name) && a.LLM == nil:
-			return fmt.Errorf("%w: agent %s: param %s of a language model, which the agent lacks", ErrInvalid,
-				a.Name, name)
+			return fmt.Errorf("%w: o parâmetro %s do agente %s é do LLM, que o agente não tem", ErrInvalid, name,
+				a.Name)
 		}
 	}
 	return nil
@@ -517,9 +520,9 @@ func checkSecrets(a Agent, secrets AgentSecrets) error {
 	set := func(secret Secret) bool { return secret != nil && strings.TrimSpace(*secret) != "" }
 	switch {
 	case set(secrets.BridgeToken) && a.Account == nil:
-		return fmt.Errorf("%w: agent %s: the token of a bridge, without an account", ErrInvalid, a.Name)
+		return fmt.Errorf("%w: o agente %s não tem conta para receber o token da bridge", ErrInvalid, a.Name)
 	case set(secrets.LLMAPIKey) && a.LLM == nil:
-		return fmt.Errorf("%w: agent %s: a secret of a language model, without one", ErrInvalid, a.Name)
+		return fmt.Errorf("%w: o agente %s não tem LLM para receber a chave da API", ErrInvalid, a.Name)
 	}
 	return nil
 }
@@ -573,7 +576,7 @@ func (s *Store) Agents(ctx context.Context) ([]Agent, error) {
 func (s *Store) Agent(ctx context.Context, id int64) (Agent, error) {
 	var agent Agent
 	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").First(&agent, id).Error
-	return agent, notFound(err, fmt.Sprintf("agent %d", id))
+	return agent, notFound(err, fmt.Sprintf("o agente %d", id))
 }
 
 // AgentByName returns the agent of name.
@@ -581,7 +584,7 @@ func (s *Store) AgentByName(ctx context.Context, name string) (Agent, error) {
 	var agent Agent
 	err := s.conn(ctx).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").Where("name = ?", name).
 		First(&agent).Error
-	return agent, notFound(err, "agent "+name)
+	return agent, notFound(err, "o agente "+name)
 }
 
 // CreateAgent creates an agent with its account and language model, if any,
@@ -622,7 +625,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 		if llm != nil && llm.PromptID != nil {
 			err := s.sharePrompt(ctx, *llm.PromptID)
 			if errors.Is(err, ErrNotFound) {
-				return fmt.Errorf("%w: agent %s: prompt %d doesn't exist", ErrInvalid, agent.Name, *llm.PromptID)
+				return fmt.Errorf("%w: o prompt %d do agente %s não existe", ErrInvalid, *llm.PromptID, agent.Name)
 			}
 			if err != nil {
 				return err
@@ -636,7 +639,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 			}
 		}
 		if err := s.conn(ctx).Create(&agent).Error; err != nil {
-			return notFound(err, "agent "+agent.Name)
+			return notFound(err, "o agente "+agent.Name)
 		}
 		if account != nil {
 			account.AgentID = agent.ID
@@ -644,7 +647,7 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 				return err
 			}
 			if err := s.conn(ctx).Create(account).Error; err != nil {
-				return notFound(err, "the account of the agent "+agent.Name)
+				return notFound(err, "a conta do agente "+agent.Name)
 			}
 		}
 		if llm != nil {
@@ -653,13 +656,13 @@ func (s *Store) CreateAgent(ctx context.Context, agent Agent, secrets AgentSecre
 				return err
 			}
 			if err := s.conn(ctx).Create(llm).Error; err != nil {
-				return notFound(err, "the language model of the agent "+agent.Name)
+				return notFound(err, "o LLM do agente "+agent.Name)
 			}
 		}
 		if reanalysis != nil {
 			reanalysis.AgentID = agent.ID
 			if err := s.conn(ctx).Create(reanalysis).Error; err != nil {
-				return notFound(err, "the reanalysis of the agent "+agent.Name)
+				return notFound(err, "a reanálise do agente "+agent.Name)
 			}
 		}
 		return nil
@@ -686,7 +689,7 @@ func (s *Store) checkAddressFree(ctx context.Context, id int64, address string) 
 	}
 	for _, other := range others {
 		if sameListener(address, other.APIAddress) {
-			return fmt.Errorf("%w: the address %s is the one of the agent %s", ErrConflict, address, other.Name)
+			return fmt.Errorf("%w: o endereço %s já é do agente %s", ErrConflict, address, other.Name)
 		}
 	}
 	return nil
@@ -724,10 +727,10 @@ func (s *Store) checkBookFree(ctx context.Context, id int64, a Agent) error {
 	book := a.MT5Book()
 	for _, other := range others {
 		if theirs := other.MT5Book(); book.Overlaps(theirs) {
-			return fmt.Errorf("%w: agent %s: the agent %s, enabled in live mode, trades %s with the magic number %d "+
-				"(comment %q) on the bridge %s: give one of them a comment or a magic number of its own, or "+
-				"disable it", ErrConflict, a.Name, other.Name, strings.Join(book.Common(theirs), ";"), book.Magic,
-				book.Comment, book.Bridge)
+			return fmt.Errorf("%w: o agente %s, ligado no modo live, já opera %s com o magic number %d (comentário "+
+				"%q) na bridge %s: dê a ele ou ao agente %s um comentário ou um magic number próprio, ou desligue um "+
+				"dos dois", ErrConflict, other.Name, strings.Join(book.Common(theirs), ";"), book.Magic, book.Comment,
+				book.Bridge, a.Name)
 		}
 	}
 	return nil
@@ -782,7 +785,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (
 		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
 			First(&agent, id).Error
 		if err != nil {
-			return notFound(err, fmt.Sprintf("agent %d", id))
+			return notFound(err, fmt.Sprintf("o agente %d", id))
 		}
 		change := update.apply(agent)
 		if err := checkReanalysis(change.agent); err != nil {
@@ -816,34 +819,34 @@ func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (
 func (s *Store) saveChange(ctx context.Context, a Agent, c agentChange) error {
 	if len(c.columns) > 0 {
 		if err := s.conn(ctx).Model(&Agent{}).Where("id = ?", a.ID).Updates(c.columns).Error; err != nil {
-			return notFound(err, "agent "+a.Name)
+			return notFound(err, "o agente "+a.Name)
 		}
 	}
 	if c.reanalysis != nil {
 		err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"allowed"})}).Create(c.reanalysis).Error
 		if err != nil {
-			return notFound(err, "the reanalysis of the agent "+a.Name)
+			return notFound(err, "a reanálise do agente "+a.Name)
 		}
 	}
 	switch {
 	case c.account != nil && a.Account == nil:
 		if err := s.conn(ctx).Create(c.agent.Account).Error; err != nil {
-			return notFound(err, "the account of the agent "+a.Name)
+			return notFound(err, "a conta do agente "+a.Name)
 		}
 	case len(c.account) > 0:
 		if err := s.conn(ctx).Model(&Account{}).Where("agent_id = ?", a.ID).Updates(c.account).Error; err != nil {
-			return notFound(err, "the account of the agent "+a.Name)
+			return notFound(err, "a conta do agente "+a.Name)
 		}
 	}
 	switch {
 	case c.llm != nil && a.LLM == nil:
 		if err := s.conn(ctx).Create(c.agent.LLM).Error; err != nil {
-			return notFound(err, "the language model of the agent "+a.Name)
+			return notFound(err, "o LLM do agente "+a.Name)
 		}
 	case len(c.llm) > 0:
 		if err := s.conn(ctx).Model(&LLMSettings{}).Where("agent_id = ?", a.ID).Updates(c.llm).Error; err != nil {
-			return notFound(err, "the language model of the agent "+a.Name)
+			return notFound(err, "o LLM do agente "+a.Name)
 		}
 	}
 	return nil
@@ -858,10 +861,10 @@ func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
 		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&agent, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("agent %d", id))
+			return notFound(err, fmt.Sprintf("o agente %d", id))
 		}
 		if agent.Enabled {
-			return fmt.Errorf("%w: the agent %s is enabled: disable it first", ErrConflict, agent.Name)
+			return fmt.Errorf("%w: desligue o agente %s antes", ErrConflict, agent.Name)
 		}
 		err := s.conn(ctx).Model(&Account{}).Where("agent_id = ?", id).Update("bridge_token", nil).Error
 		if err != nil {
@@ -894,26 +897,26 @@ func (formerNameRow) TableName() string { return "agent_former_names" }
 func (s *Store) RenameAgent(ctx context.Context, id int64, name string) (Agent, error) {
 	name = strings.TrimSpace(name)
 	if !agentNameRegexp.MatchString(name) {
-		return Agent{}, fmt.Errorf("%w: agent name %q: letters, digits, '.', '_' and '-', 64 at most, "+
-			"starting with a letter or a digit", ErrInvalid, name)
+		return Agent{}, fmt.Errorf("%w: nome de agente %q inválido: use letras, números, '.', '_' e '-', até 64 "+
+			"caracteres, começando por letra ou número", ErrInvalid, name)
 	}
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		var agent Agent
 		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&agent, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("agent %d", id))
+			return notFound(err, fmt.Sprintf("o agente %d", id))
 		}
 		switch {
 		case agent.Name == name:
 			return nil
 		case agent.Enabled:
-			return fmt.Errorf("%w: the agent %s is enabled: disable it first", ErrConflict, agent.Name)
+			return fmt.Errorf("%w: desligue o agente %s antes", ErrConflict, agent.Name)
 		}
 		var taken int64
 		if err := s.conn(ctx).Model(&Agent{}).Where("name = ? AND id <> ?", name, id).Count(&taken).Error; err != nil {
 			return err
 		}
 		if taken > 0 {
-			return fmt.Errorf("%w: an agent is named %s", ErrConflict, name)
+			return fmt.Errorf("%w: já existe um agente chamado %s", ErrConflict, name)
 		}
 		err := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).
 			Create(&formerNameRow{AgentID: id, Name: agent.Name}).Error
@@ -921,7 +924,7 @@ func (s *Store) RenameAgent(ctx context.Context, id int64, name string) (Agent, 
 			return err
 		}
 		err = s.conn(ctx).Model(&Agent{}).Where("id = ?", id).Update("name", name).Error
-		return notFound(err, "agent "+name)
+		return notFound(err, "o agente "+name)
 	})
 	if err != nil {
 		return Agent{}, err
@@ -941,7 +944,7 @@ func (s *Store) SetAgentPrompt(ctx context.Context, id int64, promptID *int64) e
 		}
 		result := s.conn(ctx).Model(&LLMSettings{}).Where("agent_id = ?", id).Update("prompt_id", promptID)
 		if result.Error == nil && result.RowsAffected == 0 {
-			return fmt.Errorf("%w: agent %d is not an LLM agent", ErrInvalid, id)
+			return fmt.Errorf("%w: o agente %d não é um agente LLM", ErrInvalid, id)
 		}
 		return result.Error
 	})
@@ -958,7 +961,7 @@ func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecr
 			}
 			result := s.conn(ctx).Model(&Account{}).Where("agent_id = ?", id).Update("bridge_token", sealed)
 			if result.Error == nil && result.RowsAffected == 0 {
-				return fmt.Errorf("%w: agent %d has no account", ErrInvalid, id)
+				return fmt.Errorf("%w: o agente %d não tem conta", ErrInvalid, id)
 			}
 			if result.Error != nil {
 				return result.Error
@@ -980,7 +983,7 @@ func (s *Store) SetAgentSecrets(ctx context.Context, id int64, secrets AgentSecr
 		}
 		result := s.conn(ctx).Model(&LLMSettings{}).Where("agent_id = ?", id).Updates(columns)
 		if result.Error == nil && result.RowsAffected == 0 {
-			return fmt.Errorf("%w: agent %d is not an LLM agent", ErrInvalid, id)
+			return fmt.Errorf("%w: o agente %d não é um agente LLM", ErrInvalid, id)
 		}
 		return result.Error
 	})
@@ -1039,7 +1042,7 @@ func (s *Store) SetPromptStatus(ctx context.Context, id int64, status PromptStat
 // to last, never leased again: the agent numbers its orders with them.
 func (s *Store) LeaseOrderIDs(ctx context.Context, id, count int64) (first, last int64, err error) {
 	if count < 1 {
-		return 0, 0, fmt.Errorf("%w: a range of %d order IDs", ErrInvalid, count)
+		return 0, 0, fmt.Errorf("%w: não dá para reservar %d IDs de ordem: o mínimo é 1", ErrInvalid, count)
 	}
 	var next []int64
 	err = s.conn(ctx).Raw("UPDATE agents SET order_id_next = order_id_next + ? WHERE id = ? AND deleted_at IS NULL "+
@@ -1048,7 +1051,7 @@ func (s *Store) LeaseOrderIDs(ctx context.Context, id, count int64) (first, last
 		return 0, 0, err
 	}
 	if len(next) == 0 {
-		return 0, 0, fmt.Errorf("%w: agent %d", ErrNotFound, id)
+		return 0, 0, fmt.Errorf("%w: o agente %d não existe", ErrNotFound, id)
 	}
 	return next[0] - count, next[0] - 1, nil
 }

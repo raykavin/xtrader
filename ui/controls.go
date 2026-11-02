@@ -330,15 +330,19 @@ func writeControlError(w http.ResponseWriter, err error) {
 	writeJSONError(w, status, controlMessage(err))
 }
 
+// EntriesBlocked leads the message of an order refused for the entries
+// blocked, its reason after it, eg: Entradas bloqueadas: notícia: NFP (USD).
+// The Telegram of the controller tells such a refusal apart by it.
+const EntriesBlocked = "Entradas bloqueadas"
+
 // controlMessage returns the message of err, an error of an order of the
 // control panel, for the user: the errors of the bot and of the broker known
-// in Portuguese, with their detail, if any. The entries blocked keep their
-// text, the Telegram of the controller telling them apart by it, and any other
-// error is told as it is.
+// in Portuguese, with their detail, if any (the entries blocked with their
+// reason, see EntriesBlocked); any other error as it is.
 func controlMessage(err error) string {
 	switch {
 	case errors.Is(err, order.ErrEntriesBlocked):
-		return err.Error()
+		return withDetail(EntriesBlocked, err, order.ErrEntriesBlocked)
 	case errors.Is(err, order.ErrBotStopped):
 		return "O bot está parado: inicie-o antes."
 	case errors.Is(err, exchange.ErrOrderNotOpen):

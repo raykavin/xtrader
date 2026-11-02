@@ -69,18 +69,18 @@ func (s *Store) TelegramUsers(ctx context.Context) ([]TelegramUser, error) {
 // AddTelegramUser authorizes the Telegram user of telegramID, named name.
 func (s *Store) AddTelegramUser(ctx context.Context, telegramID int64, name string) (TelegramUser, error) {
 	if telegramID <= 0 {
-		return TelegramUser{}, fmt.Errorf("%w: Telegram ID %d", ErrInvalid, telegramID)
+		return TelegramUser{}, fmt.Errorf("%w: o ID no Telegram deve ser um número maior que 0, não %d", ErrInvalid, telegramID)
 	}
 	user := TelegramUser{TelegramID: telegramID, Name: strings.TrimSpace(name)}
 	err := s.conn(ctx).Create(&user).Error
-	return user, notFound(err, fmt.Sprintf("Telegram user %d", telegramID))
+	return user, notFound(err, fmt.Sprintf("o usuário %d do Telegram", telegramID))
 }
 
 // DeleteTelegramUser stops answering the Telegram user of id, the record.
 func (s *Store) DeleteTelegramUser(ctx context.Context, id int64) error {
 	result := s.conn(ctx).Delete(&TelegramUser{}, id)
 	if result.Error == nil && result.RowsAffected == 0 {
-		return fmt.Errorf("%w: Telegram user %d", ErrNotFound, id)
+		return fmt.Errorf("%w: o usuário %d do Telegram não existe", ErrNotFound, id)
 	}
 	return result.Error
 }

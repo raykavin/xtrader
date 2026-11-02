@@ -67,24 +67,25 @@ func (a Agent) ProtectionOf() ui.ProtectionSettings {
 // the distance.
 func validateProtection(settings ui.ProtectionSettings) error {
 	invalid := func(format string, args ...any) error {
-		return fmt.Errorf("%w: the protection of the positions: %s", ErrInvalid, fmt.Sprintf(format, args...))
+		return fmt.Errorf("%w: proteção das posições: %s", ErrInvalid, fmt.Sprintf(format, args...))
 	}
 	if settings.Unit != ui.ProtectionUnitATR {
-		return invalid("the unit %q: atr", settings.Unit)
+		return invalid("a unidade %q não existe, use atr", settings.Unit)
 	}
 	b, t := settings.Breakeven, settings.Trailing
-	for name, value := range map[string]float64{"the trigger of the breakeven": b.Trigger,
-		"the margin of the breakeven": b.Margin, "the trigger of the trailing stop": t.Trigger,
-		"the distance of the trailing stop": t.Distance, "the step of the trailing stop": t.Step} {
+	for name, value := range map[string]float64{"o gatilho do breakeven": b.Trigger,
+		"a margem do breakeven": b.Margin, "o gatilho do trailing stop": t.Trigger,
+		"a distância do trailing stop": t.Distance, "o passo do trailing stop": t.Step} {
 		if math.IsNaN(value) || value < 0 || value > ProtectionMaxDistance {
-			return invalid("%s: from 0 to %d ATR", name, ProtectionMaxDistance)
+			return invalid("%s deve ficar entre 0 e %d ATR", name, ProtectionMaxDistance)
 		}
 	}
 	if (b.Enabled || b.Supervisor) && (b.Trigger <= 0 || b.Margin >= b.Trigger) {
-		return invalid("the breakeven needs a trigger above 0 and above its margin")
+		return invalid("o gatilho do breakeven deve ser maior que 0 e maior que a margem")
 	}
 	if (t.Enabled || t.Supervisor) && (t.Trigger <= 0 || t.Distance <= 0 || t.Step <= 0 || t.Step > t.Distance) {
-		return invalid("the trailing stop needs a trigger, a distance and a step above 0, the step up to the distance")
+		return invalid("o gatilho, a distância e o passo do trailing stop devem ser maiores que 0, e o passo não " +
+			"pode passar da distância")
 	}
 	return nil
 }
@@ -108,7 +109,7 @@ func (s *Store) SetAgentProtection(ctx context.Context, id int64, settings ui.Pr
 	err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}}, UpdateAll: true}).
 		Create(&row).Error
 	if err != nil {
-		return AgentProtection{}, notFound(err, fmt.Sprintf("the protection of the agent %d", id))
+		return AgentProtection{}, notFound(err, fmt.Sprintf("a proteção do agente %d", id))
 	}
 	return row, nil
 }
@@ -178,12 +179,13 @@ func (s *Store) ArmProtection(ctx context.Context, a PositionProtection) (Positi
 	a.Reason = strings.TrimSpace(a.Reason)
 	switch {
 	case a.Feature != ui.ProtectionBreakeven && a.Feature != ui.ProtectionTrailing:
-		return PositionProtection{}, fmt.Errorf("%w: the feature %q: breakeven or trailing", ErrInvalid, a.Feature)
+		return PositionProtection{}, fmt.Errorf("%w: a proteção %q não existe, use breakeven ou trailing", ErrInvalid,
+			a.Feature)
 	case a.Reason == "" || utf8.RuneCountInString(a.Reason) > maxProtectionReason:
-		return PositionProtection{}, fmt.Errorf("%w: the reason of an arm: 1 to %d characters", ErrInvalid,
+		return PositionProtection{}, fmt.Errorf("%w: o motivo da proteção deve ter de 1 a %d caracteres", ErrInvalid,
 			maxProtectionReason)
 	case a.Pair == "" || a.PositionRef == "":
-		return PositionProtection{}, fmt.Errorf("%w: an arm needs its pair and its position", ErrInvalid)
+		return PositionProtection{}, fmt.Errorf("%w: informe o ativo e a posição da proteção", ErrInvalid)
 	}
 	if len(a.Evidence) == 0 {
 		a.Evidence = json.RawMessage(`[]`)
@@ -191,8 +193,7 @@ func (s *Store) ArmProtection(ctx context.Context, a PositionProtection) (Positi
 	now := time.Now()
 	a.ID, a.Status, a.CreatedAt, a.UpdatedAt = 0, ArmRequested, now, now
 	if err := s.conn(ctx).Create(&a).Error; err != nil {
-		return PositionProtection{}, notFound(err, fmt.Sprintf("the %s of the position %s", a.Feature,
-			a.PositionRef))
+		return PositionProtection{}, notFound(err, fmt.Sprintf("o %s da posição %s", a.Feature, a.PositionRef))
 	}
 	return a, nil
 }
@@ -221,7 +222,7 @@ func (s *Store) SetArmStatus(ctx context.Context, id int64, status string, move 
 	result := s.conn(ctx).Model(&PositionProtection{}).Where("id = ? AND status <> ?", id, ArmEnded).
 		Updates(values)
 	if result.Error != nil {
-		return notFound(result.Error, fmt.Sprintf("the arm %d", id))
+		return notFound(result.Error, fmt.Sprintf("a proteção armada %d", id))
 	}
 	return nil
 }

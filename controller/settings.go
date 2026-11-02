@@ -115,11 +115,11 @@ func idParam(w http.ResponseWriter, r *http.Request, name string) (int64, bool) 
 func (s *settings) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, err.Error())
+		writeJSONError(w, http.StatusNotFound, userMessage(err))
 	case errors.Is(err, store.ErrConflict), errors.As(err, new(samePositions)):
-		writeJSONError(w, http.StatusConflict, err.Error())
+		writeJSONError(w, http.StatusConflict, userMessage(err))
 	case errors.Is(err, store.ErrInvalid):
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+		writeJSONError(w, http.StatusBadRequest, userMessage(err))
 	case errors.Is(err, ErrStopped), errors.Is(err, context.Canceled):
 		log.Debugf("ui: settings: %v", err)
 		writeJSONError(w, http.StatusServiceUnavailable, stoppingMessage)

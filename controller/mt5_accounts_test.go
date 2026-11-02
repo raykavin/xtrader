@@ -313,7 +313,7 @@ func TestMT5Accounts_InUse(t *testing.T) {
 	agentPath := "/api/settings/agents/trend"
 	resp, body = call(http.MethodPatch, agentPath, ui.AgentSettingsRequest{MT5AccountID: &demo.ID})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "pare o agente")
+	assert.Contains(t, body, "Pare o agente antes de trocar a conta MT5 dele.")
 	s.mu.Lock()
 	s.running["trend"] = false
 	s.mu.Unlock()

@@ -45,9 +45,9 @@ func (s *Store) StartPeriod(ctx context.Context, name string, deposit float64, c
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	switch {
 	case math.IsNaN(deposit) || deposit < 0 || deposit > maxDeposit:
-		return Period{}, fmt.Errorf("%w: the deposit must be from 0 to %.0f", ErrInvalid, float64(maxDeposit))
+		return Period{}, fmt.Errorf("%w: o depósito deve ficar entre 0 e %.0f", ErrInvalid, float64(maxDeposit))
 	case !currencyRegexp.MatchString(currency):
-		return Period{}, fmt.Errorf("%w: the currency must be a code of 3 letters, eg: BRL, not %q", ErrInvalid,
+		return Period{}, fmt.Errorf("%w: a moeda deve ser um código de 3 letras, ex.: BRL, não %q", ErrInvalid,
 			currency)
 	}
 
@@ -56,7 +56,7 @@ func (s *Store) StartPeriod(ctx context.Context, name string, deposit float64, c
 		var agent Agent
 		err := s.conn(ctx).Clauses(lockForUpdate()).Where("name = ?", name).First(&agent).Error
 		if err != nil {
-			return notFound(err, "agent "+name)
+			return notFound(err, "o agente "+name)
 		}
 		started := s.db.NowFunc()
 		var last Period
@@ -69,7 +69,7 @@ func (s *Store) StartPeriod(ctx context.Context, name string, deposit float64, c
 		}
 		period = Period{AgentID: agent.ID, StartedAt: started, Deposit: cents(deposit),
 			Currency: currency, CreatedBy: strings.TrimSpace(by)}
-		return notFound(s.conn(ctx).Create(&period).Error, "the period of the agent "+name)
+		return notFound(s.conn(ctx).Create(&period).Error, "o período do agente "+name)
 	})
 	return period, err
 }

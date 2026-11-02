@@ -106,7 +106,7 @@ func (s *Store) appendJournal(ctx context.Context, id int64, entries []JournalEn
 	rows := make([]journalRow, 0, len(entries))
 	for _, e := range entries {
 		if len(e.Input) == 0 {
-			return 0, fmt.Errorf("%w: the journal entry %s has no input", ErrInvalid, e.ID)
+			return 0, fmt.Errorf("%w: o registro %s do diário não tem os dados de entrada", ErrInvalid, e.ID)
 		}
 		row := journalRow{AgentID: id, ID: e.ID, At: e.At.UTC(), Pair: e.Pair, Trigger: e.Trigger,
 			RequestedBy: e.RequestedBy, Model: e.Model, LatencyMS: e.LatencyMS, Input: jsonb(e.Input),

@@ -191,12 +191,14 @@ func TestSettingsAPI_RefusesTheSamePositions(t *testing.T) {
 		Account: ui.AgentAccountSettings{BridgeURL: "http://localhost:18812"},
 		LLM:     &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5"}})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "agent gold-three: the agent gold, enabled in live mode, trades XAUUSDm")
+	assert.Contains(t, body, "agente gold, ligado no modo live, já opera XAUUSDm")
+	assert.Contains(t, body, "ao agente gold-three um comentário")
 
 	resp, body = call(http.MethodPatch, "/api/settings/agents/gold-two", ui.AgentSettingsRequest{
 		Enabled: boolPtr(true)})
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "agent gold-two: the agent gold, enabled in live mode, trades XAUUSDm")
+	assert.Contains(t, body, "agente gold, ligado no modo live, já opera XAUUSDm")
+	assert.Contains(t, body, "ao agente gold-two um comentário")
 
 	resp, body = call(http.MethodPatch, "/api/settings/agents/gold-two", ui.AgentSettingsRequest{
 		Enabled: boolPtr(true), Account: &ui.AgentAccountRequest{Comment: secret("nb:two")}})
