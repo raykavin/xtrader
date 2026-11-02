@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef } from "react";
 import type { Point, Snapshot } from "../api/types";
 import { formatPrice, LOCALE } from "../lib/format";
+import { HIDDEN_AMOUNT, useValuesHidden, valuesHidden } from "../lib/hiddenValues";
 import { palettes, type Theme } from "../lib/theme";
 
 interface Props {
@@ -23,6 +24,15 @@ interface ChartState {
   chart: IChartApi;
   equity: ISeriesApi<"Line">;
   asset: ISeriesApi<"Line">;
+}
+
+/** The format of the equity on its scale: its amount, masked while the amounts are hidden. */
+function equityFormat() {
+  return {
+    type: "custom" as const,
+    minMove: 0.01,
+    formatter: (value: number) => (valuesHidden() ? HIDDEN_AMOUNT : formatPrice(value)),
+  };
 }
 
 function toLine(points: Point[]): LineData<Time>[] {
@@ -68,6 +78,7 @@ export function EquityChart({ snapshot, theme }: Props) {
       title: "Patrimônio",
       priceScaleId: "right",
       priceLineVisible: false,
+      priceFormat: equityFormat(),
     });
     const asset = chart.addSeries(LineSeries, {
       color: palette.asset,
@@ -101,6 +112,12 @@ export function EquityChart({ snapshot, theme }: Props) {
     state.equity.applyOptions({ color: palette.equity });
     state.asset.applyOptions({ color: palette.asset });
   }, [theme]);
+
+  const hidden = useValuesHidden();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the scale of the equity drawn again as the amounts are hidden or shown
+  useEffect(() => {
+    stateRef.current?.equity.applyOptions({ priceFormat: equityFormat() });
+  }, [hidden]);
 
   useEffect(() => {
     const state = stateRef.current;

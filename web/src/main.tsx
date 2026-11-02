@@ -5,6 +5,7 @@ import { BacktestingPage } from "./components/BacktestingPage";
 import { Login } from "./components/Login";
 import { PerformancePage } from "./components/PerformancePage";
 import { SettingsPage } from "./components/SettingsPage";
+import { useValuesHidden } from "./lib/hiddenValues";
 import "./fonts.css";
 import "./styles.css";
 
@@ -22,4 +23,14 @@ function page() {
   return <App />;
 }
 
-createRoot(root).render(<StrictMode>{page()}</StrictMode>);
+/** The page, drawn again whole as the amounts are hidden or shown, see useValuesHidden. */
+function Root() {
+  useValuesHidden();
+  return page();
+}
+
+createRoot(root).render(
+  <StrictMode>
+    <Root />
+  </StrictMode>,
+);

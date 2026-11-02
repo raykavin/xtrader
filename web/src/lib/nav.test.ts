@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dashboardHref, rememberDashboard, settingsHref } from "./nav";
+import { agentPairHref, dashboardHref, rememberDashboard, settingsHref } from "./nav";
 
 /** A storage of a map, as the session storage of the browser. */
 function memory(): Pick<Storage, "getItem" | "setItem"> {
@@ -52,5 +52,15 @@ describe("dashboardHref", () => {
 describe("settingsHref", () => {
   it("links to a section of the settings by its hash", () => {
     expect(settingsHref("prompts")).toBe("/settings#prompts");
+  });
+});
+
+describe("agentPairHref", () => {
+  it("links to an agent on a pair, the rest of the search kept", () => {
+    expect(agentPairHref("highlow", "BTCUSDm")).toBe("/?agent=highlow&pair=BTCUSDm");
+    expect(agentPairHref("highlow", "BTCUSDm", "?agent=matrend&pair=XAUUSDm&tf=15m")).toBe(
+      "/?agent=highlow&pair=BTCUSDm&tf=15m",
+    );
+    expect(agentPairHref("a b", "X&Y")).toBe("/?agent=a+b&pair=X%26Y");
   });
 });

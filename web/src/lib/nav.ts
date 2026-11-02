@@ -29,6 +29,14 @@ export function dashboardHref(storage: Pick<Storage, "getItem"> | null): string 
   return "/";
 }
 
+/** The link to the dashboard of an agent on one of its pairs, the rest of search (eg: the timeframe) kept. */
+export function agentPairHref(agent: string, pair: string, search = ""): string {
+  const params = new URLSearchParams(search);
+  params.set("agent", agent);
+  params.set("pair", pair);
+  return `/?${params.toString()}`;
+}
+
 /** The session storage of the page, null where the browser refuses it. */
 export function sessionStore(): Storage | null {
   try {

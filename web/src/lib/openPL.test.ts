@@ -13,6 +13,7 @@ import {
   openPLSummary,
   profitTone,
   severalCurrencies,
+  tileAssets,
 } from "./openPL";
 
 const position = (
@@ -266,6 +267,48 @@ describe("the agents on the band", () => {
       true,
     );
     expect(severalCurrencies(null, null)).toBe(false);
+  });
+});
+
+describe("the assets of the tile of an agent", () => {
+  const line = agentLines(
+    read({
+      positions: [
+        position("highlow", 1, 2, { pair: "BTCUSDm", side: "SELL" }),
+        position("highlow", 2, 1, { pair: "BTCUSDm" }),
+        position("highlow", 3, -1, { pair: "XAGUSDm" }),
+      ],
+    }),
+    null,
+  )[0];
+
+  it("lists the pairs of the agent in their order, each with its sides open or alone", () => {
+    expect(line).toBeDefined();
+    if (!line) return;
+    expect(
+      tileAssets(line, ["XAUUSDm", "BTCUSDm"]).map((row) => [row.pair, row.open?.side]),
+    ).toEqual([
+      ["XAUUSDm", undefined],
+      ["BTCUSDm", "SELL"],
+      ["BTCUSDm", "BUY"],
+      ["XAGUSDm", "BUY"],
+    ]);
+  });
+
+  it("lists the pairs open only without the ones of the agent", () => {
+    if (!line) return;
+    expect(tileAssets(line).map((row) => row.pair)).toEqual(["BTCUSDm", "BTCUSDm", "XAGUSDm"]);
+    const flat = agentLines(
+      null,
+      closedRead({
+        agents: [{ agent: "orb", amount: 1, currency: "BRL", positions: 1, running: true }],
+      }),
+    )[0];
+    if (!flat) throw new Error("no line");
+    expect(tileAssets(flat, ["XAUUSDm", "BTCUSDm"])).toEqual([
+      { pair: "XAUUSDm" },
+      { pair: "BTCUSDm" },
+    ]);
   });
 });
 
