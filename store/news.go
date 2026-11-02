@@ -112,7 +112,7 @@ func (u NewsUpdate) apply(rules *NewsRules) error {
 		case url == "":
 			rules.MCPURL = nil
 		case !httpURL(url):
-			return fmt.Errorf("%w: the address of the MCP server, an http(s) URL without credentials", ErrInvalid)
+			return fmt.Errorf("%w: o servidor MCP deve ser uma URL http(s) sem credenciais", ErrInvalid)
 		default:
 			rules.MCPURL = &url
 		}
@@ -121,19 +121,19 @@ func (u NewsUpdate) apply(rules *NewsRules) error {
 		value *int
 		into  *int
 		name  string
-	}{{u.BlockBefore, &rules.BlockBefore, "before"}, {u.BlockAfter, &rules.BlockAfter, "after"}} {
+	}{{u.BlockBefore, &rules.BlockBefore, "antes"}, {u.BlockAfter, &rules.BlockAfter, "depois"}} {
 		if minutes.value == nil {
 			continue
 		}
 		if *minutes.value < 0 || *minutes.value > maxNewsWindow {
-			return fmt.Errorf("%w: the window of the news %s a release: from 0 to %d minutes", ErrInvalid,
-				minutes.name, maxNewsWindow)
+			return fmt.Errorf("%w: a janela das notícias %s de uma divulgação deve ficar entre 0 e %d minutos",
+				ErrInvalid, minutes.name, maxNewsWindow)
 		}
 		*minutes.into = *minutes.value
 	}
 	if u.BlockImportance != nil {
 		if !slices.Contains(newsImportances, *u.BlockImportance) {
-			return fmt.Errorf("%w: the importance of the releases of the window: low, medium or high", ErrInvalid)
+			return fmt.Errorf("%w: a importância das divulgações deve ser low, medium ou high", ErrInvalid)
 		}
 		rules.BlockImportance = *u.BlockImportance
 	}
@@ -151,7 +151,7 @@ func (s *Store) SetNews(ctx context.Context, update NewsUpdate) (NewsSettings, e
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		err := s.conn(ctx).Clauses(lockForUpdate()).First(&settings, 1).Error
 		if err != nil {
-			return notFound(err, "the settings of the news: run cmd/migrator up, which seeds them")
+			return notSeeded(err, "a configuração das notícias")
 		}
 		if update.Enabled != nil {
 			settings.Enabled = *update.Enabled
@@ -170,7 +170,7 @@ func (s *Store) SetNews(ctx context.Context, update NewsUpdate) (NewsSettings, e
 		}
 		var rules NewsRules
 		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&rules, 1).Error; err != nil {
-			return notFound(err, "the rules of the news: run cmd/migrator up, which seeds them")
+			return notSeeded(err, "a configuração das regras das notícias")
 		}
 		if err := update.apply(&rules); err != nil {
 			return err
@@ -276,7 +276,7 @@ func (s *Store) MigrateNewsToken(ctx context.Context) (NewsMigration, error) {
 		var settings NewsSettings
 		err = s.conn(ctx).Clauses(lockForUpdate()).First(&settings, 1).Error
 		if err != nil {
-			return notFound(err, "the settings of the news: run cmd/migrator up, which seeds them")
+			return notSeeded(err, "a configuração das notícias")
 		}
 		if len(rows) == 0 || len(settings.MCPToken) > 0 {
 			return s.dropLegacyCalendarTokens(ctx)
@@ -420,7 +420,7 @@ func (s *Store) MigrateNewsURL(ctx context.Context) (NewsURLMigration, error) {
 		result.URLs = len(rows)
 		var rules NewsRules
 		if err := s.conn(ctx).Clauses(lockForUpdate()).First(&rules, 1).Error; err != nil {
-			return notFound(err, "the rules of the news: run cmd/migrator up, which seeds them")
+			return notSeeded(err, "a configuração das regras das notícias")
 		}
 		var urls []string
 		for _, row := range rows {

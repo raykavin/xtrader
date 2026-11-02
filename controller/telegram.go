@@ -626,8 +626,8 @@ func (t *Telegram) handleOrder(m *tb.Message) {
 	var apiErr *apiError
 	switch {
 	case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict &&
-		strings.Contains(apiErr.Message, order.ErrEntriesBlocked.Error()):
-		t.reply(m, a, "Entradas bloqueadas, nenhuma ordem criada: "+apiErr.Message)
+		strings.HasPrefix(apiErr.Message, ui.EntriesBlocked):
+		t.reply(m, a, "Nenhuma ordem criada. "+apiErr.Message)
 	case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict:
 		t.reply(m, a, "Bot is stopped, no order was created. Send /start to resume.", t.menu)
 	case err != nil:

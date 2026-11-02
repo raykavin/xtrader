@@ -95,7 +95,7 @@ func (f *fakePrompts) PromptByName(_ context.Context, name string) (store.Prompt
 	if p, ok := f.prompts[name]; ok {
 		return *p, nil
 	}
-	return store.Prompt{}, fmt.Errorf("%w: prompt %s", store.ErrNotFound, name)
+	return store.Prompt{}, fmt.Errorf("%w: o prompt %s não existe", store.ErrNotFound, name)
 }
 
 func (f *fakePrompts) UpdatePrompt(_ context.Context, id int64, edit store.PromptEdit, by string) (store.Prompt,
@@ -110,11 +110,11 @@ func (f *fakePrompts) UpdatePrompt(_ context.Context, id int64, edit store.Promp
 			continue
 		}
 		if edit.Version > 0 && edit.Version != p.Version {
-			return store.Prompt{}, fmt.Errorf("%w: the prompt %s was edited meanwhile, version %d now",
+			return store.Prompt{}, fmt.Errorf("%w: o prompt %s foi alterado enquanto você editava e agora está na versão %d",
 				store.ErrConflict, p.Name, p.Version)
 		}
 		if strings.TrimSpace(*edit.Content) == "" {
-			return store.Prompt{}, fmt.Errorf("%w: the prompt %s is empty", store.ErrInvalid, p.Name)
+			return store.Prompt{}, fmt.Errorf("%w: o prompt %s está vazio", store.ErrInvalid, p.Name)
 		}
 		if *edit.Content != p.Content {
 			p.Content, p.Version = *edit.Content, p.Version+1
@@ -131,7 +131,7 @@ func (f *fakePrompts) AgentByName(_ context.Context, name string) (store.Agent, 
 	if a, ok := f.agents[name]; ok {
 		return a, nil
 	}
-	return store.Agent{}, fmt.Errorf("%w: agent %s", store.ErrNotFound, name)
+	return store.Agent{}, fmt.Errorf("%w: o agente %s não existe", store.ErrNotFound, name)
 }
 
 func (f *fakePrompts) Agents(context.Context) ([]store.Agent, error) {
@@ -225,7 +225,7 @@ func TestTelegram_ListAndShowThePrompts(t *testing.T) {
 	assert.True(t, strings.HasPrefix(documents[0].Content, "Setup: the scalp."))
 
 	telegram.handlePrompt(command("/prompt nothing"))
-	assert.Equal(t, "⚠️ not found: prompt nothing", server.last(t).Text)
+	assert.Equal(t, "⚠️ O prompt nothing não existe.", server.last(t).Text)
 	telegram.handlePrompt(command("/prompt"))
 	assert.Contains(t, server.last(t).Text, "Name the prompt")
 }
@@ -294,7 +294,7 @@ func TestTelegram_EditAPrompt(t *testing.T) {
 	telegram.handleConfirm(command("/confirm"))
 	assert.Equal(t, "Nothing to confirm.", server.last(t).Text)
 	telegram.handleEditPrompt(message("/editprompt nothing"))
-	assert.Equal(t, "⚠️ not found: prompt nothing", server.last(t).Text)
+	assert.Equal(t, "⚠️ O prompt nothing não existe.", server.last(t).Text)
 	telegram.handleDocument(&tb.Message{Sender: &tb.User{ID: telegramUserID},
 		Document: &tb.Document{File: tb.File{FileID: "file-1"}}})
 	assert.Equal(t, 4, prompts.version("trend_following"), "a file without an edit asked")
@@ -377,9 +377,9 @@ func TestTelegramEditPrompt_ConfirmFailingForNowKeepsTheContent(t *testing.T) {
 	t.Run("refused for good", func(t *testing.T) {
 		telegram, server, prompts, changes := promptsTelegram(t)
 		telegram.handleEditPrompt(message("/editprompt trend_following\nSetup: v2"))
-		prompts.failNext("UpdatePrompt", fmt.Errorf("%w: the header of the prompt", store.ErrInvalid))
+		prompts.failNext("UpdatePrompt", fmt.Errorf("%w: o cabeçalho do prompt tem um valor inválido", store.ErrInvalid))
 		telegram.handleConfirm(command("/confirm"))
-		assert.Equal(t, "⚠️ invalid: the header of the prompt", server.last(t).Text)
+		assert.Equal(t, "⚠️ O cabeçalho do prompt tem um valor inválido.", server.last(t).Text)
 		telegram.handleConfirm(command("/confirm"))
 		assert.Equal(t, "Nothing to confirm.", server.last(t).Text, "given up")
 		assert.Equal(t, 1, prompts.version("trend_following"))
@@ -506,7 +506,7 @@ func TestTelegram_UseAPrompt(t *testing.T) {
 	telegram.handleUsePrompt(command("/useprompt matrend scalp_1m"))
 	assert.Equal(t, "⚠️ matrend doesn't trade with a language model: it has no prompt.", server.last(t).Text)
 	telegram.handleUsePrompt(command("/useprompt nobody scalp_1m"))
-	assert.Equal(t, "⚠️ not found: agent nobody", server.last(t).Text)
+	assert.Equal(t, "⚠️ O agente nobody não existe.", server.last(t).Text)
 	telegram.handleUsePrompt(command("/useprompt llm"))
 	assert.Contains(t, server.last(t).Text, "Name the agent and the prompt")
 	assert.EqualValues(t, 2, changes.Load(), "only the switches")

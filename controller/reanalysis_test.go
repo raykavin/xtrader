@@ -112,14 +112,14 @@ func TestSettingsAPI_TheReanalysisOfAnAgent(t *testing.T) {
 	// refused: an agent of another kind, and one that doesn't exist
 	status, _, body := patch("matrend", ui.AgentSettingsRequest{Reanalysis: boolPtr(true)})
 	assert.Equal(t, http.StatusBadRequest, status, body)
-	assert.Contains(t, body, "an agent of kind trend has none")
+	assert.Contains(t, body, "é do tipo trend e não tem LLM")
 	assert.False(t, listed("matrend").Reanalysis)
 	status, matrend, body := patch("matrend", ui.AgentSettingsRequest{Reanalysis: boolPtr(false)})
 	assert.Equal(t, http.StatusOK, status, "off: nothing to switch off: %s", body)
 	assert.False(t, matrend.Reanalysis)
 	status, _, body = patch("nobody", ui.AgentSettingsRequest{Reanalysis: boolPtr(true)})
 	assert.Equal(t, http.StatusNotFound, status, body)
-	assert.Contains(t, body, "agent nobody")
+	assert.Contains(t, body, "agente nobody não existe")
 
 	// created with it, an LLM agent only
 	resp, body := call(http.MethodPost, "/api/settings/agents", ui.AgentCreateRequest{Name: "gold", Kind: "llm",
@@ -140,7 +140,7 @@ func TestSettingsAPI_TheReanalysisOfAnAgent(t *testing.T) {
 		Mode: "paper", APIAddress: "localhost:15612", Reanalysis: true, Params: map[string]string{"strategy": "emacross"},
 		Account: ui.AgentAccountSettings{BridgeURL: "http://127.0.0.1:18812", Comment: secret("nb:emas")}})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
-	assert.Contains(t, body, "an agent of kind trend has none")
+	assert.Contains(t, body, "é do tipo trend e não tem LLM")
 	assert.Len(t, agentNames(t, call), 4, "the trend agent not created")
 	assertProtected(t, srv, http.MethodPost, "/api/settings/agents", `{"name":"x","kind":"llm","reanalysis":true}`)
 }

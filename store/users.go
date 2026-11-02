@@ -42,9 +42,9 @@ var dummyHash = sync.OnceValue(func() []byte {
 func hashPassword(password string) (string, error) {
 	switch {
 	case len(password) < passwordMin:
-		return "", fmt.Errorf("%w: the password needs %d characters at least", ErrInvalid, passwordMin)
+		return "", fmt.Errorf("%w: a senha deve ter ao menos %d caracteres", ErrInvalid, passwordMin)
 	case len(password) > passwordMax:
-		return "", fmt.Errorf("%w: the password takes %d bytes at most", ErrInvalid, passwordMax)
+		return "", fmt.Errorf("%w: a senha deve ter até %d bytes", ErrInvalid, passwordMax)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
@@ -57,7 +57,8 @@ func hashPassword(password string) (string, error) {
 func (s *Store) CreateUser(ctx context.Context, username, password string) (User, error) {
 	username = strings.TrimSpace(username)
 	if !usernameRegexp.MatchString(username) {
-		return User{}, fmt.Errorf("%w: username %q: letters, digits and . _ @ -, 64 at most", ErrInvalid, username)
+		return User{}, fmt.Errorf("%w: nome de usuário %q inválido: use letras, números e . _ @ -, até 64 "+
+			"caracteres", ErrInvalid, username)
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -65,7 +66,7 @@ func (s *Store) CreateUser(ctx context.Context, username, password string) (User
 	}
 	user := User{Username: username, PasswordHash: hash, Enabled: true}
 	if err := s.conn(ctx).Create(&user).Error; err != nil {
-		return User{}, notFound(err, "user "+username)
+		return User{}, notFound(err, "o usuário "+username)
 	}
 	return user, nil
 }
@@ -81,7 +82,7 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 func (s *Store) User(ctx context.Context, id int64) (User, error) {
 	var user User
 	err := s.conn(ctx).First(&user, id).Error
-	return user, notFound(err, fmt.Sprintf("user %d", id))
+	return user, notFound(err, fmt.Sprintf("o usuário %d", id))
 }
 
 // CountUsers returns the number of users, the disabled ones included.
@@ -121,7 +122,7 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		}
 		result := s.conn(ctx).Delete(&User{}, id)
 		if result.Error == nil && result.RowsAffected == 0 {
-			return fmt.Errorf("%w: user %d", ErrNotFound, id)
+			return fmt.Errorf("%w: o usuário %d não existe", ErrNotFound, id)
 		}
 		return result.Error
 	})
@@ -136,7 +137,7 @@ func (s *Store) keepOneEnabled(ctx context.Context, id int64) error {
 		return err
 	}
 	if len(enabled) == 1 && enabled[0] == id {
-		return fmt.Errorf("%w: the last user enabled can't be disabled nor deleted", ErrInvalid)
+		return fmt.Errorf("%w: o último usuário ativo não pode ser desativado nem excluído", ErrInvalid)
 	}
 	return nil
 }
@@ -145,7 +146,7 @@ func (s *Store) keepOneEnabled(ctx context.Context, id int64) error {
 func (s *Store) updateUser(ctx context.Context, id int64, columns map[string]interface{}) error {
 	result := s.conn(ctx).Model(&User{}).Where("id = ?", id).Updates(columns)
 	if result.Error == nil && result.RowsAffected == 0 {
-		return fmt.Errorf("%w: user %d", ErrNotFound, id)
+		return fmt.Errorf("%w: o usuário %d não existe", ErrNotFound, id)
 	}
 	return result.Error
 }

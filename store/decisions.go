@@ -289,7 +289,7 @@ func (s *Store) Decision(ctx context.Context, id int64, decisionID string) (ui.D
 		return ui.Decision{}, err
 	}
 	if len(rows) == 0 {
-		return ui.Decision{}, fmt.Errorf("%w: decision %s", ErrNotFound, decisionID)
+		return ui.Decision{}, fmt.Errorf("%w: a decisão %s não existe", ErrNotFound, decisionID)
 	}
 	decisions, err := s.decisions(ctx, id, rows)
 	if err != nil {
@@ -380,7 +380,7 @@ func (s *Store) DecisionAttachment(ctx context.Context, id int64, decisionID str
 		return "", nil, err
 	}
 	if len(rows) == 0 {
-		return "", nil, fmt.Errorf("%w: attachment %d of the decision %s", ErrNotFound, number, decisionID)
+		return "", nil, fmt.Errorf("%w: o anexo %d da decisão %s não existe", ErrNotFound, number, decisionID)
 	}
 	return rows[0].MediaType, rows[0].Data, nil
 }

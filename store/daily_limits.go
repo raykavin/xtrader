@@ -211,21 +211,21 @@ func (g DailyGuard) Info() ui.DailyGuardInfo {
 // each account apart) as of an agent (the one of its account).
 func validateDailyLimit(settings ui.DailyLimitSettings, global bool) error {
 	invalid := func(format string, args ...any) error {
-		return fmt.Errorf("%w: the daily limits: %s", ErrInvalid, fmt.Sprintf(format, args...))
+		return fmt.Errorf("%w: limite diário: %s", ErrInvalid, fmt.Sprintf(format, args...))
 	}
-	for name, value := range map[string]*float64{"the loss": settings.MaxLoss, "the gain": settings.MaxGain} {
+	for name, value := range map[string]*float64{"a perda máxima": settings.MaxLoss, "o ganho máximo": settings.MaxGain} {
 		if value != nil && (math.IsNaN(*value) || *value <= 0 || *value > DailyLimitMax) {
-			return invalid("%s: above 0 and up to %.0f", name, DailyLimitMax)
+			return invalid("%s deve ser maior que 0 e no máximo %.0f", name, DailyLimitMax)
 		}
 	}
 	if settings.Enabled && settings.MaxLoss == nil && settings.MaxGain == nil {
-		return invalid("enabled, a loss or a gain at least")
+		return invalid("informe a perda máxima ou o ganho máximo para ligá-lo")
 	}
 	switch {
 	case global && settings.Currency != "":
-		return invalid("the limits of all the agents apply in the currency of each account, none to set")
+		return invalid("o limite de todos os agentes vale na moeda de cada conta: não informe uma moeda")
 	case !global && settings.Currency != "":
-		return invalid("the limits of an agent are in the currency of its account")
+		return invalid("o limite de um agente vale na moeda da conta dele: não informe uma moeda")
 	}
 	return nil
 }
@@ -284,7 +284,7 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 			MaxGain: settings.MaxGain, UpdatedBy: change.By, UpdatedAt: time.Now()}
 		if err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
 			Create(&next).Error; err != nil {
-			return notFound(err, "the daily limits")
+			return notFound(err, "o limite diário")
 		}
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, Kind: EventLimitChanged, Via: change.Via,
 			RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason, Previous: jsonOf(before),
@@ -314,7 +314,7 @@ func (s *Store) SetAgentDailyLimit(ctx context.Context, id int64, settings ui.Da
 			MaxGain: settings.MaxGain, UpdatedBy: change.By, UpdatedAt: time.Now()}
 		if err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "agent_id"}}, UpdateAll: true}).
 			Create(&next).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the daily limits of the agent %d", id))
+			return notFound(err, fmt.Sprintf("o limite diário do agente %d", id))
 		}
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, AgentID: &id, Kind: EventLimitChanged,
 			Via: change.Via, RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason,
@@ -360,7 +360,7 @@ func (s *Store) TripDailyGuard(ctx context.Context, trip GuardTrip) (guard Daily
 			RETURNING *`, trip.Day, trip.AgentID, trip.Kind, trigger, trip.Result, trip.Limit, trip.Currency,
 			trip.Reason).Scan(&rows).Error
 		if err != nil {
-			return notFound(err, "the daily guard")
+			return notFound(err, "o bloqueio do limite diário")
 		}
 		if len(rows) == 0 { // tripped already
 			q := s.conn(ctx).Where("day = ?::date AND kind = ? AND state = ?", trip.Day, trip.Kind, GuardTripped)
@@ -437,7 +437,7 @@ func (s *Store) SetGuardFlatten(ctx context.Context, id int64, status string, ac
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		var g DailyGuard
 		if err := s.conn(ctx).Take(&g, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the daily guard %d", id))
+			return notFound(err, fmt.Sprintf("o bloqueio %d do limite diário", id))
 		}
 		err := s.conn(ctx).Model(&DailyGuard{}).Where("id = ?", id).Updates(map[string]any{"flatten_status": status,
 			"flatten_action_id": actionID, "flatten_attempts": attempts, "updated_at": time.Now()}).Error

@@ -138,15 +138,28 @@ func (s *Store) conn(ctx context.Context) *gorm.DB {
 	return s.db.WithContext(ctx)
 }
 
-// notFound turns gorm.ErrRecordNotFound into ErrNotFound, of what.
+// notFound turns gorm.ErrRecordNotFound into ErrNotFound, of what, a
+// duplicate key into ErrConflict and a check of its table into ErrInvalid:
+// what is the record as the dashboard tells it, singular, eg: "o agente gold",
+// its detail a sentence, eg: "o agente gold não existe".
 func notFound(err error, what string) error {
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		return fmt.Errorf("%w: %s", ErrNotFound, what)
+		return fmt.Errorf("%w: %s não existe", ErrNotFound, what)
 	case errors.Is(err, gorm.ErrDuplicatedKey):
-		return fmt.Errorf("%w: %s", ErrConflict, what)
+		return fmt.Errorf("%w: %s já existe", ErrConflict, what)
 	case errors.Is(err, gorm.ErrCheckConstraintViolated):
-		return fmt.Errorf("%w: %s", ErrInvalid, what)
+		return fmt.Errorf("%w: %s tem um valor inválido", ErrInvalid, what)
+	}
+	return err
+}
+
+// notSeeded is notFound for a row the seeds create, eg: the settings of the
+// news, telling how to create it.
+func notSeeded(err error, what string) error {
+	err = notFound(err, what)
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalid) {
+		return fmt.Errorf("%w: rode o cmd/migrator up, que aplica os dados iniciais", err)
 	}
 	return err
 }

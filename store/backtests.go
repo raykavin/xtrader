@@ -125,7 +125,7 @@ func (r backtestRunRow) run() BacktestRun {
 func (s *Store) CreateBacktestBatch(ctx context.Context, batch BacktestBatch, runs []BacktestRun) (BacktestBatch,
 	[]BacktestRun, error) {
 	if len(runs) == 0 {
-		return BacktestBatch{}, nil, fmt.Errorf("%w: a batch without runs", ErrInvalid)
+		return BacktestBatch{}, nil, fmt.Errorf("%w: o lote não tem execuções", ErrInvalid)
 	}
 	row := batchRow{Name: batch.Name, PeriodFrom: batch.From, PeriodTo: batch.To,
 		ValidationShare: batch.ValidationShare, Assumptions: jsonb(batch.Assumptions), CreatedBy: batch.CreatedBy,
@@ -133,14 +133,14 @@ func (s *Store) CreateBacktestBatch(ctx context.Context, batch BacktestBatch, ru
 	var created []BacktestRun
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		if err := s.conn(ctx).Create(&row).Error; err != nil {
-			return notFound(err, "the batch of backtests")
+			return notFound(err, "o lote de backtests")
 		}
 		for _, run := range runs {
 			r := backtestRunRow{BatchID: row.ID, Agent: run.Agent, Kind: run.Kind, Segment: run.Segment,
 				PeriodFrom: run.From, PeriodTo: run.To, Status: BacktestQueued, Config: jsonb(run.Config),
 				CreatedAt: row.CreatedAt}
 			if err := s.conn(ctx).Create(&r).Error; err != nil {
-				return notFound(err, "a run of backtest")
+				return notFound(err, "uma execução do lote")
 			}
 			created = append(created, r.run())
 		}
@@ -169,7 +169,7 @@ func (s *Store) BacktestBatches(ctx context.Context, limit int) ([]BacktestBatch
 func (s *Store) BacktestBatch(ctx context.Context, id int64) (BacktestBatch, error) {
 	var row batchRow
 	if err := s.conn(ctx).Take(&row, id).Error; err != nil {
-		return BacktestBatch{}, notFound(err, "the batch of backtests")
+		return BacktestBatch{}, notFound(err, "o lote de backtests")
 	}
 	return row.batch(), nil
 }
@@ -196,7 +196,7 @@ func (s *Store) BacktestRuns(ctx context.Context, ids []int64, withResult bool) 
 func (s *Store) BacktestRun(ctx context.Context, id int64) (BacktestRun, error) {
 	var row backtestRunRow
 	if err := s.conn(ctx).Take(&row, id).Error; err != nil {
-		return BacktestRun{}, notFound(err, "the run of backtest")
+		return BacktestRun{}, notFound(err, "a execução do backtest")
 	}
 	return row.run(), nil
 }
@@ -265,7 +265,7 @@ func (s *Store) DeleteBacktestBatch(ctx context.Context, id int64) error {
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		var row batchRow
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Take(&row, id).Error; err != nil {
-			return notFound(err, "the batch of backtests")
+			return notFound(err, "o lote de backtests")
 		}
 		var busy int64
 		if err := s.conn(ctx).Model(&backtestRunRow{}).Where("batch_id = ? AND status IN ?", id,

@@ -159,21 +159,21 @@ func (in MT5AccountInput) apply(a *MT5Account) {
 // validateMT5Account returns why a is refused, as the database checks it.
 func validateMT5Account(a MT5Account, in MT5AccountInput) error {
 	invalid := func(format string, args ...any) error {
-		return fmt.Errorf("%w: the account of MT5: %s", ErrInvalid, fmt.Sprintf(format, args...))
+		return fmt.Errorf("%w: conta MT5: %s", ErrInvalid, fmt.Sprintf(format, args...))
 	}
 	switch {
 	case a.Name == "" || len([]rune(a.Name)) > maxMT5Name || !oneLine(a.Name):
-		return invalid("a name of 1 to %d characters, on a line", maxMT5Name)
+		return invalid("o nome deve ter de 1 a %d caracteres, numa linha só", maxMT5Name)
 	case a.Login <= 0:
-		return invalid("the login, a number above 0")
+		return invalid("o login deve ser um número maior que 0")
 	case a.Server == "" || len(a.Server) > maxMT5Server || !oneLine(a.Server):
-		return invalid("the server, eg: Exness-MT5Real11")
+		return invalid("informe o servidor numa linha só, ex.: Exness-MT5Real11")
 	case !httpURL(a.BridgeURL):
-		return invalid("the bridge, an http(s) URL without credentials, eg: http://mt5:18812")
+		return invalid("a bridge deve ser uma URL http(s) sem credenciais, ex.: http://mt5:18812")
 	case in.Password != nil && len(*in.Password) > maxMT5Password:
-		return invalid("the password, %d characters at most", maxMT5Password)
+		return invalid("a senha deve ter até %d caracteres", maxMT5Password)
 	case in.BridgeToken != nil && !oneLine(*in.BridgeToken):
-		return invalid("the token of the bridge, on a line")
+		return invalid("o token da bridge deve ficar numa linha só")
 	}
 	return nil
 }
@@ -197,7 +197,7 @@ func (s *Store) MT5Accounts(ctx context.Context) ([]MT5Account, error) {
 func (s *Store) MT5Account(ctx context.Context, id int64) (MT5Account, error) {
 	var account MT5Account
 	err := s.conn(ctx).Take(&account, id).Error
-	return account, notFound(err, fmt.Sprintf("the account of MT5 %d", id))
+	return account, notFound(err, fmt.Sprintf("a conta MT5 %d", id))
 }
 
 // MT5AccountSecrets returns the password and the token of the bridge of
@@ -238,7 +238,7 @@ func (s *Store) CreateMT5Account(ctx context.Context, in MT5AccountInput, active
 	}
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		if err := s.conn(ctx).Omit("Password", "BridgeToken").Create(&account).Error; err != nil {
-			return notFound(err, "the account of MT5")
+			return notFound(err, "a conta MT5")
 		}
 		if err := s.sealMT5(&account, in); err != nil {
 			return err
@@ -262,7 +262,7 @@ func (s *Store) UpdateMT5Account(ctx context.Context, id int64, in MT5AccountInp
 	change MT5Change) (previous, next MT5Account, err error) {
 	err = s.Transaction(ctx, func(ctx context.Context) error {
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Take(&previous, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the account of MT5 %d", id))
+			return notFound(err, fmt.Sprintf("a conta MT5 %d", id))
 		}
 		next = previous
 		in.apply(&next)
@@ -274,7 +274,7 @@ func (s *Store) UpdateMT5Account(ctx context.Context, id int64, in MT5AccountInp
 		}
 		next.UpdatedBy, next.UpdatedAt = change.By, time.Now()
 		if err := s.conn(ctx).Select("*").Save(&next).Error; err != nil {
-			return notFound(err, "the account of MT5")
+			return notFound(err, "a conta MT5")
 		}
 		if next.BridgeURL != previous.BridgeURL {
 			if err := s.syncBridgeOf(ctx, next); err != nil {
@@ -304,7 +304,7 @@ func (s *Store) ActivateMT5Account(ctx context.Context, id int64, active bool,
 	err = s.Transaction(ctx, func(ctx context.Context) error {
 		var account MT5Account
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Take(&account, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the account of MT5 %d", id))
+			return notFound(err, fmt.Sprintf("a conta MT5 %d", id))
 		}
 		if account.Active == active {
 			return nil
@@ -329,7 +329,7 @@ func (s *Store) ActivateMT5Account(ctx context.Context, id int64, active bool,
 func (s *Store) setActive(ctx context.Context, account MT5Account, active bool, change MT5Change) error {
 	if err := s.conn(ctx).Model(&MT5Account{}).Where("id = ?", account.ID).Updates(map[string]any{
 		"active": active, "updated_by": change.By, "updated_at": time.Now()}).Error; err != nil {
-		return notFound(err, "the account of MT5")
+		return notFound(err, "a conta MT5")
 	}
 	kind := MT5Deactivated
 	if active {
@@ -345,18 +345,18 @@ func (s *Store) DeleteMT5Account(ctx context.Context, id int64, change MT5Change
 	return s.Transaction(ctx, func(ctx context.Context) error {
 		var account MT5Account
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Take(&account, id).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the account of MT5 %d", id))
+			return notFound(err, fmt.Sprintf("a conta MT5 %d", id))
 		}
 		if account.Active {
-			return fmt.Errorf("%w: the account of MT5 %s is the one of its terminal: deactivate it first",
-				ErrConflict, account.Name)
+			return fmt.Errorf("%w: a conta MT5 %s está ativa no terminal: desative-a antes", ErrConflict,
+				account.Name)
 		}
 		var agents int64
 		if err := s.conn(ctx).Model(&AgentMT5Account{}).Where("account_id = ?", id).Count(&agents).Error; err != nil {
 			return err
 		}
 		if agents > 0 {
-			return fmt.Errorf("%w: the account of MT5 %s has %d agents: link them to another one first",
+			return fmt.Errorf("%w: a conta MT5 %s ainda tem agentes (%d): vincule-os a outra conta antes",
 				ErrConflict, account.Name, agents)
 		}
 		if err := s.addMT5Event(ctx, MT5AccountEvent{AccountID: &id, Kind: MT5Deleted, RequestedBy: change.By,
@@ -451,11 +451,11 @@ func (s *Store) SetAgentMT5Account(ctx context.Context, agentID int64, accountID
 		}
 		var account MT5Account
 		if err := s.conn(ctx).Take(&account, *accountID).Error; err != nil {
-			return notFound(err, fmt.Sprintf("the account of MT5 %d", *accountID))
+			return notFound(err, fmt.Sprintf("a conta MT5 %d", *accountID))
 		}
 		link := AgentMT5Account{AgentID: agentID, AccountID: account.ID, UpdatedBy: change.By, UpdatedAt: time.Now()}
 		if err := s.conn(ctx).Save(&link).Error; err != nil {
-			return notFound(err, "the agent")
+			return notFound(err, "o agente")
 		}
 		var accounts []Account
 		if err := s.conn(ctx).Where("agent_id = ?", agentID).Find(&accounts).Error; err != nil {
@@ -464,7 +464,7 @@ func (s *Store) SetAgentMT5Account(ctx context.Context, agentID int64, accountID
 		if len(accounts) == 0 {
 			if err := s.conn(ctx).Create(&Account{AgentID: agentID, Exchange: "mt5",
 				BridgeURL: account.BridgeURL}).Error; err != nil {
-				return notFound(err, "the account of the agent")
+				return notFound(err, "a conta do agente")
 			}
 		} else if err := s.conn(ctx).Model(&Account{}).Where("agent_id = ?", agentID).Updates(map[string]any{
 			"bridge_url": account.BridgeURL, "updated_at": time.Now()}).Error; err != nil {

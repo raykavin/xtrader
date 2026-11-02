@@ -78,18 +78,18 @@ func (TradingHoursEvent) TableName() string { return "trading_hours_events" }
 // checks them: the times HH:MM when set; on, both set and apart.
 func validateTradingHours(settings ui.TradingHoursSettings) error {
 	invalid := func(format string, args ...any) error {
-		return fmt.Errorf("%w: the trading hours: %s", ErrInvalid, fmt.Sprintf(format, args...))
+		return fmt.Errorf("%w: horário de operação: %s", ErrInvalid, fmt.Sprintf(format, args...))
 	}
-	for name, value := range map[string]string{"the start": settings.Start, "the end": settings.End} {
+	for name, value := range map[string]string{"o início": settings.Start, "o fim": settings.End} {
 		if value != "" && !agentapi.ValidClock(value) {
-			return invalid("%s: a time HH:MM, from 00:00 to 23:59", name)
+			return invalid("%s deve ser um horário HH:MM, de 00:00 a 23:59", name)
 		}
 	}
 	switch {
 	case settings.Enabled && (settings.Start == "" || settings.End == ""):
-		return invalid("on, the start and the end")
+		return invalid("informe o início e o fim para ligá-lo")
 	case settings.Enabled && settings.Start == settings.End:
-		return invalid("the start and the end apart")
+		return invalid("o início e o fim devem ser diferentes")
 	}
 	return nil
 }
@@ -127,7 +127,7 @@ func (s *Store) SetTradingHours(ctx context.Context, settings ui.TradingHoursSet
 			Flatten: settings.Flatten, CancelPending: settings.CancelPending, UpdatedBy: by, UpdatedAt: time.Now()}
 		if err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
 			Create(&next).Error; err != nil {
-			return notFound(err, "the trading hours")
+			return notFound(err, "o horário de operação")
 		}
 		return s.RecordTradingHours(ctx, &TradingHoursEvent{Kind: HoursChanged, RequestedBy: by, UserID: userID,
 			Reason: reason, Previous: jsonOf(before), Next: jsonOf(next.recorded())})

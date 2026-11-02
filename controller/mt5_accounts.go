@@ -646,7 +646,7 @@ func (s *settings) handleCreateMT5Account(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if request.Name == nil || request.Login == nil || request.Server == nil || request.BridgeURL == nil {
-		writeJSONError(w, http.StatusBadRequest, "o nome, o login, o servidor e a bridge da conta são obrigatórios")
+		writeJSONError(w, http.StatusBadRequest, "Informe o nome, o login, o servidor e a bridge da conta.")
 		return
 	}
 	account, err := s.store.CreateMT5Account(r.Context(), inputOf(request), false, "", changeOf(r, request.Reason))
@@ -707,7 +707,7 @@ func (s *settings) handleUpdateMT5Account(w http.ResponseWriter, r *http.Request
 		request.BridgeURL != nil && strings.TrimSpace(*request.BridgeURL) != account.BridgeURL
 	deactivated := request.Active != nil && !*request.Active && account.Active
 	if request.Active != nil && *request.Active && !account.Active {
-		writeJSONError(w, http.StatusBadRequest, "para ativar a conta, use Ativar (POST .../activate)")
+		writeJSONError(w, http.StatusBadRequest, "Para ativar a conta, use Ativar (POST .../activate).")
 		return
 	}
 	if (moved || deactivated) && s.refuseInUse(w, r, account, "a conta está em uso") {
@@ -954,18 +954,18 @@ func (s *settings) linkAgent(w http.ResponseWriter, r *http.Request, a store.Age
 		return false
 	}
 	if s.mt5.isRunning(a.Name) {
-		writeJSONError(w, http.StatusConflict, "pare o agente antes de trocar a conta MT5 dele")
+		writeJSONError(w, http.StatusConflict, "Pare o agente antes de trocar a conta MT5 dele.")
 		return true
 	}
 	if a.Account != nil && a.Account.BridgeURL != "" {
 		open, err := s.mt5.exposure(r.Context(), a.Account.BridgeURL, []string{a.Name})
 		if err != nil {
-			writeJSONError(w, http.StatusConflict, err.Error())
+			writeJSONError(w, http.StatusConflict, sentence(err.Error()))
 			return true
 		}
 		if len(open) > 0 {
-			writeJSONError(w, http.StatusConflict, fmt.Sprintf("o agente tem %s na conta atual: feche-as antes "+
-				"de trocar a conta, ou ficariam sem acompanhamento", strings.Join(open, ", ")))
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("O agente tem %s na conta atual: feche-as antes "+
+				"de trocar a conta, ou ficariam sem acompanhamento.", strings.Join(open, ", ")))
 			return true
 		}
 	}

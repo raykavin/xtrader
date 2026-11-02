@@ -29,7 +29,8 @@ func (discardRow) TableName() string { return "position_discards" }
 func (s *Store) SaveDiscard(ctx context.Context, id int64, discard model.Discard) error {
 	if discard.Pair == "" || discard.AfterID < 1 || discard.Quantity <= 0 ||
 		(discard.Side != model.SideTypeBuy && discard.Side != model.SideTypeSell) {
-		return fmt.Errorf("%w: the discard of a position: pair, side, quantity or fill after", ErrInvalid)
+		return fmt.Errorf("%w: descarte de posição inválido: confira o ativo, o lado, a quantidade e a execução "+
+			"anterior", ErrInvalid)
 	}
 	row := discardRow{AgentID: id, Pair: discard.Pair, AfterID: discard.AfterID, Side: string(discard.Side),
 		Quantity: discard.Quantity, At: discard.At.UTC()}

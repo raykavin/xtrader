@@ -137,7 +137,7 @@ func (s *Store) SetSupervisor(ctx context.Context, update SupervisorUpdate) (Sup
 	err := s.Transaction(ctx, func(ctx context.Context) error {
 		err := s.conn(ctx).Clauses(lockForUpdate()).First(&settings, 1).Error
 		if err != nil {
-			return notFound(err, "the settings of the supervisor: run cmd/migrator up, which seeds them")
+			return notSeeded(err, "a configuração do XTrader AI")
 		}
 		if err := update.apply(&settings); err != nil {
 			return err
@@ -215,23 +215,25 @@ func (s SupervisorSettings) validate() error {
 	}
 	switch {
 	case s.IntervalSeconds < SupervisorMinInterval || s.IntervalSeconds > SupervisorMaxInterval:
-		return invalid("the interval of the analyses: from %d to %d seconds", SupervisorMinInterval,
-			SupervisorMaxInterval)
+		return invalid("o intervalo das análises deve ficar entre %d e %d minutos", SupervisorMinInterval/60,
+			SupervisorMaxInterval/60)
 	case s.TimeoutSeconds < SupervisorMinTimeout || s.TimeoutSeconds > SupervisorMaxTimeout:
-		return invalid("the timeout of an answer: from %d to %d seconds", SupervisorMinTimeout, SupervisorMaxTimeout)
+		return invalid("o tempo máximo de resposta deve ficar entre %d e %d segundos", SupervisorMinTimeout,
+			SupervisorMaxTimeout)
 	case s.Provider != nil && *s.Provider != "openai" && *s.Provider != "anthropic":
-		return invalid("provider %q: openai or anthropic", *s.Provider)
+		return invalid("o provedor %q não existe, use openai ou anthropic", *s.Provider)
 	case s.ReasoningEffort != nil && !slices.Contains([]string{"none", "minimal", "low", "medium", "high", "xhigh"},
 		*s.ReasoningEffort):
-		return invalid("reasoning effort %q: none, minimal, low, medium, high or xhigh", *s.ReasoningEffort)
+		return invalid("o esforço de raciocínio %q não existe, use none, minimal, low, medium, high ou xhigh",
+			*s.ReasoningEffort)
 	case s.MaxTokens != nil && *s.MaxTokens < 1:
-		return invalid("the max tokens must be positive")
+		return invalid("o máximo de tokens deve ser maior que 0")
 	case utf8.RuneCountInString(s.Instructions) > SupervisorMaxInstructions:
-		return invalid("the instructions take %d characters at most", SupervisorMaxInstructions)
+		return invalid("as instruções podem ter até %d caracteres", SupervisorMaxInstructions)
 	case s.Autonomy.MaxActionsPerRun < 0 || s.Autonomy.MaxActionsPerRun > SupervisorMaxActions:
-		return invalid("the actions alone in an analysis: from 0 to %d", SupervisorMaxActions)
+		return invalid("as ações sem confirmação por análise devem ficar entre 0 e %d", SupervisorMaxActions)
 	case s.Enabled && (s.Provider == nil || s.Model == nil || len(s.APIKey) == 0):
-		return invalid("the supervisor needs its provider, its model and its API key to be enabled")
+		return invalid("informe o provedor, o modelo e a chave da API para ligar o XTrader AI")
 	}
 	return nil
 }
@@ -300,7 +302,7 @@ func (s *Store) StartSupervisorRun(ctx context.Context, origin, status, requeste
 		row.FinishedAt = &now
 	}
 	if err := s.conn(ctx).Create(&row).Error; err != nil {
-		return SupervisorRun{}, notFound(err, "an analysis of the supervisor")
+		return SupervisorRun{}, notFound(err, "uma análise do XTrader AI")
 	}
 	return row.run(), nil
 }
@@ -345,7 +347,7 @@ func (s *Store) SupervisorRuns(ctx context.Context, limit int) ([]SupervisorRun,
 func (s *Store) SupervisorRun(ctx context.Context, id int64) (SupervisorRun, error) {
 	var row runRow
 	if err := s.conn(ctx).First(&row, id).Error; err != nil {
-		return SupervisorRun{}, notFound(err, fmt.Sprintf("the analysis %d", id))
+		return SupervisorRun{}, notFound(err, fmt.Sprintf("a análise %d", id))
 	}
 	return row.run(), nil
 }
@@ -481,7 +483,7 @@ func (s *Store) CreateSupervisorAction(ctx context.Context, a SupervisorAction) 
 		Result: jsonb(a.Result), RequestedBy: a.RequestedBy, ConfirmedBy: a.ConfirmedBy, CreatedAt: time.Now(),
 		ExpiresAt: a.ExpiresAt, DecidedAt: a.DecidedAt}
 	if err := s.conn(ctx).Create(&row).Error; err != nil {
-		return SupervisorAction{}, notFound(err, "an action of the supervision")
+		return SupervisorAction{}, notFound(err, "uma ação do XTrader AI")
 	}
 	return row.action(), nil
 }
@@ -490,7 +492,7 @@ func (s *Store) CreateSupervisorAction(ctx context.Context, a SupervisorAction) 
 func (s *Store) SupervisorAction(ctx context.Context, id int64) (SupervisorAction, error) {
 	var row actionRow
 	if err := s.conn(ctx).First(&row, id).Error; err != nil {
-		return SupervisorAction{}, notFound(err, fmt.Sprintf("the action %d", id))
+		return SupervisorAction{}, notFound(err, fmt.Sprintf("a ação %d", id))
 	}
 	return row.action(), nil
 }
@@ -550,9 +552,9 @@ func (s *Store) decide(ctx context.Context, id int64, status, by string) (Superv
 	if current.Status == ActionProposed { // expired meanwhile
 		s.conn(ctx).Model(&actionRow{}).Where("id = ? AND status = ?", id, ActionProposed).
 			Updates(map[string]any{"status": ActionExpired, "finished_at": now})
-		return SupervisorAction{}, fmt.Errorf("%w: the action %d", ErrExpired, id)
+		return SupervisorAction{}, fmt.Errorf("%w: a ação %d", ErrExpired, id)
 	}
-	return current, fmt.Errorf("%w: the action %d is %s", ErrDecided, id, current.Status)
+	return current, fmt.Errorf("%w: a ação %d está %s", ErrDecided, id, current.Status)
 }
 
 // FinishSupervisorAction records how the action of id ended, status, and its
@@ -612,7 +614,7 @@ func (SupervisorMessage) TableName() string { return "supervisor_messages" }
 func (s *Store) AddSupervisorMessage(ctx context.Context, m SupervisorMessage) (SupervisorMessage, error) {
 	m.ID, m.CreatedAt = 0, time.Now()
 	if err := s.conn(ctx).Create(&m).Error; err != nil {
-		return SupervisorMessage{}, notFound(err, "a message of the supervisor")
+		return SupervisorMessage{}, notFound(err, "uma mensagem da conversa com o XTrader AI")
 	}
 	return m, nil
 }
@@ -678,7 +680,7 @@ func (s *Store) lockSupervision(ctx context.Context, id int64) (AgentSupervision
 	err := s.conn(ctx).Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&AgentSupervision{AgentID: id, StopState: StopNone, UpdatedAt: time.Now()}).Error
 	if err != nil {
-		return AgentSupervision{}, notFound(err, fmt.Sprintf("the supervision of the agent %d", id))
+		return AgentSupervision{}, notFound(err, fmt.Sprintf("a supervisão do agente %d", id))
 	}
 	var supervision AgentSupervision
 	if err := s.conn(ctx).Clauses(lockForUpdate()).First(&supervision, "agent_id = ?", id).Error; err != nil {

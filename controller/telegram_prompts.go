@@ -48,7 +48,7 @@ func promptRefused(err error) bool {
 // ones refused, the others logged.
 func (t *Telegram) promptError(m *tb.Message, err error) {
 	if promptRefused(err) {
-		t.send(m.Sender, "⚠️ "+strings.TrimPrefix(err.Error(), "store: "))
+		t.send(m.Sender, "⚠️ "+userMessage(err))
 		return
 	}
 	log.Errorf("telegram: the prompts: %v", err)

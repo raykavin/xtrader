@@ -83,10 +83,10 @@ func TestCreatePrompt_RefusesWhatTheAgentsCantRead(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	for _, tc := range []struct{ name, prompt, content, want string }{
-		{"taken", "trend_following", "Setup: x", "already exists"},
-		{"uppercase", "Breakout", "Setup: x", "prompt name"},
-		{"empty", "blank", " \n ", "empty"},
-		{"not utf-8", "binary", "Setup: \xff", "not UTF-8"},
+		{"taken", "trend_following", "Setup: x", "o prompt trend_following já existe"},
+		{"uppercase", "Breakout", "Setup: x", "nome de prompt"},
+		{"empty", "blank", " \n ", "está vazio"},
+		{"not utf-8", "binary", "Setup: \xff", "não é texto UTF-8"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.CreatePrompt(ctx, tc.prompt, "", tc.content, "web:xtrader")

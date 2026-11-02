@@ -506,34 +506,34 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"mode", func(r *ui.AgentCreateRequest) { r.Mode = "backtest" }, http.StatusBadRequest, "live or paper"},
-		{"no mode", func(r *ui.AgentCreateRequest) { r.Mode = "" }, http.StatusBadRequest, `mode \"\"`},
+		{"mode", func(r *ui.AgentCreateRequest) { r.Mode = "backtest" }, http.StatusBadRequest, "use live ou paper"},
+		{"no mode", func(r *ui.AgentCreateRequest) { r.Mode = "" }, http.StatusBadRequest, `modo \"\"`},
 		{"address", func(r *ui.AgentCreateRequest) { r.APIAddress = "localhost" }, http.StatusBadRequest,
-			"host:port"},
+			"host:porta"},
 		{"param name", func(r *ui.AgentCreateRequest) { r.Params = map[string]string{"Lot": "0.01"} },
-			http.StatusBadRequest, `param \"Lot\"`},
+			http.StatusBadRequest, `parâmetro \"Lot\"`},
 		{"param value", func(r *ui.AgentCreateRequest) { r.Params = map[string]string{"pair": "XAUUSDm\n-mode=paper"} },
-			http.StatusBadRequest, "a line of text"},
+			http.StatusBadRequest, "deve ficar numa linha só"},
 		{"param of a field", func(r *ui.AgentCreateRequest) { r.Params = map[string]string{"mt5-comment": "nb:x"} },
-			http.StatusBadRequest, "param mt5-comment is a setting of its own"},
+			http.StatusBadRequest, "parâmetro mt5-comment do agente gold tem campo próprio"},
 		{"param of a language model", func(r *ui.AgentCreateRequest) {
 			r.Kind, r.LLM, r.PromptID, r.LLMAPIKey = "trend", nil, nil, nil
-		}, http.StatusBadRequest, "for an LLM agent only"},
-		{"name taken", func(r *ui.AgentCreateRequest) { r.Name = "llm" }, http.StatusConflict, "already exists"},
+		}, http.StatusBadRequest, "só para agentes LLM"},
+		{"name taken", func(r *ui.AgentCreateRequest) { r.Name = "llm" }, http.StatusConflict, "agente llm já existe"},
 		{"address taken", func(r *ui.AgentCreateRequest) { r.APIAddress = "localhost:15503" }, http.StatusConflict,
-			"the one of the agent llm"},
+			"já é do agente llm"},
 		{"llm without its language model", func(r *ui.AgentCreateRequest) { r.LLM, r.PromptID = nil, nil },
-			http.StatusBadRequest, "needs its language model"},
+			http.StatusBadRequest, "um agente LLM precisa dele"},
 		{"llm without model", func(r *ui.AgentCreateRequest) { r.LLM.Model = "" }, http.StatusBadRequest,
-			"needs a model"},
-		{"kind", func(r *ui.AgentCreateRequest) { r.Kind = "grid" }, http.StatusBadRequest, `kind \"grid\"`},
-		{"name", func(r *ui.AgentCreateRequest) { r.Name = "../gold" }, http.StatusBadRequest, "agent name"},
+			"modelo do LLM do agente"},
+		{"kind", func(r *ui.AgentCreateRequest) { r.Kind = "grid" }, http.StatusBadRequest, `tipo \"grid\"`},
+		{"name", func(r *ui.AgentCreateRequest) { r.Name = "../gold" }, http.StatusBadRequest, `agente \"../gold\" inválido`},
 		{"bridge URL", func(r *ui.AgentCreateRequest) { r.Account.BridgeURL = "" }, http.StatusBadRequest,
-			"the URL of its bridge is required"},
+			"a URL da bridge do agente gold"},
 		{"magic", func(r *ui.AgentCreateRequest) { r.Account.Magic = ptrTo(int64(-1)) }, http.StatusBadRequest,
 			"magic number -1"},
 		{"prompt missing", func(r *ui.AgentCreateRequest) { r.PromptID = ptrTo(int64(999999)) },
-			http.StatusBadRequest, "prompt 999999 doesn't exist"},
+			http.StatusBadRequest, "prompt 999999 do agente gold não existe"},
 		{"prompt without a language model", func(r *ui.AgentCreateRequest) {
 			r.Kind, r.LLM, r.Params, r.LLMAPIKey = "trend", nil, nil, nil
 		}, http.StatusBadRequest, "Só agentes LLM têm prompt"},
@@ -683,27 +683,28 @@ func TestSettingsAPI_EditAnAgent(t *testing.T) {
 		status  int
 		want    string
 	}{
-		{"mode", "llm", ui.AgentSettingsRequest{Mode: secret("backtest")}, http.StatusBadRequest, "live or paper"},
+		{"mode", "llm", ui.AgentSettingsRequest{Mode: secret("backtest")}, http.StatusBadRequest, "use live ou paper"},
 		{"address", "llm", ui.AgentSettingsRequest{APIAddress: secret("localhost:0")}, http.StatusBadRequest,
-			"host:port"},
+			"host:porta"},
 		{"address taken", "llm", ui.AgentSettingsRequest{APIAddress: secret("localhost:15507")}, http.StatusConflict,
-			"the one of the agent matrend"},
+			"já é do agente matrend"},
 		{"param of a field", "llm", ui.AgentSettingsRequest{Params: map[string]string{"api": "localhost:1"}},
-			http.StatusBadRequest, "param api is a setting of its own"},
+			http.StatusBadRequest, "parâmetro api do agente llm tem campo próprio"},
 		{"bridge URL", "llm", ui.AgentSettingsRequest{Account: &ui.AgentAccountRequest{
-			BridgeURL: secret("ftp://127.0.0.1")}}, http.StatusBadRequest, "the URL of its bridge"},
+			BridgeURL: secret("ftp://127.0.0.1")}}, http.StatusBadRequest, "URL da bridge do agente llm deve ser http(s)"},
 		{"comment", "llm", ui.AgentSettingsRequest{Account: &ui.AgentAccountRequest{Comment: secret("[tp 1]")}},
-			http.StatusBadRequest, "not starting with ["},
+			http.StatusBadRequest, "sem começar com ["},
 		{"model removed", "llm", ui.AgentSettingsRequest{LLM: &ui.AgentLLMRequest{Model: secret("")}},
-			http.StatusBadRequest, "needs a model"},
+			http.StatusBadRequest, "modelo do LLM do agente"},
 		{"reasoning effort", "llm", ui.AgentSettingsRequest{LLM: &ui.AgentLLMRequest{
-			ReasoningEffort: secret("max")}}, http.StatusBadRequest, "reasoning effort"},
+			ReasoningEffort: secret("max")}}, http.StatusBadRequest, `esforço de raciocínio \"max\"`},
 		{"language model of a trend agent", "matrend", ui.AgentSettingsRequest{LLM: &ui.AgentLLMRequest{
 			Provider: secret("openai"), Model: secret("gpt-5")}}, http.StatusBadRequest,
-			"a language model for an agent of kind trend"},
+			"agente matrend é do tipo trend, que não usa LLM"},
 		{"param of a language model", "matrend", ui.AgentSettingsRequest{Params: map[string]string{
-			"news-block-before": "30m"}}, http.StatusBadRequest, "for an LLM agent only"},
-		{"unknown", "nobody", ui.AgentSettingsRequest{Mode: secret("paper")}, http.StatusNotFound, "agent nobody"},
+			"news-block-before": "30m"}}, http.StatusBadRequest, "só para agentes LLM"},
+		{"unknown", "nobody", ui.AgentSettingsRequest{Mode: secret("paper")}, http.StatusNotFound,
+			"agente nobody não existe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, _, body := patch(tc.agent, tc.request)
@@ -767,7 +768,7 @@ func TestSettingsAPI_DeleteAnAgent(t *testing.T) {
 
 	resp, body := call(http.MethodDelete, "/api/settings/agents/adxema", nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, "enabled")
-	assert.Contains(t, body, "disable it first")
+	assert.Contains(t, body, "agente adxema antes")
 	resp, _ = call(http.MethodDelete, "/api/settings/agents/nobody", nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
@@ -911,7 +912,7 @@ func TestSettingsAPI_TelegramAndUsers(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	resp, body = call(http.MethodPatch, fmt.Sprintf("/api/users/%d", admin.ID), ui.UserRequest{Enabled: boolPtr(false)})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "the last one enabled")
-	assert.Contains(t, body, "last user enabled")
+	assert.Contains(t, body, "último usuário ativo")
 	resp, _ = call(http.MethodDelete, fmt.Sprintf("/api/users/%d", second.ID), nil)
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	resp, _ = call(http.MethodDelete, "/api/users/999999", nil)

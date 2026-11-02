@@ -444,7 +444,8 @@ func TestControls_OrderTicket(t *testing.T) {
 			{exchange.ErrNotSupported, http.StatusUnprocessableEntity, "A corretora não aceita esta operação."},
 			{order.ErrBotStopped, http.StatusConflict, "O bot está parado: inicie-o antes."},
 			{fmt.Errorf("%w: limite diário", order.ErrEntriesBlocked), http.StatusConflict,
-				order.ErrEntriesBlocked.Error() + ": limite diário"}, // the text the Telegram tells them by
+				EntriesBlocked + ": limite diário"}, // the lead the Telegram tells them by
+			{order.ErrEntriesBlocked, http.StatusConflict, EntriesBlocked + "."},
 		} {
 			c := newTestChart(t)
 			c.SetOrderController(&fakeController{orderErr: tc.err})
