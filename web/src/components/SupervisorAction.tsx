@@ -109,7 +109,7 @@ export function SupervisorActionCard({
   const profit = scopeProfit(action);
   const confirmLabel =
     action.action === "close_positions"
-      ? `Confirmar: fechar ${positions.length} posição(ões)`
+      ? `Confirmar: fechar ${positions.length === 1 ? "1 posição" : `${positions.length} posições`}`
       : `Confirmar: ${actionLabel(action.action, action.mode).toLowerCase()}`;
 
   return (
@@ -247,11 +247,11 @@ export function SupervisorActionCard({
         {action.origin === "rule" ? (
           <span>{actionOrigin(action)}</span>
         ) : (
-          action.requested_by && <span>Pedido por {actorLabel(action.requested_by)}</span>
+          action.requested_by && <span>Pedida por {actorLabel(action.requested_by)}</span>
         )}
         {action.origin !== "rule" && action.confirmed_by && action.status !== "proposed" && (
           <span>
-            {action.status === "rejected" ? "Recusado" : "Confirmado"} por {action.confirmed_by}
+            {action.status === "rejected" ? "Recusada" : "Confirmada"} por {action.confirmed_by}
           </span>
         )}
         <span>{dayClock(action.created_at)}</span>

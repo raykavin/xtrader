@@ -185,10 +185,10 @@ export function PerformancePage() {
       <PageHeader
         eyebrow="Operação"
         title="Performance"
-        description="O resultado das operações dos agentes em live, como as contas MT5 registraram, na moeda de cada conta, sem conversão."
+        description="Resultado das operações em live, como as contas MT5 registraram, na moeda de cada conta, sem conversão."
       />
 
-      <section className="card perf-filters" aria-label="Filtros da performance">
+      <section className="card perf-filters" aria-label="Filtros">
         <div className="perf-filter">
           <span className="field-label">Período</span>
           <button type="button" className="btn" onClick={() => setPicking(true)}>
@@ -228,7 +228,7 @@ export function PerformancePage() {
           <div className="perf-filter">
             <span className="field-label">Moeda da conta</span>
             <Tabs
-              label="Moeda das contas"
+              label="Moeda da conta"
               idPrefix="perf-currency"
               items={currencies.map((c) => ({ id: c, label: c }))}
               value={shown}
@@ -242,15 +242,15 @@ export function PerformancePage() {
           onClick={refresh}
           disabled={loading}
           aria-label="Atualizar"
-          title="Ler as contas de novo"
+          title="Recarregar as operações"
         >
           <Icon name="restart" size={14} />
-          {loading ? "Lendo…" : "Atualizar"}
+          {loading ? "Atualizando…" : "Atualizar"}
         </button>
       </section>
 
       {error && (
-        <Alert tone="error" title="Não foi possível ler a performance">
+        <Alert tone="error" title="Não foi possível carregar a performance">
           {error}
         </Alert>
       )}
@@ -262,13 +262,13 @@ export function PerformancePage() {
 
       {!read ? (
         !error && (
-          <Loading label="Lendo as operações das contas">
+          <Loading label="Carregando as operações">
             <Skeleton height={320} />
           </Loading>
         )
       ) : !summary || !shown ? (
         <EmptyState icon="results" title="Nenhuma conta em live">
-          A performance aparece com agentes em live numa conta MT5.
+          Aparece quando um agente opera em live numa conta MT5.
         </EmptyState>
       ) : (
         <>
@@ -300,7 +300,7 @@ export function PerformancePage() {
 
           <section className="card perf-card" aria-label="Performance">
             <Tabs
-              label="Vistas da performance"
+              label="Visualizações da performance"
               idPrefix="perf"
               items={views.map((v) => ({
                 ...v,
@@ -312,7 +312,7 @@ export function PerformancePage() {
             <div id={ids.panel} role="tabpanel" aria-labelledby={ids.tab} className="perf-panel">
               {filtered.length === 0 && view !== "trades" ? (
                 <EmptyState compact icon="results" title="Nenhuma operação fechada no período">
-                  Escolha outro período ou tire os filtros.
+                  Escolha outro período ou limpe os filtros.
                 </EmptyState>
               ) : view === "summary" ? (
                 <PerformanceSummary summary={summary} efficiency={efficiencyState} />

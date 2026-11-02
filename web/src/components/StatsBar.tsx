@@ -159,7 +159,7 @@ function Position({ pnl }: { pnl: PositionPnL | null }) {
             {formatQuantity(pnl.quantity)} a {formatPrice(pnl.entry)}
           </span>
           {pnl.profit === null ? (
-            <strong className="position-pnl" title="Lucro aberto não informado pela corretora">
+            <strong className="position-pnl" title="A corretora não informou o P/L em aberto">
               —
             </strong>
           ) : (

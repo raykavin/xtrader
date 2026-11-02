@@ -56,7 +56,7 @@ const providerOptions: SelectOption[] = llmProviders.map((provider) => ({
 }));
 
 const effortOptions: SelectOption[] = [
-  { value: "", label: "—", hint: "o do modelo" },
+  { value: "", label: "—", hint: "padrão do modelo" },
   ...reasoningEfforts.map((effort) =>
     effort === "none"
       ? { value: effort, label: effort, hint: "sem raciocínio" }
@@ -210,9 +210,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
     { value: "", label: "default (embutido)" },
     ...prompts.map((p) => ({ value: String(p.id), label: p.name, hint: `v${p.version}` })),
   ];
-  const channelsTitle = paper
-    ? "No modo paper, o painel de controle fica ativo em todos os canais"
-    : undefined;
+  const channelsTitle = paper ? "Em paper, fica sempre ligado" : undefined;
   const addressMoved = agent?.running && values.apiAddress.trim() !== initial.apiAddress.trim();
   const action = creating ? "Criar agente" : "Salvar";
 
@@ -243,8 +241,8 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
         <div className="dialog-body">
           {agent?.running && (
             <Alert tone="warn">
-              O agente está em execução: as alterações valem quando ele for reiniciado, pelo botão
-              Reiniciar do card; desligar Iniciado pelo controller o para na hora.
+              O agente está em execução: as alterações valem depois de reiniciá-lo (botão Reiniciar
+              do card). Desligar “Iniciado pelo controller” o para na hora.
             </Alert>
           )}
 
@@ -265,7 +263,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                     value={values.kind}
                     options={kindOptions}
                     error={errorOf("kind")}
-                    hint="Não muda depois: o binário que o controller roda."
+                    hint="Não muda depois de criado."
                     onChange={(kind) => set("kind", kind)}
                   />
                 </>
@@ -285,11 +283,11 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                 hint={
                   addressMoved ? (
                     <span className="msg msg-warn">
-                      O painel passa a usar o endereço novo já; o agente só o escuta depois de
+                      O painel passa a usar o novo endereço na hora; o agente, só depois de
                       reiniciado.
                     </span>
                   ) : (
-                    "host:porta onde o agente serve a API, único entre os agentes e só no loopback (localhost, 127.0.0.1 ou [::1]): só o controller a acessa."
+                    "host:porta da API do agente, único por agente e no loopback (localhost, 127.0.0.1 ou [::1])."
                   )
                 }
               />
@@ -297,9 +295,9 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
             <div className="switch-list">
               {creating && (
                 <Switch
-                  label="Ativo"
+                  label="Ligado"
                   checked={values.enabled}
-                  title="Ligado, o controller inicia o agente assim que ele for criado"
+                  title="O controller inicia o agente assim que ele for criado"
                   onChange={(enabled) => set("enabled", enabled)}
                 />
               )}
@@ -312,7 +310,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
               <Switch
                 label="Reiniciar se cair"
                 checked={values.restart}
-                title="Ligado, o controller inicia o agente de novo quando o processo sai, com as configurações com que ele foi iniciado e os segredos atuais; desligado, o agente fica parado até ser reiniciado ou até o controller reiniciar"
+                title="Ligado, o controller inicia o agente de novo quando o processo sai, com as configurações da última inicialização e os segredos atuais; desligado, o agente fica parado até ser reiniciado (ou até o controller reiniciar)"
                 onChange={(restart) => set("restart", restart)}
               />
               {creating && (
@@ -346,10 +344,10 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
               values.enabled &&
               values.launched &&
               (paper ? (
-                <p className="field-hint">Ativo, o agente é iniciado assim que for criado.</p>
+                <p className="field-hint">O agente inicia assim que for criado.</p>
               ) : (
                 <Alert tone="warn">
-                  Ativo e em live, o agente é iniciado assim que for criado e já opera a conta MT5.
+                  Em live, o agente inicia assim que for criado e já opera a conta MT5.
                 </Alert>
               ))}
           </Section>
@@ -357,7 +355,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
           <Section
             title="Conta MT5"
             disabled={busy}
-            hint="Os agentes de uma mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ativos em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
+            hint="Agentes da mesma conta precisam de comentários (ou magics) diferentes: cada um só opera as posições do próprio magic. Dois agentes ligados em live na mesma bridge, com o mesmo magic e um ativo em comum, são recusados."
           >
             <div className="form-grid">
               <SelectField
@@ -389,7 +387,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                   {...text("bridgeToken")}
                   type="password"
                   placeholder="opcional"
-                  hint="Opcional: dá para definir depois, no card."
+                  hint="Dá para definir depois, no card."
                 />
               )}
               <TextField
@@ -460,7 +458,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                   mono
                   inputMode="numeric"
                   placeholder="opcional"
-                  hint="Por resposta, o raciocínio incluído; em branco, 4096."
+                  hint="Por resposta, contando o raciocínio; em branco, 4096."
                 />
                 {creating && (
                   <>
@@ -476,7 +474,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
                       {...text("llmAPIKey")}
                       type="password"
                       placeholder="opcional"
-                      hint="Opcional: dá para definir depois, no card."
+                      hint="Dá para definir depois, no card."
                     />
                   </>
                 )}
@@ -489,18 +487,17 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
             disabled={busy}
             hint={
               <>
-                As flags do agente sem campo próprio, pelo nome sem o traço, ex.:{" "}
+                Flags do agente sem campo próprio, pelo nome sem o traço, ex.:{" "}
                 <code>pair = XAUUSDm</code>, <code>lot = 0.01</code>, <code>timeframe = 15m</code>.
                 Nas listas, separe os itens com <code>;</code>, ex.:{" "}
-                <code>pair = BTCUSDm;XAUUSDm</code> e o lote de cada par,{" "}
-                <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code>. Decimais com ponto:{" "}
-                <code>lot = 0.05</code>; um lote com vírgula, como <code>1,5</code>, é recusado. No
-                agente LLM, o lote e os mercados correlacionados vão sempre por par:{" "}
-                <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code> e{" "}
-                <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>. O agente LLM
-                exige o intervalo entre as consultas ao modelo,{" "}
+                <code>pair = BTCUSDm;XAUUSDm</code> e o lote de cada ativo,{" "}
+                <code>lot = BTCUSDm=0.01;XAUUSDm=0.02</code>. Decimais com ponto (
+                <code>lot = 0.05</code>): um lote com vírgula, como <code>1,5</code>, é recusado. No
+                agente LLM, o lote e os mercados correlacionados vão sempre por ativo, ex.:{" "}
+                <code>llm-correlated = BTCUSDm=DXYm+XAUUSDm;XAUUSDm=DXYm+USTECm</code>, e o
+                intervalo entre as consultas ao LLM é obrigatório, ex.:{" "}
                 <code>llm-consult-interval = 5m</code> (pelo relógio, nunca no fechamento do
-                candle), diferente do <code>llm-timeout</code>, o tempo máximo de uma resposta.
+                candle); não confundir com <code>llm-timeout</code>, o tempo máximo de uma resposta.
               </>
             }
           >
@@ -573,7 +570,7 @@ export function AgentForm({ agent, prompts, onSaved, onClose }: Props) {
           </Section>
 
           {error && (
-            <Alert tone="error" title="O agente não foi salvo">
+            <Alert tone="error" title="Não foi possível salvar o agente">
               {error}
             </Alert>
           )}

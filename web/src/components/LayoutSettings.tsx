@@ -76,8 +76,8 @@ export function LayoutSettings({ intro }: Props) {
         </header>
         <div className="card-body stack">
           <p className="layout-settings-text">
-            No painel, o botão de layout da barra superior (o ícone de grade) move, oculta e
-            redimensiona os cards. A disposição fica salva neste navegador.
+            Para mover, ocultar ou redimensionar os cards, use o botão de layout (ícone de grade) na
+            barra superior do painel.
           </p>
           {saved && changes.length > 0 && (
             <ul className="layout-settings-changes">
@@ -88,8 +88,7 @@ export function LayoutSettings({ intro }: Props) {
           )}
           {restored && !saved && (
             <Alert tone="success" title="Layout padrão restaurado">
-              O painel volta à disposição original, com todos os cards e a altura padrão do gráfico,
-              inclusive nas abas já abertas.
+              Todos os cards voltam ao lugar e ao tamanho originais, inclusive nas abas já abertas.
             </Alert>
           )}
           <div>

@@ -50,9 +50,7 @@ export function BacktestRuns({ batches, highlight, onCancel, onDelete, onOpen, o
             Configurar um lote
           </button>
         }
-      >
-        Os lotes configurados aparecem aqui, com o andamento de cada execução.
-      </EmptyState>
+      />
     );
   }
   return (
@@ -88,7 +86,7 @@ export function BacktestRuns({ batches, highlight, onCancel, onDelete, onOpen, o
                   question="Excluir o lote e seus resultados?"
                   ariaLabel={`Excluir o lote ${batch.name || batch.id}`}
                   disabled={busy}
-                  title={busy ? "Cancele as execuções em andamento antes" : undefined}
+                  title={busy ? "Cancele as execuções em andamento para excluir" : undefined}
                   onConfirm={() => onDelete(batch.id)}
                 />
               </div>

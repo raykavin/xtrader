@@ -118,10 +118,9 @@ function CloseAll() {
       {(confirming || busy) && (
         <fieldset className="daily-zero-confirm" aria-label={closeAllTitle}>
           <p>
-            <strong>Todos os agentes:</strong> cancela as ordens pendentes de entrada e fecha a
-            mercado as posições abertas. Posições e ordens fora dos agentes do XTrader não são
-            tocadas; as entradas ficam retidas durante a execução; a habilitação e os limites não
-            mudam.
+            <strong>Todos os agentes:</strong> cancela as ordens pendentes de entrada e fecha as
+            posições abertas a mercado. Novas entradas ficam bloqueadas até terminar. Não afeta
+            posições e ordens fora do XTrader, não desliga agentes nem muda limites.
           </p>
           <span className="daily-zero-actions">
             <button
@@ -162,7 +161,7 @@ function CloseAll() {
           <button
             type="button"
             className="btn btn-ghost btn-icon daily-zero-dismiss"
-            aria-label="Dispensar o resultado"
+            aria-label="Fechar o resultado"
             onClick={() => setOutcome(null)}
           >
             <Icon name="close" size={12} />

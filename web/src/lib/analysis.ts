@@ -152,7 +152,7 @@ export function uniqueDrawings(drawings: Drawing[]): Drawing[] {
   });
 }
 
-const orderTypes: Record<string, string> = { market: "mercado", limit: "limit", stop: "stop" };
+const orderTypes: Record<string, string> = { market: "mercado", limit: "limite", stop: "stop" };
 
 const intentOutcomes: Record<string, string> = {
   applied: "não executada",
@@ -162,7 +162,7 @@ const intentOutcomes: Record<string, string> = {
   waiting: "aguardando rompimento",
 };
 
-/** The entry of an intent, eg: Compra limit. */
+/** The entry of an intent, eg: Compra limite. */
 export function intentLabel(intent: Intent): string {
   const side = intent.side === "SELL" ? "Venda" : "Compra";
   return `${side} ${orderTypes[intent.order_type] ?? intent.order_type}`;

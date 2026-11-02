@@ -177,9 +177,8 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
     return (
       <div className="settings-section">
         <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
-        <Alert tone="warn" title="O XTrader AI ainda não está no banco">
-          Rode o migrator (<code>migrator up</code>), que cria as tabelas e a configuração padrão
-          dele.
+        <Alert tone="warn" title="O XTrader AI ainda não está no banco de dados">
+          Rode <code>migrator up</code> para criar as tabelas e a configuração padrão.
         </Alert>
       </div>
     );
@@ -222,7 +221,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
           </header>
           <div className="card-body stack">
             <Switch
-              label="XTrader AI ativo"
+              label="XTrader AI ligado"
               checked={settings.enabled}
               disabled={busy || (!settings.enabled && !ready)}
               title={ready ? undefined : "Defina o provedor, o modelo e a chave antes"}
@@ -236,9 +235,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <p className="field-hint">
               {settings.enabled && settings.next_run_at
                 ? `Próxima análise às ${clock(settings.next_run_at)}, depois a cada ${formatInterval(settings.interval_seconds)}.`
-                : "Desligado, o XTrader AI não analisa sozinho; a conversa e Analisar agora continuam disponíveis."}
+                : "Desligado, o XTrader AI não analisa sozinho. A conversa e Analisar agora continuam disponíveis."}
               {settings.failures_in_row > 0 &&
-                ` ${settings.failures_in_row} análise(s) seguida(s) falharam: os agentes não foram afetados.`}
+                ` ${settings.failures_in_row === 1 ? "A última análise falhou" : `As últimas ${settings.failures_in_row} análises falharam`}: os agentes não foram afetados.`}
             </p>
             <h4 className="section-title">
               <Icon name="shield" size={13} />O que ele faz sozinho
@@ -256,13 +255,13 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
               label="Parar o agente quando zerado"
               checked={settings.autonomy.stop_when_flat}
               disabled={busy}
-              title="Exige duas análises seguidas; o agente é desligado quando ficar sem posição e sem pendente"
+              title="Exige duas análises seguidas; o agente é desligado quando ficar sem posição e sem ordem pendente"
               onChange={(stop_when_flat) =>
                 run({ autonomy: { ...settings.autonomy, stop_when_flat } })
               }
             />
             <Switch
-              label="Cancelar pendentes de entrada"
+              label="Cancelar ordens pendentes de entrada"
               checked={settings.autonomy.cancel_pending}
               disabled={busy}
               onChange={(cancel_pending) =>
@@ -270,8 +269,8 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
               }
             />
             <p className="field-hint">
-              Fora disso ele só propõe, e você confirma na conversa. Encerrar posições sempre pede a
-              sua confirmação, e ele nunca reativa um agente que parou.
+              Fora disso, ele só propõe e você confirma na conversa. Fechar posições sempre pede a
+              sua confirmação, e ele nunca religa um agente parado.
             </p>
           </div>
         </section>
@@ -279,9 +278,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
         <section className="card card-flush" aria-labelledby="supervisor-model-title">
           <header className="card-header">
             <div className="card-heading">
-              <span className="eyebrow">Modelo</span>
+              <span className="eyebrow">LLM</span>
               <h3 id="supervisor-model-title" className="card-title">
-                Linguagem e critérios
+                Modelo e critérios
               </h3>
             </div>
           </header>
@@ -374,8 +373,8 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                 {tokensProblem && <p className="field-error">{tokensProblem}</p>}
                 <p id="supervisor-tokens-hint" className="field-hint">
                   O raciocínio conta no limite: um modelo que raciocina (gpt-5, o3, Claude com
-                  raciocínio) pode gastar {settings.default_max_tokens} tokens só pensando e não
-                  responder. Para eles, use 16000 ou mais, com um tempo de resposta maior.
+                  raciocínio) pode gastar os {settings.default_max_tokens} tokens pensando e não
+                  responder. Nesses modelos, use 16000 ou mais e aumente o tempo máximo de resposta.
                 </p>
               </div>
               <div className="field form-wide">
@@ -391,7 +390,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
               </div>
               <div className="field">
                 <label className="field-label" htmlFor="supervisor-actions">
-                  Ações sozinho por análise
+                  Ações sem confirmação por análise
                 </label>
                 <input
                   id="supervisor-actions"
@@ -456,7 +455,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
           <div className="card-heading">
             <span className="eyebrow">Registro</span>
             <h3 id="supervisor-actions-title" className="card-title">
-              Ações da supervisão
+              Ações nos agentes
               {actions && <span className="card-count">{actions.length}</span>}
             </h3>
           </div>
@@ -464,10 +463,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
         {actions === null ? (
           <p className="card-body">Carregando…</p>
         ) : actions.length === 0 ? (
-          <EmptyState compact icon="list" title="Nenhuma ação ainda">
-            Os bloqueios, as paradas, os cancelamentos e os encerramentos aparecem aqui, com quem
-            pediu e o resultado.
-          </EmptyState>
+          <EmptyState compact icon="list" title="Nenhuma ação ainda" />
         ) : (
           <div className="table-wrap">
             <table className="table table-responsive">
@@ -522,7 +518,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
           <div className="card-heading">
             <span className="eyebrow">Registro</span>
             <h3 id="supervisor-protections-title" className="card-title">
-              Proteções acionadas
+              Proteções armadas
               {protections && <span className="card-count">{protections.length}</span>}
             </h3>
           </div>
@@ -530,10 +526,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
         {protections === null ? (
           <p className="card-body">Carregando…</p>
         ) : protections.length === 0 ? (
-          <EmptyState compact icon="shield" title="Nenhuma proteção acionada ainda">
-            O breakeven e o trailing stop que o XTrader AI armar nas posições aparecem aqui, com o
-            motivo, o stop anterior, o pedido e o confirmado pela corretora. Ele só arma onde o
-            agente autoriza, em Configurações → Agentes → Proteção.
+          <EmptyState compact icon="shield" title="Nenhuma proteção armada ainda">
+            O XTrader AI só arma breakeven e trailing stop nos agentes que autorizam, em
+            Configurações › Agentes › Proteção.
           </EmptyState>
         ) : (
           <div className="table-wrap">
@@ -542,7 +537,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                 <tr>
                   <th scope="col">Quando</th>
                   <th scope="col">Posição</th>
-                  <th scope="col">Recurso</th>
+                  <th scope="col">Proteção</th>
                   <th scope="col">Situação</th>
                   <th scope="col">Stop</th>
                   <th scope="col">Motivo</th>
@@ -560,7 +555,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                         {protection.agent} · {protection.pair}{" "}
                         <span className="mono field-hint">{protection.position_ref}</span>
                       </td>
-                      <td data-label="Recurso">
+                      <td data-label="Proteção">
                         #{protection.id} {featureLabel(protection.feature)}
                         <span className="field-hint">
                           {" "}

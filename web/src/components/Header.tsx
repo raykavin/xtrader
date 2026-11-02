@@ -90,7 +90,7 @@ export function Header({
               className={connected ? "live on" : "live off"}
               role="status"
               title={
-                connected ? "Atualizações em tempo real conectadas" : "Sem conexão: reconectando…"
+                connected ? "Recebendo atualizações em tempo real" : "Sem conexão: reconectando…"
               }
             >
               <i aria-hidden="true" />
@@ -105,10 +105,10 @@ export function Header({
             onClick={() => setValuesHidden(!hidden)}
             title={
               hidden
-                ? "Mostrar os saldos e os valores em dinheiro"
-                : "Ocultar os saldos e os valores em dinheiro, em todas as páginas"
+                ? "Mostrar valores em dinheiro"
+                : "Ocultar valores em dinheiro em todas as páginas"
             }
-            aria-label={hidden ? "Mostrar os valores" : "Ocultar os valores"}
+            aria-label={hidden ? "Mostrar valores" : "Ocultar valores"}
           >
             <Icon name={hidden ? "eyeOff" : "eye"} />
           </button>

@@ -75,7 +75,7 @@ describe("agents", () => {
   });
 
   it("tells the state of the process", () => {
-    expect(agentState(agent({ enabled: false, running: true })).label).toBe("Desativado");
+    expect(agentState(agent({ enabled: false, running: true })).label).toBe("Desligado");
     expect(agentState(agent({ running: true }))).toEqual({
       label: "Executando",
       tone: "on",
@@ -93,7 +93,7 @@ describe("agents", () => {
       mark: "stop",
     });
     expect(agentState(agent({ running: true, launch_error: blocked })).label).toBe("Não iniciado");
-    expect(agentState(agent({ enabled: false, launch_error: blocked })).label).toBe("Desativado");
+    expect(agentState(agent({ enabled: false, launch_error: blocked })).label).toBe("Desligado");
     expect(agentState(agent({ running: true, restarting: true, restart_pending: true }))).toEqual({
       label: "Reiniciando",
       tone: "warn",
@@ -112,10 +112,10 @@ describe("agents", () => {
       "Configurações de inicialização alteradas: reinicie para aplicá-las.",
     );
     expect(agentNote(agent({ restart: false, exited: true, last_exit: "exit status 1" }))).toBe(
-      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia). Última saída: exit status 1",
+      "Parou e não volta sozinho (“Reiniciar se cair” desligado): use Reiniciar para iniciá-lo; um reinício do controller também o inicia. Última saída: exit status 1",
     );
     expect(agentNote(agent({ restart: false, exited: true }))).toBe(
-      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia).",
+      "Parou e não volta sozinho (“Reiniciar se cair” desligado): use Reiniciar para iniciá-lo; um reinício do controller também o inicia.",
     );
     expect(agentNote(agent({ running: true, restarts: 1, last_exit: "signal: killed" }))).toBe(
       "Última saída: signal: killed. Reiniciado 1 vez",
@@ -196,7 +196,7 @@ describe("agents", () => {
       model: "left out",
     });
     expect(agentSummary(trend)).toEqual([
-      { label: "Par", value: "BTCUSDm" },
+      { label: "Ativo", value: "BTCUSDm" },
       { label: "Timeframe", value: "5m" },
       { label: "Estratégia", value: "matrend" },
     ]);
@@ -205,7 +205,7 @@ describe("agents", () => {
       model: "openai gpt-5",
     });
     expect(agentSummary(llm)).toEqual([
-      { label: "Pares", value: "BTCUSDm, XAUUSDm" },
+      { label: "Ativos", value: "BTCUSDm, XAUUSDm" },
       { label: "Timeframe", value: "30m" },
       { label: "Modelo", value: "openai gpt-5" },
     ]);
@@ -420,9 +420,7 @@ describe("the fields of an agent", () => {
     expect(paramKeyError("1h", "trend")).toBeNull();
     for (const key of ["llm-min-stop-atr", "calendar-importance", "news-block-before"]) {
       expect(paramKeyError(key, "llm"), key).toBeNull();
-      expect(paramKeyError(key, "trend"), key).toBe(
-        "Parâmetro do modelo de linguagem: só para agentes LLM.",
-      );
+      expect(paramKeyError(key, "trend"), key).toBe("Parâmetro só para agentes LLM.");
     }
     expect(paramKeyError("", "trend")).toBe("Informe o nome do parâmetro.");
     expect(paramKeyError("--lot", "trend")).toBe("Sem o traço: lot, não --lot.");
@@ -643,7 +641,7 @@ describe("the form of an agent", () => {
       params: {
         6: "Parâmetro repetido.",
         7: "Informe o nome do parâmetro.",
-        8: "Parâmetro do modelo de linguagem: só para agentes LLM.",
+        8: "Parâmetro só para agentes LLM.",
       },
     });
     expect(agentFormErrors(newAgent({ kind: "llm", model: "gpt-5", params }), true)).toEqual({

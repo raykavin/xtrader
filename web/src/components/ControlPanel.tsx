@@ -46,7 +46,7 @@ type Unit = "quote" | "percent" | "lot";
 
 /** Why the ticket is blocked, and where to unblock it, on its badge. */
 const blockedHint =
-  "o painel de trading está desligado neste agente. Ligue-o em Configurações › Agentes para enviar ordens.";
+  "“Painel de trading” desligado neste agente. Ligue-o em Configurações › Agentes para enviar ordens.";
 type OrderType = "market" | "limit";
 type Confirm = { kind: "order" };
 type Feedback = { tone: "ok" | "warn" | "error"; text: string };
@@ -341,7 +341,7 @@ export function ControlPanel({
               className="badge badge-blocked"
               href={settingsHref("agentes")}
               title={blockedHint}
-              aria-label={`Boleta bloqueada: ${blockedHint}`}
+              aria-label={`Boleta bloqueada. ${blockedHint}`}
             >
               Bloqueada
             </a>
@@ -407,7 +407,7 @@ export function ControlPanel({
               setAmount(e.target.value);
               setConfirm(null);
             }}
-            aria-label="Valor da ordem"
+            aria-label="Quantidade da ordem"
           />
           <select
             className="field-unit"
@@ -417,7 +417,7 @@ export function ControlPanel({
               setUnit(e.target.value as Unit);
               setConfirm(null);
             }}
-            aria-label="Unidade do valor"
+            aria-label="Unidade da quantidade"
           >
             <option value="lot">lote</option>
             <option value="quote">{accountCurrency ?? quote}</option>

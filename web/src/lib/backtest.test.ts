@@ -164,8 +164,8 @@ describe("the comparison", () => {
 
   it("tells what differs between the rows", () => {
     expect(conditionDifferences(comparisonRows(batch))).toEqual([
-      "ativos diferentes entre os agentes",
-      "agentes LLM (não determinísticos) junto de determinísticos",
+      "ativos diferentes",
+      "agentes LLM (não determinísticos) misturados aos demais",
     ]);
     const coarser = {
       ...batch,
@@ -279,7 +279,7 @@ describe("the form of a batch", () => {
       "A data final é anterior à inicial.",
     );
     expect(formRequest(form({ from: "2025-01-01" }), limits, now).errors.to).toBe(
-      "Escolha até 366 dias.",
+      "O período pode ter até 366 dias.",
     );
     expect(formRequest(form({}), { ...limits, max_runs: 3 }, now).errors.agents).toBe(
       "O lote teria 4 execuções; o máximo é 3.",
@@ -400,7 +400,7 @@ describe("the params of a batch", () => {
     expect(
       batchParams("regime=trend; -equity-curve=20 ;intermarket-pairs=XAUUSDm;BTCUSDm"),
     ).toEqual({
-      error: "BTCUSDm: nome=valor.",
+      error: "BTCUSDm: use nome=valor.",
       params: null,
     });
     expect(batchParams("regime=trend; -equity-curve=20")).toEqual({
@@ -413,6 +413,6 @@ describe("the params of a batch", () => {
     expect(batchParams("pair=XAUUSDm").error).toContain("próprio backtest");
     expect(batchParams("mt5-bridge=x").error).toContain("próprio backtest");
     expect(batchParams("llm-timeout=1m").error).toContain("LLM");
-    expect(batchParams("Regime=trend").error).toContain("nome de uma flag");
+    expect(batchParams("Regime=trend").error).toContain("letras minúsculas, dígitos e -");
   });
 });

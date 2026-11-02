@@ -239,7 +239,7 @@ function Navigation({
 
   if (where === "bar") {
     return (
-      <nav className="appnav" aria-label="Páginas">
+      <nav className="appnav" aria-label="Navegação principal">
         {dashboard}
         {performance}
         {backtesting}

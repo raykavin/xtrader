@@ -169,8 +169,8 @@ export function App() {
               </a>
             }
           >
-            O painel mostra os agentes ativos. Crie um agente ou ative um existente nas
-            configurações.
+            O painel mostra só os agentes ligados. Crie ou ligue um agente em Configurações ›
+            Agentes.
           </EmptyState>
         ) : (
           <DashboardSkeleton label="Carregando agentes…" />
@@ -518,7 +518,10 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const timeframeNote = !shownKey
     ? null
     : viewError
-      ? { text: `Candles de ${timeframeLabel(shown)}: ${viewError}`, error: true }
+      ? {
+          text: `Não foi possível carregar os candles de ${timeframeLabel(shown)}: ${viewError}`,
+          error: true,
+        }
       : view?.key !== shownKey
         ? { text: `Carregando candles de ${timeframeLabel(shown)}…` }
         : null;
@@ -584,7 +587,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
             aria-label="Personalizar o layout do painel"
             title={
               customizing
-                ? "Concluir a personalização do layout"
+                ? "Concluir a personalização"
                 : "Personalizar o layout: mover, ocultar e redimensionar os cards"
             }
             onClick={() => setCustomizing(!customizing)}
@@ -813,7 +816,7 @@ function DashboardSkeleton({
     <Loading label={label}>
       {waiting && (
         <Alert tone="info" title="Aguardando dados">
-          O agente ainda não recebeu o primeiro candle. O painel aparece assim que ele chegar.
+          O painel aparece quando o agente receber o primeiro candle.
         </Alert>
       )}
       <Skeleton className="skeleton-openpl" />

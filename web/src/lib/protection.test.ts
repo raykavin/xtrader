@@ -74,19 +74,19 @@ describe("the form of the protection", () => {
   it("refuses what the controller refuses", () => {
     const form = protectionForm(settings);
     expect(protectionErrors({ ...form, breakevenMargin: "1" })).toEqual({
-      breakevenMargin: "Menor que o gatilho.",
+      breakevenMargin: "Deve ser menor que o gatilho.",
     });
     expect(protectionErrors({ ...form, breakevenTrigger: "" })).toEqual({
       breakevenTrigger: "Defina o gatilho.",
     });
     expect(protectionErrors({ ...form, trailingStep: "2" })).toEqual({
-      trailingStep: "Até a distância.",
+      trailingStep: "No máximo a distância.",
     });
     expect(protectionErrors({ ...form, trailingDistance: "51" }).trailingDistance).toBe(
       "No máximo 50 ATR.",
     );
     expect(protectionErrors({ ...form, trailingTrigger: "abc" }).trailingTrigger).toBe(
-      "Um número, ex.: 0,5.",
+      "Digite um número, ex.: 0,5.",
     );
     // off and not allowed: the distances left as they are
     expect(

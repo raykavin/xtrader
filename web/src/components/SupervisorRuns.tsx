@@ -18,8 +18,7 @@ export function SupervisorRuns({
   if (runs.length === 0) {
     return (
       <EmptyState compact icon="shield" title="Nenhuma análise ainda">
-        As análises aparecem aqui: as periódicas, com o XTrader AI ligado, e as pedidas em Analisar
-        agora.
+        Ligue o XTrader AI ou use Analisar agora.
       </EmptyState>
     );
   }
@@ -71,8 +70,8 @@ export function SupervisorRuns({
             )}
             {run.protection_ids && run.protection_ids.length > 0 && (
               <p className="sup-run-actions">
-                Proteções armadas: {run.protection_ids.map((id) => `#${id}`).join(", ")} (veja
-                Proteções acionadas)
+                Proteções armadas: {run.protection_ids.map((id) => `#${id}`).join(", ")} (veja em
+                Configurações › XTrader AI)
               </p>
             )}
           </li>
@@ -92,9 +91,9 @@ function recommendationLabel(recommendation: string): string {
     case "stop":
       return "parar o agente";
     case "cancel_pending":
-      return "cancelar as pendentes de entrada";
+      return "cancelar as ordens pendentes de entrada";
     case "close_positions":
-      return "encerrar posições (decisão do usuário)";
+      return "fechar posições (decisão do usuário)";
   }
   return recommendation;
 }

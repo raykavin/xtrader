@@ -71,17 +71,17 @@ describe("the actions of the supervisor", () => {
     expect(actionLabel("stop_agent", "now")).toBe("Parar o agente agora");
     expect(actionLabel("block_entries")).toBe("Bloquear novas entradas");
     expect(actionNote("block_entries")).toContain("Nada é fechado nem cancelado");
-    expect(actionNote("stop_agent")).toContain("Nenhuma posição é liquidada");
-    expect(actionNote("close_positions")).toContain("só as posições dos agentes da aplicação");
+    expect(actionNote("stop_agent")).toContain("Nenhuma posição é fechada");
+    expect(actionNote("close_positions")).toContain("só as posições dos agentes do XTrader");
   });
 
   it("writes the scope of a close out: the positions, the pendings, the entries, the agents stopped", () => {
     const text = scopeText(close);
-    expect(text).toContain("Fechar 2 posição(ões) de 2 agente(s)");
-    expect(text).toContain("só dos agentes da aplicação");
+    expect(text).toContain("Fechar 2 posições de 2 agentes");
+    expect(text).toContain("só dos agentes do XTrader");
     expect(text).toContain("não são canceladas");
     expect(text).toContain("ficam bloqueadas");
-    expect(text).toContain("1 posição(ões) de agentes que não estão rodando");
+    expect(text).toContain("1 posição de agente parado é fechada direto na conta");
     expect(scopeProfit(close)).toBe("+10,50 BRL");
   });
 
@@ -182,7 +182,7 @@ describe("the conversation", () => {
 describe("an answer streaming", () => {
   it("tells its stage while the text is awaited", () => {
     expect(stageLabel(null)).toBe("Enviando");
-    expect(stageLabel({ stage: "reading" })).toBe("Lendo os agentes");
+    expect(stageLabel({ stage: "reading" })).toBe("Consultando os agentes");
     expect(stageLabel({ stage: "thinking" })).toBe("Analisando");
     expect(stageLabel({ stage: "tool", tool: "get_agent" })).toBe(
       "Consultando os detalhes do agente",
@@ -227,7 +227,7 @@ describe("the outcome of a close of positions", () => {
       remaining: [],
     });
     expect(closeOutcome(done([item("orders", "already")], "succeeded")).text).toBe(
-      "Nada a encerrar.",
+      "Nada a fechar.",
     );
   });
 

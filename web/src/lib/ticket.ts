@@ -52,10 +52,10 @@ export function levelsError(
 ): string | null {
   const order = side === "buy" ? "uma compra" : "uma venda";
   if (stop !== null && sign(side) * stop >= sign(side) * entry) {
-    return `O stop loss de ${order} fica ${side === "buy" ? "abaixo" : "acima"} da entrada`;
+    return `O stop loss de ${order} deve ficar ${side === "buy" ? "abaixo" : "acima"} da entrada`;
   }
   if (profit !== null && sign(side) * profit <= sign(side) * entry) {
-    return `O take profit de ${order} fica ${side === "buy" ? "acima" : "abaixo"} da entrada`;
+    return `O take profit de ${order} deve ficar ${side === "buy" ? "acima" : "abaixo"} da entrada`;
   }
   return null;
 }
@@ -129,6 +129,6 @@ export function orderFeedback(
   if (!order.warning) return { tone: "ok", text };
   return {
     tone: "warn",
-    text: `${text}, mas sem todo o stop loss e take profit pedidos: confira a posição, ela pode estar desprotegida (${order.warning})`,
+    text: `${text}, mas o stop loss ou o take profit pedido não foi criado. Confira a posição: ela pode estar desprotegida (${order.warning})`,
   };
 }

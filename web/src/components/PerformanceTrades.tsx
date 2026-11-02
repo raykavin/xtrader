@@ -48,8 +48,8 @@ export function PerformanceTrades({ trades, currency, fileName, excursions }: Pr
     <div className="panel-body">
       <div className="panel-toolbar">
         <p className="panel-summary">
-          {listed.length === 1 ? "1 operação" : `${listed.length} operações`}, com os resultados em{" "}
-          {currency}, a mais recente primeiro
+          {listed.length === 1 ? "1 operação" : `${listed.length} operações`}
+          {`, valores em ${currency}, mais recentes primeiro`}
         </p>
         <button
           type="button"
@@ -98,7 +98,7 @@ export function PerformanceTrades({ trades, currency, fileName, excursions }: Pr
               <th scope="col" className="num" title="Máximo contra durante a operação">
                 MAE
               </th>
-              <th scope="col" className="num" title="O resultado sobre a amplitude do preço">
+              <th scope="col" className="num" title="Resultado sobre a amplitude do preço">
                 Ef. total
               </th>
             </tr>

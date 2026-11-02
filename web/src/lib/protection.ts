@@ -75,7 +75,7 @@ export function moveLabel(move: ProtectionMove): ProtectionLabel {
         tone: "error",
       };
   }
-  return { text: "resposta da corretora perdida: o stop é relido", tone: "warn" };
+  return { text: "sem resposta da corretora: relendo o stop", tone: "warn" };
 }
 
 /** The features of a position worth showing: the ones not off, or armed. */
@@ -153,7 +153,7 @@ export function protectionErrors(
   const errors: Partial<Record<keyof ProtectionForm, string>> = {};
   const settings = protectionSettings(form);
   const check = (field: keyof ProtectionForm, value: number) => {
-    if (Number.isNaN(value)) errors[field] = "Um número, ex.: 0,5.";
+    if (Number.isNaN(value)) errors[field] = "Digite um número, ex.: 0,5.";
     else if (value > maxDistance) errors[field] = `No máximo ${maxDistance} ATR.`;
   };
   check("breakevenTrigger", settings.breakeven.trigger);
@@ -165,7 +165,7 @@ export function protectionErrors(
   const b = settings.breakeven;
   if ((b.enabled || b.supervisor) && !errors.breakevenTrigger && !errors.breakevenMargin) {
     if (b.trigger <= 0) errors.breakevenTrigger = "Defina o gatilho.";
-    else if (b.margin >= b.trigger) errors.breakevenMargin = "Menor que o gatilho.";
+    else if (b.margin >= b.trigger) errors.breakevenMargin = "Deve ser menor que o gatilho.";
   }
   const t = settings.trailing;
   if (
@@ -177,7 +177,7 @@ export function protectionErrors(
     if (t.trigger <= 0) errors.trailingTrigger = "Defina o gatilho.";
     if (t.distance <= 0) errors.trailingDistance = "Defina a distância.";
     if (t.step <= 0) errors.trailingStep = "Defina o passo.";
-    else if (t.distance > 0 && t.step > t.distance) errors.trailingStep = "Até a distância.";
+    else if (t.distance > 0 && t.step > t.distance) errors.trailingStep = "No máximo a distância.";
   }
   return errors;
 }

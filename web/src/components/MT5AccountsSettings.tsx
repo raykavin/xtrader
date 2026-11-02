@@ -149,7 +149,7 @@ function AccountEditor({
       <div className="form-grid">
         <Field
           id={`${id}-name`}
-          label="Identificação"
+          label="Nome"
           value={form.name}
           onChange={(v) => set("name", v)}
           error={shown("name")}
@@ -183,7 +183,7 @@ function AccountEditor({
           value={form.bridgeURL}
           onChange={(v) => set("bridgeURL", v)}
           error={shown("bridgeURL")}
-          hint="O terminal MT5 que serve a conta. Um terminal fica numa conta por vez."
+          hint="O terminal MT5 que serve a conta."
           mono
           inputMode="url"
           disabled={busy}
@@ -197,7 +197,7 @@ function AccountEditor({
               onChange={(v) => set("password", v)}
               error={shown("password")}
               type="password"
-              hint="Guardada cifrada; enviada ao terminal ao ativar a conta. Nunca é exibida."
+              hint="Guardada cifrada e nunca exibida; enviada ao terminal ao ativar a conta."
               disabled={busy}
             />
             <Field
@@ -244,20 +244,20 @@ function AccountEditor({
       />
       {moving && (
         <Alert tone="warn" title="Conta em uso">
-          Trocar o login, o servidor ou a bridge da conta ativa muda a conta do terminal: é recusado
-          com agentes rodando nele ou com posições e ordens dos agentes abertas.
+          Mudar o login, o servidor ou a bridge da conta ativa troca a conta do terminal: é recusado
+          com agentes em execução nele ou com posições ou ordens dos agentes abertas.
         </Alert>
       )}
       <p className="field-hint">
-        Vigência: o nome e as opções valem na hora (as opções são enviadas ao terminal); a senha é
-        usada no próximo login do terminal; a associação de um agente vale no próximo início dele.
+        O nome e as opções valem na hora; a senha, no próximo login do terminal; a associação de um
+        agente, no próximo início dele.
       </p>
       <div className="daily-actions">
         <button type="button" className="btn" disabled={busy} onClick={onCancel}>
           Cancelar
         </button>
         <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? "Salvando…" : creating ? "Cadastrar" : "Salvar"}
+          {busy ? "Salvando…" : creating ? "Adicionar conta" : "Salvar"}
         </button>
       </div>
     </form>
@@ -271,7 +271,9 @@ function TestResult({ test }: { test: MT5AccountTest }) {
   return (
     <Alert
       tone={tone}
-      title={test.error ? "Teste com erro" : test.current ? "Conta confirmada" : "Teste"}
+      title={
+        test.error ? "O teste falhou" : test.current ? "Conta confirmada" : "Conta não confirmada"
+      }
     >
       {test.error && <p>{test.error}</p>}
       {test.current && (
@@ -406,8 +408,8 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
         {busy && turning !== null && (
           <span className="field-hint" role="status">
             {turning
-              ? "Trocando de conta: parando os agentes, encerrando o que estiver aberto e logando o terminal…"
-              : "Desativando: parando os agentes e encerrando o que estiver aberto…"}
+              ? "Trocando de conta: parando os agentes, fechando o que estiver aberto e logando o terminal…"
+              : "Desativando: parando os agentes e fechando o que estiver aberto…"}
           </span>
         )}
         {turning !== null && !busy && preview === null && (
@@ -601,7 +603,7 @@ export function MT5AccountsSettings({ intro }: Props) {
           )
         }
       />
-      {error && <Alert tone="error">Não foi possível atualizar: {error}</Alert>}
+      {error && <Alert tone="error">Não foi possível carregar as contas: {error}</Alert>}
       {adding && (
         <section className="card" aria-label="Nova conta">
           <h2 className="card-title">Nova conta</h2>
@@ -616,14 +618,13 @@ export function MT5AccountsSettings({ intro }: Props) {
       )}
       {!accounts ? (
         error ? null : (
-          <Loading label="Carregando as contas MT5">
+          <Loading label="Carregando…">
             <Skeleton height={180} />
           </Loading>
         )
       ) : accounts.length === 0 ? (
-        <EmptyState icon="key" title="Nenhuma conta MT5">
-          Cadastre a conta do terminal: login, servidor, senha e a bridge. Os agentes passam a
-          operar a conta associada a eles.
+        <EmptyState icon="key" title="Nenhuma conta MT5 ainda">
+          Adicione a conta do terminal e associe os agentes a ela.
         </EmptyState>
       ) : (
         <div className="mt5-list">
@@ -636,35 +637,34 @@ export function MT5AccountsSettings({ intro }: Props) {
         <h2 className="card-title">Como funciona</h2>
         <ul className="daily-notes">
           <li>
-            Cada terminal MT5 fica logado numa conta por vez: a conta ativa dele. O terminal é
-            identificado pelo host e pela porta da bridge e pela instância que ela informa: vários
-            terminais num mesmo host são independentes, e contas em terminais diferentes ficam
-            ativas e operando ao mesmo tempo.
+            Cada terminal MT5 fica logado numa conta por vez, a ativa. O terminal é identificado
+            pelo host e pela porta da bridge e pela instância que ela informa: terminais diferentes,
+            mesmo num só host, operam contas ao mesmo tempo.
           </li>
           <li>
-            Ao ativar outra conta no mesmo terminal (ou desativar a atual), os agentes dele são
-            parados; com posições ou ordens pendentes dos agentes abertas, a troca pede confirmação,
-            encerra as posições e cancela as ordens, confere na conta e só então loga o terminal na
-            nova conta, levando para ela os agentes da conta anterior (opção marcada na
-            confirmação). Se algo continuar aberto, a troca não é feita e as pendências são
-            informadas; se o terminal não logar na nova conta, a anterior volta a ser a ativa.
-            Depois, os agentes da conta ativa voltam a ser iniciados.
+            Ao ativar outra conta no terminal (ou desativar a atual), os agentes dele param. Com
+            posições abertas ou ordens pendentes dos agentes, a troca pede confirmação, fecha as
+            posições, cancela as ordens, confere na conta e só então loga o terminal na nova conta,
+            levando para ela os agentes da anterior (opção marcada na confirmação). Se algo
+            continuar aberto, a troca não é feita e o que ficou aberto é listado; se o terminal não
+            logar na nova conta, a anterior volta a ser a ativa. Depois, os agentes da conta ativa
+            são iniciados de novo.
           </li>
           <li>
             A senha e o token ficam cifrados no banco, com a chave fora dele, e nunca são exibidos
             nem registrados. A senha é enviada ao terminal para logar; o terminal guarda a dele.
           </li>
           <li>
-            Os agentes recebem a bridge e o token da conta associada a eles (em Agentes). Trocar a
-            conta de um agente exige o agente parado e sem posições na conta atual.
+            Os agentes recebem a bridge e o token da conta associada a eles (em Configurações ›
+            Agentes). Trocar a conta de um agente exige o agente parado e sem posições na conta
+            atual.
           </li>
           <li>
-            O tipo (real ou demo), a moeda e a empresa são os confirmados pelo terminal no teste ou
-            na importação.
+            O tipo (real ou demo), a moeda e a empresa vêm do terminal, no teste ou na importação.
           </li>
           <li>
-            Um segundo terminal ao mesmo tempo é outro serviço mt5 no compose (veja o README do
-            deploy); depois, é só cadastrar a conta com a bridge dele.
+            Para um segundo terminal, adicione outro serviço mt5 no compose (veja o README do
+            deploy) e cadastre a conta com a bridge dele.
           </li>
         </ul>
       </section>

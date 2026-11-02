@@ -43,16 +43,15 @@ export function DailyLimitDialog({ agent, onChange, onClose }: Props) {
       />
       <div className="dialog-body protection-body">
         <p className="field-hint">
-          O resultado do dia deste agente (o realizado desde 00:00, com swap, comissão e taxas, mais
-          o P/L das posições abertas agora), na moeda da conta dele. Atingida a perda ou o ganho, as
-          posições dele são zeradas, as ordens pendentes de entrada canceladas e as entradas
-          bloqueadas até 00:00 (Belém). Vale junto com o limite de todos os agentes: uma entrada só
-          ocorre se os dois permitirem.
+          Considera o resultado do dia do agente, na moeda da conta dele: o realizado desde 00:00
+          (com swap, comissão e taxas) mais o P/L das posições abertas. Atingida a perda ou o ganho,
+          as posições dele são zeradas, as ordens pendentes de entrada canceladas e as entradas
+          bloqueadas até 00:00 (Belém). Vale junto com o limite de todos os agentes: a entrada só
+          acontece se os dois permitirem.
         </p>
         {paper && (
           <p className="msg msg-warn">
-            Agente em paper: o limite fica guardado, mas só vale em live (o resultado vem da conta
-            MT5).
+            Agente em paper: o limite é salvo, mas só vale em live (o resultado vem da conta MT5).
           </p>
         )}
         <DailyLimitFields

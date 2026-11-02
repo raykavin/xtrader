@@ -141,7 +141,7 @@ export function DailyLimitsSettings({ intro }: Props) {
             </h2>
           </div>
           <span className="field-hint">
-            Configure em Agentes › Limite diário, no card do agente.
+            Configure em Configurações › Agentes, no botão Limite diário do agente.
           </span>
         </header>
         {status.agents.length === 0 ? (
@@ -181,27 +181,28 @@ export function DailyLimitsSettings({ intro }: Props) {
         <ul className="daily-notes">
           <li>
             O resultado do dia é o realizado desde 00:00 ({status.zone}), com swap, comissão e
-            taxas, mais o P/L das posições abertas agora, lido das contas MT5 a cada 5 segundos.
-            Cada operação conta uma vez, mesmo com vários agentes na mesma conta; posições manuais
-            ficam de fora.
+            taxas, mais o P/L das posições abertas, lido das contas MT5 a cada 5 segundos. Cada
+            operação conta uma vez, mesmo com vários agentes na mesma conta; posições manuais não
+            contam.
           </li>
           <li>
-            Atingida a perda ou o ganho (em duas leituras seguidas), todas as posições do escopo são
-            zeradas, as ordens pendentes de entrada canceladas e as entradas bloqueadas até 00:00.
-            Stop loss, trailing e breakeven continuam valendo.
+            Atingida a perda ou o ganho em duas leituras seguidas, as posições são zeradas, as
+            ordens pendentes de entrada canceladas e as entradas bloqueadas até 00:00: de todos os
+            agentes no limite global, só do agente no limite dele. Stop loss, trailing stop e
+            breakeven continuam valendo.
           </li>
           <li>
-            Reiniciar a aplicação, religar ou liberar um agente, ou redefinir o saldo dele não
-            contorna o bloqueio. Só a virada do dia ou uma mudança explícita do limite o libera.
+            Reiniciar o XTrader, religar ou liberar um agente ou redefinir os resultados dele não
+            desfaz o bloqueio. Só a virada do dia ou uma mudança no limite o libera.
           </li>
           <li>
             Tudo na moeda de cada conta, sem conversão de câmbio: com contas em moedas diferentes, o
-            limite global vale para o resultado de cada moeda separadamente, e atingido em qualquer
-            uma, zera e bloqueia todos.
+            limite global vale para o resultado de cada moeda separadamente e, atingido em qualquer
+            uma, zera e bloqueia todos os agentes.
           </li>
           <li>
-            Sem conseguir ler uma conta, as entradas ficam bloqueadas (sem zerar nada) até a leitura
-            voltar.
+            Se uma conta não puder ser lida, as entradas ficam bloqueadas (sem zerar nada) até a
+            leitura voltar.
           </li>
           {(status.paper?.length ?? 0) > 0 && (
             <li>
@@ -210,16 +211,15 @@ export function DailyLimitsSettings({ intro }: Props) {
             </li>
           )}
           <li>
-            Horário de operação: fora dele, nenhum agente abre posição (as entradas ficam
-            bloqueadas, como no limite diário). No horário de fim, zera as posições e cancela as
-            ordens pendentes, conforme marcado; desmarcado, o que estiver aberto fica como está, com
-            os stops. Se a aplicação estiver parada no horário de fim, ela faz isso ao voltar, se
-            ainda estiver fora do horário.
+            Horário de operação: fora dele, nenhum agente abre posição. No fim do horário, zera as
+            posições e cancela as ordens pendentes, conforme marcado; sem zerar, as posições abertas
+            ficam como estão, com os stops. Se o XTrader estiver parado no fim do horário, faz isso
+            ao voltar, se ainda estiver fora do horário.
           </li>
           <li>
             Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em
             seguida); o histórico do MT5 atrasa alguns segundos; entre a leitura e o fechamento o
-            preço anda, então o resultado final pode passar um pouco do limite.
+            preço se move, então o resultado final pode passar um pouco do limite.
           </li>
         </ul>
       </section>

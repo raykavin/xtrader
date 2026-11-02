@@ -214,13 +214,19 @@ export function SupervisorChat() {
         aria-expanded={open}
         aria-controls="supervisor-panel"
         aria-label={open ? "Fechar o XTrader AI" : "Abrir o XTrader AI"}
-        title="XTrader AI, o supervisor dos agentes"
         onClick={() => (open ? close() : setOpen(true))}
       >
         <Icon name={open ? "close" : "shield"} size={20} />
         <span className="supervisor-fab-label">XTrader AI</span>
         {waiting > 0 && !open && (
-          <span className="supervisor-fab-badge" title={`${waiting} proposta(s) aguardando`}>
+          <span
+            className="supervisor-fab-badge"
+            title={
+              waiting === 1
+                ? "1 proposta aguardando confirmação"
+                : `${waiting} propostas aguardando confirmação`
+            }
+          >
             {waiting}
           </span>
         )}
@@ -243,7 +249,7 @@ export function SupervisorChat() {
                   {settings === null
                     ? "carregando…"
                     : !ready
-                      ? "sem modelo configurado"
+                      ? "não configurado"
                       : settings.enabled
                         ? `análises a cada ${Math.round(settings.interval_seconds / 60)} min`
                         : "análises periódicas desligadas"}
@@ -294,7 +300,7 @@ export function SupervisorChat() {
           {!ready && (
             <Alert tone="warn" className="supervisor-alert">
               Defina o provedor, o modelo e a chave em{" "}
-              <a href={settingsHref("supervisor")}>Configurações → XTrader AI</a>.
+              <a href={settingsHref("supervisor")}>Configurações › XTrader AI</a>.
             </Alert>
           )}
 
@@ -314,10 +320,10 @@ export function SupervisorChat() {
                   <p className="supervisor-empty">Carregando a conversa…</p>
                 ) : messages.length === 0 && !sending ? (
                   <div className="supervisor-empty">
-                    <p>Pergunte sobre os agentes, peça uma análise ou uma ação de controle.</p>
+                    <p>Pergunte sobre os agentes, peça uma análise ou uma ação.</p>
                     <p className="field-hint">
                       Ex.: "Quais agentes estão perdendo hoje?", "Bloqueie as entradas do orb",
-                      "Encerre todas as posições". Toda ação passa pela sua confirmação.
+                      "Feche todas as posições". Toda ação pede a sua confirmação.
                     </p>
                   </div>
                 ) : (
@@ -377,7 +383,9 @@ export function SupervisorChat() {
                 )}
                 {settings && settings.failures_in_row > 0 && (
                   <span className={toneClass("error")}>
-                    {settings.failures_in_row} falha(s) seguida(s)
+                    {settings.failures_in_row === 1
+                      ? "1 falha"
+                      : `${settings.failures_in_row} falhas seguidas`}
                   </span>
                 )}
               </div>
@@ -449,7 +457,7 @@ function Message({
 
 /**
  * The XTrader AI at work, until the text of its answer comes: a pulsing
- * mark, three dots and what it does, eg: Lendo os agentes. Still with the
+ * mark, three dots and what it does, eg: Consultando os agentes. Still with the
  * motion reduced, the words telling it.
  */
 function Thinking({ label }: { label: string }) {

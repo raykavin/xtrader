@@ -85,7 +85,7 @@ export function terminalsOf(accounts: MT5AccountInfo[]): { active: number; total
 export function switchQuestion(account: MT5AccountInfo, preview: MT5SwitchPreview): string {
   const leaving = preview.current.join(", ");
   if (preview.exposure.length > 0) {
-    return `Existem posições abertas ou ordens pendentes na conta ${leaving}. Ao trocar de conta, todas as posições serão encerradas e as ordens pendentes serão canceladas. Deseja continuar?`;
+    return `Há posições abertas ou ordens pendentes na conta ${leaving}. Trocar de conta fecha todas as posições e cancela as ordens pendentes. Continuar?`;
   }
   const running = preview.running.length;
   const stopped =
@@ -111,8 +111,11 @@ export function moveAgentsLabel(preview: MT5SwitchPreview): string {
   const linked = preview.linked ?? [];
   if (!preview.active || linked.length === 0) return "";
   const from = preview.current.join(", ");
-  const who = linked.length === 1 ? `o agente ${linked[0]}` : `os ${linked.length} agentes`;
-  return `Levar ${who} da conta ${from} para esta conta (voltam a ser iniciados nela)`;
+  const [who, started] =
+    linked.length === 1
+      ? [`o agente ${linked[0]}`, "volta a ser iniciado nela"]
+      : [`os ${linked.length} agentes`, "voltam a ser iniciados nela"];
+  return `Levar ${who} da conta ${from} para esta conta (${started})`;
 }
 
 /** The form of an account of MT5, as typed: its secrets apart (written only). */
@@ -156,15 +159,15 @@ export function accountErrors(
 ): Partial<Record<AccountField, string>> {
   const errors: Partial<Record<AccountField, string>> = {};
   const name = form.name.trim();
-  if (name === "" || name.length > 64) errors.name = "Um nome de 1 a 64 caracteres.";
+  if (name === "" || name.length > 64) errors.name = "Use de 1 a 64 caracteres.";
   if (!/^\d+$/.test(form.login.trim()) || Number(form.login) <= 0) {
-    errors.login = "O login, um número maior que zero.";
+    errors.login = "Use um número maior que zero.";
   }
-  if (form.server.trim() === "") errors.server = "O servidor, ex.: Exness-MT5Real11.";
+  if (form.server.trim() === "") errors.server = "Informe o servidor, ex.: Exness-MT5Real11.";
   const bridge = form.bridgeURL.trim();
   const bridgeError = bridge === "" ? "Informe a URL da bridge." : httpURLError(bridge);
   if (bridgeError) errors.bridgeURL = bridgeError;
-  if (creating && form.password.length > 256) errors.password = "Até 256 caracteres.";
+  if (creating && form.password.length > 256) errors.password = "Use até 256 caracteres.";
   return errors;
 }
 

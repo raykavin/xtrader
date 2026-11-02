@@ -65,9 +65,9 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
       setPreview(null);
       setSaved(
         outcome.response.effect === "release"
-          ? "Salvo: a trava de hoje foi liberada."
+          ? "Salvo: o bloqueio de hoje foi liberado."
           : outcome.response.effect === "trip"
-            ? "Salvo: o limite já atingido zera as posições e bloqueia as entradas em instantes."
+            ? "Salvo: o limite já foi atingido. As posições serão zeradas e as entradas bloqueadas em instantes."
             : "Salvo: vale a partir de agora.",
       );
       onSaved(next, outcome.response);
@@ -115,7 +115,7 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
       />
       {global && (
         <p className="field-hint">
-          Na moeda das contas, sem conversão: com contas em moedas diferentes, o mesmo valor vale
+          Na moeda de cada conta, sem conversão: com contas em moedas diferentes, o mesmo valor vale
           para cada moeda separadamente.
         </p>
       )}
@@ -125,11 +125,7 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
           "Perda máxima do dia",
           "Atingida (realizado + aberto), zera as posições e bloqueia as entradas até 00:00.",
         )}
-        {amount(
-          "maxGain",
-          "Ganho máximo do dia",
-          "Atingido, faz o mesmo: protege o lucro do dia de ser devolvido.",
-        )}
+        {amount("maxGain", "Ganho máximo do dia", "Atingido, faz o mesmo: protege o lucro do dia.")}
         <div className="field">
           <label className="field-label" htmlFor={`${id}-reason`}>
             Motivo (registrado)

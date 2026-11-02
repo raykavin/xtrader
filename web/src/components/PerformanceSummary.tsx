@@ -117,7 +117,7 @@ function groupsOf(s: Summary): { title?: string; left: Line[]; right: Line[] }[]
           hint:
             s.capital === null
               ? "saldo inicial das contas desconhecido"
-              : `sobre ${money(s.capital, c)}, o saldo das contas no início`,
+              : `sobre ${money(s.capital, c)} de saldo inicial`,
         },
         {
           label: "Patrimônio máximo",
@@ -160,7 +160,7 @@ function efficiencyGroup(state: EfficiencyState, currency: string) {
   return {
     title: "Eficiência (caminho do preço)",
     left: [
-      { label: "MFE médio", value: amount(e.averageMFE), hint: "o máximo a favor, em média" },
+      { label: "MFE médio", value: amount(e.averageMFE), hint: "máximo a favor, em média" },
       {
         label: "Eficiência de entrada",
         value: share(e.entry),
@@ -169,17 +169,17 @@ function efficiencyGroup(state: EfficiencyState, currency: string) {
       {
         label: "Eficiência total",
         value: share(e.total),
-        hint: "o resultado sobre a amplitude do preço",
+        hint: "resultado sobre a amplitude do preço",
       },
       {
         label: "Deixado na mesa",
         value: money(-e.leftOnTable, currency),
         tone: signClass(-e.leftOnTable),
-        hint: "o que as vencedoras devolveram do melhor ponto",
+        hint: "quanto as vencedoras devolveram do melhor ponto",
       },
     ],
     right: [
-      { label: "MAE médio", value: amount(e.averageMAE), hint: "o máximo contra, em média" },
+      { label: "MAE médio", value: amount(e.averageMAE), hint: "máximo contra, em média" },
       {
         label: "Eficiência de saída",
         value: share(e.exit),
@@ -188,12 +188,12 @@ function efficiencyGroup(state: EfficiencyState, currency: string) {
       {
         label: "Maior MAE de uma vencedora",
         value: amount(e.largestWinMAE),
-        hint: "quanto um ganho chegou a andar contra",
+        hint: "quanto uma vencedora chegou a andar contra",
       },
       {
-        label: "Operações com o caminho lido",
+        label: "Operações analisadas",
         value: `${e.trades} de ${e.trades + e.missing}`,
-        hint: e.missing ? "sem abertura conhecida ou candles não lidos" : undefined,
+        hint: e.missing ? "as demais sem abertura conhecida ou sem candles" : undefined,
       },
     ],
   };
@@ -243,15 +243,14 @@ export function PerformanceSummary({
       {!path && (
         <p className="field-hint perf-note">
           {efficiency.error
-            ? `Eficiência: os candles das operações não puderam ser lidos (${efficiency.error}).`
-            : "Eficiência: lendo os candles de cada operação na corretora…"}
+            ? `Não foi possível carregar os candles para calcular a eficiência (${efficiency.error}).`
+            : "Eficiência: carregando os candles das operações…"}
         </p>
       )}
       <p className="field-hint perf-note">
-        Operações vencedoras, perdedoras, lucro e prejuízo bruto contam o resultado antes dos
-        custos; o saldo líquido, a média por operação, o patrimônio e o drawdown, o resultado
-        líquido. Sem a leitura do caminho de cada operação, o declínio é medido entre os
-        fechamentos.
+        Vencedoras, perdedoras, lucro e prejuízo bruto usam o resultado antes dos custos; saldo
+        líquido, média por operação, patrimônio e drawdown usam o líquido. O drawdown é medido entre
+        fechamentos, não dentro de cada operação.
       </p>
     </div>
   );

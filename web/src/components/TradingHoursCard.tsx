@@ -169,7 +169,7 @@ export function TradingHoursCard() {
           {crossesMidnight(form) && " O horário passa da meia-noite: termina no dia seguinte."}
         </p>
         <fieldset className="hours-end">
-          <legend className="field-label">No horário de fim</legend>
+          <legend className="field-label">No fim do horário</legend>
           <label className="hours-check">
             <input
               type="checkbox"
@@ -177,7 +177,7 @@ export function TradingHoursCard() {
               disabled={busy}
               onChange={(e) => set("flatten", e.target.checked)}
             />
-            Zerar todas as posições em aberto
+            Zerar todas as posições abertas
           </label>
           <label className="hours-check">
             <input
@@ -190,7 +190,7 @@ export function TradingHoursCard() {
           </label>
           <p className="field-hint">
             No fim, {endActionsText(form.flatten, form.cancel_pending)}. Só as posições e ordens dos
-            agentes; as manuais nunca são tocadas.
+            agentes: as manuais não são afetadas.
           </p>
         </fieldset>
         <div className="field">

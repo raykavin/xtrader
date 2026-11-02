@@ -136,7 +136,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
         <legend>Agentes</legend>
         {errors.agents && <p className="field-error">{errors.agents}</p>}
         {read.agents.length === 0 ? (
-          <p className="field-hint">Nenhum agente cadastrado.</p>
+          <p className="field-hint">Nenhum agente cadastrado ainda.</p>
         ) : (
           <div className="bt-agents">
             {read.agents.map((a) => (
@@ -150,8 +150,8 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           </div>
         )}
         <p className="field-hint">
-          Cada agente roda com a sua configuração atual (estratégia, parâmetros, proteção), copiada
-          na execução. Agentes ligados ou desligados podem ser testados; nada neles muda.
+          Cada agente roda com uma cópia da configuração atual (estratégia, parâmetros, proteção).
+          Ligados ou desligados, todos podem ser testados; nada neles muda.
         </p>
       </fieldset>
 
@@ -212,14 +212,13 @@ export function BacktestConfigure({ read, onCreated }: Props) {
               onChange={(e) => set("to", e.target.value)}
             />
             <span className={errors.to ? "field-error" : "field-hint"}>
-              {errors.to ??
-                `Os dias pelo horário deste navegador, até ${read.max_period_days} dias.`}
+              {errors.to ?? `No fuso deste navegador, até ${read.max_period_days} dias.`}
             </span>
           </div>
           {field(
             "validation",
             "Validação fora da amostra",
-            "O fim do período, rodado à parte para conferir o resultado do início. 0 para nenhuma.",
+            "Parte final do período, rodada à parte para conferir o resultado. 0 para não validar.",
             "30",
             "%",
           )}
@@ -235,7 +234,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
               ]}
             />
             <span className={errors.timeframe ? "field-error" : "field-hint"}>
-              {errors.timeframe ?? "Trocar o timeframe testa uma variação, não o agente como está."}
+              {errors.timeframe ?? "Outro timeframe testa uma variação, não o agente como está."}
             </span>
           </div>
         </div>
@@ -247,10 +246,10 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           {field(
             "balance",
             "Saldo inicial",
-            "Na moeda de cotação do par (ex.: USD em XAUUSD).",
+            "Na moeda de cotação do ativo (ex.: USD em XAUUSD).",
             "10000",
           )}
-          {field("fee", "Taxa por execução", "Uma fração do valor de cada execução.", "0", "%")}
+          {field("fee", "Taxa por ordem", "Percentual do valor de cada ordem executada.", "0", "%")}
           {field(
             "spread",
             "Spread de reserva",
@@ -258,7 +257,13 @@ export function BacktestConfigure({ read, onCreated }: Props) {
             "0",
             "pts",
           )}
-          {field("slippage", "Slippage", "Contra a ordem, a mercado e nos stops.", "0", "pts")}
+          {field(
+            "slippage",
+            "Slippage",
+            "Aplicado contra você nas ordens a mercado e nos stops.",
+            "0",
+            "pts",
+          )}
         </div>
       </fieldset>
 
@@ -269,9 +274,9 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           {field("dailyGain", "Ganho máximo no dia", "Em branco, sem limite.", "", "")}
         </div>
         <p className="field-hint">
-          Na moeda de cotação, por execução, no dia de America/Belem: atingido, a posição é zerada e
-          as entradas param até a virada. Os limites dos agentes (na moeda da conta) e o limite
-          global de todos os agentes não se aplicam ao backtest.
+          Na moeda de cotação, por execução, no dia de America/Belem: ao atingir, a posição é
+          fechada e as entradas param até a meia-noite. Os limites diários dos agentes e o global
+          não valem no backtest.
         </p>
       </fieldset>
 
@@ -319,14 +324,14 @@ export function BacktestConfigure({ read, onCreated }: Props) {
             </div>
             {errors.hoursStart && <p className="field-error">{errors.hoursStart}</p>}
             <div className="hours-end">
-              <span className="field-label">No horário de fim</span>
+              <span className="field-label">No fim do horário</span>
               <label className="hours-check">
                 <input
                   type="checkbox"
                   checked={form.hoursFlatten}
                   onChange={(e) => set("hoursFlatten", e.target.checked)}
                 />
-                Zerar todas as posições em aberto
+                Zerar todas as posições abertas
               </label>
               <label className="hours-check">
                 <input
@@ -341,9 +346,9 @@ export function BacktestConfigure({ read, onCreated }: Props) {
         )}
         <p className="field-hint">
           {form.hours
-            ? `No horário de America/Belem, nos candles: fora dele, nenhuma entrada; no fim, ${endActionsText(form.hoursFlatten, form.hoursCancel)}.${crossesMidnight({ start: form.hoursStart, end: form.hoursEnd }) ? " Passa da meia-noite: termina no dia seguinte." : ""}`
+            ? `Horário de America/Belem: fora dele, nenhuma entrada; no fim, ${endActionsText(form.hoursFlatten, form.hoursCancel)}.${crossesMidnight({ start: form.hoursStart, end: form.hoursEnd }) ? " Passa da meia-noite: termina no dia seguinte." : ""}`
             : "Desligado, as execuções operam o dia todo."}{" "}
-          Vem preenchido com o horário da aba Limites; mudar aqui só vale para este lote.
+          Vem de Configurações › Limites; mudar aqui vale só para este lote.
         </p>
       </fieldset>
 
@@ -351,7 +356,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
         <legend>Parâmetros dos agentes</legend>
         <div className="field" data-invalid={errors.params ? "" : undefined}>
           <label className="field-label" htmlFor={`${id}-params`}>
-            Parâmetros somados a todos os agentes do lote
+            Parâmetros extras para todos os agentes do lote
           </label>
           <input
             id={`${id}-params`}
@@ -366,7 +371,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           />
           <p className="field-hint" id={`${id}-params-hint`}>
             {errors.params ??
-              "nome=valor, separados por ;, ex.: o filtro de entradas (regime, equity-curve, intermarket-symbol). Uma lista dentro de um valor vai com vírgula (ex.: intermarket-pairs=XAUUSDm,BTCUSDm). Um parâmetro do agente com o mesmo nome é substituído só neste lote. Em branco, os agentes como estão; não vale para os agentes LLM."}
+              "nome=valor separados por ;, ex.: filtros de entrada (regime, equity-curve, intermarket-symbol). Listas com vírgula: intermarket-pairs=XAUUSDm,BTCUSDm. Substitui o parâmetro de mesmo nome do agente só neste lote. Não vale para agentes LLM."}
           </p>
         </div>
       </fieldset>
@@ -390,12 +395,11 @@ export function BacktestConfigure({ read, onCreated }: Props) {
             )}
           </div>
           <Alert tone="warn" title="Custo real no provedor">
-            Cada análise chama o modelo com a chave do agente: até ~{formatNumber(calls)} chamada(s)
-            em {formatNumber(llmRuns)} execução(ões), até {formatMoney(maxCost * llmRuns)} USD pelos
-            tetos. Atingido o teto, a execução para e fica marcada. O resultado não é
-            determinístico: o modelo responde diferente a cada vez, pode ter visto o período no
-            treino, e o contexto é reduzido (sem timeframes superiores, correlatos, calendário nem
-            memória de operações).
+            Cada análise chama o LLM com a chave do agente: até ~{formatNumber(calls)} chamada(s) em{" "}
+            {formatNumber(llmRuns)} execução(ões), até {formatMoney(maxCost * llmRuns)} USD pelos
+            tetos. Ao atingir o teto, a execução para e fica marcada. O resultado varia a cada
+            execução: o LLM pode ter visto o período no treino e roda com contexto reduzido (sem
+            timeframes superiores, correlatos, calendário nem memória de operações).
           </Alert>
         </fieldset>
       )}
@@ -413,7 +417,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           <li>
             <span>Execuções</span>
             <span>
-              {runsOf(form)} (máximo {read.max_runs}), em fila no controller: continuam com a página
+              {runsOf(form)} (máximo {read.max_runs}), em fila no controller; continuam com a página
               fechada
             </span>
           </li>
@@ -433,16 +437,16 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           <li>
             <span>Dados</span>
             <span>
-              Candles de bid do MT5 da ponte de cada agente, com o spread de cada candle; compras no
+              Candles bid do MT5 pela bridge de cada agente, com o spread de cada candle; compras no
               ask. Lacunas são avisadas, nunca preenchidas.
             </span>
           </li>
           <li>
             <span>Execução</span>
             <span>
-              Na resolução mais fina que o período permite (M1 quando cabe). Stop e alvo no mesmo
-              candle: vale o stop. Entrada e stop no mesmo candle: estopada. Stop com gap: na
-              abertura.
+              Na resolução mais fina que o período permite (M1 quando cabe). Stop loss e take profit
+              no mesmo candle: vale o stop. Entrada e stop no mesmo candle: estopada. Stop com gap:
+              na abertura.
             </span>
           </li>
           <li>
@@ -451,7 +455,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           </li>
           <li>
             <span>Moeda</span>
-            <span>A de cotação do par, sem conversão: uma simulação, não a da conta.</span>
+            <span>A de cotação do ativo, sem conversão para a moeda da conta.</span>
           </li>
         </ul>
       </fieldset>
@@ -471,7 +475,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
       </div>
 
       {failure && (
-        <Alert tone="error" title="O lote não foi criado">
+        <Alert tone="error" title="Não foi possível criar o lote">
           {failure}
         </Alert>
       )}

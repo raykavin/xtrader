@@ -314,15 +314,15 @@ function ExcursionColumns({
   return (
     <>
       <p className="field-hint">
-        Por operação, a faixa vai do máximo contra (MAE) ao máximo a favor (MFE) enquanto ela esteve
-        aberta, e o ponto marca o resultado antes dos custos, em {currency}. Lido dos candles da
-        corretora{timeframes ? ` (${timeframes})` : ""}.
+        Cada faixa vai do MAE (máximo contra) ao MFE (máximo a favor) da operação; o ponto é o
+        resultado antes dos custos, em {currency}. Candles da corretora
+        {timeframes ? ` (${timeframes})` : ""}.
         {efficiency.summary?.missing
-          ? ` ${efficiency.summary.missing} operação(ões) sem o caminho: sem abertura conhecida ou candles não lidos.`
+          ? ` ${efficiency.summary.missing === 1 ? "1 operação fora" : `${efficiency.summary.missing} operações fora`} do gráfico: sem abertura conhecida ou sem candles.`
           : ""}
       </p>
       {rows.length === 0 ? (
-        <p className="field-hint">Nenhuma operação com o caminho do preço lido.</p>
+        <p className="field-hint">Nenhuma operação com candles para mostrar.</p>
       ) : (
         <figure ref={figure} className="perf-columns-chart">
           <svg
@@ -502,12 +502,11 @@ export function PerformanceCharts({ trades, currency, range, theme, efficiency }
       />
       <div id={ids.panel} role="tabpanel" aria-labelledby={ids.tab} className="perf-chart-panel">
         {trades.length === 0 ? (
-          <p className="field-hint">Nenhuma operação no período para desenhar.</p>
+          <p className="field-hint">Nenhuma operação no período.</p>
         ) : shown === "equity" ? (
           <>
             <p className="field-hint">
-              Resultado líquido acumulado a cada fechamento, em {currency}, a partir de zero no
-              início do período.
+              Resultado líquido acumulado a cada fechamento, em {currency}, a partir de zero.
             </p>
             <EquityArea points={equity} theme={theme} />
           </>
@@ -520,10 +519,10 @@ export function PerformanceCharts({ trades, currency, range, theme, efficiency }
         ) : shown === "efficiency" ? (
           efficiency.error ? (
             <p className="field-hint">
-              Os candles das operações não puderam ser lidos: {efficiency.error}
+              Não foi possível carregar os candles das operações: {efficiency.error}
             </p>
           ) : efficiency.loading ? (
-            <p className="field-hint">Lendo os candles de cada operação na corretora…</p>
+            <p className="field-hint">Carregando os candles das operações…</p>
           ) : (
             <ExcursionColumns trades={trades} efficiency={efficiency} currency={currency} />
           )

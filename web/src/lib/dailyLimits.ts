@@ -94,13 +94,13 @@ export function timeIn(unix: number | undefined, zone: string): string {
 export function flattenLabel(status: string | undefined): DailyLabel | null {
   switch (status) {
     case "running":
-      return { text: "zerando as posições…", tone: "info" };
+      return { text: "RISCO: ZERANDO POSIÇÕES…", tone: "info" };
     case "done":
-      return { text: "posições zeradas e conferidas", tone: "on" };
+      return { text: "RISCO: POSIÇÕES ZERADAS", tone: "error" };
     case "partial":
-      return { text: "zeragem parcial: confira a conta", tone: "warn" };
+      return { text: "RISCO: ZERAGEM PARCIAL", tone: "warn" };
     case "failed":
-      return { text: "zeragem falhou: confira a conta", tone: "error" };
+      return { text: "RISCO: ZERAGEM FALHOU", tone: "error" };
   }
   return null;
 }
@@ -207,8 +207,8 @@ export function dailyLimitErrors(
   const errors: Partial<Record<keyof DailyLimitForm, string>> = {};
   const check = (field: "maxLoss" | "maxGain", value: number | null) => {
     if (value === null) return;
-    if (Number.isNaN(value)) errors[field] = "Um valor, ex.: 150 ou 150,50.";
-    else if (value <= 0) errors[field] = "Acima de zero.";
+    if (Number.isNaN(value)) errors[field] = "Digite um número, ex.: 150 ou 150,50.";
+    else if (value <= 0) errors[field] = "Use um valor acima de zero.";
     else if (value > maxDailyLimit) errors[field] = "Valor alto demais.";
   };
   const loss = parseLimit(form.maxLoss);

@@ -56,7 +56,7 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
     <div className="settings-section">
       <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
       {error && (
-        <Alert tone="error" title="A alteração não foi feita">
+        <Alert tone="error" title="Não foi possível salvar a alteração">
           {error}
         </Alert>
       )}
@@ -76,13 +76,13 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
           </header>
           <div className="card-body stack">
             <Switch
-              label="Bot ativo"
+              label="Bot ligado"
               checked={telegram.enabled}
               disabled={busy}
               onChange={(enabled) => run(() => updateTelegramSettings({ enabled }))}
             />
             {telegram.enabled && !telegram.has_token && (
-              <p className="msg msg-warn">Defina o token do bot para ele rodar.</p>
+              <p className="msg msg-warn">Defina o token para o bot rodar.</p>
             )}
             <div className="secret-list">
               <SecretField
@@ -109,8 +109,8 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
             </div>
           </header>
           {telegram.users.length === 0 ? (
-            <EmptyState compact icon="users" title="Nenhum usuário autorizado">
-              O bot não responde a ninguém até que um ID seja autorizado abaixo.
+            <EmptyState compact icon="users" title="Nenhum usuário autorizado ainda">
+              O bot só responde aos IDs autorizados abaixo.
             </EmptyState>
           ) : (
             <div className="table-wrap">

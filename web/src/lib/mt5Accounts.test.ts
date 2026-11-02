@@ -164,7 +164,7 @@ describe("the accounts of MT5", () => {
       "Logar o terminal na conta 87654321 no lugar da conta Real? Os 2 agentes em execução no terminal serão parados.",
     );
     expect(switchQuestion(demo, { ...preview, exposure: ["posição de trend em XAUUSDm #1"] })).toBe(
-      "Existem posições abertas ou ordens pendentes na conta Real. Ao trocar de conta, todas as posições serão encerradas e as ordens pendentes serão canceladas. Deseja continuar?",
+      "Há posições abertas ou ordens pendentes na conta Real. Trocar de conta fecha todas as posições e cancela as ordens pendentes. Continuar?",
     );
     expect(
       switchQuestion(account(), {
@@ -184,7 +184,7 @@ describe("the accounts of MT5", () => {
       "Levar os 2 agentes da conta Real para esta conta (voltam a ser iniciados nela)",
     );
     expect(moveAgentsLabel({ ...preview, linked: ["trend"] })).toBe(
-      "Levar o agente trend da conta Real para esta conta (voltam a ser iniciados nela)",
+      "Levar o agente trend da conta Real para esta conta (volta a ser iniciado nela)",
     );
     expect(moveAgentsLabel({ ...preview, active: false })).toBe("");
     expect(moveAgentsLabel({ ...preview, linked: [] })).toBe("");

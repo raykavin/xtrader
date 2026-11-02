@@ -99,7 +99,7 @@ export function SentimentMeter({ reading, loaded, error }: Props) {
 
           {!reading && (
             <p className="meter-note">
-              {error || "Sem leitura ainda: aparece na próxima análise do modelo."}
+              {error || "Sem leitura ainda: aparece na próxima análise do LLM."}
             </p>
           )}
 

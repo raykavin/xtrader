@@ -102,8 +102,7 @@ export function DecisionsPanel({
       )}
       {decisions.length === 0 ? (
         <EmptyState compact icon="sparkles" title="Nenhuma decisão ainda">
-          Cada análise do modelo neste par aparece aqui, com a justificativa, inclusive as que não
-          geraram ordem.
+          Cada análise do LLM aparece aqui, inclusive as que não geraram ordem.
         </EmptyState>
       ) : (
         <div className="table-wrap">

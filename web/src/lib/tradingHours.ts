@@ -38,9 +38,12 @@ export function endActionsText(flatten: boolean, cancelPending: boolean): string
   return "só bloqueia novas entradas";
 }
 
-/** How the last end of the window went, eg: Fim às 17:30: posições zeradas e pendentes canceladas · Concluída. */
+/** How the last end of the window went, eg: Fim às 17:30: posições zeradas e ordens pendentes canceladas · Concluída. */
 export function lastEndLabel(end: TradingHoursEnd, zone: string): HoursLabel {
-  const what = [end.flatten && "posições zeradas", end.cancel_pending && "pendentes canceladas"]
+  const what = [
+    end.flatten && "posições zeradas",
+    end.cancel_pending && "ordens pendentes canceladas",
+  ]
     .filter(Boolean)
     .join(" e ");
   const at = timeIn(end.at, zone);
@@ -67,10 +70,10 @@ export function hoursError(form: HoursForm): string | null {
     ["O início", form.start],
     ["O fim", form.end],
   ] as const) {
-    if (value !== "" && !clock.test(value)) return `${name}: um horário de 00:00 a 23:59.`;
+    if (value !== "" && !clock.test(value)) return `${name} deve ser um horário de 00:00 a 23:59.`;
   }
   if (form.enabled && (form.start === "" || form.end === "")) {
-    return "Ligado, informe o início e o fim.";
+    return "Informe o início e o fim.";
   }
   if (form.enabled && form.start === form.end) return "O início e o fim devem ser diferentes.";
   return null;

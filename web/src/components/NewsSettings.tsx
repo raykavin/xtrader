@@ -110,7 +110,7 @@ export function NewsSettings({ intro }: Props) {
         url:
           form.url.trim() === "" || /^https?:\/\/[^\s@]+$/.test(form.url.trim())
             ? null
-            : "Um endereço http(s), ex.: http://mt5:22347/mcp.",
+            : "Use um endereço http(s), ex.: http://mt5:22347/mcp.",
       }
     : { before: null, after: null, url: null };
   const saveRules = (event: FormEvent) => {
@@ -210,7 +210,7 @@ export function NewsSettings({ intro }: Props) {
             onSave={saveToken}
           />
           <p className="field-hint">
-            O token é guardado cifrado e nunca é mostrado. Ligar, desligar ou trocar o token vale na
+            O token é salvo cifrado e nunca é exibido. Ligar, desligar ou trocar o token vale na
             hora para os agentes em execução, sem reiniciar.
           </p>
           {data.updated_at ? (
@@ -224,7 +224,7 @@ export function NewsSettings({ intro }: Props) {
       <section className="card card-flush" aria-labelledby="news-rules-title">
         <header className="card-header">
           <div className="card-heading">
-            <span className="eyebrow">Para todos os agentes</span>
+            <span className="eyebrow">Todos os agentes</span>
             <h2 id="news-rules-title" className="card-title">
               Servidor e janela da notícia
             </h2>
@@ -244,7 +244,7 @@ export function NewsSettings({ intro }: Props) {
               onChange={(e) => set("url")(e.target.value)}
             />
             <span className={errors.url ? "field-error" : "field-hint"}>
-              {errors.url ?? "O servidor MCP do terminal MT5; em branco, nenhuma consulta."}
+              {errors.url ?? "O servidor MCP do terminal MT5. Em branco, nada é consultado."}
             </span>
           </div>
           <div className="form-grid news-window">
@@ -285,9 +285,10 @@ export function NewsSettings({ intro }: Props) {
             </div>
           </div>
           <p className="field-hint">
-            Da janela antes de uma divulgação das moedas dos ativos de um agente até a janela depois
-            dela, nenhum agente abre posição. Ao começar a janela, as ordens pendentes de entrada do
-            ativo são canceladas e a posição dele é zerada a mercado. Os dois em 0: nenhum bloqueio.
+            Dos minutos antes aos minutos depois de uma divulgação nas moedas de um ativo, nenhum
+            agente abre posição nele. No início da janela, as ordens pendentes de entrada do ativo
+            são canceladas e as posições nele são fechadas a mercado. Com os dois em 0, não há
+            bloqueio.
           </p>
           <div className="news-actions">
             {saved && <span className="msg msg-ok">Salvo e aplicado aos agentes.</span>}
@@ -314,9 +315,8 @@ export function NewsSettings({ intro }: Props) {
         <div className="card-body news-body">
           {!test ? (
             <p className="field-hint">
-              Consulta uma vez o servidor salvo com o token salvo
-              {data.enabled ? "" : ", mesmo com as notícias desativadas"}, para conferir a
-              credencial.
+              Consulta uma vez o servidor e o token salvos
+              {data.enabled ? "" : ", mesmo com as notícias desligadas"}, para conferir a conexão.
             </p>
           ) : (
             <ul className="news-results">
@@ -351,7 +351,7 @@ export function NewsSettings({ intro }: Props) {
           </span>
         </header>
         {data.agents.length === 0 ? (
-          <EmptyState compact icon="news" title="Nenhum agente" />
+          <EmptyState compact icon="news" title="Nenhum agente ainda" />
         ) : (
           <div className="table-wrap news-table">
             <table className="table table-responsive">

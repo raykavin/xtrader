@@ -59,9 +59,7 @@ export function LastDecision({ decision, loaded, error, onShow }: Props) {
       ) : !loaded && !decision ? (
         <Skeleton height={72} />
       ) : !decision ? (
-        <EmptyState icon="sparkles" title="Nenhuma decisão neste par" compact>
-          A primeira análise do modelo aparece aqui assim que chegar.
-        </EmptyState>
+        <EmptyState icon="sparkles" title="Nenhuma decisão ainda" compact />
       ) : (
         <>
           <p className="decision-card-reason">{decisionReason(decision)}</p>

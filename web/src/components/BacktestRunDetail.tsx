@@ -107,7 +107,7 @@ export function BacktestRunDetail({ run, other, onSegment, onClose, theme }: Pro
               type="button"
               className="btn btn-sm btn-ghost"
               onClick={onClose}
-              aria-label="Fechar a execução"
+              aria-label="Fechar"
             >
               <Icon name="close" size={14} />
             </button>
@@ -116,25 +116,25 @@ export function BacktestRunDetail({ run, other, onSegment, onClose, theme }: Pro
       />
       {run.llm && (
         <Alert tone="info" title="Não determinístico">
-          Um modelo de linguagem decidiu as entradas: outra execução pode dar outro resultado, o
-          modelo pode ter visto o período no treino, e o contexto foi reduzido.
+          Um LLM decidiu as entradas: outra execução pode dar outro resultado, o LLM pode ter visto
+          o período no treino e o contexto foi reduzido.
         </Alert>
       )}
       {error && (
-        <Alert tone="error" title="Não foi possível ler a execução">
+        <Alert tone="error" title="Não foi possível carregar a execução">
           {error}
         </Alert>
       )}
       {!detail ? (
         !error && (
-          <Loading label="Lendo a execução">
+          <Loading label="Carregando a execução">
             <Skeleton height={240} />
           </Loading>
         )
       ) : (
         <>
           <Tabs
-            label="Vistas da execução"
+            label="Visualizações da execução"
             idPrefix={`bt-run-${run.id}`}
             items={items}
             value={view}
@@ -158,12 +158,12 @@ export function BacktestRunDetail({ run, other, onSegment, onClose, theme }: Pro
                     base={report.summary.initial_balance}
                   />
                   <p className="field-hint">
-                    O patrimônio a cada candle do timeframe do agente (realizado + aberto), em{" "}
+                    Patrimônio (realizado + aberto) a cada candle do timeframe do agente, em{" "}
                     {report.currency}; verde acima do saldo inicial, vermelho abaixo.{" "}
                     {report.summary.protection_moves > 0 &&
                       `${report.summary.protection_moves} movimento(s) de breakeven/trailing. `}
                     {report.summary.refused > 0 &&
-                      `${report.summary.refused} ordem(ns) recusada(s) pelo lote.`}
+                      `${report.summary.refused} ordem(ns) recusada(s) por volume abaixo do mínimo.`}
                   </p>
                 </>
               )
@@ -373,7 +373,7 @@ function Config({ detail }: { detail: Detail }) {
             {report.data_from && report.data_to
               ? `, de ${periodLabel(report.data_from, report.data_to + 1)}`
               : ""}
-            , da ponte do agente
+            , da bridge do agente
           </span>
         </li>
       )}
@@ -388,8 +388,8 @@ function Config({ detail }: { detail: Detail }) {
       <li>
         <span>Execução</span>
         <span>
-          {timeframeLabel(execution)} · stop com gap na abertura · stop antes do alvo no mesmo
-          candle · abertas no fim a mercado, à parte
+          {timeframeLabel(execution)} · stop com gap na abertura · stop antes do take profit no
+          mesmo candle · posições abertas no fim a mercado, à parte
         </span>
       </li>
       <li>

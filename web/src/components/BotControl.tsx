@@ -68,7 +68,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
       onControlsChange(await stopBot(agent));
       showFeedback({
         tone: "ok",
-        text: "Bot parado. Novas ordens, inclusive os stops de proteção, são rejeitadas até ele ser iniciado.",
+        text: "Bot parado. Novas ordens, inclusive stops de proteção, serão rejeitadas até você iniciá-lo.",
       });
     });
 
@@ -79,7 +79,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
         {!enabled && (
           <span className="status-chip">
             <StatusIcon />
-            {controls === null ? "…" : "desativado"}
+            {controls === null ? "…" : "Desligado"}
           </span>
         )}
         {!enabled ? null : running ? (
