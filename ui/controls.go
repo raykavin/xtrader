@@ -173,7 +173,8 @@ func (c *Chart) controlsResponse(channel Channel) ControlsResponse {
 func (c *Chart) requireController(w http.ResponseWriter, r *http.Request) (OrderController, bool) {
 	controller := c.controllerOf(channelOf(r))
 	if controller == nil {
-		writeJSONError(w, http.StatusNotFound, "bot controls are not enabled")
+		writeJSONError(w, http.StatusNotFound, "Controles do agente desligados neste canal: ligue-os em "+
+			"Configurações › Agentes.")
 		return nil, false
 	}
 	return controller, true
@@ -188,7 +189,8 @@ func (c *Chart) handleControls(w http.ResponseWriter, r *http.Request) {
 func (c *Chart) requireBotController(w http.ResponseWriter, r *http.Request) (OrderController, bool) {
 	controller := c.botControllerOf(channelOf(r))
 	if controller == nil {
-		writeJSONError(w, http.StatusNotFound, "bot controls are not enabled")
+		writeJSONError(w, http.StatusNotFound, "Controles do agente desligados neste canal: ligue-os em "+
+			"Configurações › Agentes.")
 		return nil, false
 	}
 	return controller, true
@@ -230,7 +232,7 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 
 	var request ControlOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return
 	}
 
@@ -239,31 +241,31 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 	candles := c.candles[pair]
 	c.mu.Unlock()
 	if !known {
-		writeJSONError(w, http.StatusNotFound, "unknown pair")
+		writeJSONError(w, http.StatusNotFound, "Ativo desconhecido.")
 		return
 	}
 
 	if request.Amount <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "amount must be positive")
+		writeJSONError(w, http.StatusBadRequest, "A quantidade deve ser maior que zero.")
 		return
 	}
 	if request.Percent && request.Amount > 100 {
-		writeJSONError(w, http.StatusBadRequest, "percentage cannot exceed 100")
+		writeJSONError(w, http.StatusBadRequest, "A quantidade em porcentagem não pode passar de 100.")
 		return
 	}
 	if request.Percent && request.Lot {
-		writeJSONError(w, http.StatusBadRequest, "an amount is a percentage or a size in lots, not both")
+		writeJSONError(w, http.StatusBadRequest, "Informe a quantidade em porcentagem ou em lotes, não nos dois.")
 		return
 	}
 	switch request.Type = strings.ToLower(request.Type); {
 	case request.Type != "" && request.Type != "market" && request.Type != "limit":
-		writeJSONError(w, http.StatusBadRequest, `type must be "market" or "limit"`)
+		writeJSONError(w, http.StatusBadRequest, `Tipo da ordem inválido: use "market" ou "limit".`)
 		return
 	case request.Type == "limit" && request.Price <= 0:
-		writeJSONError(w, http.StatusBadRequest, "a limit order needs its price")
+		writeJSONError(w, http.StatusBadRequest, "Informe o preço limite da ordem.")
 		return
 	case request.StopLoss < 0 || request.TakeProfit < 0:
-		writeJSONError(w, http.StatusBadRequest, "the stop loss and take profit can't be negative")
+		writeJSONError(w, http.StatusBadRequest, "O stop loss e o take profit não podem ser negativos.")
 		return
 	}
 
@@ -280,7 +282,7 @@ func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
 	case "sell":
 		side = model.SideTypeSell
 	default:
-		writeJSONError(w, http.StatusBadRequest, `side must be "buy" or "sell"`)
+		writeJSONError(w, http.StatusBadRequest, `Lado da ordem inválido: use "buy" ou "sell".`)
 		return
 	}
 
@@ -313,7 +315,7 @@ func moveManually(controller OrderController, leg model.Order, level float64) (m
 
 // writeControlError replies the error of an order of the control panel: 409
 // when the bot or the order can't take it now, 400 for invalid levels or sizes,
-// 422 when the broker doesn't support it.
+// 422 when the broker doesn't support it. See controlMessage for its message.
 func writeControlError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
@@ -325,7 +327,42 @@ func writeControlError(w http.ResponseWriter, err error) {
 	case errors.Is(err, exchange.ErrNotSupported):
 		status = http.StatusUnprocessableEntity
 	}
-	writeJSONError(w, status, err.Error())
+	writeJSONError(w, status, controlMessage(err))
+}
+
+// controlMessage returns the message of err, an error of an order of the
+// control panel, for the user: the errors of the bot and of the broker known
+// in Portuguese, with their detail, if any. The entries blocked keep their
+// text, the Telegram of the controller telling them apart by it, and any other
+// error is told as it is.
+func controlMessage(err error) string {
+	switch {
+	case errors.Is(err, order.ErrEntriesBlocked):
+		return err.Error()
+	case errors.Is(err, order.ErrBotStopped):
+		return "O bot está parado: inicie-o antes."
+	case errors.Is(err, exchange.ErrOrderNotOpen):
+		return "A ordem não está mais aberta."
+	case errors.Is(err, exchange.ErrInvalidProtection):
+		return withDetail("Stop loss ou take profit inválido", err, exchange.ErrInvalidProtection)
+	case errors.Is(err, exchange.ErrInvalidQuantity):
+		return withDetail("Tamanho da ordem inválido", err, exchange.ErrInvalidQuantity)
+	case errors.Is(err, exchange.ErrNotSupported):
+		return "A corretora não aceita esta operação."
+	}
+	return err.Error()
+}
+
+// withDetail returns message with the detail of err, the text following the
+// one of sentinel in it, eg: "min: 0.01 max: 100", when it has one.
+func withDetail(message string, err, sentinel error) string {
+	text := err.Error()
+	if i := strings.Index(text, sentinel.Error()); i >= 0 {
+		if detail := strings.TrimLeft(text[i+len(sentinel.Error()):], ": "); detail != "" {
+			return message + ": " + detail
+		}
+	}
+	return message + "."
 }
 
 // createControlOrder creates the order of the control panel and returns it, the
@@ -360,7 +397,7 @@ func createControlOrder(controller OrderController, side model.SideType, pair st
 	}
 	if len(orders) == 0 {
 		if err == nil {
-			err = errors.New("the broker created no order")
+			err = errors.New("A corretora não criou nenhuma ordem.")
 		}
 		return model.Order{}, "", err
 	}
@@ -372,8 +409,8 @@ func createControlOrder(controller OrderController, side model.SideType, pair st
 				asked++
 			}
 		}
-		return orders[0], fmt.Sprintf("the order was created, but %d of its %d stop loss and take profit "+
-			"orders only: the position may be left without them, check it: %v", len(orders)-1, asked, err), nil
+		return orders[0], fmt.Sprintf("A ordem foi criada, mas só %d das %d ordens de stop loss e take profit: "+
+			"a posição pode ter ficado sem elas. Confira: %v", len(orders)-1, asked, err), nil
 	}
 	return orders[0], "", nil
 }
@@ -390,7 +427,7 @@ func controlSize(controller OrderController, side model.SideType, pair string, r
 	case request.Lot:
 		return request.Amount, nil
 	case price <= 0:
-		return 0, errors.New("no price to size the order at")
+		return 0, errors.New("Sem preço para calcular o tamanho da ordem.")
 	}
 	amount := request.Amount
 	if request.Percent {
@@ -408,7 +445,7 @@ func controlSize(controller OrderController, side model.SideType, pair string, r
 		return 0, err
 	}
 	if point <= 0 {
-		return 0, fmt.Errorf("no point value of %s to size the order", pair)
+		return 0, fmt.Errorf("Sem o valor do ponto de %s para calcular o tamanho da ordem.", pair)
 	}
 	return amount / (price * point), nil
 }
@@ -450,10 +487,10 @@ func (c *Chart) controlledOrder(w http.ResponseWriter, r *http.Request) (model.O
 
 	switch {
 	case err != nil || !known:
-		writeJSONError(w, http.StatusNotFound, "unknown order")
+		writeJSONError(w, http.StatusNotFound, "Ordem não encontrada.")
 		return model.Order{}, false
 	case pending.Status != model.OrderStatusTypeNew:
-		writeJSONError(w, http.StatusConflict, "the order is not pending")
+		writeJSONError(w, http.StatusConflict, "A ordem não está mais pendente.")
 		return model.Order{}, false
 	}
 	return pending, true
@@ -536,11 +573,11 @@ func (c *Chart) handleControlMove(w http.ResponseWriter, r *http.Request) {
 
 	var request ControlMoveRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return
 	}
 	if request.Price <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "price must be positive")
+		writeJSONError(w, http.StatusBadRequest, "O preço deve ser maior que zero.")
 		return
 	}
 
@@ -557,7 +594,8 @@ func (c *Chart) handleControlMove(w http.ResponseWriter, r *http.Request) {
 	case model.OrderTypeLimitMaker, model.OrderTypeStopLoss:
 		moved, err = moveManually(controller, pending, request.Price)
 	default:
-		writeJSONError(w, http.StatusUnprocessableEntity, "only limit orders, stop losses and take profits move")
+		writeJSONError(w, http.StatusUnprocessableEntity, "Só ordens limitadas, stop loss e take profit "+
+			"podem ser movidos.")
 		return
 	}
 	if err != nil {

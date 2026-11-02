@@ -290,7 +290,7 @@ func TestAuth_BlocksWithoutSession(t *testing.T) {
 	} {
 		resp, body := do(t, request.method, srv.URL+request.path, request.body, nil)
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, request.path)
-		assert.Equal(t, "authentication required", decodeError(t, body), request.path)
+		assert.Equal(t, "Sessão expirada: entre de novo.", decodeError(t, body), request.path)
 	}
 
 	resp, body := do(t, http.MethodGet, srv.URL+"/ui/v1.0.0/app.js", "", nil)
@@ -370,11 +370,12 @@ func TestAuth_CSRF(t *testing.T) {
 	for _, token := range []string{"", "forged", csrf.Value + "x"} {
 		resp, body := do(t, http.MethodPost, srv.URL+"/api/agents/bot/controls/start", "", cookies, csrfHeader, token)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode, token)
-		assert.Contains(t, decodeError(t, body), "CSRF", token)
+		assert.Contains(t, decodeError(t, body), "Sessão desatualizada", token)
 	}
 	resp, body := do(t, http.MethodPost, srv.URL+"/api/agents/bot/controls/start", "", cookies, csrfHeader, csrf.Value)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "through to the agent, whose controls are off")
-	assert.Equal(t, "bot controls are not enabled", decodeError(t, body))
+	assert.Equal(t, "Controles do agente desligados neste canal: ligue-os em "+
+		"Configurações › Agentes.", decodeError(t, body))
 	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents/bot/controls", "", cookies)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "a read needs no token")
 
@@ -397,7 +398,7 @@ func TestAuth_InvalidCredentials(t *testing.T) {
 	} {
 		resp, body := login(t, srv, credentials[0], credentials[1])
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, credentials)
-		assert.Equal(t, "invalid username or password", decodeError(t, body), credentials)
+		assert.Equal(t, "Usuário ou senha inválidos.", decodeError(t, body), credentials)
 		assert.Nil(t, sessionOf(resp), credentials)
 	}
 	assert.Empty(t, d.auth.sessions)
@@ -713,7 +714,7 @@ func TestAuth_LoginBruteForce_BackoffOfAnAddress(t *testing.T) {
 		rec := from(attacker, testUsername, testPassword)
 		require.Equal(t, http.StatusTooManyRequests, rec.Code, "after %d failures", guess)
 		assert.Equal(t, int(wait.Seconds()), retryAfter(t, rec), "after %d failures", guess)
-		assert.Contains(t, decodeError(t, rec.Body.String()), "too many failed logins")
+		assert.Contains(t, decodeError(t, rec.Body.String()), "Muitas tentativas de login falharam")
 		assert.Equal(t, calls, users.calls.Load(), "the password not checked, even the right one")
 
 		clock.advance(wait - time.Second)

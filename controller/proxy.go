@@ -41,7 +41,7 @@ var servedTypes = map[string]bool{"application/json": true, "text/event-stream":
 // serve.
 type refusedAnswer struct{ what string }
 
-func (e *refusedAnswer) Error() string { return "an answer of " + e.what }
+func (e *refusedAnswer) Error() string { return "uma resposta com " + e.what }
 
 // newAgentProxy proxies the requests to the API of an agent, their path
 // relative to it, from the trade panel of the web dashboard, whatever channel
@@ -67,8 +67,8 @@ func newAgentProxy(a Agent, api *url.URL, keys *agentKeys) *httputil.ReverseProx
 			var refused *refusedAnswer
 			if errors.As(err, &refused) {
 				log.Warnf("ui: agent %s: %v, refused", a.Name, err)
-				writeJSONError(w, http.StatusBadGateway, fmt.Sprintf("agent %s answered %s, which the dashboard "+
-					"doesn't serve", a.Name, refused.what))
+				writeJSONError(w, http.StatusBadGateway, fmt.Sprintf("O agente %s respondeu com %s, que o "+
+					"painel não exibe.", a.Name, refused.what))
 				return
 			}
 			log.Debugf("ui: agent %s: %v", a.Name, err)
@@ -101,25 +101,25 @@ func checkAnswer(res *http.Response) error {
 		}
 	}
 	if res.StatusCode == http.StatusSwitchingProtocols {
-		return &refusedAnswer{"another protocol"}
+		return &refusedAnswer{"outro protocolo"}
 	}
 	value := res.Header.Get("Content-Type")
 	if value == "" {
 		if res.ContentLength == 0 {
 			return nil
 		}
-		return &refusedAnswer{"a payload without its type"}
+		return &refusedAnswer{"um conteúdo sem tipo"}
 	}
 	mediaType, _, err := mime.ParseMediaType(value)
 	switch {
 	case err != nil:
-		return &refusedAnswer{fmt.Sprintf("a payload of the type %q", value)}
+		return &refusedAnswer{fmt.Sprintf("um conteúdo do tipo %q", value)}
 	case servedTypes[mediaType], ui.ImageType(mediaType):
 		return nil
 	case mediaType == "application/octet-stream" && attachment(res.Header.Get("Content-Disposition")):
 		return nil // a file of a decision, see ui.ImageType
 	}
-	return &refusedAnswer{"a payload of the type " + mediaType}
+	return &refusedAnswer{"um conteúdo do tipo " + mediaType}
 }
 
 // attachment reports whether the Content-Disposition of an answer makes its

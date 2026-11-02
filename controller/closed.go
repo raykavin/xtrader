@@ -107,7 +107,8 @@ func (c *closedProfits) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Errorf("ui: the closed profit of the agents: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the closed profit of the agents can't be read now")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler o P/L fechado dos agentes agora. "+
+			"Tente de novo em instantes.")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -121,11 +122,11 @@ func closedRangeOf(query url.Values) (closedRange, error) {
 	to, errTo := strconv.ParseInt(query.Get("to"), 10, 64)
 	switch {
 	case errFrom != nil || errTo != nil || from < 0:
-		return closedRange{}, errors.New("from and to: the range, in Unix seconds")
+		return closedRange{}, errors.New("Período inválido: informe from e to em segundos Unix.")
 	case to <= from:
-		return closedRange{}, errors.New("to must be after from")
+		return closedRange{}, errors.New("Período inválido: o fim (to) deve vir depois do início (from).")
 	case time.Duration(to-from)*time.Second > maxClosedRange:
-		return closedRange{}, errors.New("a range of 400 days at most")
+		return closedRange{}, errors.New("Período longo demais: no máximo 400 dias.")
 	}
 	return closedRange{from: time.Unix(from, 0), to: time.Unix(to, 0)}, nil
 }

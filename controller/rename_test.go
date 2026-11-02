@@ -34,7 +34,7 @@ func TestSettingsAPI_RenameAnAgent(t *testing.T) {
 
 	resp, body := rename("llm", "llm-tendencia")
 	require.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	require.Contains(t, body, "disable it first")
+	require.Contains(t, body, "Desligue o agente llm antes.")
 	off := false
 	resp, body = call(http.MethodPatch, "/api/settings/agents/llm", ui.AgentSettingsRequest{Enabled: &off})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)

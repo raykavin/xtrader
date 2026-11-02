@@ -283,7 +283,7 @@ func TestTelegram_PickAgent(t *testing.T) {
 
 	telegram.handleAgent(command("/agent down"))
 	telegram.handleStatus(command("/status"))
-	assert.Regexp(t, `^\[down\] agent down is offline at 127\.0\.0\.1:\d+$`, server.last(t).Text)
+	assert.Regexp(t, `^\[down\] O agente down não responde em 127\.0\.0\.1:\d+\.$`, server.last(t).Text)
 
 	telegram.handleAgent(command("/agent"))
 	assert.True(t, strings.HasPrefix(server.last(t).Text, "Agents:"), "the agents to pick from")
@@ -359,7 +359,7 @@ func TestTelegram_Orders(t *testing.T) {
 	assert.Equal(t, "[eth] Invalid amount", server.last(t).Text)
 
 	telegram.handleOrder(command("/buy GOLD 1 lot"))
-	assert.Equal(t, "[eth] unknown pair", server.last(t).Text)
+	assert.Equal(t, "[eth] Ativo desconhecido.", server.last(t).Text)
 
 	controller.orderErr = order.ErrBotStopped
 	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
@@ -605,7 +605,7 @@ func TestTelegram_Reanalyze(t *testing.T) {
 	assert.Equal(t, "XAUUSDm telegram | Estamos no lucro, acredito que você pode encerrar a posição? O que acha?",
 		llm.reanalyzed[len(llm.reanalyzed)-1])
 	telegram.handleReanalyze(command("/reanalyze XAUUSDm " + strings.Repeat("x", ui.MaxReanalysisNote+1)))
-	assert.Contains(t, server.last(t).Text, "the note has 501 characters, 500 at most")
+	assert.Contains(t, server.last(t).Text, "A mensagem tem 501 caracteres; o máximo é 500.")
 
 	llm.mu.Lock()
 	llm.refuse = errors.New("openai gpt-test is rate limited for 20s: ask again later")

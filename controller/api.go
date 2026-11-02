@@ -33,7 +33,7 @@ func (e *apiError) Error() string {
 
 // offline is the error of an agent whose API doesn't answer.
 func offline(a Agent) error {
-	return fmt.Errorf("agent %s is offline at %s", a.Name, a.Address)
+	return fmt.Errorf("O agente %s não responde em %s.", a.Name, a.Address)
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {

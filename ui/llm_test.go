@@ -237,7 +237,7 @@ func TestLLM_Reanalyze(t *testing.T) {
 	resp, body = send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm","note":"`+long+
 		`!"}`, ChannelTelegram)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	require.Contains(t, body, "the note has 501 characters, 500 at most")
+	require.Contains(t, body, "A mensagem tem 501 caracteres; o máximo é 500.")
 	require.Len(t, llm.reanalyzed, 3)
 
 	resp, _ = send(t, http.MethodPost, srv.URL+"/api/controls/reanalyze", `{"pair":"EURUSD"}`, ChannelTelegram)
@@ -262,7 +262,7 @@ func TestLLM_Reanalyze(t *testing.T) {
 		require.JSONEq(t, `{"enabled":true,"status":"running","bot_control":true}`, body, channel)
 		resp, body = send(t, http.MethodPost, plainSrv.URL+"/api/controls/reanalyze", `{"pair":"BTCUSDm"}`, channel)
 		require.Equal(t, http.StatusNotFound, resp.StatusCode, channel)
-		require.Contains(t, body, "doesn't use a language model", channel)
+		require.Contains(t, body, "não usa LLM", channel)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestLLM_ReanalysisApartFromTheTradePanel(t *testing.T) {
 			require.Equal(t, tc.fromTelegram, resp.StatusCode, telBody)
 			for status, answer := range map[int]string{tc.web: body, tc.fromTelegram: telBody} {
 				if status == http.StatusForbidden {
-					require.Contains(t, answer, "the reanalysis is disabled in the settings of the agent")
+					require.Contains(t, answer, "Reanálise não permitida")
 				}
 			}
 			var want []string

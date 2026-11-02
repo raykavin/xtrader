@@ -135,7 +135,7 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 	if err != nil {
 		if errors.Is(err, errNotConfigured) {
 			return fail("O XTrader AI ainda não tem um modelo configurado: defina o provedor, o modelo e a chave "+
-				"em Configurações → XTrader AI.", err)
+				"em Configurações › XTrader AI.", err)
 		}
 		return fail("Não consegui ler as configurações do XTrader AI agora.", err)
 	}

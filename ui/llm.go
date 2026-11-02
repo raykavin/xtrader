@@ -147,7 +147,7 @@ func finitePrices(prices ...*float64) bool {
 // strategy that keeps none.
 func (c *Chart) requireDecisions(w http.ResponseWriter) (DecisionSource, bool) {
 	if c.decisions == nil {
-		writeJSONError(w, http.StatusNotFound, "the strategy keeps no decisions of a language model")
+		writeJSONError(w, http.StatusNotFound, "A estratégia deste agente não guarda decisões do LLM.")
 		return nil, false
 	}
 	return c.decisions, true
@@ -166,7 +166,7 @@ func (c *Chart) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		resolved, known := c.resolvePair(pair)
 		c.mu.Unlock()
 		if !known {
-			writeJSONError(w, http.StatusNotFound, "unknown pair")
+			writeJSONError(w, http.StatusNotFound, "Ativo desconhecido.")
 			return
 		}
 		pair = resolved
@@ -175,7 +175,7 @@ func (c *Chart) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("limit"); value != "" {
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 {
-			writeJSONError(w, http.StatusBadRequest, "limit must be a positive number")
+			writeJSONError(w, http.StatusBadRequest, "O limite deve ser um número maior que zero.")
 			return
 		}
 		limit = min(n, maxDecisions)
@@ -203,7 +203,7 @@ func (c *Chart) handleDecision(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 	case !found:
-		writeJSONError(w, http.StatusNotFound, "unknown decision")
+		writeJSONError(w, http.StatusNotFound, "Decisão não encontrada.")
 	default:
 		writeJSON(w, decision)
 	}
@@ -218,13 +218,13 @@ func (c *Chart) handleDecisionAttachment(w http.ResponseWriter, r *http.Request)
 	}
 	index, err := strconv.Atoi(chi.URLParam(r, "index"))
 	if err != nil || index < 0 {
-		writeJSONError(w, http.StatusNotFound, "unknown attachment")
+		writeJSONError(w, http.StatusNotFound, "Anexo não encontrado.")
 		return
 	}
 	mediaType, data, err := decisions.Attachment(chi.URLParam(r, "id"), index)
 	switch {
 	case errors.Is(err, ErrUnknownDecision):
-		writeJSONError(w, http.StatusNotFound, "unknown attachment")
+		writeJSONError(w, http.StatusNotFound, "Anexo não encontrado.")
 		return
 	case err != nil:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -252,22 +252,23 @@ func (c *Chart) handleReanalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	reanalyzer := c.reanalyzer()
 	if reanalyzer == nil {
-		writeJSONError(w, http.StatusNotFound, "the strategy doesn't use a language model")
+		writeJSONError(w, http.StatusNotFound, "A estratégia deste agente não usa LLM.")
 		return
 	}
 	if !c.reanalysisAllowed() {
-		writeJSONError(w, http.StatusForbidden, "the reanalysis is disabled in the settings of the agent")
+		writeJSONError(w, http.StatusForbidden, "Reanálise não permitida: ligue “Permitir reanálise” em "+
+			"Configurações › Agentes.")
 		return
 	}
 
 	var request ReanalysisRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return
 	}
 	note := strings.TrimSpace(request.Note)
 	if n := utf8.RuneCountInString(note); n > MaxReanalysisNote {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("the note has %d characters, %d at most", n,
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("A mensagem tem %d caracteres; o máximo é %d.", n,
 			MaxReanalysisNote))
 		return
 	}
@@ -275,7 +276,7 @@ func (c *Chart) handleReanalyze(w http.ResponseWriter, r *http.Request) {
 	pair, known := c.resolvePair(request.Pair)
 	c.mu.Unlock()
 	if !known {
-		writeJSONError(w, http.StatusNotFound, "unknown pair")
+		writeJSONError(w, http.StatusNotFound, "Ativo desconhecido.")
 		return
 	}
 

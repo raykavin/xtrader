@@ -67,7 +67,8 @@ func (p *openPositions) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Errorf("ui: the open positions of the agents: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the open positions of the agents can't be read now")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler as posições abertas agora. "+
+			"Tente de novo em instantes.")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

@@ -383,15 +383,16 @@ func TestDashboard_ProxiesTheAgentAPI(t *testing.T) {
 
 	resp, body = postJSON(t, srv.URL+"/api/agents/btc/controls/stop", "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	assert.Equal(t, "bot controls are not enabled", decodeError(t, body))
+	assert.Equal(t, "Controles do agente desligados neste canal: ligue-os em "+
+		"Configurações › Agentes.", decodeError(t, body))
 
 	resp, body = get(t, srv.URL+"/api/agents/nobody/pairs")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	assert.Equal(t, "unknown agent", decodeError(t, body))
+	assert.Equal(t, "Agente desconhecido.", decodeError(t, body))
 
 	resp, body = get(t, srv.URL+"/api/agents/down/pairs")
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
-	assert.Contains(t, decodeError(t, body), "agent down is offline")
+	assert.Contains(t, decodeError(t, body), "O agente down não responde")
 }
 
 // publishCandles publishes a new candle of the chart every few milliseconds,
@@ -457,13 +458,14 @@ func TestDashboard_Call(t *testing.T) {
 	var apiErr *apiError
 	err = d.call(ctx, agentNamed(t, d, "bot"), http.MethodPost, "controls/start", nil, nil)
 	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, &apiError{Status: http.StatusNotFound, Message: "bot controls are not enabled"}, apiErr)
+	assert.Equal(t, &apiError{Status: http.StatusNotFound,
+		Message: "Controles do agente desligados neste canal: ligue-os em Configurações › Agentes."}, apiErr)
 	err = d.call(ctx, agentNamed(t, d, "bot"), http.MethodGet, "BTCUSDT/snapshot", nil, nil)
 	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, &apiError{Status: http.StatusNotFound, Message: "unknown pair"}, apiErr)
+	assert.Equal(t, &apiError{Status: http.StatusNotFound, Message: "Ativo desconhecido."}, apiErr)
 
 	err = d.call(ctx, agentNamed(t, d, "down"), http.MethodGet, "pairs", nil, nil)
-	require.ErrorContains(t, err, "agent down is offline at")
+	require.ErrorContains(t, err, "O agente down não responde em")
 	err = d.events(ctx, agentNamed(t, d, "down"), func() { t.Error("connected") }, nil)
-	require.ErrorContains(t, err, "agent down is offline at")
+	require.ErrorContains(t, err, "O agente down não responde em")
 }

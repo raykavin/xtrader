@@ -132,22 +132,31 @@ func (s *Supervision) setDailyLimit(w http.ResponseWriter, r *http.Request, a *s
 }
 
 // fail answers an error of the supervisor: 404, 409, 410 or 400 for the ones
-// of the request, 500 else, its detail logged.
+// of the request, 500 else, its detail logged. The errors of the supervisor
+// are told the user in Portuguese, their text kept for the logs.
 func (s *Supervision) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, store.ErrDecided), errors.Is(err, errAnalyzing):
+	case errors.Is(err, errAnalyzing):
+		writeJSONError(w, http.StatusConflict, analyzingMessage)
+	case errors.Is(err, store.ErrDecided):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrExpired):
 		writeJSONError(w, http.StatusGone, "a proposta expirou: peça uma nova ao XTrader AI")
-	case errors.Is(err, store.ErrInvalid), errors.Is(err, errEmptyMessage), errors.Is(err, errNotConfigured):
+	case errors.Is(err, errEmptyMessage):
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Escreva uma mensagem de 1 a %d caracteres.",
+			maxMessageLength))
+	case errors.Is(err, errNotConfigured):
+		writeJSONError(w, http.StatusBadRequest, "O XTrader AI ainda não tem um LLM configurado: defina o "+
+			"provedor, o modelo e a chave em Configurações › XTrader AI.")
+	case errors.Is(err, store.ErrInvalid):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, context.Canceled):
-		writeJSONError(w, http.StatusServiceUnavailable, ErrStopped.Error())
+		writeJSONError(w, http.StatusServiceUnavailable, stoppingMessage)
 	default:
 		log.Errorf("ui: supervisor: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the supervisor can't answer now")
+		writeJSONError(w, http.StatusInternalServerError, supervisorDown)
 	}
 }
 
@@ -485,7 +494,7 @@ func (s *Supervision) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("before"); value != "" {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || parsed < 1 {
-			writeJSONError(w, http.StatusBadRequest, "invalid before")
+			writeJSONError(w, http.StatusBadRequest, "Parâmetro before inválido.")
 			return
 		}
 		before = parsed
@@ -513,7 +522,7 @@ func (s *Supervision) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDOf(r.Context())
 	if userID == 0 {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		writeJSONError(w, http.StatusUnauthorized, "Sessão expirada: entre de novo.")
 		return
 	}
 	added, err := s.Ask(r.Context(), userID, userOf(r.Context()), request.Text)

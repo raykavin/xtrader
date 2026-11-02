@@ -51,7 +51,7 @@ func writeJSON(w http.ResponseWriter, payload interface{}) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		log.Errorf("ui: failed to encode the answer: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "failed to encode the answer: "+err.Error())
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível montar a resposta: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -83,7 +83,7 @@ func (c *Chart) handlePairs(w http.ResponseWriter, _ *http.Request) {
 func (c *Chart) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	snapshot, ok := c.snapshotOf(chi.URLParam(r, "pair"))
 	if !ok {
-		http.Error(w, "unknown pair", http.StatusNotFound)
+		http.Error(w, "Ativo desconhecido.", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, snapshot)
@@ -134,7 +134,7 @@ func (c *Chart) handleOrdersCSV(w http.ResponseWriter, r *http.Request) {
 	c.mu.Unlock()
 
 	if !ok {
-		http.Error(w, "unknown pair", http.StatusNotFound)
+		http.Error(w, "Ativo desconhecido.", http.StatusNotFound)
 		return
 	}
 

@@ -193,7 +193,7 @@ func (c *Chart) handleCandles(w http.ResponseWriter, r *http.Request) {
 	execution := c.executionTimeframe()
 	c.mu.Unlock()
 	if !known {
-		writeJSONError(w, http.StatusNotFound, "unknown pair")
+		writeJSONError(w, http.StatusNotFound, "Ativo desconhecido.")
 		return
 	}
 	timeframe := normalizeTimeframe(r.URL.Query().Get("timeframe"))
@@ -204,21 +204,22 @@ func (c *Chart) handleCandles(w http.ResponseWriter, r *http.Request) {
 	if value := r.URL.Query().Get("limit"); value != "" {
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 {
-			writeJSONError(w, http.StatusBadRequest, "limit must be a positive number")
+			writeJSONError(w, http.StatusBadRequest, "O limite deve ser um número maior que zero.")
 			return
 		}
 		limit = min(n, maxViewCandles)
 	}
 	if timeframe != execution && !slices.Contains(ViewTimeframes, timeframe) {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("timeframe %q: one of %s, or the one of the strategy, %s",
-			timeframe, strings.Join(ViewTimeframes, ", "), execution))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Timeframe %q inválido: use um de %s ou o da "+
+			"estratégia, %s.", timeframe, strings.Join(ViewTimeframes, ", "), execution))
 		return
 	}
 
 	candles, source, err := c.viewCandles(r.Context(), pair, timeframe, execution, limit)
 	switch {
-	case errors.Is(err, ErrTimeframeUnavailable):
-		writeJSONError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrTimeframeUnavailable): // below the one of the strategy, see viewCandles
+		writeJSONError(w, http.StatusConflict, fmt.Sprintf("O timeframe %s não está disponível: é menor que o da "+
+			"estratégia, %s, e o agente não lê outro neste modo.", timeframe, execution))
 		return
 	case err != nil:
 		writeJSONError(w, http.StatusBadGateway, err.Error())
@@ -257,7 +258,7 @@ func (c *Chart) viewCandles(ctx context.Context, pair, timeframe, execution stri
 
 	read, err := c.readView(ctx, pair, timeframe, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("the candles %s of %s: %w", timeframe, pair, err)
+		return nil, "", fmt.Errorf("Não foi possível ler os candles %s de %s: %w", timeframe, pair, err)
 	}
 	candles := make([]Candle, 0, len(read)+1)
 	for _, candle := range read {

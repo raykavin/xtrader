@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -160,7 +161,7 @@ func TestControls_Disabled(t *testing.T) {
 	for _, path := range []string{"/controls/start", "/controls/stop", "/controls/order"} {
 		resp, body := postJSON(t, srv.URL+"/api"+path, "{}")
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
-		assert.Contains(t, body, "not enabled")
+		assert.Contains(t, body, "Controles do agente desligados")
 	}
 }
 
@@ -195,14 +196,14 @@ func TestControls_OrderValidation(t *testing.T) {
 		name, body, wantError string
 		wantStatus            int
 	}{
-		{"invalid json", "{", "invalid JSON", http.StatusBadRequest},
-		{"unknown pair", `{"pair":"DOGEUSDT","side":"buy","amount":10}`, "unknown pair", http.StatusNotFound},
-		{"zero amount", `{"pair":"BTCUSDT","side":"buy","amount":0}`, "amount must be positive", http.StatusBadRequest},
+		{"invalid json", "{", "Pedido inválido", http.StatusBadRequest},
+		{"unknown pair", `{"pair":"DOGEUSDT","side":"buy","amount":10}`, "Ativo desconhecido", http.StatusNotFound},
+		{"zero amount", `{"pair":"BTCUSDT","side":"buy","amount":0}`, "A quantidade deve ser maior que zero", http.StatusBadRequest},
 		{"percent above 100", `{"pair":"BTCUSDT","side":"buy","amount":150,"percent":true}`,
-			"percentage cannot exceed 100", http.StatusBadRequest},
+			"não pode passar de 100", http.StatusBadRequest},
 		{"percent and lot", `{"pair":"BTCUSDT","side":"buy","amount":50,"percent":true,"lot":true}`,
-			"not both", http.StatusBadRequest},
-		{"invalid side", `{"pair":"BTCUSDT","side":"hold","amount":10}`, "side must be", http.StatusBadRequest},
+			"não nos dois", http.StatusBadRequest},
+		{"invalid side", `{"pair":"BTCUSDT","side":"hold","amount":10}`, "Lado da ordem inválido", http.StatusBadRequest},
 	}
 
 	for _, tc := range testCases {
@@ -274,7 +275,7 @@ func TestControls_OrderErrors(t *testing.T) {
 
 	resp, body := postJSON(t, srv.URL+"/api/controls/order", `{"pair":"BTCUSDT","side":"buy","amount":10}`)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Contains(t, body, "stopped")
+	assert.Contains(t, body, "O bot está parado")
 
 	controller.orderErr = assert.AnError
 	resp, body = postJSON(t, srv.URL+"/api/controls/order", `{"pair":"BTCUSDT","side":"buy","amount":10}`)
@@ -342,7 +343,7 @@ func TestControls_OrderExecutedIsNoError(t *testing.T) {
 		var created ControlOrderResponse
 		require.NoError(t, json.Unmarshal([]byte(body), &created))
 		assert.Equal(t, int64(4), created.ID)
-		assert.Contains(t, created.Warning, "0 of its 1 stop loss and take profit orders only")
+		assert.Contains(t, created.Warning, "só 0 das 1 ordens de stop loss e take profit")
 		assert.Contains(t, created.Warning, exchange.ErrInvalidProtection.Error())
 	})
 }
@@ -419,10 +420,10 @@ func TestControls_OrderTicket(t *testing.T) {
 		srv := newTestServer(t, c)
 
 		for body, wantError := range map[string]string{
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"stop"}`:                             `type must be`,
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit"}`:                            "needs its price",
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"stop_loss":-1}`:                            "can't be negative",
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit","price":1,"take_profit":-5}`: "can't be negative",
+			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"stop"}`:                             `Tipo da ordem inválido`,
+			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit"}`:                            "Informe o preço limite",
+			`{"pair":"BTCUSDT","side":"buy","amount":10,"stop_loss":-1}`:                            "não podem ser negativos",
+			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit","price":1,"take_profit":-5}`: "não podem ser negativos",
 		} {
 			resp, got := postJSON(t, srv.URL+"/api/controls/order", body)
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
@@ -432,20 +433,28 @@ func TestControls_OrderTicket(t *testing.T) {
 	})
 
 	t.Run("the errors of the broker", func(t *testing.T) {
-		for err, wantStatus := range map[error]int{
-			exchange.ErrInvalidProtection: http.StatusBadRequest,
-			exchange.ErrNotSupported:      http.StatusUnprocessableEntity,
-			order.ErrBotStopped:           http.StatusConflict,
+		for _, tc := range []struct {
+			err        error
+			wantStatus int
+			wantError  string
+		}{
+			{exchange.ErrInvalidProtection, http.StatusBadRequest, "Stop loss ou take profit inválido."},
+			{fmt.Errorf("%w: min: 0.01 max: 100", exchange.ErrInvalidQuantity), http.StatusBadRequest,
+				"Tamanho da ordem inválido: min: 0.01 max: 100"},
+			{exchange.ErrNotSupported, http.StatusUnprocessableEntity, "A corretora não aceita esta operação."},
+			{order.ErrBotStopped, http.StatusConflict, "O bot está parado: inicie-o antes."},
+			{fmt.Errorf("%w: limite diário", order.ErrEntriesBlocked), http.StatusConflict,
+				order.ErrEntriesBlocked.Error() + ": limite diário"}, // the text the Telegram tells them by
 		} {
 			c := newTestChart(t)
-			c.SetOrderController(&fakeController{orderErr: err})
+			c.SetOrderController(&fakeController{orderErr: tc.err})
 			c.OnCandle(candleAt("BTCUSDT", base, 40000))
 			srv := newTestServer(t, c)
 
 			resp, body := postJSON(t, srv.URL+"/api/controls/order",
 				`{"pair":"BTCUSDT","side":"buy","amount":100,"stop_loss":39000}`)
-			assert.Equal(t, wantStatus, resp.StatusCode, err)
-			assert.Contains(t, body, err.Error())
+			assert.Equal(t, tc.wantStatus, resp.StatusCode, tc.err)
+			assert.Contains(t, body, tc.wantError, tc.err)
 		}
 	})
 }
@@ -497,14 +506,14 @@ func TestControls_MoveAndCancel(t *testing.T) {
 			path, body, wantError string
 			wantStatus            int
 		}{
-			{"9/move", `{"price":39000}`, "unknown order", http.StatusNotFound},
-			{"x/move", `{"price":39000}`, "unknown order", http.StatusNotFound},
-			{"4/move", `{"price":39000}`, "not pending", http.StatusConflict},
-			{"5/move", `{"price":39000}`, "only limit orders", http.StatusUnprocessableEntity},
-			{"1/move", `{"price":0}`, "price must be positive", http.StatusBadRequest},
-			{"1/move", `{`, "invalid JSON", http.StatusBadRequest},
-			{"9/cancel", ``, "unknown order", http.StatusNotFound},
-			{"4/cancel", ``, "not pending", http.StatusConflict},
+			{"9/move", `{"price":39000}`, "Ordem não encontrada", http.StatusNotFound},
+			{"x/move", `{"price":39000}`, "Ordem não encontrada", http.StatusNotFound},
+			{"4/move", `{"price":39000}`, "não está mais pendente", http.StatusConflict},
+			{"5/move", `{"price":39000}`, "Só ordens limitadas", http.StatusUnprocessableEntity},
+			{"1/move", `{"price":0}`, "O preço deve ser maior que zero", http.StatusBadRequest},
+			{"1/move", `{`, "Pedido inválido", http.StatusBadRequest},
+			{"9/cancel", ``, "Ordem não encontrada", http.StatusNotFound},
+			{"4/cancel", ``, "não está mais pendente", http.StatusConflict},
 		} {
 			resp, body := postJSON(t, url+tc.path, tc.body)
 			assert.Equal(t, tc.wantStatus, resp.StatusCode, tc.path)

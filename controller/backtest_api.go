@@ -106,7 +106,7 @@ func (b *Backtests) handleList(w http.ResponseWriter, r *http.Request) {
 func (b *Backtests) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var request ui.BacktestRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return
 	}
 	batch, runs, err := b.plan(r.Context(), request, userOf(r.Context()), time.Now())
@@ -136,7 +136,7 @@ func (b *Backtests) handleCreate(w http.ResponseWriter, r *http.Request) {
 func (b *Backtests) handleRun(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid run")
+		writeJSONError(w, http.StatusBadRequest, "Execução inválida.")
 		return
 	}
 	run, err := b.store.BacktestRun(r.Context(), id)
@@ -152,7 +152,7 @@ func (b *Backtests) handleRun(w http.ResponseWriter, r *http.Request) {
 func (b *Backtests) handleCancel(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid run")
+		writeJSONError(w, http.StatusBadRequest, "Execução inválida.")
 		return
 	}
 	ok, err := b.Cancel(r.Context(), id)
@@ -172,7 +172,7 @@ func (b *Backtests) handleCancel(w http.ResponseWriter, r *http.Request) {
 func (b *Backtests) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid batch")
+		writeJSONError(w, http.StatusBadRequest, "Lote inválido.")
 		return
 	}
 	if err := b.store.DeleteBacktestBatch(r.Context(), id); err != nil {

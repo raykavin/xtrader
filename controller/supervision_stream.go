@@ -83,7 +83,7 @@ func (s *Supervision) handleAskStream(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := userIDOf(r.Context())
 	if userID == 0 {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		writeJSONError(w, http.StatusUnauthorized, "Sessão expirada: entre de novo.")
 		return
 	}
 	if _, err := checkMessage(request.Text); err != nil {
@@ -119,7 +119,7 @@ func (s *Supervision) handleAskStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf("supervisor: the conversation of %s: %v", by, err)
 		if len(added) == 0 {
-			stream.send(ui.SupervisorEventError, ui.SupervisorStreamError{Error: "the supervisor can't answer now"})
+			stream.send(ui.SupervisorEventError, ui.SupervisorStreamError{Error: supervisorDown})
 			return
 		}
 	}
