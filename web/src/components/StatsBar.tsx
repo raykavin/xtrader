@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Point, Snapshot } from "../api/types";
 import {
+  formatMoney,
   formatNumber,
   formatPercent,
   formatPrice,
@@ -55,7 +56,7 @@ export function StatsBar({ stats, snapshot, theme, since, pnl }: Props) {
             label: "Retorno da estratégia",
             value: formatPercent(stats.returnPct),
             tone: signClass(stats.returnPct),
-            hint: `De ${formatNumber(stats.initialEquity)} para ${formatNumber(stats.finalEquity)} ${snapshot.quote}${snapshot.simulated ? " (simulação)" : ""}`,
+            hint: `De ${formatMoney(stats.initialEquity)} para ${formatMoney(stats.finalEquity)} ${snapshot.quote}${snapshot.simulated ? " (simulação)" : ""}`,
             curve: snapshot.equity_values,
           },
           {
@@ -82,7 +83,7 @@ export function StatsBar({ stats, snapshot, theme, since, pnl }: Props) {
     },
     {
       label: "Lucro líquido",
-      value: formatNumber(stats.totalProfit),
+      value: formatMoney(stats.totalProfit),
       unit: stats.profitCurrency,
       tone: signClass(stats.totalProfit),
       hint:

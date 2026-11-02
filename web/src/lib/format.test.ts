@@ -5,9 +5,11 @@ import {
   formatNumber,
   formatPercent,
   formatPrice,
+  formatProfit,
   formatQuantity,
   formatTime,
 } from "./format";
+import { HIDDEN_AMOUNT, setValuesHidden, valuesHidden } from "./hiddenValues";
 
 describe("format", () => {
   it("writes numbers as in Brazil", () => {
@@ -42,5 +44,24 @@ describe("format", () => {
 
   it("writes the day and time in UTC", () => {
     expect(formatTime(Date.UTC(2021, 8, 26, 20, 5) / 1000)).toBe("26/09/2021 20:05");
+  });
+});
+
+describe("the amounts hidden", () => {
+  it("masks the money, its sign too, and leaves the prices, the quantities and the percents", () => {
+    expect(valuesHidden()).toBe(false);
+    setValuesHidden(true);
+    try {
+      expect(formatMoney(1012.55)).toBe(HIDDEN_AMOUNT);
+      expect(formatProfit(-3.4)).toBe(HIDDEN_AMOUNT);
+      expect(formatProfit(11.92)).toBe(HIDDEN_AMOUNT);
+      expect(formatPrice(4171.3)).toBe("4.171,3");
+      expect(formatQuantity(0.02)).toBe("0,02");
+      expect(formatPercent(0.021)).toBe("+2,10%");
+    } finally {
+      setValuesHidden(false);
+    }
+    expect(formatMoney(1012.55)).toBe("1.012,55");
+    expect(formatProfit(-3.4)).toBe("−3,40");
   });
 });

@@ -403,6 +403,11 @@ export interface AgentStatus {
   online: boolean;
   period?: AgentPeriod;
   supervision?: AgentSupervisionInfo; // absent for an agent never supervised
+  /**
+   * Pairs are the pairs it trades, as its settings tell them; none without
+   * the settings of the controller.
+   */
+  pairs?: string[];
 }
 /**
  * AgentsResponse lists the agents of the dashboard, in the order of its

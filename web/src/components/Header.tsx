@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { logout } from "../api/client";
+import { setValuesHidden, useValuesHidden } from "../lib/hiddenValues";
 import { dashboardHref, sessionStore } from "../lib/nav";
 import type { Theme } from "../lib/theme";
 import { Icon } from "./Icon";
@@ -24,7 +25,8 @@ interface Props {
 
 /**
  * The bar atop the pages: the brand, the navigation (behind the menu on a
- * phone), whether the updates are live, the theme, the user and the logout.
+ * phone), whether the updates are live, the amounts hidden or shown, the
+ * theme, the user and the logout.
  */
 export function Header({
   theme,
@@ -38,6 +40,7 @@ export function Header({
 }: Props) {
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hidden = useValuesHidden();
 
   const leave = async () => {
     setLeaving(true);
@@ -95,6 +98,20 @@ export function Header({
             </span>
           )}
           {actions}
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon"
+            aria-pressed={hidden}
+            onClick={() => setValuesHidden(!hidden)}
+            title={
+              hidden
+                ? "Mostrar os saldos e os valores em dinheiro"
+                : "Ocultar os saldos e os valores em dinheiro, em todas as páginas"
+            }
+            aria-label={hidden ? "Mostrar os valores" : "Ocultar os valores"}
+          >
+            <Icon name={hidden ? "eyeOff" : "eye"} />
+          </button>
           <button
             type="button"
             className="btn btn-ghost btn-icon"

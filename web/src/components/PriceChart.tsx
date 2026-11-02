@@ -56,6 +56,7 @@ import {
   formatProfit,
   LOCALE,
 } from "../lib/format";
+import { useValuesHidden } from "../lib/hiddenValues";
 import { shownFeatures } from "../lib/protection";
 import { type PositionPnL, positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
@@ -604,6 +605,8 @@ export function PriceChart({
   // movable ones are dragged to move them.
   const levels = ticket?.levels;
   const onLevel = ticket?.onLevel;
+  const hidden = useValuesHidden();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: drawn again as the amounts are hidden or shown, formatProfit masking the profit open
   useEffect(() => {
     const state = stateRef.current;
     if (!state) return;
@@ -719,7 +722,7 @@ export function PriceChart({
       }
     }
     state.dragger.setLines(draggable);
-  }, [snapshot.orders, snapshot.levels, pnl, theme, levels, onLevel, onMoveOrder]);
+  }, [snapshot.orders, snapshot.levels, pnl, theme, levels, onLevel, onMoveOrder, hidden]);
 
   // The analysis of the language model: its zones, levels and markers, and
   // the prices of its intent, drawn behind the candles, see AnalysisPrimitive.

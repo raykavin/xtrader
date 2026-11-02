@@ -3169,8 +3169,8 @@ fieldset.seg {
   min-height: 26px;
 }
 
-/* the evolution of the closed profit: its label and what it sums, the line
-   of the running total like the one of the quote card, the ends of its time */
+/* the accumulated profit: its label and the key of its lines, the line of
+   the running total like the one of the quote card, the ends of its time */
 /* growing with the room the card leaves it, eg: as tall as the agents beside */
 .openpl-chart {
   display: flex;
@@ -3183,14 +3183,26 @@ fieldset.seg {
 .openpl-chart-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 2px var(--sp-3);
+  align-items: center;
+  gap: 2px var(--sp-2);
 }
 
-.openpl-chart-note {
+/* what its lines tell: the profit open dashed, the closed one plain */
+.openpl-chart-key {
   color: var(--text-2);
   font-size: var(--fs-xs);
+}
+
+.openpl-chart-key-line {
+  display: inline-block;
+  width: 14px;
+  margin: 0 4px 0 2px;
+  border-top: 2px solid currentColor;
+  vertical-align: middle;
+}
+
+.openpl-chart-key-line.is-open {
+  border-top-style: dashed;
 }
 
 .openpl-chart-plot {
@@ -3217,47 +3229,6 @@ fieldset.seg {
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: 10.5px;
-}
-
-/* the closed total plus the profit open now, the end of the line, dashed */
-.openpl-chart-live {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 4px;
-  flex-basis: 100%;
-  justify-content: flex-end;
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-}
-
-.openpl-chart-live strong {
-  color: var(--text-1);
-  font-weight: 600;
-}
-
-.openpl-chart-live strong.pos {
-  color: var(--pos);
-}
-
-.openpl-chart-live strong.neg {
-  color: var(--neg);
-}
-
-.openpl-chart-live-key {
-  align-self: center;
-  width: 12px;
-  border-top: 1.5px dashed currentColor;
-}
-
-.openpl-chart-live-parts {
-  color: var(--text-3);
-}
-
-@media (max-width: 520px) {
-  .openpl-chart-live-parts {
-    display: none;
-  }
 }
 
 .openpl-chart-axis {
@@ -3292,8 +3263,10 @@ fieldset.seg {
   min-height: 72px;
 }
 
-/* the hairline between the figures and the agents */
-.openpl-separator {
+/* the hairlines between the figures and the agents, and between the figures
+   and the accumulated profit */
+.openpl-separator,
+.openpl-divider {
   flex: none;
   align-self: stretch;
   margin: 0;
@@ -3535,6 +3508,29 @@ fieldset.seg {
   text-overflow: ellipsis;
 }
 
+/* the pair of an asset, a link to the agent on it; the one shown marked */
+.openpl-pair {
+  border-radius: 3px;
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+.openpl-pair:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.openpl-pair:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openpl-pair[aria-current="page"] {
+  color: var(--text-1);
+  font-weight: 700;
+}
+
 .openpl-side {
   display: inline-grid;
   flex: none;
@@ -3632,13 +3628,21 @@ fieldset.seg {
   .openpl-layout.is-crowded .openpl-finance {
     display: grid;
     grid-template-rows: auto 1fr;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    gap: var(--sp-3) var(--sp-6);
+    grid-template-columns: minmax(0, 3fr) auto minmax(0, 2fr);
+    gap: var(--sp-3) var(--sp-5);
+  }
+
+  /* the figures and the chart side by side: the hairline between them, upright */
+  .openpl-layout.is-crowded .openpl-divider {
+    grid-row: 1 / -1;
+    grid-column: 2;
+    border-top: 0;
+    border-left: 1px solid var(--glass-border);
   }
 
   .openpl-layout.is-crowded .openpl-chart {
     grid-row: 1 / -1;
-    grid-column: 2;
+    grid-column: 3;
   }
 }
 

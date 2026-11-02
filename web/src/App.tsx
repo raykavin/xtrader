@@ -248,6 +248,21 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   snapshotRef.current = snapshot;
   const reloadedFor = useRef<string | null>(null);
 
+  // An agent on one of its pairs, from the card of all the agents: this one
+  // switched to the pair it trades, another one shown on it (its dashboard
+  // takes the pair of the URL when it trades it, see the pair list below).
+  const showAgentPair = useCallback(
+    (name: string, wanted: string) => {
+      if (name !== agent) {
+        setPairInURL(wanted);
+        onAgentChange(name);
+      } else if (pairs.includes(wanted)) {
+        setPair(wanted);
+      }
+    },
+    [agent, pairs, onAgentChange],
+  );
+
   // The order ticket belongs to a pair.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on pair change only
   useEffect(() => setLevels(noLevels), [pair]);
@@ -625,7 +640,14 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                   />
                 ) : undefined,
                 // of all the agents, whichever is shown
-                openpl: <OpenProfitCard theme={theme} />,
+                openpl: (
+                  <OpenProfitCard
+                    theme={theme}
+                    agents={agents}
+                    shown={{ agent, pair }}
+                    onShow={showAgentPair}
+                  />
+                ),
                 results: (
                   <StatsBar
                     stats={stats}

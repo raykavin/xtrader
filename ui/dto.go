@@ -335,6 +335,9 @@ type AgentStatus struct {
 	Online      bool                  `json:"online"`
 	Period      *AgentPeriod          `json:"period,omitempty"`
 	Supervision *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
+	// Pairs are the pairs it trades, as its settings tell them; none without
+	// the settings of the controller.
+	Pairs []string `json:"pairs,omitempty"`
 }
 
 // AgentsResponse lists the agents of the dashboard, in the order of its

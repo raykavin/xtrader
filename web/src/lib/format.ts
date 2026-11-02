@@ -1,3 +1,5 @@
+import { HIDDEN_AMOUNT, valuesHidden } from "./hiddenValues";
+
 // Numbers as in Brazil: 1.234,56
 export const LOCALE = "pt-BR";
 
@@ -15,13 +17,15 @@ const moneyFormat = new Intl.NumberFormat(LOCALE, {
   maximumFractionDigits: 2,
 });
 
-/** An amount of money with two decimals, eg: 1.000,00 or -3,40. */
+/** An amount of money with two decimals, eg: 1.000,00 or -3,40; masked while the amounts are hidden (see valuesHidden). */
 export function formatMoney(value: number): string {
+  if (valuesHidden()) return HIDDEN_AMOUNT;
   return moneyFormat.format(value || 0); // || 0 drops the sign of a negative zero
 }
 
-/** A profit with its sign and two decimals, eg: +11,92 or −3,40. */
+/** A profit with its sign and two decimals, eg: +11,92 or −3,40; masked, its sign too, while the amounts are hidden. */
 export function formatProfit(value: number): string {
+  if (valuesHidden()) return HIDDEN_AMOUNT;
   return `${value >= 0 ? "+" : "−"}${moneyFormat.format(Math.abs(value))}`;
 }
 

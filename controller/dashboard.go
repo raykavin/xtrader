@@ -4,6 +4,7 @@
 package controller
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"errors"
@@ -24,6 +25,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
 
@@ -278,12 +281,13 @@ func (d *Dashboard) handleAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // statuses returns the agents, in the order of the configuration, probing their
-// API at once, with their current period.
+// API at once, with their current period, their supervision and their pairs.
 func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 	agents := d.agents.list()
 	statuses := make([]ui.AgentStatus, len(agents))
 	periods := d.currentPeriods(ctx)
-	supervisions := d.supervisions(ctx)
+	stored := d.storedAgents(ctx)
+	supervisions := d.supervisions(ctx, stored)
 
 	var wg sync.WaitGroup
 	for i, a := range agents {
@@ -292,6 +296,9 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 			defer wg.Done()
 			statuses[i] = ui.AgentStatus{Name: a.Name, Kind: a.Kind, Address: a.Address, Online: d.online(ctx, a),
 				Supervision: supervisions[a.Name]}
+			if s, ok := stored[a.Name]; ok {
+				statuses[i].Pairs = agentPairs(s.Params)
+			}
 			if period, ok := periods[a.Name]; ok {
 				current := uiPeriod(period, nil)
 				statuses[i].Period = &current
@@ -302,17 +309,27 @@ func (d *Dashboard) statuses(ctx context.Context) []ui.AgentStatus {
 	return statuses
 }
 
-// supervisions returns the supervision of the agents supervised, by name, none
-// without settings.
-func (d *Dashboard) supervisions(ctx context.Context) map[string]*ui.AgentSupervisionInfo {
+// storedAgents returns the agents of the database, by name, none without
+// settings or on a failure to read them.
+func (d *Dashboard) storedAgents(ctx context.Context) map[string]store.Agent {
 	if d.settings == nil {
 		return nil
 	}
 	agents, err := d.settings.store.Agents(ctx)
 	if err != nil {
-		log.Warnf("ui: the supervision of the agents: %v", err)
+		log.Warnf("ui: the agents of the database: %v", err)
 		return nil
 	}
+	byName := make(map[string]store.Agent, len(agents))
+	for _, a := range agents {
+		byName[a.Name] = a
+	}
+	return byName
+}
+
+// supervisions returns the supervision of the agents of agents supervised, by
+// name.
+func (d *Dashboard) supervisions(ctx context.Context, agents map[string]store.Agent) map[string]*ui.AgentSupervisionInfo {
 	infos := make(map[string]*ui.AgentSupervisionInfo)
 	for _, a := range agents {
 		if info := withDaily(ctx, d.settings.store, a, supervisionInfo(a)); info != nil {
@@ -320,6 +337,12 @@ func (d *Dashboard) supervisions(ctx context.Context) map[string]*ui.AgentSuperv
 		}
 	}
 	return infos
+}
+
+// agentPairs returns the pairs an agent trades, as its params tell them: the
+// default pair without any.
+func agentPairs(params store.Params) []string {
+	return listParam(cmp.Or(params["pair"], agentapi.DefaultPair))
 }
 
 // Online tells whether the API of the agent of that name answers.

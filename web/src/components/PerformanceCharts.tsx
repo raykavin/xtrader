@@ -10,6 +10,7 @@ import {
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { PerformanceTrade, Point } from "../api/types";
 import { formatMoney, formatPercent, formatProfit, LOCALE, signClass } from "../lib/format";
+import { useValuesHidden } from "../lib/hiddenValues";
 import {
   bucketOf,
   type EfficiencyState,
@@ -119,6 +120,14 @@ export function EquityArea({
     });
     current.series.applyOptions(s.series);
   }, [theme]);
+
+  const hidden = useValuesHidden();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the scale drawn again as the amounts are hidden or shown, formatMoney masking them
+  useEffect(() => {
+    state.current?.chart.applyOptions({
+      localization: { locale: LOCALE, priceFormatter: (value: number) => formatMoney(value) },
+    });
+  }, [hidden]);
 
   useEffect(() => {
     const current = state.current;

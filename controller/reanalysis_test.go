@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
 
@@ -163,4 +164,26 @@ func TestDashboard_TheKindOfTheAgents(t *testing.T) {
 		kinds[a.Name] = a.Kind
 	}
 	assert.Equal(t, map[string]string{"llm": "llm", "matrend": "trend"}, kinds)
+}
+
+// The list of the agents of the dashboard tells the pairs of each one, as its
+// settings tell them (the default pair without any), so that the dashboard
+// links to an agent on one of them.
+func TestDashboard_ThePairsOfTheAgents(t *testing.T) {
+	c := newManaged(t)
+	ctx := context.Background()
+	c.agent(t, "highlow", "breakout", true, func(a *store.Agent) { a.Params["pair"] = "XAUUSDm; BTCUSDm" })
+	c.agent(t, "mtfema", "trend", true, func(a *store.Agent) { delete(a.Params, "pair") })
+	call, _ := settingsSession(t, c)
+	require.NoError(t, c.manager.Reconcile(ctx))
+
+	resp, body := call(http.MethodGet, "/api/agents", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var list ui.AgentsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &list))
+	pairs := map[string][]string{}
+	for _, a := range list.Agents {
+		pairs[a.Name] = a.Pairs
+	}
+	assert.Equal(t, map[string][]string{"highlow": {"XAUUSDm", "BTCUSDm"}, "mtfema": {agentapi.DefaultPair}}, pairs)
 }

@@ -1,6 +1,11 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { closeAgentPositions, fetchClosedProfit } from "../api/client";
-import type { ClosedProfitResponse, CurrencyAmount, OpenPositionsResponse } from "../api/types";
+import type {
+  AgentStatus,
+  ClosedProfitResponse,
+  CurrencyAmount,
+  OpenPositionsResponse,
+} from "../api/types";
 import {
   type ClosedPeriod,
   type ClosedRange,
@@ -13,6 +18,7 @@ import {
   saveClosedPeriod,
 } from "../lib/closedPL";
 import { formatMoney, formatProfit, signClass } from "../lib/format";
+import { agentPairHref } from "../lib/nav";
 import {
   type AgentLine,
   accountsSummary,
@@ -26,6 +32,7 @@ import {
   openPLSummary,
   profitTone,
   severalCurrencies,
+  tileAssets,
 } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { palettes, type Theme } from "../lib/theme";
@@ -205,17 +212,37 @@ function useCloseAgent(agent: string) {
   return { busy, feedback, close };
 }
 
-/** The tile of an agent: its icon, its name, the profit open of each of its assets and its closed one, its background by the sign of its open profit. */
+/** The agent and the pair the dashboard shows. */
+export interface ShownPair {
+  agent: string;
+  pair: string | null;
+}
+
+/**
+ * The tile of an agent: its icon, its name, its assets (the pairs it trades,
+ * each with the profit open of its positions) and its closed profit, its
+ * background by the sign of its open profit. An agent of the dashboard
+ * (pairs given) has each of its assets a link to it on that pair, shown at
+ * once in the page (see onShow); a link opened apart, eg: in a new tab, as
+ * any link. One of an agent off the dashboard, eg: disabled, isn't.
+ */
 function AgentTile({
   line,
   open,
   several,
   label,
+  pairs,
+  shown,
+  onShow,
 }: {
   line: AgentLine;
   open: OpenPositionsResponse | null;
   several: boolean;
   label: string;
+  /** The pairs of the agent, undefined for one off the dashboard. */
+  pairs: string[] | undefined;
+  shown: ShownPair;
+  onShow: (agent: string, pair: string) => void;
 }) {
   const state = agentOpenState(line, open);
   const note = openNotes[state];
@@ -294,27 +321,60 @@ function AgentTile({
         </div>
       )}
       <dl className="openpl-assets">
-        {line.assets.map((asset) => {
-          const direction = directionOf(asset.side);
+        {tileAssets(line, pairs).map(({ pair, open: asset }) => {
+          const direction = asset && directionOf(asset.side);
+          const current = shown.agent === line.agent && shown.pair === pair;
           return (
             <div
-              key={`${asset.pair}/${asset.side}`}
-              className="openpl-asset"
-              title={assetLabel(asset)}
+              key={`${pair}/${asset?.side ?? ""}`}
+              className={asset ? "openpl-asset" : "openpl-asset is-idle"}
+              title={asset ? assetLabel(asset) : `${pair}: sem posição aberta`}
             >
               <dt>
-                <span
-                  className={`openpl-side is-${direction.icon}`}
-                  role="img"
-                  aria-label={assetLabel(asset)}
-                >
-                  <Icon name={direction.icon} size={11} />
+                {asset && direction && (
+                  <span
+                    className={`openpl-side is-${direction.icon}`}
+                    role="img"
+                    aria-label={assetLabel(asset)}
+                  >
+                    <Icon name={direction.icon} size={11} />
+                  </span>
+                )}
+                <span>
+                  {pairs ? (
+                    <a
+                      className="openpl-pair"
+                      href={agentPairHref(line.agent, pair, window.location.search)}
+                      aria-current={current ? "page" : undefined}
+                      aria-label={`Mostrar ${line.agent} em ${pair}`}
+                      title={
+                        current
+                          ? `${line.agent} em ${pair}, mostrado`
+                          : `Mostrar ${line.agent} em ${pair}`
+                      }
+                      onClick={(e) => {
+                        // opened apart (a new tab, a window) as any link
+                        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+                          return;
+                        e.preventDefault();
+                        onShow(line.agent, pair);
+                      }}
+                    >
+                      {pair}
+                    </a>
+                  ) : (
+                    pair
+                  )}
+                  {asset && <span aria-hidden="true">:</span>}
                 </span>
-                <span aria-hidden="true">{asset.pair}:</span>
               </dt>
-              <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
-                {amountsText(asset.amounts, several)}
-              </dd>
+              {asset ? (
+                <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
+                  {amountsText(asset.amounts, several)}
+                </dd>
+              ) : (
+                <dd className="openpl-profit" />
+              )}
             </div>
           );
         })}
@@ -335,15 +395,16 @@ function AgentTile({
 }
 
 /**
- * The evolution of the closed profit of all the agents in the period, as its
- * card tells it: the running total from 0 at the start of the period, exit
- * after exit, held until now, a line in steps along the time of the period
- * like the line of the quote card; a chart for each currency, none
+ * The accumulated profit of all the agents in the period, as its card tells
+ * it: the closed one, the running total from 0 at the start of the period,
+ * exit after exit, held until now, a plain line in steps along the time of the
+ * period like the line of the quote card; a chart for each currency, none
  * converted. In a period not over, with positions open, the line goes on,
  * dashed, to the closed total plus the profit open now (see closedCharts),
- * in real time: drawn again each time the open positions are read. While the
- * period is read, a placeholder; without an exit nor a position open, or on a
- * failure, said so: never the read of another period.
+ * in real time: drawn again each time the open positions are read. Its head
+ * tells the two lines apart. While the period is read, a placeholder; without
+ * an exit nor a position open, or on a failure, said so: never the read of
+ * another period.
  */
 function ClosedEvolution({
   read,
@@ -362,7 +423,6 @@ function ClosedEvolution({
 }) {
   const now = Math.floor(Date.now() / 1000);
   const charts = read ? closedCharts(read, now, open?.totals) : [];
-  const live = charts.some((chart) => chart.live);
   const axis = closedAxis(range, now);
   const palette = palettes[theme];
   let body: ReactNode;
@@ -395,7 +455,7 @@ function ClosedEvolution({
             <figure
               key={chart.currency}
               className="openpl-chart-plot"
-              aria-label={`P/L fechado acumulado, ${label}: de 0 a ${formatProfit(chart.total)} ${chart.currency} em ${exits}${now}`}
+              aria-label={`P/L acumulado, ${label}: fechado de 0 a ${formatProfit(chart.total)} ${chart.currency} em ${exits}${now}`}
             >
               <Sparkline
                 points={chart.points}
@@ -422,31 +482,12 @@ function ClosedEvolution({
   return (
     <div className="openpl-chart">
       <div className="openpl-chart-head">
-        <span className="openpl-label">P/L fechado acumulado</span>
-        <span className="openpl-chart-note">
-          {label} · saída a saída, de todos os agentes
-          {read && !read.complete && " · incompleto"}
+        <span className="openpl-label">P/L acumulado</span>
+        <span className="openpl-chart-key">
+          (<i className="openpl-chart-key-line is-open" aria-hidden="true" />
+          aberto + <i className="openpl-chart-key-line" aria-hidden="true" />
+          fechado)
         </span>
-        {live && (
-          <span className="openpl-chart-live">
-            <span className="openpl-chart-live-key" aria-hidden="true" />
-            agora, com o P/L aberto:{" "}
-            {charts
-              .filter((chart) => chart.live && chart.open !== undefined)
-              .map((chart, i) => (
-                <span key={chart.currency}>
-                  {i > 0 && " · "}
-                  <strong className={`mono ${signClass(chart.live?.value ?? 0)}`}>
-                    {formatProfit(chart.live?.value ?? 0)} {chart.currency}
-                  </strong>{" "}
-                  <span className="openpl-chart-live-parts mono">
-                    ({formatProfit(chart.total)} fechado {(chart.open ?? 0) < 0 ? "−" : "+"}{" "}
-                    {formatProfit(Math.abs(chart.open ?? 0))} aberto)
-                  </span>
-                </span>
-              ))}
-          </span>
-        )}
       </div>
       {body}
     </div>
@@ -460,13 +501,27 @@ function ClosedEvolution({
  * today, this week, this month or custom days) and the balances of their
  * accounts, as the broker reports them, by the currency of each account (none
  * converted: a total for each currency), each labelled, their values aligned;
- * the evolution of the closed profit in the period under them; apart, by
- * agent (beside them up to AGENTS_BESIDE on a wide card, under them across it
- * with more), a tile each with the profit open of each of its assets and its closed
+ * past a hairline, the accumulated profit of the period under them (see
+ * ClosedEvolution); apart, by agent (beside them up to AGENTS_BESIDE on a
+ * wide card, under them across it with more), a tile each with its assets,
+ * the profit open of each, a link each to the agent on it, and its closed
  * one, tinted by the sign of its open profit (a stopped or disabled one marked
  * so); incomplete, and why, when an account wasn't read.
  */
-export function OpenProfitCard({ theme }: { theme: Theme }) {
+export function OpenProfitCard({
+  theme,
+  agents,
+  shown,
+  onShow,
+}: {
+  theme: Theme;
+  /** The agents of the dashboard, with their pairs: the ones a tile links to. */
+  agents: AgentStatus[];
+  /** The agent and the pair shown, their link marked. */
+  shown: ShownPair;
+  /** Shows an agent on one of its pairs. */
+  onShow: (agent: string, pair: string) => void;
+}) {
   const { read, error } = useOpenPositions();
   const [period, setPeriod] = useState<ClosedPeriod>(loadClosedPeriod);
   const [picking, setPicking] = useState(false);
@@ -481,6 +536,7 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
   ];
   const range = closedRange(period);
   const label = closedPeriodLabel(period);
+  const pairsOf = new Map(agents.map((a) => [a.name, a.pairs ?? []]));
 
   const apply = (next: ClosedPeriod) => {
     saveClosedPeriod(next);
@@ -609,6 +665,8 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
             </div>
           </dl>
 
+          <hr className="openpl-divider" />
+
           <ClosedEvolution
             read={closed.read}
             error={closed.error}
@@ -634,6 +692,9 @@ export function OpenProfitCard({ theme }: { theme: Theme }) {
                     open={read}
                     several={several}
                     label={label}
+                    pairs={pairsOf.get(line.agent)}
+                    shown={shown}
+                    onShow={onShow}
                   />
                 ))}
               </ul>
