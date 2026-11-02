@@ -16,6 +16,7 @@ import type {
 import { featureLabel } from "../lib/protection";
 import {
   actionLabel,
+  actionOrigin,
   actionStatusLabel,
   formatInterval,
   intervalError,
@@ -492,9 +493,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                         #{action.id} {actionLabel(action.action, action.mode)}
                       </td>
                       <td data-label="Agentes">{action.scope.agents.join(", ") || "—"}</td>
-                      <td data-label="Origem">
-                        {originLabel(action.source, action.confirmed_by || action.requested_by)}
-                      </td>
+                      <td data-label="Origem">{actionOrigin(action)}</td>
                       <td data-label="Situação">
                         <button
                           type="button"

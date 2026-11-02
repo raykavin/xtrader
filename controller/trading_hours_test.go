@@ -163,6 +163,7 @@ func TestTradingHours_BlocksOutsideTheWindowAndActsAtItsEnd(t *testing.T) {
 	assert.Equal(t, store.ActionClosePositions, action.Action)
 	assert.Equal(t, hoursBy, action.RequestedBy)
 	assert.Equal(t, store.SourceSupervisor, action.Source)
+	assert.Equal(t, originRule, actionInfo(action).Origin, "the trading hours, never the supervisor")
 	_, options := scopeOf(action)
 	assert.Equal(t, ui.SupervisorOptions{Whole: true, CancelPending: true}, options, "never blocked for good")
 

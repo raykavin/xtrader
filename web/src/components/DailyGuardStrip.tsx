@@ -304,7 +304,8 @@ export function DailyGuardStrip({
       )}
       {reached && (
         <p className="daily-strip-note">
-          Entradas bloqueadas até 00:00 ({zoneLabel(status.zone)}){at ? ` · atingido às ${at}` : ""}
+          {stripHeadline(global)}
+          {at ? ` às ${at}` : ""}: entradas bloqueadas até 00:00 ({zoneLabel(status.zone)})
         </p>
       )}
       {tone === "incomplete" && global.guard && (

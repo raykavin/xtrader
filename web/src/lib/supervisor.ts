@@ -170,40 +170,73 @@ export function originLabel(origin: string, by?: string): string {
   return origin;
 }
 
-/** The badges of the supervision of an agent: its entries blocked, its stop. */
-export function supervisionBadges(info?: AgentSupervisionInfo): (ToneLabel & { title: string })[] {
+/**
+ * Who did something, after a verb, eg: pelo XTrader AI, por admin; empty
+ * when not recorded.
+ */
+export function byActor(by?: string): string {
+  if (!by) return "";
+  return by === "supervisor" ? "pelo XTrader AI" : `por ${by}`;
+}
+
+/**
+ * Where an action came from, as the server records it: XTrader AI, a user
+ * (who confirmed it, else who asked), or a rule of the controller applied by
+ * itself (the daily limit, the trading hours), never XTrader AI.
+ */
+export function actionOrigin(
+  action: Pick<SupervisorActionInfo, "origin" | "source" | "requested_by" | "confirmed_by">,
+): string {
+  if (action.origin === "rule") {
+    const rule = action.requested_by ?? "";
+    return rule ? `${rule.charAt(0).toUpperCase()}${rule.slice(1)} (automático)` : "Automático";
+  }
+  if (action.origin === "user" || action.source === "user") {
+    const by = action.confirmed_by || action.requested_by;
+    return by ? `Usuário (${by})` : "Usuário";
+  }
+  return "XTrader AI";
+}
+
+/** What a badge of the supervision of an agent is about: the agent (its stop) or its entries. */
+export type BadgeScope = "agent" | "entries";
+
+/** A badge of the supervision of an agent. */
+export interface SupervisionBadge extends ToneLabel {
+  scope: BadgeScope;
+  title: string;
+}
+
+/**
+ * The badges of the supervision of an agent: its stop and its entries
+ * blocked, each by whom the server recorded (XTrader AI or a user). The
+ * daily limit isn't one: its card tells it.
+ */
+export function supervisionBadges(info?: AgentSupervisionInfo): SupervisionBadge[] {
   if (!info) return [];
-  const badges: (ToneLabel & { title: string })[] = [];
+  const badges: SupervisionBadge[] = [];
+  const reason = (text?: string) => (text ? `Motivo: ${text}` : "Sem motivo registrado");
   if (info.stop_state === "stopped") {
     badges.push({
-      text: "Interrompido pelo XTrader AI",
+      scope: "agent",
+      text: `Parado ${byActor(info.stop_by)}`.trim(),
       tone: "error",
-      title: info.stop_reason ? `Motivo: ${info.stop_reason}` : "Parado pelo XTrader AI",
+      title: reason(info.stop_reason),
     });
   } else if (info.stop_state === "pending_flat") {
     badges.push({
+      scope: "agent",
       text: "Parada pendente",
       tone: "warn",
-      title: `Desligado quando ficar sem posição e sem pendente. Motivo: ${info.stop_reason ?? "—"}`,
+      title: `Desliga quando ficar sem posição e sem ordem pendente. ${reason(info.stop_reason)}`,
     });
   }
   if (info.entries_blocked) {
     badges.push({
-      text: "Entradas bloqueadas",
+      scope: "entries",
+      text: `Bloqueadas ${byActor(info.entries_by)}`.trim(),
       tone: "warn",
-      title: [
-        info.entries_reason ? `Motivo: ${info.entries_reason}` : "",
-        info.entries_by ? `Por: ${actorLabel(info.entries_by)}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    });
-  }
-  if (info.daily_blocked) {
-    badges.push({
-      text: "Limite diário: entradas bloqueadas",
-      tone: "error",
-      title: `${info.daily_reason ?? "Um limite diário bloqueia as entradas"} · liberado às 00:00`,
+      title: reason(info.entries_reason),
     });
   }
   return badges;

@@ -395,13 +395,34 @@ func (s *Supervision) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+// Origins of the actions on the dashboard (see ui.SupervisorActionInfo).
+const (
+	originSupervisor = "supervisor" // the supervisor, XTrader AI
+	originUser       = "user"
+	originRule       = "rule" // a rule of the controller: the daily limit, the trading hours
+)
+
+// actionOrigin returns who the action a came from: a user, a rule of the
+// controller (its requester, see dailyBy and hoursBy) or the supervisor. The
+// rules record their actions as the supervisor's, their source.
+func actionOrigin(a store.SupervisorAction) string {
+	switch {
+	case a.Source == store.SourceUser:
+		return originUser
+	case a.RequestedBy == dailyBy || a.RequestedBy == hoursBy:
+		return originRule
+	}
+	return originSupervisor
+}
+
 // actionInfo returns the action a for the dashboard.
 func actionInfo(a store.SupervisorAction) ui.SupervisorActionInfo {
 	scope, options := scopeOf(a)
 	if scope.Agents == nil {
 		scope.Agents = []string{}
 	}
-	info := ui.SupervisorActionInfo{ID: a.ID, Source: a.Source, RunID: a.RunID, Action: a.Action, Mode: a.Mode,
+	info := ui.SupervisorActionInfo{ID: a.ID, Source: a.Source, Origin: actionOrigin(a), RunID: a.RunID,
+		Action: a.Action, Mode: a.Mode,
 		Scope: scope, Options: options, Reason: a.Reason, Category: a.Category, Evidence: []string{},
 		Status: a.Status, RequestedBy: a.RequestedBy, ConfirmedBy: a.ConfirmedBy, CreatedAt: a.CreatedAt.Unix(),
 		ExpiresAt: unix(a.ExpiresAt), DecidedAt: unix(a.DecidedAt), FinishedAt: unix(a.FinishedAt)}

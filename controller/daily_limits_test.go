@@ -220,6 +220,7 @@ func TestDailyLimiter_LossClosesEverythingAndBlocksUntilTheNextDay(t *testing.T)
 	assert.Equal(t, store.ActionClosePositions, actions[0].Action)
 	assert.Equal(t, dailyBy, actions[0].RequestedBy)
 	assert.Equal(t, store.SourceSupervisor, actions[0].Source)
+	assert.Equal(t, originRule, actionInfo(actions[0]).Origin, "the daily limit, never the supervisor")
 
 	// the supervisor allows the entries: still blocked by the guard
 	item := s.sup.setEntries(ctx, a, false, "liberar", "admin", nil)

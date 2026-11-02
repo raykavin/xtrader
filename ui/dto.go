@@ -2001,13 +2001,15 @@ type SupervisorResult struct {
 
 // SupervisorActionInfo is an action of the supervision on the agents, its
 // times in Unix seconds: asked by the supervisor (alone, or proposed) or by a
-// user; block_entries, allow_entries, stop_agent (when_flat or now),
+// user, or taken by a rule of the controller (Origin rule: the daily limit or
+// the trading hours, RequestedBy naming it); block_entries, allow_entries, stop_agent (when_flat or now),
 // cancel_pending or close_positions; why, of which category (operational,
 // risk or performance); proposed until confirmed, rejected or expired, then
 // executing, succeeded, partial, failed or unknown.
 type SupervisorActionInfo struct {
 	ID          int64             `json:"id"`
 	Source      string            `json:"source"`
+	Origin      string            `json:"origin"` // supervisor (XTrader AI), user or rule
 	RunID       *int64            `json:"run_id,omitempty"`
 	Action      string            `json:"action"`
 	Mode        string            `json:"mode,omitempty"`
