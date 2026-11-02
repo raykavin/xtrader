@@ -189,7 +189,9 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
       .then(setSnapshots)
       .catch(() => {
         if (!signal.aborted) {
-          setOffline("O agente não respondeu: os resultados aparecem com ele executando.");
+          setOffline(
+            "O agente não respondeu: os resultados aparecem quando ele estiver em execução.",
+          );
         }
       });
     return () => controller.abort();
@@ -215,10 +217,10 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
   const code = (fixed ?? currency).trim().toUpperCase();
   const invalid =
     amount === null
-      ? "Informe o depósito: um valor a partir de 0, por exemplo 1.000,00."
+      ? "Informe o depósito: um valor a partir de 0, ex.: 1.000,00."
       : /^[A-Z]{3}$/.test(code)
         ? null
-        : "Informe a moeda: um código de 3 letras, por exemplo BRL.";
+        : "Informe a moeda: um código de 3 letras, ex.: BRL.";
 
   const close = () => dialog.current?.close();
 
@@ -241,7 +243,7 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
       );
       if (outcome.stale !== null) {
         setStale(
-          `A redefinição foi feita, mas a lista de períodos não pôde ser atualizada (${outcome.stale}): não a repita; feche e abra de novo para conferir.`,
+          `Resultados redefinidos, mas não foi possível atualizar a lista de períodos (${outcome.stale}). Não redefina de novo: feche e abra esta janela para conferir.`,
         );
       }
     } catch (e) {
@@ -297,10 +299,10 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
             Redefinir resultados
           </h3>
           <p className="field-hint">
-            Zera Operações, Taxa de acerto, Lucro líquido e Fator de lucro de todos os ativos: os
-            cards passam a contar só as operações fechadas a partir de agora. O período atual fica
-            guardado com os resultados dele. As ordens continuam no histórico, e as posições abertas
-            e as ordens pendentes não mudam; uma posição aberta conta no novo período quando fechar.
+            Os cards de todos os ativos (Operações, Taxa de acerto, Lucro líquido e Fator de lucro)
+            passam a contar só as operações fechadas a partir de agora. O período atual fica salvo
+            com os resultados dele. O histórico de ordens, as posições abertas e as ordens pendentes
+            não mudam; uma posição aberta entra no novo período quando for fechada.
           </p>
           <div className="results-fields">
             <label className="field">
@@ -327,8 +329,8 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
                   fixed === undefined
                     ? undefined
                     : snapshots?.some((s) => s.account_currency)
-                      ? "A moeda da conta do agente"
-                      : "A moeda da simulação"
+                      ? "Moeda da conta do agente"
+                      : "Moeda da simulação"
                 }
                 disabled={busy}
                 aria-invalid={currency !== "" && !/^[A-Z]{3}$/.test(code)}

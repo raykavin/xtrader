@@ -76,7 +76,7 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
 
   /** The button showing a group: its agents, and how many of them are enabled. */
   const groupButton = (group: AgentGroup) => {
-    const enabled = group.enabled === 1 ? "1 ativo" : `${group.enabled} ativos`;
+    const enabled = group.enabled === 1 ? "1 ligado" : `${group.enabled} ligados`;
     return (
       <button
         key={group.kind}
@@ -111,9 +111,7 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
       />
       {!shown ? (
         <div className="card">
-          <EmptyState icon="bot" title="Nenhum agente cadastrado" action={create}>
-            Crie o primeiro agente para operar uma estratégia ou um modelo de linguagem.
-          </EmptyState>
+          <EmptyState icon="bot" title="Nenhum agente ainda" action={create} />
         </div>
       ) : (
         <>
@@ -225,7 +223,7 @@ function AgentCard({
       const result = await setAgentEntries(agent.name, { blocked });
       if (result.action.status !== "succeeded") {
         setError(
-          `${blocked ? "Bloqueio" : "Liberação"} gravado, sem confirmação do agente: ${
+          `${blocked ? "Bloqueio salvo" : "Liberação salva"}, sem confirmação do agente: ${
             result.action.result?.items.map((item) => item.detail).join("; ") ??
             result.action.status
           }`,
@@ -255,19 +253,17 @@ function AgentCard({
     { value: DEFAULT_PROMPT, label: "default (embutido)" },
     ...prompts.map((p) => ({ value: String(p.id), label: p.name, hint: `v${p.version}` })),
   ];
-  const channelsTitle = paper
-    ? "No modo paper, o painel de controle fica ativo em todos os canais"
-    : undefined;
+  const channelsTitle = paper ? "Em paper, fica sempre ligado" : undefined;
   const renameTitle = agent.enabled
-    ? "Desative o agente antes de renomeá-lo"
+    ? "Desligue o agente antes de renomeá-lo"
     : stopping
-      ? "O agente ainda está parando: aguarde para renomeá-lo"
-      : "Muda só o nome; a conta, as ordens e as decisões continuam dele";
+      ? "O agente está parando: aguarde para renomeá-lo"
+      : "Muda só o nome: a conta, as ordens e as decisões continuam dele";
   const deleteTitle = agent.enabled
-    ? "Desative o agente antes de excluí-lo"
+    ? "Desligue o agente antes de excluí-lo"
     : stopping
-      ? "O agente ainda está parando: aguarde para excluí-lo"
-      : "Exclui o agente; as ordens e as decisões dele são mantidas";
+      ? "O agente está parando: aguarde para excluí-lo"
+      : "As ordens e as decisões do agente são mantidas";
   const notes = [agentNote(agent), outboxNote(agent)].filter(Boolean);
   const blocked = Boolean(agent.supervision?.entries_blocked);
 
@@ -305,10 +301,10 @@ function AgentCard({
       <div className="agent-block">
         <div className="agent-switches">
           <Switch
-            label="Ativo"
+            label="Ligado"
             checked={agent.enabled}
             disabled={busy}
-            title="Ligado, o controller o inicia; desligado, o para"
+            title="Ligado, o controller inicia o agente; desligado, o agente para"
             onChange={(enabled) => change({ enabled })}
           />
           <Switch
@@ -363,7 +359,7 @@ function AgentCard({
               {status.text}
             </p>
           )}
-          <p className="field-hint">A troca vale a partir da próxima análise, sem reiniciar.</p>
+          <p className="field-hint">Vale a partir da próxima análise, sem reiniciar.</p>
         </div>
       )}
 
@@ -383,7 +379,7 @@ function AgentCard({
           )}
           {agent.mt5_account_id ? (
             <p className="field-hint">
-              Bridge e token da conta MT5 associada (Configurações › Contas MT5).
+              Bridge e token vêm da conta MT5 associada (Configurações › Contas MT5).
             </p>
           ) : (
             <SecretField
@@ -401,7 +397,7 @@ function AgentCard({
           {agent.supervision.stop_state === "stopped" && (
             <p className="msg msg-error">
               {`Parado ${byActor(agent.supervision.stop_by)}`.trim()}:{" "}
-              {agent.supervision.stop_reason || "sem motivo registrado"}. Ative o agente para
+              {agent.supervision.stop_reason || "sem motivo registrado"}. Ligue o agente para
               retomá-lo.
             </p>
           )}
@@ -432,7 +428,7 @@ function AgentCard({
             type="button"
             className="btn btn-sm"
             aria-label={`Resultados de ${agent.name}`}
-            title="Os resultados por período, e a redefinição deles"
+            title="Ver e redefinir os resultados por período"
             onClick={() => setResults(true)}
           >
             <Icon name="results" size={14} />
@@ -452,7 +448,7 @@ function AgentCard({
             type="button"
             className={agent.daily_limit?.enabled ? "btn btn-sm protection-on" : "btn btn-sm"}
             aria-label={`Limite diário de ${agent.name}`}
-            title="Perda e ganho máximos do dia deste agente: atingidos, zera e bloqueia até 00:00"
+            title="Perda e ganho máximos do dia deste agente: atingido um, fecha as posições dele e bloqueia as entradas até 00:00"
             onClick={() => setDailyLimit(true)}
           >
             <Icon name="alert" size={14} />
@@ -475,7 +471,7 @@ function AgentCard({
             title={
               agent.restart_pending
                 ? "Aplica as configurações de inicialização alteradas"
-                : "Reinicia o processo do agente"
+                : undefined
             }
             disabled={busy || !agent.enabled || !agent.launched}
             onClick={restart}

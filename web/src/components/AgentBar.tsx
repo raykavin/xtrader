@@ -74,11 +74,11 @@ export function AgentBar({
         </div>
         <div className="field context-pair">
           <span className="field-label" aria-hidden="true">
-            Par
+            Ativo
           </span>
           {pairs.length > 1 && pairs.length <= PAIR_SEGMENTS ? (
             <fieldset className="seg seg-fill">
-              <legend>Par</legend>
+              <legend>Ativo</legend>
               {pairs.map((p) => (
                 <button
                   key={p}
@@ -92,13 +92,13 @@ export function AgentBar({
               ))}
             </fieldset>
           ) : pairs.length === 1 ? (
-            <span className="context-static" title="O único par deste agente">
-              <span className="sr-only">Par: </span>
+            <span className="context-static" title="O único ativo deste agente">
+              <span className="sr-only">Ativo: </span>
               {pairs[0]}
             </span>
           ) : (
             <Select
-              caption="Par"
+              caption="Ativo"
               value={pair}
               onChange={onPairChange}
               placeholder="aguardando dados…"
@@ -145,7 +145,7 @@ export function AgentBar({
             <dt className="status-label">Estratégia</dt>
             <dd
               className="status-value"
-              title="O timeframe de execução muda nas configurações do agente, com reinício"
+              title="O timeframe de execução muda em Configurações › Agentes e reinicia o agente"
             >
               {timeframe && <span className="tag">Executa em {timeframeLabel(timeframe)}</span>}
               {llm && <span className="tag tag-model">{llm}</span>}

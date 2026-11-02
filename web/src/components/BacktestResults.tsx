@@ -39,27 +39,27 @@ function share(value: number, digits = 1): string {
 
 /** The columns of the comparison: their title, what they mean on hover. */
 const columns: { key: SortKey; label: string; title: string }[] = [
-  { key: "agent", label: "Agente", title: "O agente, a sua estratégia e os seus ativos" },
+  { key: "agent", label: "Agente", title: "Agente, estratégia e ativos" },
   {
     key: "ratio",
     label: "Ret./DD",
-    title: "O resultado líquido sobre o drawdown máximo: quanto rendeu por unidade de queda",
+    title: "Resultado líquido ÷ drawdown máximo",
   },
-  { key: "net", label: "Líquido", title: "O resultado das operações fechadas, após os custos" },
-  { key: "return", label: "Retorno", title: "O resultado líquido sobre o saldo inicial" },
-  { key: "drawdown", label: "DD máx.", title: "A maior queda do patrimônio desde um topo" },
-  { key: "factor", label: "Fator de lucro", title: "Os ganhos somados sobre as perdas somadas" },
-  { key: "winrate", label: "Acerto", title: "As operações vencedoras sobre as fechadas" },
-  { key: "trades", label: "Operações", title: "As operações fechadas: a amostra" },
+  { key: "net", label: "Líquido", title: "Resultado das operações fechadas, após os custos" },
+  { key: "return", label: "Retorno", title: "Resultado líquido ÷ saldo inicial" },
+  { key: "drawdown", label: "DD máx.", title: "Maior queda do patrimônio desde um topo" },
+  { key: "factor", label: "Fator de lucro", title: "Ganhos somados ÷ perdas somadas" },
+  { key: "winrate", label: "Acerto", title: "Vencedoras ÷ operações fechadas" },
+  { key: "trades", label: "Operações", title: "Operações fechadas (a amostra)" },
   {
     key: "months",
     label: "Meses +",
-    title: "Os meses com resultado positivo sobre os meses com operações: a consistência",
+    title: "Meses positivos ÷ meses com operações (a consistência)",
   },
   {
     key: "validation",
     label: "Validação",
-    title: "O retorno/DD e o líquido do período de validação, fora da amostra do ajuste",
+    title: "Ret./DD e líquido do período de validação, fora da amostra",
   },
 ];
 
@@ -97,7 +97,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
           </button>
         }
       >
-        Os resultados aparecem quando as execuções de um lote terminam.
+        Aparecem quando as execuções de um lote terminam.
       </EmptyState>
     );
   }
@@ -157,7 +157,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
           {formatMoney(a.balance)} {a.currency}
         </strong>
         {` · taxa ${share(a.fee, 3)} · spread de reserva ${formatNumber(a.spread_points)} pts · slippage ${formatNumber(a.slippage_points)} pts`}
-        {` · execução em ${timeframeLabel(a.execution_timeframe)} quando a corretora tem os candles (senão mais grosso, avisado), stop antes do alvo no mesmo candle`}
+        {` · execução em ${timeframeLabel(a.execution_timeframe)} (ou maior, com aviso, se faltarem candles), stop antes do take profit no mesmo candle`}
         {a.daily_loss || a.daily_gain
           ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
           : " · sem limites diários"}
@@ -167,11 +167,11 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
               .map(([name, value]) => `${name}=${value}`)
               .join("; ")}`
           : ""}
-        {" · abertas no fim: a mercado, à parte"}
+        {" · posições abertas no fim: a mercado, à parte"}
       </p>
 
       {differences.length > 0 && (
-        <Alert tone="warn" title="Condições diferentes entre as linhas">
+        <Alert tone="warn" title="Condições diferentes entre os agentes">
           {differences.join("; ")}. Compare com cuidado.
         </Alert>
       )}
@@ -229,10 +229,9 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
         </table>
       </div>
       <p className="field-hint">
-        Nenhuma linha é "a melhor": compare o retorno pelo risco, a amostra ({MIN_SAMPLE}+
-        operações), a consistência e a validação. "—" é uma métrica indefinida (ex.: fator de lucro
-        sem perdas); passe o mouse para ver o motivo. Clique num agente para abrir a execução ao
-        lado.
+        Compare o retorno pelo risco, a amostra ({MIN_SAMPLE}+ operações), a consistência e a
+        validação, não só o lucro. "—" indica métrica indefinida; passe o mouse para ver o motivo.
+        Clique num agente para ver a execução.
       </p>
 
       <RunDrawer
@@ -326,7 +325,7 @@ function CompareRow({
             label="Ret./DD"
             value={s.return_over_drawdown}
             text={(x) => formatNumber(Math.round(x * 100) / 100)}
-            why="Sem drawdown: a razão não se define"
+            why="Sem drawdown: razão indefinida"
             tone
           />
           <td className={`num mono strong ${signClass(s.net)}`} data-label="Líquido">
@@ -352,7 +351,7 @@ function CompareRow({
           <td className="num mono" data-label="Operações">
             {s.trades}
             {s.open_positions > 0 && (
-              <small title="Abertas no fim, avaliadas a mercado à parte">
+              <small title="Posições abertas no fim, avaliadas a mercado">
                 {" "}
                 +{s.open_positions} ({formatProfit(s.open_profit)})
               </small>
@@ -393,12 +392,12 @@ function CompareRow({
             </span>
           ))}
           {s && s.refused > 0 && (
-            <span className="bt-flag warn" title="Ordens fora do passo ou do mínimo de lote">
+            <span className="bt-flag warn" title="Volume abaixo do mínimo de lote do ativo">
               {s.refused} recusada(s)
             </span>
           )}
           {s?.llm_cost !== undefined && (
-            <span className="bt-flag info" title={`${s.llm_calls ?? 0} chamadas do modelo`}>
+            <span className="bt-flag info" title={`${s.llm_calls ?? 0} chamadas ao LLM`}>
               LLM {formatMoney(s.llm_cost)} USD
             </span>
           )}

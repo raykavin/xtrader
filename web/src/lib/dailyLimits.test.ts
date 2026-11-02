@@ -38,8 +38,8 @@ describe("the daily limits on the dashboard", () => {
     });
     expect(blocked).toEqual({ text: "Ganho atingido: bloqueado", tone: "error" });
     expect(dailyStateLabel({ state: "incomplete", limits: { enabled: true } }).tone).toBe("warn");
-    expect(flattenLabel("done")?.tone).toBe("on");
-    expect(flattenLabel("failed")?.text).toContain("confira a conta");
+    expect(flattenLabel("done")).toEqual({ text: "RISCO: POSIÇÕES ZERADAS", tone: "error" });
+    expect(flattenLabel("failed")).toEqual({ text: "RISCO: ZERAGEM FALHOU", tone: "error" });
     expect(flattenLabel(undefined)).toBeNull();
   });
 
@@ -107,7 +107,7 @@ describe("the form of the daily limits", () => {
     expect(dailyLimitErrors({ ...form, maxLoss: "" }).maxLoss).toBe(
       "Defina a perda, o ganho ou os dois.",
     );
-    expect(dailyLimitErrors({ ...form, maxLoss: "0" }).maxLoss).toBe("Acima de zero.");
+    expect(dailyLimitErrors({ ...form, maxLoss: "0" }).maxLoss).toBe("Use um valor acima de zero.");
     expect(dailyLimitErrors({ ...form, enabled: false, maxLoss: "" })).toEqual({});
   });
 });

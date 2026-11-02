@@ -206,7 +206,7 @@ export function Login() {
           Trader Cockpit
         </h1>
         <p className="login-subtitle">
-          Faça login para acompanhar/controlar suas operações automatizadas
+          Entre para acompanhar e controlar suas operações automatizadas
         </p>
 
         <form className="login-form" onSubmit={submit} noValidate>

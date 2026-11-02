@@ -25,7 +25,7 @@ export function newsStatusLabel(status: string): NewsStatusLabel {
       };
     case "missing_token":
       return {
-        text: "Token ausente",
+        text: "Sem token",
         tone: "warn",
         hint: "Nada foi consultado: defina o token do servidor MCP.",
       };
@@ -56,9 +56,9 @@ export function newsState(
 ): NewsStatusLabel {
   if (!enabled) {
     return {
-      text: "Desativadas",
+      text: "Desligadas",
       tone: "warn",
-      hint: "Nenhum agente consulta o calendário nem bloqueia entradas por notícia. O modelo dos agentes LLM é avisado de que as notícias não foram lidas: isso não significa que não haja divulgações.",
+      hint: "Nenhum agente consulta o calendário nem bloqueia entradas por notícia. O LLM dos agentes é avisado de que as notícias não foram lidas, o que não significa que não haja divulgações.",
     };
   }
   if (url.trim() === "") {
@@ -72,18 +72,18 @@ export function newsState(
     return {
       text: "Sem token",
       tone: "warn",
-      hint: "Ligadas, mas sem o token do servidor MCP: nenhuma consulta é feita, nada é bloqueado e o modelo é avisado da credencial ausente.",
+      hint: "Ligadas, mas sem o token do servidor MCP: nenhuma consulta é feita, nada é bloqueado e o LLM é avisado da falta do token.",
     };
   }
   if (window <= 0) {
     return {
       text: "Sem janela",
       tone: "warn",
-      hint: "Ligadas, mas com a janela em 0: os agentes LLM leem o calendário, e nenhuma entrada é bloqueada.",
+      hint: "Ligadas, mas com a janela em 0: os agentes LLM leem o calendário e nenhuma entrada é bloqueada.",
     };
   }
   return {
-    text: "Ativas",
+    text: "Ligadas",
     tone: "on",
     hint: "Todos os agentes, LLM ou não, ficam fora do mercado na janela de cada divulgação das moedas dos seus ativos.",
   };

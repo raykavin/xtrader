@@ -77,7 +77,7 @@ export function UsersSettings({ intro, users, current, onChange }: Props) {
     <div className="settings-section">
       <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
       {error && (
-        <Alert tone="error" title="A alteração não foi feita">
+        <Alert tone="error" title="Não foi possível salvar a alteração">
           {error}
         </Alert>
       )}
@@ -222,7 +222,7 @@ export function UsersSettings({ intro, users, current, onChange }: Props) {
               id="new-user-password"
               type="password"
               className="input"
-              placeholder="8 caracteres ao menos"
+              placeholder="mínimo de 8 caracteres"
               autoComplete="new-password"
               value={password}
               disabled={busy}

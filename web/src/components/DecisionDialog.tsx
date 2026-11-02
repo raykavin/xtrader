@@ -146,7 +146,7 @@ function DecisionDetails({
         {decision.sentiment !== undefined && (
           <span
             className="decision-confidence"
-            title="A leitura do mercado pelo modelo, de 0 (muito baixista) a 100 (muito altista); não opera"
+            title="Leitura do mercado pelo LLM, de 0 (muito baixista) a 100 (muito altista). Só informativa: não gera ordens"
           >
             sentimento {formatSentiment(decision.sentiment)}{" "}
             <span className={`meter-band ${sentimentBand(decision.sentiment).tone}`}>
@@ -220,7 +220,7 @@ function DecisionDetails({
 
       {isSkipped(decision) ? (
         <section className="dialog-section">
-          <h3 className="section-title">Por que o modelo não foi consultado</h3>
+          <h3 className="section-title">Por que o LLM não foi consultado</h3>
           <p className="decision-reason">{decisionReason(decision)}</p>
           {decision.error && <p className="decision-detail">{decision.error}</p>}
         </section>

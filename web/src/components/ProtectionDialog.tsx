@@ -107,9 +107,9 @@ export function ProtectionDialog({ agent, onChange, onClose }: Props) {
       />
       <div className="dialog-body protection-body">
         <p className="field-hint">
-          Distâncias em múltiplos do ATR(14) dos candles fechados do timeframe do agente, em preço
-          de cada ativo. O stop só aperta: nunca afrouxa um stop mais protetor e nunca é removido se
-          uma atualização falhar. Vale na hora, sem reiniciar, enquanto o agente estiver rodando.
+          Distâncias em múltiplos do ATR(14) dos candles fechados do timeframe do agente, no preço
+          de cada ativo. O stop só aperta: nunca afrouxa um stop mais protetor nem é removido se uma
+          atualização falhar. Vale na hora, sem reiniciar, com o agente em execução.
         </p>
         {error && <Alert tone="error">{error}</Alert>}
 
@@ -194,7 +194,7 @@ export function ProtectionDialog({ agent, onChange, onClose }: Props) {
           </li>
           {isLLM && (
             <li>
-              Com a proteção ligada, o modelo nunca afrouxa o stop, mesmo com{" "}
+              Com a proteção ligada, o LLM nunca afrouxa o stop, mesmo com{" "}
               <code>llm-widen-stop</code>.
             </li>
           )}

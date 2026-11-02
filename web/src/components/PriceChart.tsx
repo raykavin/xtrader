@@ -650,7 +650,7 @@ export function PriceChart({
       specs.set("position", {
         price: open.entry,
         color: (open.profit ?? 0) >= 0 ? palette.up : palette.down,
-        title: `${side} ${formatCompact(open.quantity)} P&L Aberto: ${profit}`,
+        title: `${side} ${formatCompact(open.quantity)} P/L aberto: ${profit}`,
         dashed: false,
       });
     }
@@ -1016,10 +1016,10 @@ export function PriceChart({
               {timeframes.map((view) => {
                 const label = timeframeLabel(view.timeframe);
                 const title = !view.available
-                  ? `${label}: indisponível neste agente (sem fonte de candles abaixo do timeframe de execução)`
+                  ? `${label}: indisponível neste agente (sem candles abaixo do timeframe de execução)`
                   : view.execution
-                    ? `${label}: timeframe de execução, o da estratégia e das análises do LLM (muda só nas configurações do agente, com reinício)`
-                    : `${label}: só a visualização; a estratégia segue no ${timeframeLabel(execution)}`;
+                    ? `${label}: timeframe de execução da estratégia e das análises do LLM (muda em Configurações › Agentes, com reinício)`
+                    : `${label}: só visualização; a estratégia continua no ${timeframeLabel(execution)}`;
                 return (
                   <button
                     key={view.timeframe}

@@ -11,14 +11,14 @@ const actions: Record<string, string> = {
   ENTER_SHORT: "Vender",
   HOLD: "Manter",
   EXIT: "Sair",
-  MODIFY_SL: "Mover stop",
-  MODIFY_TP: "Mover alvo",
+  MODIFY_SL: "Mover stop loss",
+  MODIFY_TP: "Mover take profit",
   BUY_LIMIT: "Compra limite",
   SELL_LIMIT: "Venda limite",
   BUY_STOP: "Compra stop",
   SELL_STOP: "Venda stop",
-  MODIFY_PENDING: "Alterar pendente",
-  CANCEL_PENDING: "Cancelar pendente",
+  MODIFY_PENDING: "Alterar ordem pendente",
+  CANCEL_PENDING: "Cancelar ordem pendente",
 };
 
 const outcomes: Record<string, string> = {
@@ -33,8 +33,8 @@ const outcomes: Record<string, string> = {
 // agents/llm/decisions.go), the code in the reason of a skipped one
 const skips: Record<string, string> = {
   position: "Não foi possível ler a posição na corretora",
-  close_retry: "Um fechamento que falhou está sendo tentado de novo",
-  protection: "A corretora não aceita stop e alvo na ordem",
+  close_retry: "Tentando de novo um fechamento que falhou",
+  protection: "A corretora não aceita stop loss e take profit na ordem",
   daily_limit: "Entradas bloqueadas pelo limite diário do ativo",
   news: "Entradas bloqueadas perto de notícia de alta importância",
   size: "Sem lote para o ativo ou saldo insuficiente",
@@ -43,7 +43,7 @@ const skips: Record<string, string> = {
   direction: "A direção configurada não permite entrada",
   higher_trend: "Sem tendência definida nos timeframes maiores (exigida para entrar)",
   against_trend: "Entradas permitidas só contra a tendência dos timeframes maiores",
-  rate_limited: "Provedor do modelo com limite de requisições",
+  rate_limited: "Limite de requisições do provedor do LLM atingido",
   pending_cancel: "O cancelamento da ordem pendente aguarda a confirmação da corretora",
 };
 
@@ -168,10 +168,10 @@ export function reanalysisButton(state: ReanalysisState): { label: string; title
       return {
         label: "Reanalisar agora (DESATIVADO)",
         title:
-          "Reanálise desativada: ligue “Permitir reanálise” nas configurações do agente; independe do painel de trading",
+          "Ligue “Permitir reanálise” em Configurações › Agentes (independe do “Painel de trading”)",
       };
     case "unknown":
-      return { label: "Reanalisar agora", title: "Lendo os controles do agente…" };
+      return { label: "Reanalisar agora", title: "Carregando os controles do agente…" };
     default:
       return {
         label: "Reanalisar agora (INDISPONÍVEL)",

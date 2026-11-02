@@ -43,7 +43,7 @@ export function PriceHero({ snapshot, buyAndHold, theme }: Props) {
             </span>
           </div>
         </div>
-        <span className="hero-value" title="Último preço, o fechamento do último candle">
+        <span className="hero-value" title="Fechamento do último candle">
           {last > 0 ? formatPrice(last) : "—"}
           <small>{snapshot.quote}</small>
         </span>

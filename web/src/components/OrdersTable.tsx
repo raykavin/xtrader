@@ -84,14 +84,12 @@ export function OrdersTable({
         </a>
       </div>
       {cancelError && (
-        <Alert tone="error" title="A ordem não foi cancelada">
+        <Alert tone="error" title="Não foi possível cancelar a ordem">
           {cancelError}
         </Alert>
       )}
       {orders.length === 0 ? (
-        <EmptyState compact icon="list" title="Nenhuma ordem ainda">
-          As ordens do agente neste par aparecem aqui assim que forem enviadas.
-        </EmptyState>
+        <EmptyState compact icon="list" title="Nenhuma ordem ainda" />
       ) : (
         <div className="table-wrap">
           <table className="table table-responsive">
@@ -119,7 +117,7 @@ export function OrdersTable({
                   </>
                 )}
                 <th scope="col" className="num">
-                  Lucro/Perda ({profitCurrency})
+                  P/L ({profitCurrency})
                 </th>
                 {onShowDecision && <th scope="col">Justificativa</th>}
                 {onCancel && (
@@ -167,7 +165,7 @@ export function OrdersTable({
                   )}
                   <td
                     className={`num mono ${signClass(account ? (order.account_profit ?? 0) : order.profit)}`}
-                    data-label={`Lucro/Perda (${profitCurrency})`}
+                    data-label={`P/L (${profitCurrency})`}
                   >
                     {profitCell(order, account)}
                   </td>

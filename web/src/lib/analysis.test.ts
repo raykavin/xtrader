@@ -231,7 +231,7 @@ describe("analysis on the chart", () => {
       palette,
     );
     expect(shapes.levels.map((l) => [l.from, l.price, l.intent, l.color, l.label])).toEqual([
-      [1790003600, 100.5, true, palette.accent, "Intenção: Compra limit (recusada) 100,5"],
+      [1790003600, 100.5, true, palette.accent, "Intenção: Compra limite (recusada) 100,5"],
       [1790003600, 99, true, palette.down, "SL da intenção 99"],
       [1790003600, 103, true, palette.up, "TP da intenção 103"],
     ]);
@@ -498,7 +498,7 @@ describe("pending orders on the chart", () => {
 describe("the decisions of the pending orders", () => {
   it("labels and colors them", () => {
     expect(decisionActionLabel("BUY_LIMIT")).toBe("Compra limite");
-    expect(decisionActionLabel("CANCEL_PENDING")).toBe("Cancelar pendente");
+    expect(decisionActionLabel("CANCEL_PENDING")).toBe("Cancelar ordem pendente");
     expect(decisionTone("BUY_STOP")).toBe("buy");
     expect(decisionTone("SELL_LIMIT")).toBe("sell");
     expect(decisionTone("MODIFY_PENDING")).toBe("");

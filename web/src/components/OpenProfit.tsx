@@ -164,11 +164,11 @@ function Amounts({
 }
 
 /** What the tile of an agent tells of its open profit beside its assets, by its state. */
-const openNotes: Partial<Record<OpenState, { text: string; title: string }>> = {
-  flat: { text: "Sem posição aberta", title: "O agente não tem posição aberta agora" },
+const openNotes: Partial<Record<OpenState, { text: string; title?: string }>> = {
+  flat: { text: "Sem posição aberta" },
   unknown: {
     text: "Em aberto: sem dados",
-    title: "As posições abertas da conta do agente não puderam ser lidas: nada é contado como zero",
+    title: "Não foi possível ler as posições abertas do agente; nada é contado como zero",
   },
 };
 
@@ -256,7 +256,7 @@ function AgentTile({
           (line.positions === 1 ? "1 posição aberta" : `${line.positions} posições abertas`),
         line.closedPositions > 0 &&
           `${line.closedPositions === 1 ? "1 posição fechada" : `${line.closedPositions} posições fechadas`} (${label})`,
-        !line.running && "o agente parado",
+        !line.running && "parado",
       ]
         .filter(Boolean)
         .join(", ")}
@@ -269,9 +269,9 @@ function AgentTile({
           {line.assets.length > 1 && (
             <span
               className={`openpl-agent-total mono ${profitClass(line.open)}`}
-              title="Em aberto, a soma dos ativos"
+              title="P/L em aberto (soma dos ativos)"
             >
-              <span className="sr-only">Em aberto, a soma dos ativos: </span>
+              <span className="sr-only">P/L em aberto (soma dos ativos): </span>
               {amountsText(line.open, several)}
             </span>
           )}
@@ -283,13 +283,13 @@ function AgentTile({
               aria-busy={closing.busy}
               title={
                 closing.busy
-                  ? `Encerrando as posições de ${line.agent}…`
-                  : `Encerrar já ${line.positions === 1 ? "a posição" : `as ${positions}`} de ${line.agent}, a mercado`
+                  ? `Fechando as posições de ${line.agent}…`
+                  : `Fechar agora ${line.positions === 1 ? "a posição" : `as ${positions}`} de ${line.agent} a mercado`
               }
               aria-label={
                 closing.busy
-                  ? `Encerrando as posições de ${line.agent}`
-                  : `Encerrar as posições de ${line.agent}`
+                  ? `Fechando as posições de ${line.agent}`
+                  : `Fechar as posições de ${line.agent}`
               }
               onClick={closing.close}
             >
@@ -343,7 +343,7 @@ function AgentTile({
                       aria-label={`Ver ${line.agent} em ${pair}`}
                       title={
                         current
-                          ? `${line.agent} em ${pair}, aberto`
+                          ? `${line.agent} em ${pair}, em exibição`
                           : `Ver ${line.agent} em ${pair}`
                       }
                       onClick={(e) => {
@@ -371,7 +371,7 @@ function AgentTile({
         {line.closed.length > 0 && (
           <div
             className="openpl-asset openpl-asset-closed"
-            title={`Fechado (${label}): ${line.closedPositions === 1 ? "1 posição" : `${line.closedPositions} posições`}`}
+            title={`P/L fechado (${label}): ${line.closedPositions === 1 ? "1 posição" : `${line.closedPositions} posições`}`}
           >
             <dt>Fechado:</dt>
             <dd className={`openpl-profit mono ${profitClass(line.closed)}`}>
@@ -550,8 +550,8 @@ export function OpenProfitCard({
                     complete={read.complete}
                     gaps={openPLGaps(read)}
                     signed
-                    empty="Nenhuma conta de agente em live lida"
-                    what="Em aberto"
+                    empty="Nenhuma conta live lida"
+                    what="P/L em aberto"
                   />
                 ) : error ? (
                   <span className="openpl-value" title="Não lido">
@@ -587,7 +587,7 @@ export function OpenProfitCard({
                 <button
                   type="button"
                   className="openpl-period"
-                  title={`De ${localTime(range.from)} até antes de ${localTime(range.to)} (horário deste navegador). Clique duas vezes para escolher o período.`}
+                  title={`De ${localTime(range.from)} a ${localTime(range.to)} (horário do navegador). Clique duas vezes para escolher o período.`}
                   aria-haspopup="dialog"
                   aria-label={`P/L fechado, ${label}: clique duas vezes para escolher o período`}
                   onDoubleClick={() => setPicking(true)}
@@ -609,8 +609,8 @@ export function OpenProfitCard({
                     complete={closed.read.complete}
                     gaps={openPLGaps(closed.read)}
                     signed
-                    empty="Nenhuma conta de agente em live lida"
-                    what={`Fechado (${label})`}
+                    empty="Nenhuma conta live lida"
+                    what={`P/L fechado (${label})`}
                   />
                 ) : closed.error ? (
                   <span className="openpl-value" title="Não lido">
@@ -640,7 +640,7 @@ export function OpenProfitCard({
                     complete={read.complete}
                     gaps={openPLGaps(read)}
                     signed={false}
-                    empty="Nenhuma conta de agente em live lida"
+                    empty="Nenhuma conta live lida"
                     what="Saldo"
                   />
                 ) : error ? (
@@ -702,7 +702,9 @@ export function OpenProfitCard({
                 </ul>
               )}
               {read && error && (
-                <p className="openpl-note error">Não foi possível atualizar: {error}</p>
+                <p className="openpl-note error">
+                  Não foi possível atualizar o P/L em aberto: {error}
+                </p>
               )}
               {closed.read && closed.error && (
                 <p className="openpl-note error">

@@ -55,15 +55,15 @@ export function PromptsSettings({ intro, prompts, onChange }: Props) {
         actions={create}
       />
       {error && (
-        <Alert tone="error" title="O prompt não foi excluído">
+        <Alert tone="error" title="Não foi possível excluir o prompt">
           {error}
         </Alert>
       )}
       <div className="card card-flush">
         {prompts.length === 0 ? (
-          <EmptyState icon="prompt" title="Nenhum prompt cadastrado" action={create}>
-            Crie um prompt, ou rode o migrator (up) para os prompts de exemplo. Sem prompt, os
-            agentes LLM usam o embutido.
+          <EmptyState icon="prompt" title="Nenhum prompt ainda" action={create}>
+            Sem prompt, os agentes LLM usam o embutido. Para os prompts de exemplo, rode o migrator
+            (up).
           </EmptyState>
         ) : (
           <div className="table-wrap">

@@ -152,7 +152,7 @@ export const reasonLabels: Record<string, string> = {
   limit: "Ordem limitada",
   stop_entry: "Ordem stop",
   stop_loss: "Stop loss",
-  take_profit: "Alvo",
+  take_profit: "Take profit",
   daily_limit: "Limite diário",
   stop_out: "Patrimônio zerado",
   trading_hours: "Fim do horário",
@@ -207,8 +207,7 @@ export function robustnessFlags(
     flags.push({
       text: "Degradou na validação",
       tone: "error",
-      title:
-        "O período de validação teve resultado bem pior que o de ajuste: possível ajuste excessivo",
+      title: "Resultado da validação bem pior que o do ajuste: possível ajuste excessivo",
     });
   }
   if (llm) {
@@ -216,7 +215,7 @@ export function robustnessFlags(
       text: "LLM: não determinístico",
       tone: "info",
       title:
-        "As respostas do modelo variam entre execuções, o contexto é parcial e o modelo pode ter visto o período",
+        "As respostas do LLM variam entre execuções, o contexto é parcial e o LLM pode ter visto o período no treino",
     });
   }
   if (summary.gaps > 0) {
@@ -358,9 +357,9 @@ export function filterRows(rows: ComparisonRow[], filter: ComparisonFilter): Com
 export function conditionDifferences(rows: ComparisonRow[]): string[] {
   const differences: string[] = [];
   const pairs = new Set(rows.map((row) => [...row.pairs].sort().join(";")));
-  if (pairs.size > 1) differences.push("ativos diferentes entre os agentes");
+  if (pairs.size > 1) differences.push("ativos diferentes");
   const timeframes = new Set(rows.map((row) => row.fit?.timeframe ?? ""));
-  if (timeframes.size > 1) differences.push("timeframes diferentes entre os agentes");
+  if (timeframes.size > 1) differences.push("timeframes diferentes");
   const executions = new Set(
     rows.flatMap((row) =>
       [row.fit, row.validation].flatMap((run) => run?.summary?.execution_timeframe ?? []),
@@ -370,7 +369,7 @@ export function conditionDifferences(rows: ComparisonRow[]): string[] {
     differences.push(`execução em resoluções diferentes (${[...executions].sort().join(", ")})`);
   }
   if (rows.some((row) => row.llm) && rows.some((row) => !row.llm)) {
-    differences.push("agentes LLM (não determinísticos) junto de determinísticos");
+    differences.push("agentes LLM (não determinísticos) misturados aos demais");
   }
   return differences;
 }
@@ -499,16 +498,16 @@ export function batchParams(text: string): {
     const at = part.indexOf("=");
     const name = (at < 0 ? part : part.slice(0, at)).trim().replace(/^-+/, "");
     const value = at < 0 ? "" : part.slice(at + 1).trim();
-    if (at < 0 || value === "") return { params: null, error: `${name}: nome=valor.` };
+    if (at < 0 || value === "") return { params: null, error: `${name}: use nome=valor.` };
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name))
       return {
         params: null,
-        error: `${name}: o nome de uma flag (letras minúsculas, dígitos e -).`,
+        error: `${name}: use só letras minúsculas, dígitos e -.`,
       };
     if (batchParamsSet.includes(name) || name.startsWith("mt5-"))
       return { params: null, error: `${name} é definido pelo próprio backtest.` };
     if (/^(llm|calendar|news)-/.test(name))
-      return { params: null, error: `${name} é de um agente LLM.` };
+      return { params: null, error: `${name} só vale para agentes LLM.` };
     params[name] = value;
   }
   return { params: Object.keys(params).length > 0 ? params : null };
@@ -587,7 +586,7 @@ export function formRequest(
     errors.to =
       form.to < form.from ? "A data final é anterior à inicial." : "O período ainda não começou.";
   } else if (period.to - period.from > limits.max_period_days * 86400) {
-    errors.to = `Escolha até ${limits.max_period_days} dias.`;
+    errors.to = `O período pode ter até ${limits.max_period_days} dias.`;
   }
   const share = number(
     "validation",
@@ -606,7 +605,7 @@ export function formRequest(
   const llmMaxCalls = number(
     "llmMaxCalls",
     (v) => v >= 0 && Number.isInteger(v),
-    "Um número inteiro, 0 ou mais.",
+    "Use um número inteiro, 0 ou mais.",
   );
   const llmMaxCost = number("llmMaxCost", (v) => v >= 0, "0 ou mais dólares.");
   const params = batchParams(form.params);
@@ -622,7 +621,7 @@ export function formRequest(
     if (refused) errors.hoursStart = refused;
   }
   if (form.timeframe !== "" && !backtestTimeframes.includes(form.timeframe)) {
-    errors.timeframe = "Um timeframe da lista.";
+    errors.timeframe = "Escolha um timeframe da lista.";
   }
   const runs = runsOf(form);
   if (!errors.agents && runs > limits.max_runs) {

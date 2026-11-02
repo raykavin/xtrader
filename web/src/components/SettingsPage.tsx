@@ -45,28 +45,28 @@ const intros: Record<SettingsTab, SectionIntro> = {
   agentes: {
     title: "Agentes",
     description:
-      "Ligue, configure e reinicie cada agente. Num agente em execução, Ativo, Painel de trading, Controle via Telegram e o prompt mudam na hora; o resto vale depois de reiniciar.",
+      "Num agente em execução, “Ligado”, “Painel de trading”, “Controle via Telegram”, “Permitir reanálise” e o prompt valem na hora; o resto, depois de reiniciar.",
   },
   contas: {
     title: "Contas MT5",
     description:
-      "As contas do MetaTrader 5: login, servidor e senha (cifrada), o terminal que serve cada uma e os agentes que a operam. Um terminal fica numa conta por vez; trocar a conta dele para os agentes e encerra o que estiver aberto, com confirmação.",
+      "Um terminal fica numa conta por vez. Trocar a conta dele pede confirmação: os agentes param, as posições são fechadas e as ordens pendentes, canceladas.",
   },
   limites: {
     title: "Limites",
     description:
-      "A perda e o ganho máximos do dia, de todos os agentes somados e de cada agente, e o horário de operação. Atingido um limite, a aplicação zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00; fora do horário, nenhum agente abre posição.",
+      "Perda e ganho máximos do dia, no total e por agente, e o horário de operação. Atingido um limite, o XTrader zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00; fora do horário, nenhum agente abre posição.",
   },
   noticias: {
     title: "Notícias",
     description:
-      "O calendário econômico do servidor MCP do MetaTrader 5, para todos os agentes, LLM ou não: ligue ou desligue, defina o servidor, o token e a janela em que nenhum agente opera perto de uma divulgação. As mudanças valem na hora para os agentes em execução, sem reiniciar.",
+      "Calendário econômico do servidor MCP do MetaTrader 5, para todos os agentes: nenhum agente opera na janela definida em torno de cada divulgação. As mudanças valem na hora, sem reiniciar.",
   },
   prompts: {
     title: "Prompts",
     description: (
       <>
-        As instruções dos agentes LLM. As linhas do cabeçalho (<code># Indicators:</code>,{" "}
+        Instruções dos agentes LLM. As linhas do cabeçalho (<code># Indicators:</code>,{" "}
         <code># Take profit:</code> e outras) configuram o agente; uma edição vale a partir da
         próxima análise.
       </>
@@ -75,12 +75,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
   supervisor: {
     title: "XTrader AI",
     description:
-      "O supervisor dos agentes, um modelo de linguagem que acompanha todos eles: analisa periodicamente, bloqueia entradas ou para um agente dentro da autonomia definida aqui, e propõe o resto para você confirmar na conversa.",
+      "Um LLM que acompanha todos os agentes: analisa periodicamente, bloqueia entradas ou para um agente dentro da autonomia definida aqui e propõe o resto para você confirmar na conversa.",
   },
   telegram: {
     title: "Telegram",
-    description:
-      "O bot do Telegram e quem ele atende: só os IDs autorizados controlam os agentes e os prompts por lá.",
+    description: "Só os IDs autorizados controlam os agentes e os prompts pelo bot.",
   },
   usuarios: {
     title: "Usuários",
@@ -89,8 +88,7 @@ const intros: Record<SettingsTab, SectionIntro> = {
   },
   layout: {
     title: "Layout",
-    description:
-      "A disposição dos cards do painel neste navegador: a ordem, os ocultos e o tamanho do gráfico.",
+    description: "A disposição dos cards do painel, salva neste navegador.",
   },
 };
 
@@ -218,11 +216,13 @@ export function SettingsPage() {
     ...(prompts && { prompts: { text: String(prompts.length) } }),
     ...(supervisor && {
       supervisor: supervisor.enabled
-        ? { text: "ativo", tone: "on" }
+        ? { text: "ligado", tone: "on" }
         : { text: "desligado", tone: "off" },
     }),
     ...(telegram && {
-      telegram: telegram.running ? { text: "ativo", tone: "on" } : { text: "parado", tone: "off" },
+      telegram: telegram.running
+        ? { text: "executando", tone: "on" }
+        : { text: "parado", tone: "off" },
     }),
     ...(users && { usuarios: { text: String(users.length) } }),
   };
@@ -331,7 +331,7 @@ function SectionLoading({ intro, cards = false }: { intro: SectionIntro; cards?:
   return (
     <>
       <PageHeader eyebrow="Configurações" title={intro.title} description={intro.description} />
-      <Loading label={`Carregando ${intro.title.toLowerCase()}…`}>
+      <Loading label="Carregando…">
         {cards ? (
           <div className="agent-grid">
             <Skeleton height={300} />

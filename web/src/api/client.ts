@@ -121,7 +121,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** The error of an answer of the API refused: its message, else the status. */
 function failureOf(path: string, response: Response, text: string): APIError {
-  let message = `${path}: ${response.status} ${response.statusText}`;
+  let message = `O servidor respondeu ${response.status} ${response.statusText} (${path}).`;
   try {
     const parsed = JSON.parse(text) as { error?: string };
     if (parsed.error) message = parsed.error;
@@ -706,8 +706,7 @@ export async function streamSupervisorMessage(
   parser.push(decoder.decode());
   parser.end();
   if (failure !== null) throw new APIError(failure, response.status);
-  if (done === null)
-    throw new APIError("A resposta foi interrompida antes do fim.", response.status);
+  if (done === null) throw new APIError("A resposta foi interrompida.", response.status);
   return done;
 }
 

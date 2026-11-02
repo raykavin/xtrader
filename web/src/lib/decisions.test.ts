@@ -111,7 +111,7 @@ describe("labels", () => {
     expect(reanalysisButton("enabled").label).toBe("Reanalisar agora");
     expect(reanalysisButton("disabled").label).toBe("Reanalisar agora (DESATIVADO)");
     expect(reanalysisButton("disabled").title).toContain(
-      "ligue “Permitir reanálise” nas configurações do agente",
+      "Ligue “Permitir reanálise” em Configurações › Agentes",
     );
     expect(reanalysisButton("unavailable").label).toBe("Reanalisar agora (INDISPONÍVEL)");
     expect(reanalysisButton("unknown").label).toBe("Reanalisar agora");

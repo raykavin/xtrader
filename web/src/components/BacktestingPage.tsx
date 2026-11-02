@@ -111,36 +111,36 @@ export function BacktestingPage() {
       <PageHeader
         eyebrow="Operação"
         title="Backtesting"
-        description="As estratégias dos agentes sobre o histórico dos seus ativos, várias ao mesmo tempo, comparadas nas mesmas condições."
+        description="Teste as estratégias dos agentes no histórico dos ativos e compare-as nas mesmas condições."
       />
 
       <Alert tone="info" title="Simulação" className="bt-notice">
-        Nenhuma execução envia ordens nem altera os agentes, seus saldos ou históricos. Os
-        resultados ficam na moeda de cotação do par e não garantem o resultado em live. Ativar um
-        agente continua sendo feito em Configurações › Agentes.
+        Nenhuma execução envia ordens nem altera os agentes. Os resultados ficam na moeda de cotação
+        do ativo e não garantem o resultado em live. Para ligar um agente, use Configurações ›
+        Agentes.
       </Alert>
 
       {error && (
-        <Alert tone="error" title="Não foi possível ler os backtests">
+        <Alert tone="error" title="Não foi possível carregar os backtests">
           {error}
         </Alert>
       )}
       {failure && (
-        <Alert tone="error" title="A ação não foi feita">
+        <Alert tone="error" title="Não foi possível concluir a ação">
           {failure}
         </Alert>
       )}
 
       {!read ? (
         !error && (
-          <Loading label="Lendo os backtests">
+          <Loading label="Carregando os backtests">
             <Skeleton height={320} />
           </Loading>
         )
       ) : (
         <section className="card perf-card" aria-label="Backtesting">
           <Tabs
-            label="Áreas do backtesting"
+            label="Seções do backtesting"
             idPrefix="bt"
             items={views.map((v) => ({
               ...v,

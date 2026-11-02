@@ -355,7 +355,7 @@ export function DashboardCards({
     event.preventDefault();
     setDrag({ card, pointer: event.pointerId, x: event.clientX, y: event.clientY });
     setAnnouncement(
-      `Movendo ${CARD_LABELS[card]}: solte onde ele deve ficar, ou Esc para cancelar.`,
+      `Movendo ${CARD_LABELS[card]}: solte no lugar desejado ou tecle Esc para cancelar.`,
     );
   };
 
@@ -387,7 +387,9 @@ export function DashboardCards({
 
   const hide = (card: CardId) => {
     onLayout(setHidden(layout, card, true));
-    setAnnouncement(`${CARD_LABELS[card]} oculto. Ele volta pelo botão Mostrar, acima dos cards.`);
+    setAnnouncement(
+      `Card ${CARD_LABELS[card]} oculto. Para mostrá-lo, use Mostrar, acima dos cards.`,
+    );
   };
 
   // the width of the chart, set or being dragged
@@ -497,11 +499,11 @@ export function DashboardCards({
           <div className="layout-bar-text">
             <span className="eyebrow">Personalizando o layout</span>
             <p id={hintId}>
-              Arraste um card pela barra acima dele e solte na borda esquerda ou direita de outro
-              card para pô-lo ao lado, em cima ou embaixo para empilhar, no meio para trocar os dois
-              de lugar, ou numa faixa entre as linhas para criar uma linha. Com a barra em foco, as
-              setas do teclado também movem o card. Oculte um card no ✕; o gráfico muda de tamanho
-              pelas bordas: a de baixo muda a altura, a da direita a largura, e o canto, as duas.
+              Arraste um card pela barra acima dele: solte na borda lateral de outro card para pô-lo
+              ao lado, na de cima ou de baixo para empilhar, no meio para trocar os dois de lugar,
+              ou entre as linhas para criar uma linha. Com a barra em foco, as setas do teclado
+              também movem o card. O ✕ oculta o card. Redimensione o gráfico pelas bordas: a de
+              baixo muda a altura, a da direita, a largura, e o canto, as duas.
             </p>
           </div>
           {hidden.length > 0 && (
@@ -829,7 +831,7 @@ function ChartSizer({
         className="chart-resize"
         role="separator"
         aria-orientation="horizontal"
-        aria-label="Altura do gráfico: arraste, ou use as setas para cima e para baixo"
+        aria-label="Altura do gráfico: arraste ou use as setas para cima e para baixo"
         aria-valuemin={CHART_MIN_HEIGHT}
         aria-valuemax={CHART_MAX_HEIGHT}
         aria-valuenow={height ?? undefined}
@@ -863,7 +865,7 @@ function ChartSizer({
             className="chart-resize-width"
             role="separator"
             aria-orientation="vertical"
-            aria-label="Largura do gráfico: arraste, ou use as setas para a esquerda e para a direita"
+            aria-label="Largura do gráfico: arraste ou use as setas para a esquerda e para a direita"
             aria-valuemin={CHART_MIN_WIDTH}
             aria-valuemax={CHART_MAX_WIDTH}
             aria-valuenow={width ?? undefined}

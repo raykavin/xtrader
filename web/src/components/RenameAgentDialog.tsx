@@ -64,9 +64,8 @@ export function RenameAgentDialog({ name, onConfirm, onClose }: Props) {
       <form className="dialog-form" onSubmit={submit} noValidate>
         <div className="dialog-body">
           <p className="dialog-lead">
-            Só o nome muda: o agente mantém a conta, o comentário e o número mágico na corretora (as
-            posições continuam dele), as ordens, as decisões, os resultados e a fila de registros
-            ainda não enviados.
+            Só o nome muda: o agente mantém a conta, o comentário e o magic (as posições continuam
+            dele), as ordens, as decisões, os resultados e os registros ainda não enviados.
           </p>
           <div className="field" data-invalid={touched && invalid ? "" : undefined}>
             <label className="field-label" htmlFor="rename-name">
@@ -89,11 +88,11 @@ export function RenameAgentDialog({ name, onConfirm, onClose }: Props) {
             <p className={touched && invalid ? "field-error" : "field-hint"} id="rename-hint">
               {touched && invalid
                 ? invalid
-                : "No painel, no Telegram (/agent) e nos endereços, o agente passa a ser chamado por ele."}
+                : "O novo nome vale no painel, no Telegram (/agent) e nos endereços."}
             </p>
           </div>
           {error && (
-            <Alert tone="error" title="O agente não foi renomeado">
+            <Alert tone="error" title="Não foi possível renomear o agente">
               {error}
             </Alert>
           )}

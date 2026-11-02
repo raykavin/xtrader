@@ -45,14 +45,14 @@ describe("the trading hours", () => {
       lastEndLabel({ at: end, flatten: true, cancel_pending: true, status: "succeeded" }, zone),
     ).toEqual({
       tone: "on",
-      text: "Fim às 17:30: posições zeradas e pendentes canceladas · Concluída",
+      text: "Fim às 17:30: posições zeradas e ordens pendentes canceladas · Concluída",
     });
     expect(
       lastEndLabel({ at: end, flatten: true, cancel_pending: false, status: "partial" }, zone),
     ).toEqual({ tone: "warn", text: "Fim às 17:30: posições zeradas · Parcial" });
     expect(
       lastEndLabel({ at: end, flatten: false, cancel_pending: true, status: "executing" }, zone),
-    ).toEqual({ tone: "info", text: "Fim às 17:30: pendentes canceladas · executando" });
+    ).toEqual({ tone: "info", text: "Fim às 17:30: ordens pendentes canceladas · executando" });
   });
 
   it("checks the form as the controller does", () => {
@@ -64,10 +64,12 @@ describe("the trading hours", () => {
       cancel_pending: false,
     };
     expect(hoursError(form)).toBeNull();
-    expect(hoursError({ ...form, start: "" })).toBe("Ligado, informe o início e o fim.");
+    expect(hoursError({ ...form, start: "" })).toBe("Informe o início e o fim.");
     expect(hoursError({ ...form, enabled: false, start: "" })).toBeNull();
     expect(hoursError({ ...form, end: "09:00" })).toBe("O início e o fim devem ser diferentes.");
-    expect(hoursError({ ...form, start: "24:00" })).toBe("O início: um horário de 00:00 a 23:59.");
+    expect(hoursError({ ...form, start: "24:00" })).toBe(
+      "O início deve ser um horário de 00:00 a 23:59.",
+    );
     expect(crossesMidnight({ start: "22:00", end: "02:00" })).toBe(true);
     expect(crossesMidnight(form)).toBe(false);
   });

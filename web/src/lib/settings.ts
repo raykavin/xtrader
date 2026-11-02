@@ -38,11 +38,11 @@ export function agentKindLabel(kind: string): string {
 
 /** What the trade panel of an agent turns on in the dashboard: its bot starts and stops without it. */
 export const tradePanelHint =
-  "Ordens pela boleta e pelo gráfico; iniciar e parar o bot e a reanálise do LLM não dependem dele";
+  "Ordens pela boleta e pelo gráfico; iniciar e parar o bot e pedir reanálise ao LLM não dependem dele";
 
 /** What the reanalysis of an LLM agent allows, apart from its trade panel. */
 export const reanalysisHint =
-  "Pedir uma nova análise ao LLM entre os fechamentos, pelo painel e pelo Telegram (com o controle via Telegram ligado); independe do painel de trading";
+  "Pedir nova análise ao LLM entre os fechamentos, pelo painel ou pelo Telegram (com “Controle via Telegram” ligado); não depende do “Painel de trading”";
 
 /** The kinds of the agents, of the binaries the controller launches, in its order. */
 export const agentKinds = Object.keys(kinds);
@@ -56,7 +56,7 @@ export type Tone = "on" | "off" | "warn";
  * when it runs or stopped.
  */
 export function agentState(agent: AgentSettings): { label: string; tone: Tone; mark?: StatusMark } {
-  if (!agent.enabled) return { label: "Desativado", tone: "off" };
+  if (!agent.enabled) return { label: "Desligado", tone: "off" };
   if (agent.launch_error) return { label: "Não iniciado", tone: "warn", mark: "stop" };
   if (agent.running && agent.restarting)
     return { label: "Reiniciando", tone: "warn", mark: "stop" };
@@ -79,7 +79,7 @@ export function agentNote(agent: AgentSettings): string {
   const exit = agent.last_exit ? `Última saída: ${agent.last_exit}` : "";
   if (agent.exited) {
     const note =
-      "Saiu e fica parado, iniciado com “Reiniciar se cair” desligado: reinicie para iniciá-lo de novo (um reinício do controller também o inicia).";
+      "Parou e não volta sozinho (“Reiniciar se cair” desligado): use Reiniciar para iniciá-lo; um reinício do controller também o inicia.";
     return exit ? `${note} ${exit}` : note;
   }
   const restarts = agent.restarts ?? 0;
@@ -179,7 +179,7 @@ export function agentSummary(agent: AgentSettings): { label: string; value: stri
     .map((p) => p.trim())
     .filter(Boolean);
   const parts = [
-    { label: pairs.length > 1 ? "Pares" : "Par", value: pairs.join(", ") },
+    { label: pairs.length > 1 ? "Ativos" : "Ativo", value: pairs.join(", ") },
     { label: "Timeframe", value: timeframe.trim() },
     agent.kind === "llm"
       ? { label: "Modelo", value: agent.model?.trim() ?? "" }
@@ -237,8 +237,8 @@ export function parseTelegramID(text: string): number | null {
 /** Why a password is refused, null when it is taken: 8 to 72 bytes, as bcrypt takes. */
 export function passwordError(password: string): string | null {
   const size = new TextEncoder().encode(password).length;
-  if (size < 8) return "A senha precisa de 8 caracteres ao menos.";
-  if (size > 72) return "A senha pode ter 72 bytes no máximo.";
+  if (size < 8) return "A senha precisa ter pelo menos 8 caracteres.";
+  if (size > 72) return "A senha pode ter no máximo 72 bytes.";
   return null;
 }
 
@@ -450,7 +450,7 @@ export function paramKeyError(key: string, kind: string): string | null {
     return `${name} é uma configuração do próprio agente, não um parâmetro.`;
   }
   if (kind !== "llm" && llmParamPrefixes.some((prefix) => name.startsWith(prefix))) {
-    return "Parâmetro do modelo de linguagem: só para agentes LLM.";
+    return "Parâmetro só para agentes LLM.";
   }
   return null;
 }

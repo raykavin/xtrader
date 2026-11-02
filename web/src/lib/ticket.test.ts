@@ -53,11 +53,19 @@ describe("ticket", () => {
   it("checks the levels as the brokers do", () => {
     expect(levelsError("buy", 2400, 2388, 2424)).toBeNull();
     expect(levelsError("buy", 2400, null, null)).toBeNull();
-    expect(levelsError("buy", 2400, 2400, null)).toContain("stop loss de uma compra fica abaixo");
-    expect(levelsError("buy", 2400, null, 2390)).toContain("take profit de uma compra fica acima");
+    expect(levelsError("buy", 2400, 2400, null)).toContain(
+      "stop loss de uma compra deve ficar abaixo",
+    );
+    expect(levelsError("buy", 2400, null, 2390)).toContain(
+      "take profit de uma compra deve ficar acima",
+    );
     expect(levelsError("sell", 2400, 2412, 2376)).toBeNull();
-    expect(levelsError("sell", 2400, 2390, null)).toContain("stop loss de uma venda fica acima");
-    expect(levelsError("sell", 2400, null, 2410)).toContain("take profit de uma venda fica abaixo");
+    expect(levelsError("sell", 2400, 2390, null)).toContain(
+      "stop loss de uma venda deve ficar acima",
+    );
+    expect(levelsError("sell", 2400, null, 2410)).toContain(
+      "take profit de uma venda deve ficar abaixo",
+    );
   });
 
   it("draws the pending orders, movable when the brokers move them", () => {

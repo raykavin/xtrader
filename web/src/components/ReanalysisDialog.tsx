@@ -72,12 +72,12 @@ export function ReanalysisDialog({ pair, onConfirm, onClose }: Props) {
       <form className="dialog-form" onSubmit={submit}>
         <div className="dialog-body">
           <p className="dialog-lead">
-            Pede ao modelo uma nova análise de <strong>{pair}</strong> agora, fora do intervalo de
+            Pede ao LLM uma nova análise de <strong>{pair}</strong> agora, fora do intervalo de
             consultas.
           </p>
           <div className="field">
             <label className="field-label" htmlFor="reanalysis-note">
-              Mensagem para o agente <span className="optional">(opcional)</span>
+              Mensagem para o LLM <span className="optional">(opcional)</span>
             </label>
             <textarea
               id="reanalysis-note"
@@ -87,20 +87,20 @@ export function ReanalysisDialog({ pair, onConfirm, onClose }: Props) {
               rows={4}
               value={note}
               maxLength={MaxReanalysisNote}
-              placeholder="Ex.: encerre a posição ou proteja o lucro"
+              placeholder="ex.: feche a posição ou proteja o lucro"
               disabled={busy}
               onChange={(e) => setNote(e.target.value)}
               onKeyDown={onKey}
             />
             <p className="field-hint split" id="reanalysis-hint">
-              <span>O modelo considera a mensagem, mas decide pela estratégia e pelas regras.</span>
+              <span>O LLM considera a mensagem, mas decide pela estratégia e pelas regras.</span>
               <span className="mono">
                 {note.length}/{MaxReanalysisNote}
               </span>
             </p>
           </div>
           {error && (
-            <Alert tone="error" title="A reanálise foi recusada">
+            <Alert tone="error" title="Não foi possível pedir a reanálise">
               {error}
             </Alert>
           )}

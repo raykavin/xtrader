@@ -72,7 +72,7 @@ export function PromptEditor({ id, onSaved, onClose }: Props) {
     } catch (e) {
       if (e instanceof APIError && e.status === 409 && id !== null) {
         setError(
-          "O prompt foi alterado em outro lugar desde que foi aberto: feche e abra de novo para editar a versão atual.",
+          "O prompt mudou em outro lugar depois de aberto. Feche e abra de novo para editar a versão atual.",
         );
       } else {
         setError(e instanceof Error ? e.message : String(e));
@@ -173,7 +173,7 @@ export function PromptEditor({ id, onSaved, onClose }: Props) {
             </Alert>
           )}
           {error && (
-            <Alert tone="error" title="O prompt não foi salvo">
+            <Alert tone="error" title="Não foi possível salvar o prompt">
               {error}
             </Alert>
           )}

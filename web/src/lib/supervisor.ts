@@ -32,7 +32,7 @@ export function actionLabel(action: string, mode?: string): string {
     case "cancel_pending":
       return "Cancelar ordens pendentes de entrada";
     case "close_positions":
-      return "Encerrar posições";
+      return "Fechar posições";
   }
   return action;
 }
@@ -46,12 +46,12 @@ export function actionNote(action: string, mode?: string): string {
       return "O agente volta a abrir posições conforme a estratégia.";
     case "stop_agent":
       return mode === "now"
-        ? "Bloqueia as entradas, cancela as pendentes de entrada e desliga o agente já. As posições ficam abertas, com o stop loss e o take profit na corretora, sem o gerenciamento da estratégia: recusado se alguma posição estiver sem stop loss."
-        : "Bloqueia as entradas e cancela as pendentes de entrada agora; o agente continua gerenciando as posições e é desligado quando ficar sem posição e sem ordem pendente. Nenhuma posição é liquidada.";
+        ? "Bloqueia as entradas, cancela as ordens pendentes de entrada e desliga o agente agora. As posições ficam abertas com o stop loss e o take profit na corretora, sem o gerenciamento da estratégia. Recusada se alguma posição estiver sem stop loss."
+        : "Bloqueia as entradas e cancela as ordens pendentes de entrada agora. O agente continua gerenciando as posições e é desligado quando ficar sem posição e sem ordem pendente. Nenhuma posição é fechada.";
     case "cancel_pending":
-      return "Cancela só as ordens pendentes de entrada; as proteções das posições (stop loss e take profit) ficam.";
+      return "Cancela só as ordens pendentes de entrada. O stop loss e o take profit das posições continuam.";
     case "close_positions":
-      return "Fecha a mercado só as posições dos agentes da aplicação listadas abaixo, nunca operações feitas fora deles.";
+      return "Fecha a mercado só as posições dos agentes do XTrader listadas abaixo, nunca operações feitas fora deles.";
   }
   return "";
 }
@@ -270,15 +270,15 @@ export function scopeText(action: SupervisorActionInfo): string {
     agents.length === 1
       ? `o agente ${agents[0]}`
       : `${agents.length} agentes (${agents.join(", ")})`;
-  const pairs = action.scope.pairs?.length ? ` nos pares ${action.scope.pairs.join(", ")}` : "";
+  const pairs = action.scope.pairs?.length ? ` nos ativos ${action.scope.pairs.join(", ")}` : "";
   switch (action.action) {
     case "close_positions": {
       const positions = action.scope.positions ?? [];
       const owners = [...new Set(positions.map((p) => p.agent))];
       const parts = [
-        `Fechar ${positions.length} posição(ões) de ${owners.length} agente(s)${pairs}, só dos agentes da aplicação.`,
+        `Fechar ${counted(positions.length, "posição", "posições")} de ${counted(owners.length, "agente", "agentes")}${pairs}, só dos agentes do XTrader.`,
         action.options.cancel_pending
-          ? "As pendentes de entrada também são canceladas."
+          ? "As ordens pendentes de entrada também são canceladas."
           : "As ordens pendentes não são canceladas.",
         action.options.keep_blocked
           ? "As entradas ficam bloqueadas depois."
@@ -287,13 +287,15 @@ export function scopeText(action: SupervisorActionInfo): string {
       const stopped = positions.filter((p) => !p.running && !p.paper);
       if (stopped.length > 0) {
         parts.push(
-          `${stopped.length} posição(ões) de agentes que não estão rodando são fechadas direto na conta.`,
+          stopped.length === 1
+            ? "1 posição de agente parado é fechada direto na conta."
+            : `${stopped.length} posições de agentes parados são fechadas direto na conta.`,
         );
       }
       return parts.join(" ");
     }
     case "cancel_pending":
-      return `Cancelar ${(action.scope.orders ?? []).length} ordem(ns) pendente(s) de entrada de ${who}${pairs}.`;
+      return `Cancelar ${counted((action.scope.orders ?? []).length, "ordem pendente", "ordens pendentes")} de entrada de ${who}${pairs}.`;
   }
   return `${actionLabel(action.action, action.mode)}: ${who}.`;
 }
@@ -333,11 +335,11 @@ export function withAction(
   return messages.map((m) => (m.action?.id === action.id ? { ...m, action } : m));
 }
 
-/** What an answer streaming is doing, eg: Lendo os agentes, while the model is awaited. */
+/** What an answer streaming is doing, eg: Consultando os agentes, while the model is awaited. */
 export function stageLabel(stage: SupervisorStreamStage | null): string {
   switch (stage?.stage) {
     case "reading":
-      return "Lendo os agentes";
+      return "Consultando os agentes";
     case "thinking":
       return "Analisando";
     case "tool":
@@ -356,17 +358,17 @@ export function protectionStatusLabel(protection: SupervisorProtectionInfo): Ton
     case "refused":
       return { text: "Recusada pelo agente", tone: "off" };
     case "ended":
-      return { text: "Encerrada: posição fechada", tone: "off" };
+      return { text: "Posição fechada", tone: "off" };
     case "active":
       return protection.move === "confirmed"
-        ? { text: "Aplicada, confirmada pela corretora", tone: "on" }
+        ? { text: "Confirmada pela corretora", tone: "on" }
         : { text: "Ativa", tone: "on" };
   }
   switch (protection.move) {
     case "rejected":
-      return { text: "Armada; envio recusado pela corretora", tone: "error" };
+      return { text: "Armada: a corretora recusou o novo stop", tone: "error" };
     case "unknown":
-      return { text: "Armada; resposta da corretora perdida", tone: "warn" };
+      return { text: "Armada: sem resposta da corretora", tone: "warn" };
   }
   return { text: "Armada: aguardando o gatilho", tone: "info" };
 }
@@ -426,7 +428,7 @@ export function closeOutcome(action: SupervisorActionInfo): CloseOutcome {
     case "succeeded":
       return {
         tone: "ok",
-        text: parts.length > 0 ? `${parts.join(" · ")}.` : "Nada a encerrar.",
+        text: parts.length > 0 ? `${parts.join(" · ")}.` : "Nada a fechar.",
         remaining,
       };
     case "failed":
