@@ -33,6 +33,13 @@ var (
 // errAnalyzing is the error of an analysis asked while another one runs.
 var errAnalyzing = errors.New("an analysis of the supervisor is running already")
 
+// analyzingMessage tells the user errAnalyzing.
+const analyzingMessage = "Uma análise do XTrader AI já está em andamento."
+
+// supervisorDown tells the user the supervisor failed to answer, the detail
+// logged.
+const supervisorDown = "O XTrader AI não pode responder agora. Tente de novo em instantes."
+
 // errNotConfigured is the error of an analysis or a conversation without the
 // language model of the supervisor.
 var errNotConfigured = errors.New("the supervisor has no language model: set its provider, model and key in " +
@@ -248,9 +255,9 @@ func (s *Supervision) Analyze(ctx context.Context, origin, by string) (store.Sup
 	if !s.analyzing.CompareAndSwap(false, true) {
 		run, err := s.store.StartSupervisorRun(ctx, origin, store.RunSkipped, by, "")
 		if err == nil {
-			run.Error = errAnalyzing.Error()
+			run.Error = analyzingMessage
 			_ = s.store.FinishSupervisorRun(ctx, store.SupervisorRun{ID: run.ID, Status: store.RunSkipped,
-				Error: errAnalyzing.Error()})
+				Error: analyzingMessage})
 		}
 		return run, errAnalyzing
 	}
@@ -322,7 +329,7 @@ func (a *analysis) usageJSON() json.RawMessage {
 func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 	view, err := a.s.read(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the agents: %w", err)
+		return fmt.Errorf("Não foi possível ler os agentes: %w", err)
 	}
 	a.view = view
 	snapshot, err := json.Marshal(view.snapshot)
@@ -342,7 +349,7 @@ func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 		a.usage.Output += answer.Usage.Output
 		a.usage.Reasoning += answer.Usage.Reasoning
 		if err != nil {
-			return fmt.Errorf("the model: %w", err)
+			return fmt.Errorf("Falha no LLM: %w", err)
 		}
 		if len(answer.ToolCalls) == 0 {
 			if !a.reported {
@@ -352,7 +359,7 @@ func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 				return errors.New(maxTokensMessage(a.settings, answer.Usage))
 			}
 			if a.summary == "" {
-				return errors.New("the model answered without its report")
+				return errors.New("O LLM respondeu sem o relatório. Tente de novo.")
 			}
 			return nil
 		}
@@ -367,7 +374,7 @@ func (a *analysis) ask(ctx context.Context, chat llm.Chat) error {
 		}
 	}
 	if !a.reported {
-		return fmt.Errorf("the model didn't report in %d answers", maxToolRounds)
+		return fmt.Errorf("O LLM não enviou o relatório em %d respostas. Tente de novo.", maxToolRounds)
 	}
 	return nil
 }
@@ -386,7 +393,7 @@ func maxTokensMessage(settings store.SupervisorSettings, usage llm.Usage) string
 		spent = fmt.Sprintf("%d tokens, %d deles raciocinando", usage.Output, usage.Reasoning)
 	}
 	return fmt.Sprintf("O modelo gastou todo o limite da resposta (%s; o limite é %d) antes de responder. "+
-		"Aumente o Máximo de tokens em Configurações → XTrader AI ou reduza o raciocínio.", spent, limit)
+		"Aumente o Máximo de tokens em Configurações › XTrader AI ou reduza o raciocínio.", spent, limit)
 }
 
 // hasAction reports whether calls ask for an action, not only the report.

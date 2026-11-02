@@ -62,8 +62,8 @@ const (
 )
 
 // errNoUsers is the error of the dashboard without users.
-const errNoUsers = "the dashboard has no user: set bootstrap in config.yml, or import the previous version with " +
-	"cmd/migrator"
+const errNoUsers = "O painel não tem usuários: defina bootstrap no config.yml ou importe a versão anterior com o " +
+	"cmd/migrator."
 
 // Users are the users of the dashboard, see store.Store.
 type Users interface {
@@ -164,14 +164,14 @@ func (a *auth) protect(next http.Handler) http.Handler {
 		s := a.session(r)
 		switch {
 		case s != nil && !safeMethod(r.Method) && !validCSRF(r, s):
-			writeJSONError(w, http.StatusForbidden, "invalid or missing CSRF token: reload the page")
+			writeJSONError(w, http.StatusForbidden, "Sessão desatualizada: recarregue a página.")
 		case s != nil:
 			ctx := context.WithValue(context.WithValue(r.Context(), userKey{}, s.username), userIDKey{}, s.userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case strings.HasPrefix(r.URL.Path, "/api/") && !a.configured(r.Context()):
 			writeJSONError(w, http.StatusServiceUnavailable, errNoUsers)
 		case strings.HasPrefix(r.URL.Path, "/api/") || !safeMethod(r.Method):
-			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			writeJSONError(w, http.StatusUnauthorized, "Sessão expirada: entre de novo.")
 		default:
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		}
@@ -202,7 +202,7 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	var request ui.LoginRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLoginBody)).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return
 	}
 	client := a.clientAddress(r)
@@ -219,13 +219,13 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		failures, wait := ticket.finish(loginFailed, a.now(), a.failDelay)
 		log.Warnf("ui: failed login from %s (%d in a row, the next one in %v)", client, failures, wait)
 		pause(r.Context(), a.failDelay)
-		writeJSONError(w, http.StatusUnauthorized, "invalid username or password")
+		writeJSONError(w, http.StatusUnauthorized, "Usuário ou senha inválidos.")
 		return
 	}
 	if err != nil {
 		ticket.finish(loginAborted, a.now(), 0)
 		log.Errorf("ui: login: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the login failed, try again")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível entrar. Tente de novo.")
 		return
 	}
 	ticket.finish(loginSucceeded, a.now(), 0)
@@ -233,7 +233,7 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	id, s, err := a.open(user)
 	if err != nil {
 		log.Error(err)
-		writeJSONError(w, http.StatusInternalServerError, "the session couldn't be opened")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível abrir a sessão. Tente de novo.")
 		return
 	}
 	a.setCookies(w, r, id, s)
@@ -268,7 +268,7 @@ func (a *auth) setCookies(w http.ResponseWriter, r *http.Request, id string, s *
 // cookies.
 func (a *auth) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s := a.session(r); s != nil && !validCSRF(r, s) {
-		writeJSONError(w, http.StatusForbidden, "invalid or missing CSRF token: reload the page")
+		writeJSONError(w, http.StatusForbidden, "Sessão desatualizada: recarregue a página.")
 		return
 	}
 	if cookie, err := r.Cookie(sessionCookie); err == nil {

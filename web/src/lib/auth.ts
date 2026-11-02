@@ -1,7 +1,7 @@
 // The login of the dashboard: where to go once logged in, and what to tell of
 // a login refused.
 
-import { APIError } from "../api/errors";
+import { APIError, OFFLINE_MESSAGE } from "../api/errors";
 
 /**
  * Whether a character of a URL is one the browsers drop (a control
@@ -57,7 +57,7 @@ export function loginError(error: unknown): string {
     }
     return "Não foi possível entrar. Tente novamente.";
   }
-  return "Sem conexão com o painel. Verifique a rede e tente novamente.";
+  return OFFLINE_MESSAGE;
 }
 
 /** A wait of seconds, as the login tells it: "45 s", "3 min". */

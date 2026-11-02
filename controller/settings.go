@@ -82,7 +82,7 @@ func (s *settings) routes(r chi.Router) {
 // it can't.
 func decode(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBody)).Decode(v); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return false
 	}
 	return true
@@ -100,7 +100,7 @@ func writeCreated(w http.ResponseWriter, payload interface{}) {
 func idParam(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
 	id, err := strconv.ParseInt(chi.URLParam(r, name), 10, 64)
 	if err != nil || id < 1 {
-		writeJSONError(w, http.StatusBadRequest, "invalid "+name)
+		writeJSONError(w, http.StatusBadRequest, "Parâmetro "+name+" inválido.")
 		return 0, false
 	}
 	return id, true
@@ -122,10 +122,11 @@ func (s *settings) fail(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrStopped), errors.Is(err, context.Canceled):
 		log.Debugf("ui: settings: %v", err)
-		writeJSONError(w, http.StatusServiceUnavailable, ErrStopped.Error())
+		writeJSONError(w, http.StatusServiceUnavailable, stoppingMessage)
 	default:
 		log.Errorf("ui: settings: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the settings can't be read or changed now")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler ou salvar as configurações agora. "+
+			"Tente de novo em instantes.")
 	}
 }
 
@@ -207,7 +208,7 @@ func (s *settings) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		agent.LLM = &store.LLMSettings{Provider: l.Provider, Model: l.Model, BaseURL: l.BaseURL,
 			ReasoningEffort: l.ReasoningEffort, MaxTokens: l.MaxTokens, PromptID: request.PromptID}
 	case request.PromptID != nil:
-		writeJSONError(w, http.StatusBadRequest, "a prompt without a language model: for an LLM agent only")
+		writeJSONError(w, http.StatusBadRequest, "Só agentes LLM têm prompt: escolha o LLM do agente ou tire o prompt.")
 		return
 	}
 	created, err := s.store.CreateAgent(ctx, agent, store.AgentSecrets{LLMAPIKey: request.LLMAPIKey,
@@ -325,7 +326,7 @@ func (s *settings) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.Enabled && s.manager.State(a.Name).Running {
-		writeJSONError(w, http.StatusConflict, "the agent "+a.Name+" is still stopping: try again in a moment")
+		writeJSONError(w, http.StatusConflict, "O agente "+a.Name+" ainda está parando. Tente de novo em instantes.")
 		return
 	}
 	if err := s.store.DeleteAgent(ctx, a.ID); err != nil {
@@ -356,10 +357,10 @@ func (s *settings) handleRename(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case a.Enabled:
-		writeJSONError(w, http.StatusConflict, "the agent "+a.Name+" is enabled: disable it first")
+		writeJSONError(w, http.StatusConflict, "Desligue o agente "+a.Name+" antes.")
 		return
 	case s.manager.State(a.Name).Running:
-		writeJSONError(w, http.StatusConflict, "the agent "+a.Name+" is still stopping: try again in a moment")
+		writeJSONError(w, http.StatusConflict, "O agente "+a.Name+" ainda está parando. Tente de novo em instantes.")
 		return
 	}
 	undo := func() {}
@@ -458,7 +459,7 @@ func (s *settings) handleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Content == nil {
-		writeJSONError(w, http.StatusBadRequest, "the content of the prompt is required")
+		writeJSONError(w, http.StatusBadRequest, "Informe o conteúdo do prompt.")
 		return
 	}
 	description := ""
@@ -610,7 +611,7 @@ func (s *settings) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Password == nil {
-		writeJSONError(w, http.StatusBadRequest, "the password is required")
+		writeJSONError(w, http.StatusBadRequest, "Informe a senha.")
 		return
 	}
 	user, err := s.store.CreateUser(r.Context(), request.Username, *request.Password)

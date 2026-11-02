@@ -126,7 +126,7 @@ func (c *candleCache) read(ctx context.Context, bridge, token, symbol, file, mt5
 	data := candleData{Timeframe: file}
 	if err := bridgeGet(ctx, c.client, 1<<20, bridge, "/symbol?"+url.Values{"symbol": {symbol}}.Encode(), token,
 		&data.Symbol); err != nil {
-		return data, fmt.Errorf("the symbol %s: %w", symbol, err)
+		return data, fmt.Errorf("o símbolo %s: %w", symbol, err)
 	}
 	if err := os.MkdirAll(filepath.Join(c.dir, "candles"), 0o750); err != nil {
 		return data, err
@@ -152,7 +152,7 @@ func (c *candleCache) read(ctx context.Context, bridge, token, symbol, file, mt5
 				"from": {strconv.FormatInt(start.Unix(), 10)},
 				"to":   {strconv.FormatInt(end.Add(-time.Second).Unix(), 10)}}.Encode()
 			if err := bridgeGet(ctx, c.client, backtestReadLimit, bridge, path, token, &part); err != nil {
-				return data, fmt.Errorf("the candles of %s: %w", symbol, err)
+				return data, fmt.Errorf("os candles de %s: %w", symbol, err)
 			}
 			for _, rate := range part {
 				if n := len(rates); n > 0 && rate.Time <= rates[n-1].Time {

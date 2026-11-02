@@ -47,14 +47,15 @@ func (c *Chart) guard(next http.Handler) http.Handler {
 		switch {
 		case !loopbackRequest(r):
 			writeJSONError(w, http.StatusMisdirectedRequest,
-				"the API of the agent answers on the loopback only: localhost, 127.0.0.0/8 or [::1]")
+				"A API do agente só responde no loopback: localhost, 127.0.0.0/8 ou [::1].")
 		case fromBrowser(r):
 			writeJSONError(w, http.StatusForbidden,
-				"the API of the agent answers its controller only: open the agent on the dashboard")
+				"A API do agente só responde ao controller: abra o agente pelo painel.")
 		case c.key != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get(KeyHeader)), []byte(c.key)) != 1:
-			writeJSONError(w, http.StatusForbidden, "the API of the agent answers the controller that launched it only")
+			writeJSONError(w, http.StatusForbidden, "A API do agente só responde ao controller que o iniciou.")
 		case changes(r.Method) && !isJSON(r.Header.Get("Content-Type")):
-			writeJSONError(w, http.StatusUnsupportedMediaType, "the payload must be JSON: Content-Type: application/json")
+			writeJSONError(w, http.StatusUnsupportedMediaType, "O pedido deve ser JSON: "+
+				"Content-Type: application/json.")
 		default:
 			next.ServeHTTP(w, r)
 		}

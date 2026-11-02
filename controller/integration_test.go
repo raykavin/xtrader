@@ -536,7 +536,7 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 			http.StatusBadRequest, "prompt 999999 doesn't exist"},
 		{"prompt without a language model", func(r *ui.AgentCreateRequest) {
 			r.Kind, r.LLM, r.Params, r.LLMAPIKey = "trend", nil, nil, nil
-		}, http.StatusBadRequest, "a prompt without a language model"},
+		}, http.StatusBadRequest, "Só agentes LLM têm prompt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := gold()
@@ -777,7 +777,7 @@ func TestSettingsAPI_DeleteAnAgent(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	resp, body = call(http.MethodDelete, "/api/settings/agents/adxema", nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "still stopping")
+	assert.Contains(t, body, "ainda está parando")
 	require.Eventually(t, func() bool { return !c.manager.State("adxema").Running }, 10*time.Second,
 		50*time.Millisecond)
 	resp, body = call(http.MethodDelete, "/api/settings/agents/adxema", nil)

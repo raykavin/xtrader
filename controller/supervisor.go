@@ -32,6 +32,9 @@ var baseEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "TZ", "LANG", "LC_ALL"
 // processes, see Supervisor.StopAll.
 var ErrStopped = errors.New("the controller is stopping: nothing starts anymore")
 
+// stoppingMessage tells the user ErrStopped.
+const stoppingMessage = "O controller está parando: nada mais é iniciado."
+
 // ProcessSpec is a program the controller runs: an agent, or a service of the
 // host the agents need. StopTimeout is how long it has to exit once
 // interrupted before it is killed, the one of the supervisor when 0.

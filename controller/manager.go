@@ -563,8 +563,8 @@ func (m *Manager) conflict(name string, live bool, book agentapi.MT5Book) error 
 		if other == name || !l.live || !l.book.Overlaps(book) || !m.supervisor.Running(other) {
 			continue
 		}
-		return samePositions(fmt.Sprintf("the agent %s, running in live mode, trades %s with the magic number %d "+
-			"(comment %q) on the bridge %s: give one of them a comment or a magic number of its own", other,
+		return samePositions(fmt.Sprintf("O agente %s, em execução no modo live, opera %s com o magic %d "+
+			"(comentário %q) na bridge %s: dê a um dos dois um comentário ou um magic próprio.", other,
 			strings.Join(book.Common(l.book), ";"), book.Magic, book.Comment, book.Bridge))
 	}
 	return nil

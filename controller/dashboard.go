@@ -374,7 +374,7 @@ func (d *Dashboard) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "agent")
 	a, ok := d.agents.get(name)
 	if !ok {
-		writeJSONError(w, http.StatusNotFound, "unknown agent")
+		writeJSONError(w, http.StatusNotFound, "Agente desconhecido.")
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")

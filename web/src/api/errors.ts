@@ -16,3 +16,28 @@ export function retryAfterSeconds(header: string | null): number | undefined {
   if (header === null || !/^\d+$/.test(header.trim())) return undefined;
   return Number(header.trim());
 }
+
+/** What a request that never reached the server tells, eg: the network down. */
+export const OFFLINE_MESSAGE = "Sem conexão com o XTrader. Verifique a rede e tente novamente.";
+
+/**
+ * A request that never reached the server (the network down, the server off),
+ * in place of the error of the browser in English, eg: Failed to fetch; that
+ * one kept as its cause.
+ */
+export class NetworkError extends Error {
+  constructor(cause: unknown) {
+    super(OFFLINE_MESSAGE, { cause });
+    this.name = "NetworkError";
+  }
+}
+
+/** fetch, a request that can't reach the server failing with a NetworkError; an abort as it is. */
+export async function fetchOrOffline(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (init?.signal?.aborted) throw e; // canceled: the callers tell it apart
+    throw new NetworkError(e);
+  }
+}

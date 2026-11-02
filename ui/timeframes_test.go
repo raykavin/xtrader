@@ -124,10 +124,10 @@ func TestChart_CandlesOfTheStrategyAndResampled(t *testing.T) {
 
 	resp, body := get(t, srv.URL+"/api/BTCUSDm/candles?timeframe=5m")
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
-	require.Contains(t, body, "below the timeframe of the strategy")
+	require.Contains(t, body, "é menor que o da estratégia, 30m")
 	resp, body = get(t, srv.URL+"/api/BTCUSDm/candles?timeframe=2h")
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	require.Contains(t, body, "one of 1m, 5m, 15m, 30m, 4h, 1d")
+	require.Contains(t, body, "use um de 1m, 5m, 15m, 30m, 4h, 1d")
 	resp, _ = get(t, srv.URL+"/api/ETHUSDm/candles?timeframe=4h")
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

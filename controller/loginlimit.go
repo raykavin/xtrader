@@ -41,8 +41,8 @@ const (
 
 // The reasons of the logins refused.
 const (
-	refusedFailures = "too many failed logins: try again later"
-	refusedBusy     = "too many logins at once: try again in a moment"
+	refusedFailures = "Muitas tentativas de login falharam: tente de novo mais tarde."
+	refusedBusy     = "Muitos logins ao mesmo tempo: tente de novo em instantes."
 )
 
 // loginLimiter follows the logins of the dashboard, see above.

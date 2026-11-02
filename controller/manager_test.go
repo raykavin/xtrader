@@ -60,8 +60,8 @@ func TestManager_DoesNotLaunchTwoAgentsOfTheSamePositions(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	assert.False(t, c.manager.supervisor.Running("gold-two"))
 	state := c.manager.State("gold-two")
-	assert.Contains(t, state.LaunchError, "the agent gold, running in live mode, trades XAUUSDm with "+
-		"the magic number 980556666 (comment \"nb:trendconfluence\")")
+	assert.Contains(t, state.LaunchError, "O agente gold, em execução no modo live, opera XAUUSDm com "+
+		"o magic 980556666 (comentário \"nb:trendconfluence\")")
 	assert.Empty(t, c.manager.State("gold").LaunchError)
 	assert.Empty(t, c.manager.State("paper").LaunchError)
 	require.NoError(t, c.manager.Reconcile(ctx))
@@ -100,7 +100,7 @@ func TestManager_DoesNotLaunchTwoAgentsOfTheSamePositions(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrConflict, "the store refuses it now")
 	c.exec(t, "UPDATE agents SET enabled = TRUE WHERE id = ?", gold.ID)
 	err = c.manager.Restart(ctx, "gold")
-	require.ErrorContains(t, err, "the agent gold-two, running in live mode")
+	require.ErrorContains(t, err, "O agente gold-two, em execução no modo live")
 	assert.False(t, c.manager.supervisor.Running("gold"))
 	assert.Equal(t, err.Error(), c.manager.State("gold").LaunchError)
 }
@@ -139,7 +139,7 @@ func TestInternalAPI_RefusesTheSettingsOfTheSamePositions(t *testing.T) {
 	require.NoError(t, err)
 	resp := internalCall(t, srv, token, http.MethodGet, "/config", nil, nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Contains(t, c.manager.State("gold-two").LaunchError, "the agent gold, running in live mode, trades XAUUSDm")
+	assert.Contains(t, c.manager.State("gold-two").LaunchError, "O agente gold, em execução no modo live, opera XAUUSDm")
 
 	c.exec(t, "UPDATE agents SET mode = 'paper' WHERE id = ?", second.ID)
 	require.Equal(t, http.StatusOK, internalCall(t, srv, token, http.MethodGet, "/config", nil, &cfg).StatusCode,
@@ -182,7 +182,7 @@ func TestSettingsAPI_RefusesTheSamePositions(t *testing.T) {
 	c.exec(t, "UPDATE agents SET enabled = TRUE WHERE id = ?", restarted.ID) // saved before the store refused it
 	resp, body := call(http.MethodPost, "/api/settings/agents/trend-two/restart", nil)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode, body)
-	assert.Contains(t, body, "the agent trend, running in live mode, trades XAUUSDm")
+	assert.Contains(t, body, "O agente trend, em execução no modo live, opera XAUUSDm")
 	assert.False(t, c.manager.supervisor.Running(restarted.Name))
 
 	resp, body = call(http.MethodPost, "/api/settings/agents", ui.AgentCreateRequest{Name: "gold-three",

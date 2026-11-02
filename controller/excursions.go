@@ -83,7 +83,8 @@ func (e *excursions) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Errorf("ui: the excursions of the trades of the agents: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the excursions of the trades can't be read now")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler o MFE e o MAE das operações agora. "+
+			"Tente de novo em instantes.")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

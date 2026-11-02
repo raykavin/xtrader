@@ -83,7 +83,7 @@ func (c *Chart) requireSupervisor(w http.ResponseWriter, r *http.Request) (Super
 	controller := c.supervised
 	c.mu.Unlock()
 	if controller == nil || channelOf(r) != ChannelSupervisor {
-		writeJSONError(w, http.StatusNotFound, "not found")
+		writeJSONError(w, http.StatusNotFound, "Não encontrado.")
 		return nil, false
 	}
 	return controller, true
@@ -158,7 +158,7 @@ func (c *Chart) handleSupervision(w http.ResponseWriter, r *http.Request) {
 	for _, pair := range pairs {
 		asset, _, err := controller.Position(pair)
 		if err != nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "the position of "+pair+" can't be read now: "+
+			writeJSONError(w, http.StatusServiceUnavailable, "Não foi possível ler a posição de "+pair+" agora: "+
 				err.Error())
 			return
 		}
@@ -187,7 +187,7 @@ func (c *Chart) handleSupervisionProtect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if c.protector == nil {
-		writeJSONError(w, http.StatusNotFound, "the protection of the positions isn't run by this agent")
+		writeJSONError(w, http.StatusNotFound, "Este agente não faz a proteção das posições.")
 		return
 	}
 	var request SupervisionProtectRequest
@@ -195,7 +195,7 @@ func (c *Chart) handleSupervisionProtect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if request.ArmID <= 0 || strings.TrimSpace(request.Reason) == "" {
-		writeJSONError(w, http.StatusBadRequest, "an arm needs its record and its reason")
+		writeJSONError(w, http.StatusBadRequest, "Para armar a proteção, informe o registro e o motivo.")
 		return
 	}
 	writeJSON(w, c.protector.Arm(request))
@@ -205,7 +205,7 @@ func (c *Chart) handleSupervisionProtect(w http.ResponseWriter, r *http.Request)
 // answering 400 when it can't.
 func decodeSupervision(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid JSON payload")
+		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
 		return false
 	}
 	return true
@@ -264,14 +264,14 @@ func (c *Chart) handleSupervisionClose(w http.ResponseWriter, r *http.Request) {
 	}
 	pairs, unknown := c.pairsOf(request.Pairs)
 	if len(unknown) > 0 {
-		writeJSONError(w, http.StatusNotFound, "unknown pairs: "+strings.Join(unknown, ", "))
+		writeJSONError(w, http.StatusNotFound, "Ativos desconhecidos: "+strings.Join(unknown, ", "))
 		return
 	}
 	reason := strings.TrimSpace(request.Reason)
 	if request.Block {
 		controller.BlockEntries(request.Revision, reason)
 	}
-	release := controller.HoldEntries(cmpOr(reason, "closing the positions"))
+	release := controller.HoldEntries(cmpOr(reason, "fechando as posições"))
 	defer func() {
 		hold := min(time.Duration(max(request.HoldSeconds, 0))*time.Second, maxHold)
 		if hold <= 0 {
@@ -319,7 +319,7 @@ func (c *Chart) handleSupervisionCancel(w http.ResponseWriter, r *http.Request) 
 	}
 	pairs, unknown := c.pairsOf(request.Pairs)
 	if len(unknown) > 0 {
-		writeJSONError(w, http.StatusNotFound, "unknown pairs: "+strings.Join(unknown, ", "))
+		writeJSONError(w, http.StatusNotFound, "Ativos desconhecidos: "+strings.Join(unknown, ", "))
 		return
 	}
 	writeJSON(w, SupervisionCancelResponse{Results: c.cancelEntries(controller, pairs)})

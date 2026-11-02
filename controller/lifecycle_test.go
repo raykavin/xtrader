@@ -247,7 +247,7 @@ func TestSettingsAPI_RestartAsTheControllerStops(t *testing.T) {
 		signal() // as the controller stops
 		got := <-restarted
 		assert.Equal(t, http.StatusServiceUnavailable, got.status, got.body)
-		assert.Contains(t, got.body, "stopping")
+		assert.Contains(t, got.body, "está parando")
 		assert.Never(t, func() bool { return c.starts("matrend") > 1 }, 300*time.Millisecond, 10*time.Millisecond)
 	})
 
@@ -260,7 +260,7 @@ func TestSettingsAPI_RestartAsTheControllerStops(t *testing.T) {
 		c.manager.close()
 		resp, body := call(http.MethodPost, "/api/settings/agents/matrend/restart", nil)
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, body)
-		assert.Contains(t, body, ErrStopped.Error())
+		assert.Contains(t, body, stoppingMessage)
 		assert.Equal(t, 1, c.starts("matrend"))
 	})
 }

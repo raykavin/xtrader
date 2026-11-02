@@ -34,7 +34,7 @@ func TestDashboard_KeyOfTheAgent(t *testing.T) {
 	// without it, eg: an agent of a controller before, refused
 	resp, body := get(t, srv.URL+"/api/agents/bot/pairs")
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	assert.Contains(t, decodeError(t, body), "the controller that launched it")
+	assert.Contains(t, decodeError(t, body), "só responde ao controller que o iniciou")
 	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents/bot/pairs", "", nil, ui.KeyHeader, "the-key")
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "the key of the browser dropped")
 	assert.False(t, d.Online(ctx, "bot"))

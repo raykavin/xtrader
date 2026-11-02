@@ -2,7 +2,7 @@ import type { BacktestRunDetail } from "../lib/backtest";
 import { liveStream } from "../lib/events";
 import { csrfToken } from "../lib/settings";
 import { createSSEParser } from "../lib/sse";
-import { APIError, retryAfterSeconds } from "./errors";
+import { APIError, fetchOrOffline, retryAfterSeconds } from "./errors";
 import type {
   AgentCreateRequest,
   AgentPeriod,
@@ -109,7 +109,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (token && unsafeMethods.includes((init?.method ?? "GET").toUpperCase())) {
     headers.set("X-CSRF-Token", token);
   }
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const response = await fetchOrOffline(`${API_BASE}${path}`, { ...init, headers });
   if (response.status === 401 && !path.startsWith("/auth/")) {
     // the session expired, or was closed: back to the login
     window.location.assign(loginPath());
@@ -660,7 +660,7 @@ export async function streamSupervisorMessage(
   const token = csrfToken(document.cookie);
   if (token) headers.set("X-CSRF-Token", token);
   const request: SupervisorMessageRequest = { text };
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetchOrOffline(`${API_BASE}${path}`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),

@@ -51,7 +51,8 @@ func (p *performance) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Errorf("ui: the performance of the agents: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "the performance of the agents can't be read now")
+		writeJSONError(w, http.StatusInternalServerError, "Não foi possível ler a performance dos agentes agora. "+
+			"Tente de novo em instantes.")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

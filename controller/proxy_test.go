@@ -210,7 +210,7 @@ func TestAgentProxy_AnswersOfTheAgent(t *testing.T) {
 		assert.Equal(t, tc.status, resp.StatusCode, tc.path)
 		if tc.status == http.StatusBadGateway {
 			assert.Equal(t, "application/json", resp.Header.Get("Content-Type"), tc.path)
-			assert.Contains(t, decodeError(t, body), "agent bot answered", tc.path)
+			assert.Contains(t, decodeError(t, body), "O agente bot respondeu com", tc.path)
 			assert.NotContains(t, body, "alert(", tc.path)
 		} else {
 			assert.Equal(t, tc.body, body, tc.path)
