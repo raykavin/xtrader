@@ -161,31 +161,6 @@ export function agentLines(
   return lines;
 }
 
-/** A row of an asset in the tile of an agent: its pair, and its profit open on a side; none without a position on it. */
-export interface TileAsset {
-  pair: string;
-  open?: AssetOpenPL;
-}
-
-/**
- * The assets of the tile of an agent: the pairs it trades (pairs, as its
- * settings tell them), in their order, each with its positions open by side
- * or alone without any; then the pairs it holds open outside them, eg: one
- * taken out of its settings with a position still open.
- */
-export function tileAssets(line: AgentLine, pairs: string[] = []): TileAsset[] {
-  const rows: TileAsset[] = [];
-  for (const pair of pairs) {
-    const open = line.assets.filter((asset) => asset.pair === pair);
-    if (open.length === 0) rows.push({ pair });
-    for (const asset of open) rows.push({ pair, open: asset });
-  }
-  for (const asset of line.assets) {
-    if (!pairs.includes(asset.pair)) rows.push({ pair: asset.pair, open: asset });
-  }
-  return rows;
-}
-
 /** Whether the band shows several currencies, each amount then with its code. */
 export function severalCurrencies(
   open: OpenPositionsResponse | null,

@@ -45,6 +45,12 @@ export function AgentBar({
 }: Props) {
   const online = agents.filter((a) => a.online).length;
   const current = agents.find((a) => a.name === agent);
+  const badges = supervisionBadges(current?.supervision);
+  const agentBadges = badges.filter((badge) => badge.scope === "agent");
+  // a stopped agent is offline: its stop, and by whom, says more
+  const offline =
+    current !== undefined && !current.online && current.supervision?.stop_state !== "stopped";
+  const entriesBadges = badges.filter((badge) => badge.scope === "entries");
   return (
     <section className="context-bar" aria-label="Agente e estado">
       <div className="context-pick">
@@ -103,22 +109,29 @@ export function AgentBar({
       </div>
 
       <dl className="status-list">
-        {current && !current.online && (
+        {(agentBadges.length > 0 || offline) && (
           <div className="status-item">
             <dt className="status-label">Agente</dt>
             <dd className="status-value">
-              <span className="status-chip warn" title="A API do agente não responde">
-                <i aria-hidden="true" />
-                Offline
-              </span>
+              {offline && (
+                <span className="status-chip warn" title="A API do agente não responde">
+                  <i aria-hidden="true" />
+                  Offline
+                </span>
+              )}
+              {agentBadges.map((badge) => (
+                <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>
+                  {badge.text}
+                </span>
+              ))}
             </dd>
           </div>
         )}
-        {supervisionBadges(current?.supervision).length > 0 && (
+        {entriesBadges.length > 0 && (
           <div className="status-item">
-            <dt className="status-label">XTrader AI</dt>
+            <dt className="status-label">Entradas</dt>
             <dd className="status-value">
-              {supervisionBadges(current?.supervision).map((badge) => (
+              {entriesBadges.map((badge) => (
                 <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>
                   {badge.text}
                 </span>

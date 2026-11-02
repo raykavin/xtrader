@@ -7,9 +7,11 @@ import type {
 import {
   actionLabel,
   actionNote,
+  actionOrigin,
   actionStatusLabel,
   actorLabel,
   awaitingDecision,
+  byActor,
   closeOutcome,
   formatInterval,
   intervalError,
@@ -24,6 +26,7 @@ import {
 const close: SupervisorActionInfo = {
   id: 7,
   source: "supervisor",
+  origin: "supervisor",
   action: "close_positions",
   scope: {
     agents: ["emacross", "fibonacci"],
@@ -91,8 +94,25 @@ describe("the actions of the supervisor", () => {
 });
 
 describe("the badges of an agent supervised", () => {
-  it("shows its stop and its entries blocked, with the reason", () => {
+  it("shows its stop and its entries blocked, by whom, with the reason", () => {
     expect(supervisionBadges(undefined)).toEqual([]);
+    const badges = supervisionBadges({
+      entries_blocked: true,
+      entries_reason: "loop de reinício",
+      entries_by: "supervisor",
+      stop_state: "stopped",
+      stop_reason: "loop de reinício",
+      stop_by: "admin",
+    });
+    expect(badges.map((b) => [b.scope, b.text])).toEqual([
+      ["agent", "Parado por admin"],
+      ["entries", "Bloqueadas pelo XTrader AI"],
+    ]);
+    expect(badges[0]?.title).toBe("Motivo: loop de reinício");
+    expect(badges[1]?.title).toBe("Motivo: loop de reinício");
+  });
+
+  it("leaves the daily limit to its card", () => {
     expect(
       supervisionBadges({
         entries_blocked: false,
@@ -100,26 +120,34 @@ describe("the badges of an agent supervised", () => {
         daily_blocked: true,
         daily_reason: "perda diária atingida",
       }),
-    ).toEqual([
-      {
-        text: "Limite diário: entradas bloqueadas",
-        tone: "error",
-        title: "perda diária atingida · liberado às 00:00",
-      },
-    ]);
-    const badges = supervisionBadges({
-      entries_blocked: true,
-      entries_reason: "loop de reinício",
-      entries_by: "supervisor",
-      stop_state: "stopped",
-      stop_reason: "loop de reinício",
-    });
-    expect(badges.map((b) => b.text)).toEqual([
-      "Interrompido pelo XTrader AI",
-      "Entradas bloqueadas",
-    ]);
-    expect(badges[0]?.title).toBe("Motivo: loop de reinício");
-    expect(badges[1]?.title).toBe("Motivo: loop de reinício · Por: XTrader AI");
+    ).toEqual([]);
+  });
+});
+
+describe("the origin of an action", () => {
+  it("tells XTrader AI, a user, or a rule applied by itself", () => {
+    expect(actionOrigin(close)).toBe("XTrader AI");
+    expect(actionOrigin({ ...close, confirmed_by: "admin" })).toBe("XTrader AI");
+    expect(
+      actionOrigin({
+        ...close,
+        origin: "rule",
+        requested_by: "limite diário",
+        confirmed_by: "limite diário",
+      }),
+    ).toBe("Limite diário (automático)");
+    expect(actionOrigin({ ...close, origin: "rule", requested_by: "horário de operação" })).toBe(
+      "Horário de operação (automático)",
+    );
+    expect(actionOrigin({ ...close, source: "user", origin: "user", requested_by: "admin" })).toBe(
+      "Usuário (admin)",
+    );
+  });
+
+  it("names who did something after a verb", () => {
+    expect(byActor("supervisor")).toBe("pelo XTrader AI");
+    expect(byActor("admin")).toBe("por admin");
+    expect(byActor(undefined)).toBe("");
   });
 });
 

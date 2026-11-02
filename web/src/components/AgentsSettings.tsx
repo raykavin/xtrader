@@ -19,7 +19,7 @@ import {
   reanalysisHint,
   tradePanelHint,
 } from "../lib/settings";
-import { actorLabel, supervisionBadges } from "../lib/supervisor";
+import { byActor } from "../lib/supervisor";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { ConfirmButton } from "./ConfirmButton";
@@ -33,7 +33,6 @@ import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
 import { EmptyState } from "./States";
 import { StatusIcon } from "./StatusIcon";
-import { toneClass } from "./SupervisorAction";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -270,7 +269,6 @@ function AgentCard({
       ? "O agente ainda está parando: aguarde para excluí-lo"
       : "Exclui o agente; as ordens e as decisões dele são mantidas";
   const notes = [agentNote(agent), outboxNote(agent)].filter(Boolean);
-  const badges = supervisionBadges(agent.supervision);
   const blocked = Boolean(agent.supervision?.entries_blocked);
 
   return (
@@ -296,12 +294,6 @@ function AgentCard({
           {summary.map((part) => (
             <span key={part.label} className="tag tag-mono" title={part.label}>
               {part.value}
-            </span>
-          ))}
-          {badges.map((badge) => (
-            <span key={badge.text} className={toneClass(badge.tone)} title={badge.title}>
-              <Icon name={badge.tone === "error" ? "shield" : "lock"} size={12} />
-              {badge.text}
             </span>
           ))}
         </div>
@@ -408,25 +400,22 @@ function AgentCard({
         <div className="agent-block agent-supervision">
           {agent.supervision.stop_state === "stopped" && (
             <p className="msg msg-error">
-              Interrompido pelo XTrader AI:{" "}
+              {`Parado ${byActor(agent.supervision.stop_by)}`.trim()}:{" "}
               {agent.supervision.stop_reason || "sem motivo registrado"}. Ative o agente para
               retomá-lo.
             </p>
           )}
           {agent.supervision.stop_state === "pending_flat" && (
             <p className="msg msg-warn">
-              Parada pendente: o agente é desligado quando ficar sem posição e sem pendente (
-              {agent.supervision.stop_reason}).
+              Parada pendente: o agente desliga quando ficar sem posição e sem ordem pendente
+              {agent.supervision.stop_reason ? ` (${agent.supervision.stop_reason})` : ""}.
             </p>
           )}
           {blocked && (
             <p className="msg msg-warn">
-              Entradas bloqueadas
-              {agent.supervision.entries_by
-                ? ` por ${actorLabel(agent.supervision.entries_by)}`
-                : ""}
-              : {agent.supervision.entries_reason || "sem motivo registrado"}. O agente gerencia as
-              posições que tem.
+              {`Entradas bloqueadas ${byActor(agent.supervision.entries_by)}`.trim()}:{" "}
+              {agent.supervision.entries_reason || "sem motivo registrado"}. O agente continua
+              gerenciando as posições abertas.
             </p>
           )}
         </div>

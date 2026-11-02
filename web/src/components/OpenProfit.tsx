@@ -32,7 +32,6 @@ import {
   openPLSummary,
   profitTone,
   severalCurrencies,
-  tileAssets,
 } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { palettes, type Theme } from "../lib/theme";
@@ -231,7 +230,7 @@ function AgentTile({
   open,
   several,
   label,
-  pairs,
+  linked,
   shown,
   onShow,
 }: {
@@ -239,8 +238,8 @@ function AgentTile({
   open: OpenPositionsResponse | null;
   several: boolean;
   label: string;
-  /** The pairs of the agent, undefined for one off the dashboard. */
-  pairs: string[] | undefined;
+  /** Whether the dashboard shows the agent: its assets then link to it. */
+  linked: boolean;
   shown: ShownPair;
   onShow: (agent: string, pair: string) => void;
 }) {
@@ -321,36 +320,31 @@ function AgentTile({
         </div>
       )}
       <dl className="openpl-assets">
-        {tileAssets(line, pairs).map(({ pair, open: asset }) => {
-          const direction = asset && directionOf(asset.side);
+        {line.assets.map((asset) => {
+          const { pair } = asset;
+          const direction = directionOf(asset.side);
           const current = shown.agent === line.agent && shown.pair === pair;
           return (
-            <div
-              key={`${pair}/${asset?.side ?? ""}`}
-              className={asset ? "openpl-asset" : "openpl-asset is-idle"}
-              title={asset ? assetLabel(asset) : `${pair}: sem posição aberta`}
-            >
+            <div key={`${pair}/${asset.side}`} className="openpl-asset" title={assetLabel(asset)}>
               <dt>
-                {asset && direction && (
-                  <span
-                    className={`openpl-side is-${direction.icon}`}
-                    role="img"
-                    aria-label={assetLabel(asset)}
-                  >
-                    <Icon name={direction.icon} size={11} />
-                  </span>
-                )}
+                <span
+                  className={`openpl-side is-${direction.icon}`}
+                  role="img"
+                  aria-label={assetLabel(asset)}
+                >
+                  <Icon name={direction.icon} size={11} />
+                </span>
                 <span>
-                  {pairs ? (
+                  {linked ? (
                     <a
                       className="openpl-pair"
                       href={agentPairHref(line.agent, pair, window.location.search)}
                       aria-current={current ? "page" : undefined}
-                      aria-label={`Mostrar ${line.agent} em ${pair}`}
+                      aria-label={`Ver ${line.agent} em ${pair}`}
                       title={
                         current
-                          ? `${line.agent} em ${pair}, mostrado`
-                          : `Mostrar ${line.agent} em ${pair}`
+                          ? `${line.agent} em ${pair}, aberto`
+                          : `Ver ${line.agent} em ${pair}`
                       }
                       onClick={(e) => {
                         // opened apart (a new tab, a window) as any link
@@ -365,16 +359,12 @@ function AgentTile({
                   ) : (
                     pair
                   )}
-                  {asset && <span aria-hidden="true">:</span>}
+                  <span aria-hidden="true">:</span>
                 </span>
               </dt>
-              {asset ? (
-                <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
-                  {amountsText(asset.amounts, several)}
-                </dd>
-              ) : (
-                <dd className="openpl-profit" />
-              )}
+              <dd className={`openpl-profit mono ${profitClass(asset.amounts)}`}>
+                {amountsText(asset.amounts, several)}
+              </dd>
             </div>
           );
         })}
@@ -536,7 +526,7 @@ export function OpenProfitCard({
   ];
   const range = closedRange(period);
   const label = closedPeriodLabel(period);
-  const pairsOf = new Map(agents.map((a) => [a.name, a.pairs ?? []]));
+  const listed = new Set(agents.map((a) => a.name));
 
   const apply = (next: ClosedPeriod) => {
     saveClosedPeriod(next);
@@ -692,7 +682,7 @@ export function OpenProfitCard({
                     open={read}
                     several={several}
                     label={label}
-                    pairs={pairsOf.get(line.agent)}
+                    linked={listed.has(line.agent)}
                     shown={shown}
                     onShow={onShow}
                   />

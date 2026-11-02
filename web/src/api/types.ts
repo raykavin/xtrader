@@ -2262,7 +2262,8 @@ export interface SupervisorResult {
 /**
  * SupervisorActionInfo is an action of the supervision on the agents, its
  * times in Unix seconds: asked by the supervisor (alone, or proposed) or by a
- * user; block_entries, allow_entries, stop_agent (when_flat or now),
+ * user, or taken by a rule of the controller (Origin rule: the daily limit or
+ * the trading hours, RequestedBy naming it); block_entries, allow_entries, stop_agent (when_flat or now),
  * cancel_pending or close_positions; why, of which category (operational,
  * risk or performance); proposed until confirmed, rejected or expired, then
  * executing, succeeded, partial, failed or unknown.
@@ -2270,6 +2271,7 @@ export interface SupervisorResult {
 export interface SupervisorActionInfo {
   id: number /* int64 */;
   source: string;
+  origin: string; // supervisor (XTrader AI), user or rule
   run_id?: number /* int64 */;
   action: string;
   mode?: string;

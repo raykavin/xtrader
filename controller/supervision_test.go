@@ -358,6 +358,21 @@ func protected(ticket, magic int64) bridgePosition {
 
 // The settings of the supervisor on the dashboard: its key written only, its
 // interval and its timeout in their bounds, enabled only with its model.
+func TestActionOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		source, by, want string
+	}{
+		{store.SourceSupervisor, "supervisor", originSupervisor},
+		{store.SourceSupervisor, dailyBy, originRule},
+		{store.SourceSupervisor, hoursBy, originRule},
+		{store.SourceUser, "admin", originUser},
+		{store.SourceUser, dailyBy, originUser}, // a user named so is still a user
+	} {
+		a := store.SupervisorAction{Source: tc.source, RequestedBy: tc.by}
+		assert.Equal(t, tc.want, actionOrigin(a), "%s by %s", tc.source, tc.by)
+	}
+}
+
 func TestSupervisionAPI_Settings(t *testing.T) {
 	s := newSupervised(t)
 	call, _ := settingsSession(t, s.managed)
