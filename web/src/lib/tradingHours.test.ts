@@ -10,7 +10,6 @@ import {
   hoursSettings,
   hoursState,
   hoursWindows,
-  lastEndLabel,
   MAX_WINDOWS,
   nextWindow,
   parsePairs,
@@ -95,38 +94,10 @@ describe("the trading hours", () => {
     ).toEqual([window("08:00", "10:00")]);
   });
 
-  it("tells what the end does and how the last one went", () => {
+  it("tells what the end does", () => {
     expect(endActionsText(true, true)).toBe("zera as posições e cancela as ordens pendentes");
     expect(endActionsText(false, true)).toBe("cancela as ordens pendentes");
     expect(endActionsText(false, false)).toBe("só bloqueia novas entradas");
-    expect(
-      lastEndLabel({ at: end, flatten: true, cancel_pending: true, status: "succeeded" }, zone),
-    ).toEqual({
-      tone: "on",
-      text: "Fim às 17:30: posições zeradas e ordens pendentes canceladas · Concluída",
-    });
-    expect(
-      lastEndLabel({ at: end, flatten: true, cancel_pending: false, status: "partial" }, zone),
-    ).toEqual({ tone: "warn", text: "Fim às 17:30: posições zeradas · Parcial" });
-    expect(
-      lastEndLabel({ at: end, flatten: false, cancel_pending: true, status: "executing" }, zone),
-    ).toEqual({ tone: "info", text: "Fim às 17:30: ordens pendentes canceladas · executando" });
-    expect(
-      lastEndLabel(
-        {
-          at: end,
-          start: "14:00",
-          end: "17:30",
-          flatten: true,
-          cancel_pending: false,
-          status: "failed",
-        },
-        zone,
-      ),
-    ).toEqual({
-      tone: "error",
-      text: "Fim da janela 14:00–17:30 às 17:30: posições zeradas · Falhou",
-    });
   });
 
   it("checks the form as the controller does", () => {

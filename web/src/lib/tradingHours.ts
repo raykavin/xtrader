@@ -1,14 +1,8 @@
 // The trading hours of all the agents on the dashboard: how they stand, the
 // actions of the end of each of their windows, and the form that sets them.
 
-import type {
-  TradingHoursEnd,
-  TradingHoursSettings,
-  TradingHoursStatus,
-  TradingWindow,
-} from "../api/types";
+import type { TradingHoursSettings, TradingHoursStatus, TradingWindow } from "../api/types";
 import { timeIn } from "./dailyLimits";
-import { actionStatusLabel } from "./supervisor";
 
 /** A label and its tone, as the chips of the dashboard show them. */
 export interface HoursLabel {
@@ -126,31 +120,6 @@ export function endActionsText(flatten: boolean, cancelPending: boolean): string
   if (flatten) return "zera as posições";
   if (cancelPending) return "cancela as ordens pendentes";
   return "só bloqueia novas entradas";
-}
-
-/**
- * How the last end of a window went, eg: Fim da janela 08:00–10:00 às 10:00:
- * posições zeradas · Concluída (Fim às 10:00: … for the ends of before, the
- * window unknown).
- */
-export function lastEndLabel(end: TradingHoursEnd, zone: string): HoursLabel {
-  const what = [
-    end.flatten && "posições zeradas",
-    end.cancel_pending && "ordens pendentes canceladas",
-  ]
-    .filter(Boolean)
-    .join(" e ");
-  const at = timeIn(end.at, zone);
-  const head =
-    end.start && end.end
-      ? `Fim da janela ${windowLabel({ start: end.start, end: end.end })}`
-      : "Fim";
-  if (end.status === "executing") {
-    return { tone: "info", text: `${head} às ${at}: ${what} · executando` };
-  }
-  const status = actionStatusLabel(end.status);
-  const tone = status.tone === "on" ? "on" : status.tone === "error" ? "error" : "warn";
-  return { tone, text: `${head} às ${at}: ${what} · ${status.text}` };
 }
 
 /**

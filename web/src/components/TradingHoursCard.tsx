@@ -6,7 +6,6 @@ import {
   hoursError,
   hoursSettings,
   hoursState,
-  lastEndLabel,
   windowsForm,
   windowsOf,
 } from "../lib/tradingHours";
@@ -141,13 +140,6 @@ export function TradingHoursCard() {
       </header>
       <form className="card-body hours-body" onSubmit={submit} noValidate>
         {error && <Alert tone="error">{error}</Alert>}
-        {status.last_end && (
-          <p className="hours-last">
-            <span className={chip(lastEndLabel(status.last_end, status.zone).tone)}>
-              {lastEndLabel(status.last_end, status.zone).text}
-            </span>
-          </p>
-        )}
         <Switch
           checked={form.enabled}
           onChange={(value) => set("enabled", value)}
