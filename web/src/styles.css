@@ -7981,19 +7981,6 @@ h3.md-heading {
   accent-color: var(--accent);
 }
 
-.hours-last {
-  margin: 0;
-}
-
-/* the last end in words: wrapped on a phone */
-.hours-last .status-chip {
-  height: auto;
-  min-height: 22px;
-  padding-block: 3px;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 /* the windows of the trading hours, in the settings and in a batch: a row by
    window, its start and end beside its agents, its assets and what its end
    does; on two lines when narrower, stacked on a phone */
@@ -9053,10 +9040,6 @@ circle.perf-down {
 .news-url {
   font-size: var(--fs-sm);
   overflow-wrap: anywhere;
-}
-
-.news-table {
-  margin: 0 var(--sp-5) var(--sp-5);
 }
 
 .news-window {

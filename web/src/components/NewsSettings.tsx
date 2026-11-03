@@ -8,7 +8,7 @@ import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
-import { Alert, EmptyState, Loading, Skeleton } from "./States";
+import { Alert, Loading, Skeleton } from "./States";
 import { Switch } from "./Switch";
 
 interface Props {
@@ -229,6 +229,16 @@ export function NewsSettings({ intro }: Props) {
               Servidor e janela da notícia
             </h2>
           </div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={testing}
+            onClick={runTest}
+            title={`Consulta uma vez o servidor e o token salvos${data.enabled ? "" : ", mesmo com as notícias desligadas"}`}
+          >
+            <Icon name="restart" size={14} />
+            {testing ? "Testando…" : "Testar conexão"}
+          </button>
         </header>
         <form className="card-body news-body" onSubmit={saveRules} noValidate>
           <div className="field" data-invalid={errors.url ? "" : undefined}>
@@ -246,6 +256,23 @@ export function NewsSettings({ intro }: Props) {
             <span className={errors.url ? "field-error" : "field-hint"}>
               {errors.url ?? "O servidor MCP do terminal MT5. Em branco, nada é consultado."}
             </span>
+            {test && (
+              <ul className="news-results" aria-label="Resultado do teste">
+                {test.results.map((result) => {
+                  const label = newsStatusLabel(result.status);
+                  return (
+                    <li key={result.url || "none"} className="news-result">
+                      <span className={chip(label.tone)}>{label.text}</span>
+                      {result.url && <span className="mono news-url">{result.url}</span>}
+                      <span className="field-hint">
+                        {label.hint}
+                        {result.detail ? ` (${result.detail})` : ""}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
           <div className="form-grid news-window">
             <div className="field" data-invalid={errors.before ? "" : undefined}>
@@ -297,93 +324,6 @@ export function NewsSettings({ intro }: Props) {
             </button>
           </div>
         </form>
-      </section>
-
-      <section className="card card-flush" aria-labelledby="news-test-title">
-        <header className="card-header">
-          <div className="card-heading">
-            <span className="eyebrow">Conexão</span>
-            <h2 id="news-test-title" className="card-title">
-              Testar o servidor MCP
-            </h2>
-          </div>
-          <button type="button" className="btn btn-sm" disabled={testing} onClick={runTest}>
-            <Icon name="restart" size={14} />
-            {testing ? "Testando…" : "Testar agora"}
-          </button>
-        </header>
-        <div className="card-body news-body">
-          {!test ? (
-            <p className="field-hint">
-              Consulta uma vez o servidor e o token salvos
-              {data.enabled ? "" : ", mesmo com as notícias desligadas"}, para conferir a conexão.
-            </p>
-          ) : (
-            <ul className="news-results">
-              {test.results.map((result) => {
-                const label = newsStatusLabel(result.status);
-                return (
-                  <li key={result.url || "none"} className="news-result">
-                    <span className={chip(label.tone)}>{label.text}</span>
-                    {result.url && <span className="mono news-url">{result.url}</span>}
-                    <span className="field-hint">
-                      {label.hint}
-                      {result.detail ? ` (${result.detail})` : ""}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section className="card card-flush" aria-labelledby="news-agents-title">
-        <header className="card-header">
-          <div className="card-heading">
-            <span className="eyebrow">Todos os agentes</span>
-            <h2 id="news-agents-title" className="card-title">
-              Quem respeita as notícias
-            </h2>
-          </div>
-          <span className="field-hint">
-            {data.agents.length === 1 ? "1 agente" : `${data.agents.length} agentes`}
-          </span>
-        </header>
-        {data.agents.length === 0 ? (
-          <EmptyState compact icon="news" title="Nenhum agente ainda" />
-        ) : (
-          <div className="table-wrap news-table">
-            <table className="table table-responsive">
-              <thead>
-                <tr>
-                  <th scope="col">Agente</th>
-                  <th scope="col">Tipo</th>
-                  <th scope="col">Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.agents.map((agent) => (
-                  <tr key={agent.agent}>
-                    <td className="strong" data-label="Agente">
-                      {agent.agent}
-                    </td>
-                    <td data-label="Tipo">
-                      {agent.kind === "llm" ? "LLM: calendário no contexto e bloqueio" : "bloqueio"}
-                    </td>
-                    <td data-label="Estado">
-                      {agent.running
-                        ? "executando"
-                        : agent.enabled
-                          ? "ligado, parado"
-                          : "desligado"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </section>
     </>
   );

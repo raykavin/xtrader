@@ -118,12 +118,8 @@ export function DailyLimitsSettings({ intro }: Props) {
               Limite diário global
             </h2>
           </div>
-          <span className="field-hint">
-            Dia de {status.day} ({status.zone})
-          </span>
         </header>
         <div className="card-body daily-body">
-          <ScopeState scope={status.global} zone={status.zone} />
           <DailyLimitFields
             key={version}
             unit={globalUnit(scopeResults(status.global))}
