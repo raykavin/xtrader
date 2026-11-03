@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DailyLimitsStatus } from "../api/types";
 import {
+  blockNote,
   dailyLimitErrors,
   dailyLimitForm,
   dailyLimitSettings,
@@ -18,6 +19,37 @@ import {
 } from "./dailyLimits";
 
 describe("the daily limits on the dashboard", () => {
+  it("tells what a guard blocks once: the limit, when, until when; incomplete, why", () => {
+    const guard = {
+      id: 1,
+      kind: "limit",
+      trigger: "gain",
+      result: 205.87,
+      limit: 200,
+      currency: "USD",
+      reason: "Ganho diário de todos os agentes atingido: 205,87 USD (limite 200,00 USD)",
+      trips: 1,
+      tripped_at: Date.UTC(2026, 10, 3, 13, 35) / 1000,
+    };
+    expect(blockNote({ state: "blocked", limits: { enabled: true }, guard }, "America/Belem")).toBe(
+      "Limite de 200,00 USD, atingido às 10:35 · entradas bloqueadas até 00:00",
+    );
+    expect(
+      blockNote(
+        {
+          state: "incomplete",
+          limits: { enabled: true },
+          guard: {
+            ...guard,
+            reason: "resultado do dia incompleto (a conta de trend não respondeu)",
+          },
+        },
+        "America/Belem",
+      ),
+    ).toBe("Resultado do dia incompleto (a conta de trend não respondeu)");
+    expect(blockNote({ state: "free", limits: { enabled: true } }, "America/Belem")).toBe("");
+  });
+
   it("tells the state of a scope, the side reached", () => {
     expect(dailyStateLabel({ state: "free", limits: { enabled: true } }).tone).toBe("on");
     expect(dailyStateLabel(undefined).text).toBe("Sem limite");
@@ -36,8 +68,11 @@ describe("the daily limits on the dashboard", () => {
         tripped_at: 1,
       },
     });
-    expect(blocked).toEqual({ text: "Ganho atingido: bloqueado", tone: "error" });
-    expect(dailyStateLabel({ state: "incomplete", limits: { enabled: true } }).tone).toBe("warn");
+    expect(blocked).toEqual({ text: "Ganho máximo atingido", tone: "error" });
+    expect(dailyStateLabel({ state: "incomplete", limits: { enabled: true } })).toEqual({
+      text: "Resultado incompleto",
+      tone: "warn",
+    });
     expect(flattenLabel("done")).toEqual({ text: "RISCO: POSIÇÕES ZERADAS", tone: "error" });
     expect(flattenLabel("failed")).toEqual({ text: "RISCO: ZERAGEM FALHOU", tone: "error" });
     expect(flattenLabel(undefined)).toBeNull();
