@@ -23,19 +23,16 @@ export interface DailyLabel {
   tone: DailyTone;
 }
 
-/** The state of a scope in words, eg: Bloqueado até 00:00. */
+/** The state of a scope in words, eg: Perda máxima atingida; the block and until when told apart, see blockNote. */
 export function dailyStateLabel(scope: DailyScopeStatus | undefined): DailyLabel {
   switch (scope?.state) {
     case "blocked":
       return {
-        text:
-          scope.guard?.trigger === "gain"
-            ? "Ganho atingido: bloqueado"
-            : "Perda atingida: bloqueado",
+        text: scope.guard?.trigger === "gain" ? "Ganho máximo atingido" : "Perda máxima atingida",
         tone: "error",
       };
     case "incomplete":
-      return { text: "Dados incompletos: entradas bloqueadas", tone: "warn" };
+      return { text: "Resultado incompleto", tone: "warn" };
     case "free":
       return { text: "Liberado", tone: "on" };
   }
@@ -88,6 +85,26 @@ export function timeIn(unix: number | undefined, zone: string): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * What the guard of a scope blocks, in a line, apart from its state and its
+ * result: reached, its limit, when, and until when the entries stay blocked
+ * (eg: Limite de 200,00 USD, atingido às 10:35 · entradas bloqueadas até
+ * 00:00); incomplete, why (which accounts weren't read); else none.
+ */
+export function blockNote(scope: DailyScopeStatus | undefined, zone: string): string {
+  const guard = scope?.guard;
+  if (!guard) return "";
+  if (scope.state === "incomplete") {
+    return guard.reason.charAt(0).toUpperCase() + guard.reason.slice(1);
+  }
+  if (scope.state !== "blocked") return "";
+  const at = timeIn(guard.tripped_at, zone);
+  const limit = guard.limit
+    ? `Limite de ${formatMoney(guard.limit)} ${guard.currency}`.trim()
+    : "Limite";
+  return `${limit}, atingido${at ? ` às ${at}` : ""} · entradas bloqueadas até 00:00`;
 }
 
 /** How the positions of a guard were closed, eg: posições zeradas. */

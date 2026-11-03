@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchDailyLimits } from "../api/client";
 import type { DailyLimitsResponse, DailyScopeStatus } from "../api/types";
 import {
+  blockNote,
   dailyStateLabel,
   flattenLabel,
   globalUnit,
@@ -9,6 +10,7 @@ import {
   resultAmount,
   scopeResults,
 } from "../lib/dailyLimits";
+import { formatProfit } from "../lib/format";
 import { DailyLimitFields } from "./DailyLimitFields";
 import { PageHeader } from "./PageHeader";
 import type { SectionIntro } from "./SettingsPage";
@@ -23,29 +25,33 @@ interface Props {
 }
 
 /**
- * A scope of the daily limits now: its state, its result of the day (of all
- * the agents, one by currency of the accounts), and the guard blocking it.
+ * A scope of the daily limits now, each thing once: its state with how its
+ * positions were zeroed; its result of the day (of all the agents, one by
+ * currency of the accounts), realized and open; and what its guard blocks,
+ * until when (see blockNote).
  */
-function ScopeState({ scope }: { scope: DailyScopeStatus }) {
+function ScopeState({ scope, zone }: { scope: DailyScopeStatus; zone: string }) {
   const state = dailyStateLabel(scope);
   const flatten = flattenLabel(scope.guard?.flatten_status);
   const results = scopeResults(scope);
+  const note = blockNote(scope, zone);
   const missing = results.find((r) => !r.complete && (r.missing?.length ?? 0) > 0)?.missing;
   return (
     <div className="daily-state">
-      <span className={`status-chip ${state.tone}`}>{state.text}</span>
+      <div className="daily-state-head">
+        <span className={`status-chip ${state.tone}`}>{state.text}</span>
+        {flatten && <span className={`status-chip ${flatten.tone}`}>{flatten.text}</span>}
+      </div>
       {results.map((result) => (
-        <span key={result.currency || "none"} className="daily-result">
+        <div key={result.currency || "none"} className="daily-result">
           <strong className="mono">{resultAmount(result.total, result.currency)}</strong>
           <span className="field-hint">
-            realizado {resultAmount(result.realized, result.currency)} · aberto{" "}
-            {resultAmount(result.open, result.currency)}
+            realizado {formatProfit(result.realized)} · aberto {formatProfit(result.open)}
             {!result.complete && " · incompleto"}
           </span>
-        </span>
+        </div>
       ))}
-      {scope.guard && <p className="daily-reason">{scope.guard.reason}</p>}
-      {flatten && <span className={`status-chip ${flatten.tone}`}>{flatten.text}</span>}
+      {note && <p className="field-hint daily-reason">{note}</p>}
       {missing && <p className="field-hint">Falta: {missing.join("; ")}</p>}
     </div>
   );
@@ -117,7 +123,7 @@ export function DailyLimitsSettings({ intro }: Props) {
           </span>
         </header>
         <div className="card-body daily-body">
-          <ScopeState scope={status.global} />
+          <ScopeState scope={status.global} zone={status.zone} />
           <DailyLimitFields
             key={version}
             unit={globalUnit(scopeResults(status.global))}
@@ -164,7 +170,7 @@ export function DailyLimitsSettings({ intro }: Props) {
                       {limitsLabel(scope.limits, scope.result?.currency)}
                     </td>
                     <td data-label="Hoje" className="daily-cell">
-                      <ScopeState scope={scope} />
+                      <ScopeState scope={scope} zone={status.zone} />
                     </td>
                   </tr>
                 ))}
