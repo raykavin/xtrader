@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/metalabel"
 	"github.com/raykavin/xtrader/agents/strategies"
 	"github.com/raykavin/xtrader/exchange"
@@ -402,6 +403,49 @@ func TestFilter_ExitsPass(t *testing.T) {
 	assert.InDelta(t, 1, orders[4].Quantity, 1e-9, "the order of the exit returned with the refusal")
 	asset, _, _ = b.wallet.Position(pair)
 	assert.InDelta(t, 0, asset, 1e-9, "flat, not short")
+}
+
+// A gate alone (no filter on): the strategy wrapped only for it, its entries
+// refused on an asset the gate refuses and allowed on the others; its exits and
+// the orders protecting a position always pass; nothing else refused, not even
+// before a candle.
+func TestFilter_GateAlone(t *testing.T) {
+	gate := &agentapi.PairGate{}
+	s := &script{timeframe: "15m", warmup: 3}
+	wrapped, err := Wrap(s, Config{Gate: gate})
+	require.NoError(t, err)
+	_, isFilter := wrapped.(*filter)
+	require.True(t, isFilter, "wrapped for the gate")
+	assert.Equal(t, 3, wrapped.WarmupPeriod())
+	b := newBench(t, wrapped)
+	var errs []error
+	step := 0
+	s.on = func(df *model.Dataframe, broker service.Broker) {
+		step++
+		switch step {
+		case 1: // every asset: the entry allowed
+			_, err := broker.CreateOrderMarket(model.SideTypeBuy, pair, 1)
+			errs = append(errs, err)
+			gate.Set(1, []string{"XAUUSDm"}, "Janela 08:00–10:00 só para o ativo XAUUSDm")
+		case 2: // only XAUUSDm: an entry refused with why, the take profit and the exit pass
+			_, err := broker.CreateOrderMarket(model.SideTypeBuy, pair, 1)
+			errs = append(errs, err)
+			o, err := broker.CreateOrderLimit(model.SideTypeSell, pair, 1, 200)
+			errs = append(errs, err)
+			require.NoError(t, broker.Cancel(o))
+			_, err = broker.CreateOrderMarket(model.SideTypeSell, pair, 1)
+			errs = append(errs, err)
+		}
+	}
+	b.feed(line(2, 100, 1)...)
+	require.Len(t, errs, 4)
+	assert.NoError(t, errs[0])
+	assert.ErrorIs(t, errs[1], order.ErrEntriesBlocked)
+	assert.ErrorContains(t, errs[1], "Janela 08:00–10:00 só para o ativo XAUUSDm")
+	assert.NoError(t, errs[2], "a take profit: protects")
+	assert.NoError(t, errs[3], "the exit passes")
+	asset, _, _ := b.wallet.Position(pair)
+	assert.InDelta(t, 0, asset, 1e-9, "flat")
 }
 
 // The exits are judged against the position the exchange holds too, the one

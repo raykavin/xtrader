@@ -48,6 +48,7 @@ type guard struct {
 	// them now, the window open (-1 for none) and seen open since the start,
 	// and the window whose end to act on at the close of the candle
 	hoursWindows []ui.TradingWindow
+	gate         *agentapi.PairGate // takes the assets of the window open, see Hooks.Gate
 	hoursClosed  bool
 	hoursAt      int
 	hoursOpened  bool
@@ -103,6 +104,16 @@ func (g *guard) tick(now time.Time) {
 				g.hoursEnd = &was
 			}
 			g.hoursOpened = false
+		}
+		if open != g.hoursAt {
+			// the assets of the window open, as the controller tells them live
+			var pairs []string
+			reason := ""
+			if open >= 0 && len(g.hoursWindows[open].Pairs) > 0 {
+				pairs, reason = g.hoursWindows[open].Pairs, agentapi.WindowPairsReason(g.hoursWindows[open])
+			}
+			g.revision++
+			g.gate.Set(g.revision, pairs, reason)
 		}
 		g.hoursAt, g.hoursClosed = open, open < 0
 		if open >= 0 {

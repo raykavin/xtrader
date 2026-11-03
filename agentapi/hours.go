@@ -147,6 +147,15 @@ func WindowsProblem(windows []ui.TradingWindow) string {
 				return fmt.Sprintf("a janela %s repete o agente %s", WindowLabel(w), name)
 			}
 		}
+		for i, pair := range w.Pairs {
+			switch {
+			case !symbol.MatchString(pair):
+				return fmt.Sprintf("a janela %s tem um ativo inválido, %q: use o nome do ativo no MT5, ex.: "+
+					"XAUUSDm, separados por ;", WindowLabel(w), pair)
+			case slices.Contains(w.Pairs[:i], pair):
+				return fmt.Sprintf("a janela %s repete o ativo %s", WindowLabel(w), pair)
+			}
+		}
 	}
 	sorted := SortedWindows(windows)
 	for i := 1; i < len(sorted); i++ {
@@ -178,12 +187,25 @@ func WindowsFor(windows []ui.TradingWindow, name string) []ui.TradingWindow {
 }
 
 // SameWindow reports whether a and b are the same window: the same times,
-// agents (in any order) and actions at its end.
+// agents and assets (in any order) and actions at its end.
 func SameWindow(a, b ui.TradingWindow) bool {
-	if a.Start != b.Start || a.End != b.End || a.Flatten != b.Flatten || a.CancelPending != b.CancelPending ||
-		len(a.Agents) != len(b.Agents) {
-		return false
+	same := func(x, y []string) bool {
+		return slices.Equal(slices.Sorted(slices.Values(x)), slices.Sorted(slices.Values(y)))
 	}
-	agents := slices.Sorted(slices.Values(a.Agents))
-	return slices.Equal(agents, slices.Sorted(slices.Values(b.Agents)))
+	return a.Start == b.Start && a.End == b.End && a.Flatten == b.Flatten && a.CancelPending == b.CancelPending &&
+		same(a.Agents, b.Agents) && same(a.Pairs, b.Pairs)
+}
+
+// symbol is an asset of a window of the trading hours, as MT5 names them, eg:
+// XAUUSDm, US500.cash.
+var symbol = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._#-]{0,31}$`)
+
+// WindowPairsReason returns why an entry is refused outside the assets of the
+// window w, eg: Janela 08:00–10:00 só para os ativos XAUUSDm, BTCUSDm.
+func WindowPairsReason(w ui.TradingWindow) string {
+	what := "o ativo"
+	if len(w.Pairs) > 1 {
+		what = "os ativos"
+	}
+	return fmt.Sprintf("Janela %s só para %s %s", WindowLabel(w), what, strings.Join(w.Pairs, ", "))
 }

@@ -32,8 +32,9 @@ interface Props {
 /**
  * The windows of the trading hours, of the settings and of a batch: one row
  * by window, its start, its end, the agents that may open positions in it
- * (all of them by default, chosen in a dialog) and what its end does, each
- * removable; a button to add one, free of the others. The problems are told
+ * (all of them by default, chosen in a dialog), the assets they may open them
+ * on (all of them by default, typed separated by ;) and what its end does,
+ * each removable; a button to add one, free of the others. The problems are told
  * as the controller tells them, each by the field or the row concerned, the
  * ones of the whole list under it.
  */
@@ -148,6 +149,32 @@ export function TradingWindowsEditor({
                     </button>
                   </div>
                 )}
+                <div
+                  className="field hours-window-pairs"
+                  data-invalid={errors.pairs ? "" : undefined}
+                >
+                  <label className="field-label" htmlFor={fieldId(w, "pairs")}>
+                    Ativos
+                  </label>
+                  <input
+                    id={fieldId(w, "pairs")}
+                    className="input mono"
+                    value={w.pairsText}
+                    placeholder="todos (ex.: XAUUSDm;BTCUSDm)"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={disabled}
+                    aria-invalid={errors.pairs ? true : undefined}
+                    aria-describedby={errors.pairs ? fieldId(w, "pairs-error") : undefined}
+                    onChange={(e) => update(w.key, { pairsText: e.target.value })}
+                  />
+                  {errors.pairs && (
+                    <span id={fieldId(w, "pairs-error")} className="field-error">
+                      {errors.pairs}
+                    </span>
+                  )}
+                </div>
                 <fieldset className="hours-end hours-window-checks">
                   <legend className="field-label">No fim da janela</legend>
                   <label className="hours-check">

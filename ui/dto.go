@@ -2211,13 +2211,16 @@ type DailyLimitsStatus struct {
 // TradingWindow is a window of the trading hours of a day: from Start to End
 // (HH:MM, of the zone of the controller, America/Belem; Start before End, a
 // window never crossing midnight; the end itself outside), the agents allowed
-// to open positions in it (Agents, by name; none for all of them), and what is
-// done at its end: every position of the agents closed (Flatten) and their
-// pending orders canceled (CancelPending), as checked, whatever its Agents.
+// to open positions in it (Agents, by name; none for all of them) and the
+// assets they may open them on (Pairs, eg: XAUUSDm; none for all of them),
+// and what is done at its end: every position of the agents closed (Flatten)
+// and their pending orders canceled (CancelPending), as checked, whatever its
+// Agents and Pairs.
 type TradingWindow struct {
 	Start         string   `json:"start"`
 	End           string   `json:"end"`
 	Agents        []string `json:"agents,omitempty"`
+	Pairs         []string `json:"pairs,omitempty"`
 	Flatten       bool     `json:"flatten"`
 	CancelPending bool     `json:"cancel_pending"`
 }

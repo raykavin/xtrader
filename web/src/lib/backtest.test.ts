@@ -302,14 +302,14 @@ describe("the form of a batch", () => {
     const f = withHours(form({}), hours);
     expect(f.hours).toBe(true);
     expect(f.hoursWindows.map(({ key: _, ...w }) => w)).toEqual([
-      { ...morning, agents: [] },
-      { ...noon, agents: [] },
+      { ...morning, agents: [], pairsText: "" },
+      { ...noon, agents: [], pairsText: "" },
     ]);
     expect(withHours(form({}), { ...hours, enabled: false }).hours).toBe(false);
     // the hours of a single window, of before
     expect(
       withHours(form({}), { ...hours, windows: [] }).hoursWindows.map(({ key: _, ...w }) => w),
-    ).toEqual([{ ...morning, agents: [] }]);
+    ).toEqual([{ ...morning, agents: [], pairsText: "" }]);
     // the windows sent in the order of the day, whatever the order typed
     const reversed = { ...f, hoursWindows: [...f.hoursWindows].reverse() };
     expect(formRequest(reversed, limits, now).request?.hours).toEqual({
@@ -423,7 +423,7 @@ describe("the form of a batch", () => {
         flatten: false,
         cancel_pending: false,
       }),
-    ).toBe("08:00–10:00 (highlow, matrend), no fim zera as posições");
+    ).toBe("08:00–10:00 (agentes: highlow, matrend), no fim zera as posições");
     expect(
       hoursAssumption({
         windows: [
@@ -433,7 +433,7 @@ describe("the form of a batch", () => {
         flatten: false,
         cancel_pending: false,
       }),
-    ).toBe("08:00–10:00 (highlow), 12:00–14:00, no fim de cada janela zera as posições");
+    ).toBe("08:00–10:00 (agente: highlow), 12:00–14:00, no fim de cada janela zera as posições");
     expect(
       hoursAssumption({
         windows: [{ ...morning, agents: ["highlow"] }, noon],
@@ -441,8 +441,44 @@ describe("the form of a batch", () => {
         cancel_pending: false,
       }),
     ).toBe(
-      "08:00–10:00 (highlow), no fim zera as posições; 12:00–14:00, no fim cancela as ordens pendentes",
+      "08:00–10:00 (agente: highlow), no fim zera as posições; 12:00–14:00, no fim cancela as ordens pendentes",
     );
+  });
+
+  it("limits a window of a batch to some assets, kept from the settings and sent as a list", () => {
+    const morning = { start: "08:00", end: "10:00", flatten: true, cancel_pending: false };
+    const hours = {
+      enabled: true,
+      windows: [{ ...morning, agents: ["a"], pairs: ["XAUUSDm", "BTCUSDm"] }],
+      start: "08:00",
+      end: "10:00",
+      flatten: true,
+      cancel_pending: false,
+    };
+    const f = withHours(form({ agents: ["a"] }), hours);
+    expect(f.hoursWindows[0]?.pairsText).toBe("XAUUSDm;BTCUSDm");
+    expect(formRequest(f, limits, now).request?.hours).toEqual({
+      windows: [{ ...morning, agents: ["a"], pairs: ["XAUUSDm", "BTCUSDm"] }],
+      flatten: false,
+      cancel_pending: false,
+    });
+    const [first] = f.hoursWindows;
+    if (!first) throw new Error("a window");
+    const typed = (pairsText: string) =>
+      formRequest({ ...f, hoursWindows: [{ ...first, pairsText }] }, limits, now);
+    expect(typed(" USOILm ; ").request?.hours?.windows?.[0]?.pairs).toEqual(["USOILm"]);
+    expect(typed("").request?.hours?.windows?.[0]).not.toHaveProperty("pairs");
+    expect(typed("USOILm;USOILm").errors.hoursWindows).toBe(
+      "A janela 08:00–10:00 repete o ativo USOILm.",
+    );
+    expect(typed("USOILm;USOILm").request).toBeNull();
+    expect(
+      hoursAssumption({
+        windows: [{ ...morning, agents: ["highlow"], pairs: ["XAUUSDm", "BTCUSDm"] }],
+        flatten: false,
+        cancel_pending: false,
+      }),
+    ).toBe("08:00–10:00 (agente: highlow; ativos: XAUUSDm, BTCUSDm), no fim zera as posições");
   });
 
   it("counts the runs and the calls of the LLMs, by run", () => {

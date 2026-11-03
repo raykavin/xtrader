@@ -20,11 +20,11 @@ import {
   agentsOutside,
   endActionsText,
   type WindowForm,
+  windowDetails,
   windowsCheck,
   windowsForm,
   windowsOf,
   windowsRequest,
-  windowWithAgents,
 } from "./tradingHours";
 
 /** A trade of the report of a run, see agentapi.BacktestTrade. */
@@ -169,11 +169,11 @@ export const reasonLabels: Record<string, string> = {
 
 /**
  * The trading hours of assumptions in words: their windows (the start to the
- * end of a batch of before), the agents of each when some, and what the end
- * of each does, eg: 09:00–17:30, no fim zera as posições; 08:00–10:00
- * (highlow), 12:00–14:00, no fim de cada janela zera as posições;
- * 08:00–10:00, no fim zera as posições; 12:00–14:00, no fim só bloqueia novas
- * entradas. Empty for none.
+ * end of a batch of before), the agents and the assets of each when some (see
+ * windowDetails), and what the end of each does, eg: 09:00–17:30, no fim zera
+ * as posições; 08:00–10:00 (agente: highlow; ativo: XAUUSDm), 12:00–14:00, no
+ * fim de cada janela zera as posições; 08:00–10:00, no fim zera as posições;
+ * 12:00–14:00, no fim só bloqueia novas entradas. Empty for none.
  */
 export function hoursAssumption(hours: BacktestHours | undefined): string {
   const windows = hours ? windowsOf(hours) : [];
@@ -181,11 +181,11 @@ export function hoursAssumption(hours: BacktestHours | undefined): string {
   if (!first) return "";
   const ends = (w: { flatten: boolean; cancel_pending: boolean }) =>
     endActionsText(w.flatten, w.cancel_pending);
-  if (windows.length === 1) return `${windowWithAgents(first)}, no fim ${ends(first)}`;
+  if (windows.length === 1) return `${windowDetails(first)}, no fim ${ends(first)}`;
   if (windows.every((w) => ends(w) === ends(first))) {
-    return `${windows.map(windowWithAgents).join(", ")}, no fim de cada janela ${ends(first)}`;
+    return `${windows.map(windowDetails).join(", ")}, no fim de cada janela ${ends(first)}`;
   }
-  return windows.map((w) => `${windowWithAgents(w)}, no fim ${ends(w)}`).join("; ");
+  return windows.map((w) => `${windowDetails(w)}, no fim ${ends(w)}`).join("; ");
 }
 
 /** Whether a run is still to end. */

@@ -510,6 +510,28 @@ func TestRun_TradingWindows(t *testing.T) {
 	require.Len(t, report.Open, 1, "the position of the second window left at its end")
 }
 
+// The assets of the windows of the trading hours given to the gate of the
+// strategy as each window opens: the asset of the first one allowed in it,
+// refused in the second one, which allows another.
+func TestRun_TradingWindowsPairs(t *testing.T) {
+	cfg := config(t, 9)
+	cfg.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{
+		{Start: "00:02", End: "00:04", Pairs: []string{testPair}},
+		{Start: "00:06", End: "00:08", Pairs: []string{"XAGUSDm"}},
+	}}
+	gate := &agentapi.PairGate{}
+	var first, second bool
+	var why string
+	s := &script{steps: map[int]func(*model.Dataframe, service.Broker){
+		1: func(*model.Dataframe, service.Broker) { first, _ = gate.Allows(testPair) },    // 00:02
+		5: func(*model.Dataframe, service.Broker) { second, why = gate.Allows(testPair) }, // 00:06
+	}}
+	runScript(t, context.Background(), s, flat(9, 100), cfg, Hooks{Gate: gate})
+	assert.True(t, first, "its asset in the first window")
+	assert.False(t, second, "refused in the second one")
+	assert.Equal(t, "Janela 00:06–00:08 só para o ativo XAGUSDm", why)
+}
+
 // The warmup before the period counted in candles of the timeframe of the
 // strategy, the engine handing it those: 30 candles of 1m before the period
 // are 6 of 5m, short of a warmup of 10, told; enough for one of 5.

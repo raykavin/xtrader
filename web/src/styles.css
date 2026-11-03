@@ -7995,8 +7995,8 @@ h3.md-heading {
 }
 
 /* the windows of the trading hours, in the settings and in a batch: a row by
-   window, its start and end beside its agents and what its end does; stacked
-   when narrow */
+   window, its start and end beside its agents, its assets and what its end
+   does; on two lines when narrower, stacked on a phone */
 .hours-windows {
   display: grid;
   gap: var(--sp-3);
@@ -8013,10 +8013,12 @@ h3.md-heading {
 .hours-window {
   display: grid;
   grid-template-areas:
-    "head head head head"
-    "start end agents checks"
-    "error error error error";
-  grid-template-columns: minmax(0, 9rem) minmax(0, 9rem) minmax(0, 14rem) minmax(0, 1fr);
+    "head head head head head"
+    "start end agents pairs checks"
+    "error error error error error";
+  grid-template-columns:
+    minmax(0, 9rem) minmax(0, 9rem) minmax(0, 13rem) minmax(0, 1fr)
+    auto;
   align-items: start;
   gap: var(--sp-2) var(--sp-3);
   min-width: 0;
@@ -8064,6 +8066,10 @@ h3.md-heading {
   grid-area: agents;
 }
 
+.hours-window-pairs {
+  grid-area: pairs;
+}
+
 /* the agents of a window: all of them, the one, or how many, cut to fit */
 .hours-window-agents-button {
   justify-content: flex-start;
@@ -8083,12 +8089,12 @@ h3.md-heading {
   grid-area: error;
 }
 
-@container (max-width: 759px) {
+@container (max-width: 999px) {
   .hours-window {
     grid-template-areas:
       "head head head"
       "start end agents"
-      "checks checks checks"
+      "pairs pairs checks"
       "error error error";
     grid-template-columns: minmax(0, 9rem) minmax(0, 9rem) minmax(0, 1fr);
   }
@@ -8100,6 +8106,7 @@ h3.md-heading {
       "head head"
       "start end"
       "agents agents"
+      "pairs pairs"
       "checks checks"
       "error error";
     grid-template-columns: repeat(2, minmax(0, 1fr));

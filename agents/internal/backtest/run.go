@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/raykavin/xtrader/agentapi"
 	"maps"
 	"os"
 	"slices"
@@ -39,6 +40,9 @@ type Hooks struct {
 	Candles  func(source CandleSource)
 	Extra    func() (json.RawMessage, string)
 	Warnings []string
+	// Gate, when set, takes the assets of the window of the trading hours
+	// open, as the controller tells them live (see agentapi.PairGate)
+	Gate *agentapi.PairGate
 }
 
 // CandleSource reads the last candles of a symbol, complete ones only: in a
@@ -209,6 +213,9 @@ func run(ctx context.Context, settings xtrader.Settings, strat strategy.Strategy
 		bot.Controller().SetStopGuard(protection.Guarded)
 	}
 	g, err = newGuard(cfg, bot.Controller(), store, w, feed, protection)
+	if g != nil {
+		g.gate = hooks.Gate
+	}
 	if err != nil {
 		return err
 	}

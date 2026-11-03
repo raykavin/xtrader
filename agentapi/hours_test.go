@@ -75,3 +75,37 @@ func TestHoursWindows(t *testing.T) {
 		HoursWindows(nil, "07:00", "12:00", false, true), "the single window of before")
 	assert.Nil(t, HoursWindows(nil, "", "", true, true))
 }
+
+func TestPairGate(t *testing.T) {
+	var none *PairGate
+	allowed, _ := none.Allows("XAUUSDm")
+	assert.True(t, allowed, "no gate: every asset")
+	g := &PairGate{}
+	allowed, _ = g.Allows("XAUUSDm")
+	assert.True(t, allowed, "the zero value: every asset")
+	require.True(t, g.Set(3, []string{"XAUUSDm", "BTCUSDm"}, "Janela 08:00–10:00 só para os ativos XAUUSDm, BTCUSDm"))
+	allowed, _ = g.Allows("BTCUSDm")
+	assert.True(t, allowed)
+	allowed, why := g.Allows("USOILm")
+	assert.False(t, allowed)
+	assert.Equal(t, "Janela 08:00–10:00 só para os ativos XAUUSDm, BTCUSDm", why)
+	assert.False(t, g.Set(2, nil, ""), "an older revision ignored")
+	allowed, _ = g.Allows("USOILm")
+	assert.False(t, allowed)
+	require.True(t, g.Set(4, nil, ""))
+	allowed, _ = g.Allows("USOILm")
+	assert.True(t, allowed, "every asset again")
+}
+
+func TestWindowsProblem_Pairs(t *testing.T) {
+	w := ui.TradingWindow{Start: "08:00", End: "10:00", Pairs: []string{"XAUUSDm", "US500.cash", "BTC#"}}
+	assert.Empty(t, WindowsProblem([]ui.TradingWindow{w}))
+	w.Pairs = []string{"XAU USDm"}
+	assert.Contains(t, WindowsProblem([]ui.TradingWindow{w}), `tem um ativo inválido, "XAU USDm"`)
+	w.Pairs = []string{"XAUUSDm", "XAUUSDm"}
+	assert.Contains(t, WindowsProblem([]ui.TradingWindow{w}), "repete o ativo XAUUSDm")
+	assert.Equal(t, "Janela 08:00–10:00 só para o ativo XAUUSDm",
+		WindowPairsReason(ui.TradingWindow{Start: "08:00", End: "10:00", Pairs: []string{"XAUUSDm"}}))
+	assert.True(t, SameWindow(ui.TradingWindow{Pairs: []string{"A", "B"}}, ui.TradingWindow{Pairs: []string{"B", "A"}}))
+	assert.False(t, SameWindow(ui.TradingWindow{Pairs: []string{"A"}}, ui.TradingWindow{Pairs: []string{"B"}}))
+}

@@ -13,15 +13,16 @@ import {
   lastEndLabel,
   MAX_WINDOWS,
   nextWindow,
+  parsePairs,
   type WindowForm,
   windowAllows,
+  windowDetails,
   windowLabel,
   windowsCheck,
   windowsForm,
   windowsLabel,
   windowsOf,
   windowsRequest,
-  windowWithAgents,
 } from "./tradingHours";
 
 const zone = "America/Belem";
@@ -50,7 +51,12 @@ const window = (from: string, to: string, fields: Partial<TradingWindow> = {}): 
 
 /** windows as the rows of a form, keyed by their place. */
 const rows = (...windows: TradingWindow[]): WindowForm[] =>
-  windows.map((w, i) => ({ ...w, agents: w.agents ?? [], key: `k${i}` }));
+  windows.map(({ pairs, ...w }, i) => ({
+    ...w,
+    agents: w.agents ?? [],
+    pairsText: (pairs ?? []).join(";"),
+    key: `k${i}`,
+  }));
 
 describe("the trading hours", () => {
   it("tells how they stand: off, open until the end, closed until the start", () => {
@@ -247,9 +253,9 @@ describe("the trading hours", () => {
     expect(agentsLabel(["highlow", "matrend", "orb"])).toBe("3 agentes");
     expect(agentsTitle([])).toBe("Todos os agentes operam nesta janela");
     expect(agentsTitle(["highlow", "matrend"])).toBe("Operam nesta janela: highlow, matrend");
-    expect(windowWithAgents(window("08:00", "10:00"))).toBe("08:00–10:00");
-    expect(windowWithAgents(window("08:00", "10:00", { agents: ["highlow", "matrend"] }))).toBe(
-      "08:00–10:00 (highlow, matrend)",
+    expect(windowDetails(window("08:00", "10:00"))).toBe("08:00–10:00");
+    expect(windowDetails(window("08:00", "10:00", { agents: ["highlow", "matrend"] }))).toBe(
+      "08:00–10:00 (agentes: highlow, matrend)",
     );
     expect(
       hoursWindows(
@@ -257,7 +263,7 @@ describe("the trading hours", () => {
           windows: [window("08:00", "10:00", { agents: ["highlow"] }), window("12:00", "14:00")],
         }),
       ),
-    ).toBe("08:00–10:00 (highlow), 12:00–14:00");
+    ).toBe("08:00–10:00 (agente: highlow), 12:00–14:00");
   });
 
   it("lets an agent open positions in the windows of all the agents or of its own", () => {
@@ -289,6 +295,104 @@ describe("the trading hours", () => {
       hoursSettings({ enabled: true, windows: rows(window("08:00", "10:00", { agents: ["orb"] })) })
         .windows,
     ).toEqual([window("08:00", "10:00", { agents: ["orb"] })]);
+  });
+
+  it("takes the assets of a window typed separated by ;, the case kept", () => {
+    expect(parsePairs("")).toEqual([]);
+    expect(parsePairs(" ; ;")).toEqual([]);
+    expect(parsePairs("XAUUSDm")).toEqual(["XAUUSDm"]);
+    expect(parsePairs(" XAUUSDm ;BTCUSDm; USOILm;")).toEqual(["XAUUSDm", "BTCUSDm", "USOILm"]);
+    expect(parsePairs("xauusdm;XAUUSDm")).toEqual(["xauusdm", "XAUUSDm"]);
+    // kept as typed in the form, a list of before joined by ;
+    const [typed] = windowsForm([window("08:00", "10:00", { pairs: ["XAUUSDm", "BTCUSDm"] })]);
+    expect(typed?.pairsText).toBe("XAUUSDm;BTCUSDm");
+    expect(windowsForm([window("08:00", "10:00")])[0]?.pairsText).toBe("");
+  });
+
+  it("names a window with its agents and its assets, each when some", () => {
+    expect(windowDetails(window("08:00", "10:00", { pairs: ["XAUUSDm"] }))).toBe(
+      "08:00–10:00 (ativo: XAUUSDm)",
+    );
+    expect(
+      windowDetails(
+        window("08:00", "10:00", { agents: ["highlow"], pairs: ["XAUUSDm", "BTCUSDm"] }),
+      ),
+    ).toBe("08:00–10:00 (agente: highlow; ativos: XAUUSDm, BTCUSDm)");
+    expect(windowDetails(window("08:00", "10:00", { agents: [], pairs: [] }))).toBe("08:00–10:00");
+    expect(
+      hoursWindows(
+        status({
+          windows: [window("08:00", "10:00", { pairs: ["XAUUSDm"] }), window("12:00", "14:00")],
+        }),
+      ),
+    ).toBe("08:00–10:00 (ativo: XAUUSDm), 12:00–14:00");
+  });
+
+  it("checks the assets of a window as the controller does", () => {
+    const check = (pairsText: string, from = "08:00", to = "10:00") =>
+      windowsCheck([{ ...rows(window(from, to))[0], pairsText } as WindowForm], true);
+    expect(check("").first).toBeNull();
+    expect(check("XAUUSDm;BTCUSDm;USOILm").first).toBeNull();
+    expect(check("US30.cash;GER40#;BRENT_X-1").first).toBeNull();
+    expect(check("XAUUSDm;xauusdm").first).toBeNull();
+    expect(check("XAUUSDm,BTCUSDm").first).toBe(
+      'A janela 08:00–10:00 tem um ativo inválido, "XAUUSDm,BTCUSDm": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+    );
+    expect(check("XAU USD").rows.k0?.pairs).toBe(
+      'A janela 08:00–10:00 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+    );
+    expect(check(".XAU").first).toContain('ativo inválido, ".XAU"');
+    expect(check("A".repeat(33)).first).toContain("ativo inválido");
+    expect(check("A".repeat(32)).first).toBeNull();
+    expect(check("XAUUSDm; BTCUSDm ;XAUUSDm").first).toBe(
+      "A janela 08:00–10:00 repete o ativo XAUUSDm.",
+    );
+    // named by its place while its times are typed, its times told first
+    const typing = check("XAU USD", "");
+    expect(typing.rows.k0?.pairs).toBe(
+      'A janela 1 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+    );
+    expect(typing.first).toBe("O início da janela 1 deve ser um horário HH:MM, de 00:00 a 23:59.");
+    // the times of every window before the assets, the assets before the overlaps
+    const all = windowsCheck(
+      rows(
+        window("08:00", "10:00", { pairs: ["XAU USD"] }),
+        window("09:00", "11:00"),
+        window("15:00", "13:00"),
+      ),
+      true,
+    );
+    expect(all.first).toBe(
+      "A janela 15:00–13:00 deve começar antes de terminar: uma janela não atravessa a meia-noite.",
+    );
+    const noTimes = windowsCheck(
+      rows(window("08:00", "10:00", { pairs: ["XAU USD"] }), window("09:00", "11:00")),
+      true,
+    );
+    expect(noTimes.first).toContain('A janela 08:00–10:00 tem um ativo inválido, "XAU USD"');
+    // a window with an asset refused still weighed for the overlaps
+    expect(noTimes.list).toBe(
+      "As janelas 08:00–10:00 e 09:00–11:00 se sobrepõem ou se encostam: junte-as numa só ou deixe um intervalo entre elas.",
+    );
+  });
+
+  it("sends the assets of a window as a list, only when some", () => {
+    const sent = windowsRequest(
+      rows(window("12:00", "14:00"), window("08:00", "10:00", { agents: ["orb"] })).map((w, i) =>
+        i === 0 ? { ...w, pairsText: " XAUUSDm; ;BTCUSDm " } : w,
+      ),
+    );
+    expect(sent).toEqual([
+      window("08:00", "10:00", { agents: ["orb"] }),
+      window("12:00", "14:00", { pairs: ["XAUUSDm", "BTCUSDm"] }),
+    ]);
+    expect(sent[0]).not.toHaveProperty("pairs");
+    expect(
+      hoursSettings({
+        enabled: true,
+        windows: rows(window("08:00", "10:00", { pairs: ["USOILm"] })),
+      }).windows,
+    ).toEqual([window("08:00", "10:00", { pairs: ["USOILm"] })]);
   });
 
   it("adds a window free of the others, inside the day", () => {

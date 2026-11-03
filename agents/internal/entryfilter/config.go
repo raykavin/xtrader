@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/raykavin/xtrader/agentapi"
 	"math"
 	"slices"
 	"strings"
@@ -116,6 +117,10 @@ type Config struct {
 	Run        int64
 	Segment    string
 	RecordFrom time.Time
+
+	// Gate, when set, tells the assets the strategy may open positions on now
+	// (the window of the trading hours open), asked before any filter
+	Gate *agentapi.PairGate
 }
 
 // Enabled reports whether a filter is on, or the samples recorded: off, the
