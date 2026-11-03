@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -68,7 +69,8 @@ type dailyLimiter struct {
 	status    ui.DailyLimitsStatus  // as last evaluated
 	hours     ui.TradingHoursStatus // as last evaluated, see evaluateHours
 
-	hoursMu sync.Mutex // an evaluation of the trading hours at a time
+	hoursMu     sync.Mutex  // an evaluation of the trading hours at a time
+	hoursEnding atomic.Bool // the actions at the end of a window running, see endHours
 }
 
 func newDailyLimiter(s *Supervision) *dailyLimiter {

@@ -412,12 +412,34 @@ func TestBacktests_PlanRefused(t *testing.T) {
 
 	// the trading hours of the batch, copied to the assumptions of each run
 	hours := ok
-	hours.Hours = &ui.BacktestHours{Start: "22:00", End: "02:00", Flatten: true}
+	hours.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{{Start: "08:00", End: "10:00", Flatten: true},
+		{Start: "12:00", End: "14:00", CancelPending: true}}}
 	_, runs, err = b.plan(context.Background(), hours, "admin", time.Now())
 	require.NoError(t, err)
 	var hoursSnap backtestSnapshot
 	require.NoError(t, json.Unmarshal(runs[0].Config, &hoursSnap))
 	assert.Equal(t, hours.Hours, hoursSnap.Assumptions.Hours)
+
+	// windows for some agents: the run of an agent with its windows only, the
+	// batch keeping them all; an agent in no window refused
+	some := ok
+	some.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{
+		{Start: "08:00", End: "10:00", Agents: []string{"trend"}, Flatten: true},
+		{Start: "12:00", End: "14:00", Agents: []string{"llm"}}}}
+	batch, runs, err := b.plan(context.Background(), some, "admin", time.Now())
+	require.NoError(t, err)
+	var someSnap backtestSnapshot
+	require.NoError(t, json.Unmarshal(runs[0].Config, &someSnap))
+	assert.Equal(t, &ui.BacktestHours{Windows: []ui.TradingWindow{{Start: "08:00", End: "10:00", Flatten: true}}},
+		someSnap.Assumptions.Hours, "the window of trend only")
+	var kept ui.BacktestAssumptions
+	require.NoError(t, json.Unmarshal(batch.Assumptions, &kept))
+	assert.Len(t, kept.Hours.Windows, 2, "the batch keeps them all")
+	none := ok
+	none.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{{Start: "08:00", End: "10:00", Agents: []string{"llm"}}}}
+	_, _, err = b.plan(context.Background(), none, "admin", time.Now())
+	require.ErrorIs(t, err, store.ErrInvalid)
+	assert.Contains(t, err.Error(), "o agente trend não está em nenhuma janela do horário")
 
 	// the params of the batch added to the agent, one of the same name
 	// replaced, copied to the assumptions
@@ -464,7 +486,15 @@ func TestBacktests_PlanRefused(t *testing.T) {
 		"the hours apart": func(r *ui.BacktestRequest) {
 			r.Hours = &ui.BacktestHours{Start: "09:00", End: "09:00"}
 		},
-		"the hours HH:MM":    func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{Start: "9:00", End: "17:00"} },
+		"the hours HH:MM": func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{Start: "9:00", End: "17:00"} },
+		"windows overlapping": func(r *ui.BacktestRequest) {
+			r.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{{Start: "08:00", End: "10:00"},
+				{Start: "09:00", End: "11:00"}}}
+		},
+		"a window across midnight": func(r *ui.BacktestRequest) {
+			r.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{{Start: "22:00", End: "02:00"}}}
+		},
+		"no window":          func(r *ui.BacktestRequest) { r.Hours = &ui.BacktestHours{} },
 		"a param not a flag": func(r *ui.BacktestRequest) { r.Params = map[string]string{"Regime": "trend"} },
 		"a param the backtest sets": func(r *ui.BacktestRequest) {
 			r.Params = map[string]string{"pair": "BTCUSDm"}

@@ -211,10 +211,10 @@ export function DailyLimitsSettings({ intro }: Props) {
             </li>
           )}
           <li>
-            Horário de operação: fora dele, nenhum agente abre posição. No fim do horário, zera as
-            posições e cancela as ordens pendentes, conforme marcado; sem zerar, as posições abertas
-            ficam como estão, com os stops. Se o XTrader estiver parado no fim do horário, faz isso
-            ao voltar, se ainda estiver fora do horário.
+            Horário de operação: fora das janelas, nenhum agente abre posição. No fim de cada
+            janela, zera as posições e cancela as ordens pendentes, conforme marcado nela; sem
+            zerar, as posições abertas ficam como estão, com os stops. Se o XTrader estiver parado
+            no fim de uma janela, faz isso ao voltar.
           </li>
           <li>
             Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em

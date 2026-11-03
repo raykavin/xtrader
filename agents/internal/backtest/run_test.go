@@ -478,6 +478,38 @@ func TestRun_TradingHoursAcrossMidnight(t *testing.T) {
 	require.Len(t, report.Open, 1)
 }
 
+// Several windows of the trading hours, each with the actions of its own end:
+// the entries allowed inside each and blocked between them; at the end of the
+// first one the position closed, at the end of the second one left (its
+// window doesn't flatten).
+func TestRun_TradingWindows(t *testing.T) {
+	cfg := config(t, 9)
+	cfg.Hours = &ui.BacktestHours{Windows: []ui.TradingWindow{
+		{Start: "00:02", End: "00:04", Flatten: true},
+		{Start: "00:06", End: "00:08"},
+	}}
+	var first, between, second error
+	s := &script{steps: map[int]func(*model.Dataframe, service.Broker){
+		1: func(_ *model.Dataframe, b service.Broker) { // closes at 00:02
+			_, first = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+		},
+		3: func(_ *model.Dataframe, b service.Broker) { // 00:04, between the windows
+			_, between = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+		},
+		5: func(_ *model.Dataframe, b service.Broker) { // 00:06
+			_, second = b.CreateOrderMarket(model.SideTypeBuy, testPair, 1)
+		},
+	}}
+	report := runScript(t, context.Background(), s, flat(9, 100), cfg, Hooks{})
+	assert.NoError(t, first, "inside the first window")
+	assert.Error(t, between, "between the windows")
+	assert.NoError(t, second, "inside the second window")
+	require.Len(t, report.Trades, 1, "only the first window flattens")
+	assert.Equal(t, ReasonHours, report.Trades[0].ExitReason)
+	assert.Equal(t, start.Add(3*time.Minute).Unix(), report.Trades[0].ClosedAt, "on the candle closing at 00:04")
+	require.Len(t, report.Open, 1, "the position of the second window left at its end")
+}
+
 // The warmup before the period counted in candles of the timeframe of the
 // strategy, the engine handing it those: 30 candles of 1m before the period
 // are 6 of 5m, short of a warmup of 10, told; enough for one of 5.

@@ -1168,13 +1168,16 @@ export interface BacktestRequest {
 /**
  * BacktestHours are the trading hours of the runs of a batch, as the ones of
  * the agents (see TradingHoursSettings) on the clock of the candles: no entry
- * before Start nor from End (HH:MM of America/Belem, crossing midnight when
- * Start is after End); at End, after a window open, the positions closed
- * (Flatten) and the pending entries canceled (CancelPending), as checked.
+ * outside its Windows (HH:MM of America/Belem); at the end of each, after it
+ * was open, the positions closed and the pending entries canceled, as it
+ * checks. Without Windows (the batches of before), Start to End is its only
+ * one (crossing midnight when Start is after End), with Flatten and
+ * CancelPending.
  */
 export interface BacktestHours {
-  start: string;
-  end: string;
+  windows?: TradingWindow[];
+  start?: string;
+  end?: string;
   flatten: boolean;
   cancel_pending: boolean;
 }
@@ -2529,15 +2532,32 @@ export interface DailyLimitsStatus {
   hours: TradingHoursStatus;
 }
 /**
+ * TradingWindow is a window of the trading hours of a day: from Start to End
+ * (HH:MM, of the zone of the controller, America/Belem; Start before End, a
+ * window never crossing midnight; the end itself outside), the agents allowed
+ * to open positions in it (Agents, by name; none for all of them), and what is
+ * done at its end: every position of the agents closed (Flatten) and their
+ * pending orders canceled (CancelPending), as checked, whatever its Agents.
+ */
+export interface TradingWindow {
+  start: string;
+  end: string;
+  agents?: string[];
+  flatten: boolean;
+  cancel_pending: boolean;
+}
+/**
  * TradingHoursSettings are the trading hours of all the agents: on, no agent
- * opens a position before Start nor from End (HH:MM, of the zone of the
- * controller, America/Belem; a window crossing midnight when Start is after
- * End); at End every position of the agents is closed (Flatten) and their
- * pending orders canceled (CancelPending), as checked. UpdatedBy and
- * UpdatedAt (Unix seconds) tell the last change.
+ * opens a position outside its Windows (in the order of the day, none
+ * overlapping nor touching another), and at the end of each every position of
+ * the agents is closed and their pending orders canceled, as it checks.
+ * Start, End, Flatten and CancelPending are its first window, for the clients
+ * of a single window: a request without Windows takes them as its only one.
+ * UpdatedBy and UpdatedAt (Unix seconds) tell the last change.
  */
 export interface TradingHoursSettings {
   enabled: boolean;
+  windows: TradingWindow[];
   start: string;
   end: string;
   flatten: boolean;
@@ -2546,14 +2566,18 @@ export interface TradingHoursSettings {
   updated_at?: number /* int64 */;
 }
 /**
- * TradingHoursStatus is how the trading hours stand: on or off, the window
- * (Start, End, in Zone), Open while inside it, Blocked while the entries of
- * the agents are blocked by it (as recorded and sent to the agents), NextAt
- * the next change (the end while open, the start while closed; Unix seconds,
- * 0 while off), and the actions of the last end of the window, if any.
+ * TradingHoursStatus is how the trading hours stand: on or off, their
+ * Windows (in Zone), Open while inside one (Window, the one open), Blocked
+ * while the entries of the agents are blocked by them (as recorded and sent
+ * to the agents), NextAt the next change (the end of the window open, else the
+ * start of the next one; Unix seconds, 0 while off), and the actions of the
+ * last end of a window, if any. Start and End are the window open, else the
+ * next one.
  */
 export interface TradingHoursStatus {
   enabled: boolean;
+  windows?: TradingWindow[];
+  window?: TradingWindow;
   start?: string;
   end?: string;
   zone: string;
@@ -2563,13 +2587,16 @@ export interface TradingHoursStatus {
   last_end?: TradingHoursEnd;
 }
 /**
- * TradingHoursEnd is how the actions of an end of the window went: when
- * (Unix seconds), what was asked (Flatten, CancelPending), the status of the
- * action (running while it runs, else the one of its result: succeeded,
- * partial, failed or unknown) and the action of the XTrader AI recorded.
+ * TradingHoursEnd is how the actions of an end of a window went: when (Unix
+ * seconds), the window (Start, End; none for the ends of before), what was
+ * asked (Flatten, CancelPending), the status of the action (running while it
+ * runs, else the one of its result: succeeded, partial, failed or unknown) and
+ * the action of the XTrader AI recorded.
  */
 export interface TradingHoursEnd {
   at: number /* int64 */;
+  start?: string;
+  end?: string;
   flatten: boolean;
   cancel_pending: boolean;
   status: string;

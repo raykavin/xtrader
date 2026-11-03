@@ -798,8 +798,9 @@ func entriesOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Ent
 
 // combinedEntries returns the entries of the agent of id: blocked by its
 // supervision (supervision), by a daily guard, its own or the one of all the
-// agents (see store.DailyEntries), or by the trading hours, their window
-// closed (see store.TradingHoursEntries), the reasons of the daily guard and
+// agents (see store.DailyEntries), or by the trading hours, outside their
+// windows or in a window for other agents (see store.TradingHoursEntries), the
+// reasons of the daily guard and
 // of the hours first; their revision the sum of the three, which only grow,
 // so that allowing the entries in its supervision (eg: a user, or the agent
 // enabled again) never lifts a daily guard nor the hours.
@@ -809,7 +810,7 @@ func combinedEntries(ctx context.Context, s *store.Store, id int64,
 	if err != nil {
 		return agentapi.Entries{}, err
 	}
-	hours, hoursReason, hoursRevision, err := s.TradingHoursEntries(ctx)
+	hours, hoursReason, hoursRevision, err := s.TradingHoursEntries(ctx, id)
 	if err != nil {
 		return agentapi.Entries{}, err
 	}

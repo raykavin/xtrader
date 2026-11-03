@@ -172,7 +172,12 @@ func (c *BacktestConfig) Validate() error {
 		return errors.New("backtest: the ceilings and the prices of the language model must be 0 or more")
 	case c.Report == "":
 		return errors.New("backtest: the file of the report")
-	case c.Hours != nil && (!ValidClock(c.Hours.Start) || !ValidClock(c.Hours.End) || c.Hours.Start == c.Hours.End):
+	case c.Hours != nil && len(HoursWindows(c.Hours.Windows, c.Hours.Start, c.Hours.End, false, false)) == 0:
+		return errors.New("backtest: the trading hours: a window at least")
+	case c.Hours != nil && len(c.Hours.Windows) > 0 && WindowsProblem(c.Hours.Windows) != "":
+		return fmt.Errorf("backtest: the trading hours: %s", WindowsProblem(c.Hours.Windows))
+	case c.Hours != nil && len(c.Hours.Windows) == 0 && (!ValidClock(c.Hours.Start) || !ValidClock(c.Hours.End) ||
+		c.Hours.Start == c.Hours.End):
 		return errors.New("backtest: the trading hours: a start and an end HH:MM, apart")
 	}
 	for pair, s := range c.Symbols {

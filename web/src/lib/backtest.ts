@@ -16,7 +16,16 @@ import type {
 } from "../api/types";
 import { dayOf, dayStart } from "./closedPL";
 import type { SupervisorTone } from "./supervisor";
-import { endActionsText, hoursError } from "./tradingHours";
+import {
+  agentsOutside,
+  endActionsText,
+  type WindowForm,
+  windowsCheck,
+  windowsForm,
+  windowsOf,
+  windowsRequest,
+  windowWithAgents,
+} from "./tradingHours";
 
 /** A trade of the report of a run, see agentapi.BacktestTrade. */
 export interface BacktestTrade {
@@ -158,10 +167,25 @@ export const reasonLabels: Record<string, string> = {
   trading_hours: "Fim do horário",
 };
 
-/** The trading hours of assumptions in words, eg: 09:00–17:30, zera e cancela no fim; empty for none. */
+/**
+ * The trading hours of assumptions in words: their windows (the start to the
+ * end of a batch of before), the agents of each when some, and what the end
+ * of each does, eg: 09:00–17:30, no fim zera as posições; 08:00–10:00
+ * (highlow), 12:00–14:00, no fim de cada janela zera as posições;
+ * 08:00–10:00, no fim zera as posições; 12:00–14:00, no fim só bloqueia novas
+ * entradas. Empty for none.
+ */
 export function hoursAssumption(hours: BacktestHours | undefined): string {
-  if (!hours) return "";
-  return `${hours.start}–${hours.end}, no fim ${endActionsText(hours.flatten, hours.cancel_pending)}`;
+  const windows = hours ? windowsOf(hours) : [];
+  const [first] = windows;
+  if (!first) return "";
+  const ends = (w: { flatten: boolean; cancel_pending: boolean }) =>
+    endActionsText(w.flatten, w.cancel_pending);
+  if (windows.length === 1) return `${windowWithAgents(first)}, no fim ${ends(first)}`;
+  if (windows.every((w) => ends(w) === ends(first))) {
+    return `${windows.map(windowWithAgents).join(", ")}, no fim de cada janela ${ends(first)}`;
+  }
+  return windows.map((w) => `${windowWithAgents(w)}, no fim ${ends(w)}`).join("; ");
 }
 
 /** Whether a run is still to end. */
@@ -421,12 +445,9 @@ export interface BacktestForm {
   slippage: string;
   dailyLoss: string;
   dailyGain: string;
-  /** The trading hours of the runs: applied or not, their window and the actions of their end. */
+  /** The trading hours of the runs: applied or not, and their windows with the actions of the end of each. */
   hours: boolean;
-  hoursStart: string;
-  hoursEnd: string;
-  hoursFlatten: boolean;
-  hoursCancel: boolean;
+  hoursWindows: WindowForm[];
   llmMaxCalls: string;
   llmMaxCost: string;
   /** Params added to every agent of the batch, eg: the entry filter, "regime=trend; equity-curve=20". */
@@ -459,10 +480,7 @@ export function defaultForm(now: Date = new Date()): BacktestForm {
     dailyLoss: "",
     dailyGain: "",
     hours: false,
-    hoursStart: "",
-    hoursEnd: "",
-    hoursFlatten: false,
-    hoursCancel: false,
+    hoursWindows: [],
     llmMaxCalls: "",
     llmMaxCost: "",
     params: "",
@@ -515,18 +533,11 @@ export function batchParams(text: string): {
 
 /**
  * form with the trading hours of the agents (the tab Limites) as its hours:
- * applied when they are on, their window and the actions of their end copied,
- * to change as the batch tests.
+ * applied when they are on, their windows and the actions of the end of each
+ * copied, to change as the batch tests.
  */
 export function withHours(form: BacktestForm, hours: TradingHoursSettings): BacktestForm {
-  return {
-    ...form,
-    hours: hours.enabled,
-    hoursStart: hours.start,
-    hoursEnd: hours.end,
-    hoursFlatten: hours.flatten,
-    hoursCancel: hours.cancel_pending,
-  };
+  return { ...form, hours: hours.enabled, hoursWindows: windowsForm(windowsOf(hours)) };
 }
 
 /** The number of text, a comma or a point for the decimals; NaN when it isn't one, null when blank. */
@@ -611,14 +622,8 @@ export function formRequest(
   const params = batchParams(form.params);
   if (params.error) errors.params = params.error;
   if (form.hours) {
-    const refused = hoursError({
-      enabled: true,
-      start: form.hoursStart,
-      end: form.hoursEnd,
-      flatten: form.hoursFlatten,
-      cancel_pending: form.hoursCancel,
-    });
-    if (refused) errors.hoursStart = refused;
+    const refused = windowsCheck(form.hoursWindows, true).first ?? outsideWindows(form)[0] ?? null;
+    if (refused) errors.hoursWindows = refused;
   }
   if (form.timeframe !== "" && !backtestTimeframes.includes(form.timeframe)) {
     errors.timeframe = "Escolha um timeframe da lista.";
@@ -644,20 +649,37 @@ export function formRequest(
       slippage_points: slippage,
       daily_loss: dailyLoss || undefined,
       daily_gain: dailyGain || undefined,
-      hours: form.hours
-        ? {
-            start: form.hoursStart,
-            end: form.hoursEnd,
-            flatten: form.hoursFlatten,
-            cancel_pending: form.hoursCancel,
-          }
-        : undefined,
+      hours: form.hours ? batchHours(form.hoursWindows) : undefined,
       llm_max_calls: llmMaxCalls || undefined,
       llm_max_cost: llmMaxCost || undefined,
       params: params.params ?? undefined,
     },
     errors,
   };
+}
+
+/**
+ * Why the agents of the batch of form are refused by its trading hours, one
+ * by agent no window lets open positions (as the controller refuses them);
+ * none while they are off.
+ */
+export function outsideWindows(
+  form: Pick<BacktestForm, "agents" | "hours" | "hoursWindows">,
+): string[] {
+  if (!form.hours) return [];
+  return agentsOutside(form.agents, form.hoursWindows).map(
+    (name) =>
+      `O agente ${name} não está em nenhuma janela do horário: inclua-o numa janela ou tire-o do lote.`,
+  );
+}
+
+/**
+ * The trading hours of a batch as sent: its windows by their start, the
+ * agents and the actions of the end of each in them (the ones of the hours of
+ * before, flatten and cancel_pending, unchecked).
+ */
+export function batchHours(windows: WindowForm[]): BacktestHours {
+  return { windows: windowsRequest(windows), flatten: false, cancel_pending: false };
 }
 
 /** The pairs agent tests in form: its own, the ones chosen among them when some are. */

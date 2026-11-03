@@ -15,6 +15,7 @@ import {
   formPeriod,
   formRequest,
   hoursAssumption,
+  outsideWindows,
   progressOf,
   reasonLabels,
   robustnessFlags,
@@ -287,42 +288,161 @@ describe("the form of a batch", () => {
   });
 
   it("takes the trading hours of the agents, to change for the batch", () => {
+    const morning = { start: "08:00", end: "10:00", flatten: true, cancel_pending: false };
+    const noon = { start: "12:00", end: "14:00", flatten: false, cancel_pending: true };
     const hours = {
       enabled: true,
-      start: "09:00",
-      end: "17:30",
+      windows: [morning, noon],
+      start: "08:00",
+      end: "10:00",
       flatten: true,
       cancel_pending: false,
       updated_by: "admin",
     };
     const f = withHours(form({}), hours);
-    expect([f.hours, f.hoursStart, f.hoursEnd, f.hoursFlatten, f.hoursCancel]).toEqual([
-      true,
-      "09:00",
-      "17:30",
-      true,
-      false,
+    expect(f.hours).toBe(true);
+    expect(f.hoursWindows.map(({ key: _, ...w }) => w)).toEqual([
+      { ...morning, agents: [] },
+      { ...noon, agents: [] },
     ]);
     expect(withHours(form({}), { ...hours, enabled: false }).hours).toBe(false);
-    expect(formRequest(f, limits, now).request?.hours).toEqual({
-      start: "09:00",
-      end: "17:30",
-      flatten: true,
+    // the hours of a single window, of before
+    expect(
+      withHours(form({}), { ...hours, windows: [] }).hoursWindows.map(({ key: _, ...w }) => w),
+    ).toEqual([{ ...morning, agents: [] }]);
+    // the windows sent in the order of the day, whatever the order typed
+    const reversed = { ...f, hoursWindows: [...f.hoursWindows].reverse() };
+    expect(formRequest(reversed, limits, now).request?.hours).toEqual({
+      windows: [morning, noon],
+      flatten: false,
       cancel_pending: false,
     });
     expect(formRequest(form({}), limits, now).request?.hours).toBeUndefined();
-    expect(formRequest({ ...f, hoursEnd: "09:00" }, limits, now).errors.hoursStart).toBe(
-      "O início e o fim devem ser diferentes.",
-    );
-    expect(formRequest({ ...f, hoursStart: "" }, limits, now).request).toBeNull();
+    const [first, second] = f.hoursWindows;
+    if (!first || !second) throw new Error("two windows");
     expect(
-      formRequest({ ...f, hours: false, hoursStart: "" }, limits, now).request?.hours,
+      formRequest({ ...f, hoursWindows: [{ ...first, end: "08:00" }, second] }, limits, now).errors
+        .hoursWindows,
+    ).toBe(
+      "A janela 08:00–08:00 deve começar antes de terminar: uma janela não atravessa a meia-noite.",
+    );
+    expect(
+      formRequest({ ...f, hoursWindows: [first, { ...second, start: "10:00" }] }, limits, now)
+        .errors.hoursWindows,
+    ).toBe(
+      "As janelas 08:00–10:00 e 10:00–14:00 se sobrepõem ou se encostam: junte-as numa só ou deixe um intervalo entre elas.",
+    );
+    expect(
+      formRequest({ ...f, hoursWindows: [{ ...first, start: "" }] }, limits, now).request,
+    ).toBeNull();
+    expect(formRequest({ ...f, hoursWindows: [] }, limits, now).errors.hoursWindows).toBe(
+      "Adicione ao menos uma janela.",
+    );
+    expect(
+      formRequest({ ...f, hours: false, hoursWindows: [{ ...first, start: "" }] }, limits, now)
+        .request?.hours,
     ).toBeUndefined();
+    // a batch of before: its start to its end, crossing midnight
     expect(
       hoursAssumption({ start: "22:00", end: "02:00", flatten: true, cancel_pending: true }),
     ).toBe("22:00–02:00, no fim zera as posições e cancela as ordens pendentes");
+    expect(hoursAssumption({ windows: [morning], flatten: false, cancel_pending: false })).toBe(
+      "08:00–10:00, no fim zera as posições",
+    );
+    expect(
+      hoursAssumption({
+        windows: [morning, { ...noon, flatten: true, cancel_pending: false }],
+        flatten: false,
+        cancel_pending: false,
+      }),
+    ).toBe("08:00–10:00, 12:00–14:00, no fim de cada janela zera as posições");
+    expect(
+      hoursAssumption({ windows: [morning, noon], flatten: false, cancel_pending: false }),
+    ).toBe("08:00–10:00, no fim zera as posições; 12:00–14:00, no fim cancela as ordens pendentes");
     expect(hoursAssumption(undefined)).toBe("");
+    expect(hoursAssumption({ windows: [], flatten: false, cancel_pending: false })).toBe("");
     expect(reasonLabels.trading_hours).toBe("Fim do horário");
+  });
+
+  it("limits a window of a batch to some of its agents, each agent in a window at least", () => {
+    const morning = { start: "08:00", end: "10:00", flatten: true, cancel_pending: false };
+    const noon = { start: "12:00", end: "14:00", flatten: false, cancel_pending: true };
+    const hours = {
+      enabled: true,
+      windows: [{ ...morning, agents: ["a"] }, noon],
+      start: "08:00",
+      end: "10:00",
+      flatten: true,
+      cancel_pending: false,
+    };
+    // the agents of the windows kept from the settings
+    const f = withHours(form({}), hours);
+    expect(f.hoursWindows.map((w) => w.agents)).toEqual([["a"], []]);
+    expect(outsideWindows(f)).toEqual([]);
+    expect(formRequest(f, limits, now).request?.hours).toEqual({
+      windows: [{ ...morning, agents: ["a"] }, noon],
+      flatten: false,
+      cancel_pending: false,
+    });
+    // b of the batch in no window
+    const onlyA = { ...f, hoursWindows: f.hoursWindows.map((w) => ({ ...w, agents: ["a"] })) };
+    const refused =
+      "O agente b não está em nenhuma janela do horário: inclua-o numa janela ou tire-o do lote.";
+    expect(outsideWindows(onlyA)).toEqual([refused]);
+    expect(formRequest(onlyA, limits, now).errors.hoursWindows).toBe(refused);
+    expect(formRequest(onlyA, limits, now).request).toBeNull();
+    expect(outsideWindows({ ...onlyA, agents: ["b", "c", "a"] })).toEqual([
+      refused,
+      refused.replace("agente b", "agente c"),
+    ]);
+    // off, or without windows (one asked for first): no agent out of them
+    expect(outsideWindows({ ...onlyA, hours: false })).toEqual([]);
+    expect(formRequest({ ...onlyA, hours: false }, limits, now).request).not.toBeNull();
+    expect(outsideWindows({ ...onlyA, hoursWindows: [] })).toEqual([]);
+    // a problem of the windows told first
+    const [first] = onlyA.hoursWindows;
+    if (!first) throw new Error("a window");
+    expect(
+      formRequest({ ...onlyA, hoursWindows: [{ ...first, end: "08:00" }] }, limits, now).errors
+        .hoursWindows,
+    ).toBe(
+      "A janela 08:00–08:00 deve começar antes de terminar: uma janela não atravessa a meia-noite.",
+    );
+    expect(formRequest({ ...onlyA, agents: ["a"] }, limits, now).request?.hours).toEqual({
+      windows: [
+        { ...morning, agents: ["a"] },
+        { ...noon, agents: ["a"] },
+      ],
+      flatten: false,
+      cancel_pending: false,
+    });
+    // the agents of a window in the assumptions
+    expect(
+      hoursAssumption({
+        windows: [{ ...morning, agents: ["highlow", "matrend"] }],
+        flatten: false,
+        cancel_pending: false,
+      }),
+    ).toBe("08:00–10:00 (highlow, matrend), no fim zera as posições");
+    expect(
+      hoursAssumption({
+        windows: [
+          { ...morning, agents: ["highlow"] },
+          { ...noon, flatten: true, cancel_pending: false },
+        ],
+        flatten: false,
+        cancel_pending: false,
+      }),
+    ).toBe("08:00–10:00 (highlow), 12:00–14:00, no fim de cada janela zera as posições");
+    expect(
+      hoursAssumption({
+        windows: [{ ...morning, agents: ["highlow"] }, noon],
+        flatten: false,
+        cancel_pending: false,
+      }),
+    ).toBe(
+      "08:00–10:00 (highlow), no fim zera as posições; 12:00–14:00, no fim cancela as ordens pendentes",
+    );
   });
 
   it("counts the runs and the calls of the LLMs, by run", () => {
