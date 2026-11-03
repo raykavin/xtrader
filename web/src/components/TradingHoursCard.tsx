@@ -167,8 +167,9 @@ export function TradingHoursCard() {
           disabled={busy}
         />
         <p className="field-hint">
-          No fim de cada janela, vale o que estiver marcado nela; sem nada marcado, só bloqueia
-          novas entradas. Só as posições e ordens dos agentes: as manuais não são afetadas.
+          Agentes e ativos de uma janela: sem nenhum, valem todos. No fim de cada janela, vale o que
+          estiver marcado nela, para todos os agentes e ativos; sem nada marcado, só bloqueia novas
+          entradas. Só as posições e ordens dos agentes: as manuais não são afetadas.
         </p>
         <div className="field">
           <label className="field-label" htmlFor={`${id}-reason`}>

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,8 +46,9 @@ type Agent struct {
 	prompts *Prompts
 
 	mu         sync.Mutex
-	entries    Entries    // of the bot, see Supervise
-	protection Protection // of the positions of the bot, see Protect
+	entries    Entries            // of the bot, see Supervise
+	gate       *agentapi.PairGate // the assets of its entries, see Gate
+	protection Protection         // of the positions of the bot, see Protect
 	orders     *Orders
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -228,6 +230,26 @@ func (a *Agent) Supervise(controller Entries) {
 	applyEntries(a.Config.Name, controller, a.Config.Entries)
 }
 
+// Gate has the assets the strategy of the bot may open positions on follow
+// the ones the controller tells (see agentapi.Entries.EntriesPairs): the ones
+// of its settings at once, then the ones of its runtime as they change, with
+// its entries. Before Run.
+func (a *Agent) Gate(gate *agentapi.PairGate) {
+	a.mu.Lock()
+	a.gate = gate
+	a.mu.Unlock()
+	applyPairs(gate, a.Config.Entries)
+}
+
+// applyPairs applies the assets of entries to gate, an older revision
+// ignored.
+func applyPairs(gate *agentapi.PairGate, entries agentapi.Entries) {
+	if gate.Set(entries.EntriesRevision, entries.EntriesPairs, entries.PairsReason) && len(entries.EntriesPairs) > 0 {
+		log.Infof("the entries only on %s (revision %d)", strings.Join(entries.EntriesPairs, ", "),
+			entries.EntriesRevision)
+	}
+}
+
 // Protection is the protection of the positions of the bot as the controller
 // sets it, see agentapi.Protection and protect.Manager.
 type Protection interface {
@@ -268,10 +290,13 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 		runtime, changed, err := a.client.Runtime(ctx, version, runtimeWait)
 		if err == nil && changed {
 			a.mu.Lock()
-			entries, protection := a.entries, a.protection
+			entries, gate, protection := a.entries, a.gate, a.protection
 			a.mu.Unlock()
 			if entries != nil {
 				applyEntries(a.Config.Name, entries, runtime.Entries)
+			}
+			if gate != nil {
+				applyPairs(gate, runtime.Entries)
 			}
 			if protection != nil {
 				protection.Apply(runtime.ProtectionSettings, runtime.ProtectionArms)

@@ -74,6 +74,8 @@ type filter struct {
 	source  CandleSource
 	pairs   map[string]*pairState
 	tracker *tracker
+
+	gateOnly bool // no filter on: the entries asked of the gate of cfg only, see Wrap
 }
 
 // The wrappers of a strategy filtered, by the optional interfaces of the
@@ -98,12 +100,19 @@ func (f hfReleasesFilter) OnPartialCandle(df *model.Dataframe, broker service.Br
 func (f hfReleasesFilter) SetReleases(source strategies.Releases) { f.releases(source) }
 
 // Wrap returns s filtered as cfg says (see the package), s itself when no
-// filter is on (cfg.Enabled false): the agents without a filter trade as they
-// did. It fails on a config that can't filter, or a model of -meta-model that
+// filter is on (cfg.Enabled false) nor a gate (cfg.Gate): the agents without a
+// filter trade as they did. With a gate alone, the strategy only has its
+// entries on the assets the gate refuses refused, nothing measured nor read
+// more. It fails on a config that can't filter, or a model of -meta-model that
 // can't be read.
 func Wrap(s strategy.Strategy, cfg Config) (strategy.Strategy, error) {
 	if !cfg.Enabled() {
-		return s, nil
+		if cfg.Gate == nil {
+			return s, nil
+		}
+		f := &filter{inner: s, cfg: cfg, pairs: make(map[string]*pairState), gateOnly: true,
+			tracker: newTracker(0, 0, nil), warmup: s.WarmupPeriod()}
+		return wrapped(f), nil
 	}
 	cfg = cfg.withDefaults()
 	if err := cfg.validate(); err != nil {
@@ -149,17 +158,22 @@ func Wrap(s strategy.Strategy, cfg Config) (strategy.Strategy, error) {
 		f.warmup = max(f.warmup, intermarketLimit(cfg))
 	}
 
-	_, hf := s.(strategy.HighFrequencyStrategy)
-	_, releases := s.(strategies.ReleasesUser)
+	return wrapped(f), nil
+}
+
+// wrapped returns the filter f with the optional interfaces of its strategy.
+func wrapped(f *filter) strategy.Strategy {
+	_, hf := f.inner.(strategy.HighFrequencyStrategy)
+	_, releases := f.inner.(strategies.ReleasesUser)
 	switch {
 	case hf && releases:
-		return hfReleasesFilter{f}, nil
+		return hfReleasesFilter{f}
 	case hf:
-		return hfFilter{f}, nil
+		return hfFilter{f}
 	case releases:
-		return releasesFilter{f}, nil
+		return releasesFilter{f}
 	}
-	return f, nil
+	return f
 }
 
 // features reports whether the entries need their features: for the model or
@@ -234,6 +248,13 @@ func (f *filter) ChartAnalysis(pair string) (ui.Analysis, bool) {
 // positions it left.
 func (f *filter) OnCandle(df *model.Dataframe, broker service.Broker) {
 	n := len(df.Close)
+	if f.gateOnly {
+		f.mu.Lock()
+		f.state(df.Pair).df = df
+		f.mu.Unlock()
+		f.inner.OnCandle(df, f.gate(broker))
+		return
+	}
 	if n == 0 {
 		f.inner.OnCandle(df, f.gate(broker))
 		return
@@ -351,7 +372,7 @@ func (f *filter) entry(pair string, side model.SideType, kind entryKind, level, 
 	var sample *metalabel.Sample
 	var features map[string]float64
 	var computed bool
-	if st != nil && st.df != nil && len(st.df.Close) > 0 {
+	if !f.gateOnly && st != nil && st.df != nil && len(st.df.Close) > 0 {
 		n := len(st.df.Close)
 		price := level
 		if kind == kindMarket {
@@ -405,6 +426,12 @@ func (f *filter) entry(pair string, side model.SideType, kind entryKind, level, 
 // reference, the meta-labeling, in that order. Under mu.
 func (f *filter) refusal(pair string, st *pairState, side model.SideType, features map[string]float64,
 	computed bool) string {
+	if allowed, why := f.cfg.Gate.Allows(pair); !allowed {
+		return why
+	}
+	if f.gateOnly {
+		return ""
+	}
 	if st == nil || st.df == nil {
 		return fmt.Sprintf("no candle of %s handed to the strategy yet", pair)
 	}

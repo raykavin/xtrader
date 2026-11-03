@@ -43,10 +43,21 @@ export function windowsLabel(windows: Pick<TradingWindow, "start" | "end">[]): s
   return windows.map(windowLabel).join(", ");
 }
 
-/** A window and its agents in words, eg: 08:00–10:00 (highlow, matrend); the window alone for all of them. */
-export function windowWithAgents(window: Pick<TradingWindow, "start" | "end" | "agents">): string {
+/**
+ * A window with its agents and its assets in words, each named when some, eg:
+ * 08:00–10:00 (agentes: highlow, matrend; ativo: XAUUSDm); the window alone
+ * for all of them.
+ */
+export function windowDetails(
+  window: Pick<TradingWindow, "start" | "end" | "agents" | "pairs">,
+): string {
   const agents = window.agents ?? [];
-  return agents.length > 0 ? `${windowLabel(window)} (${agents.join(", ")})` : windowLabel(window);
+  const pairs = window.pairs ?? [];
+  const parts = [
+    agents.length > 0 && `${agents.length === 1 ? "agente" : "agentes"}: ${agents.join(", ")}`,
+    pairs.length > 0 && `${pairs.length === 1 ? "ativo" : "ativos"}: ${pairs.join(", ")}`,
+  ].filter(Boolean);
+  return parts.length > 0 ? `${windowLabel(window)} (${parts.join("; ")})` : windowLabel(window);
 }
 
 /** The agents of a window, as its button shows them: all of them for none, the name of one, or how many. */
@@ -104,9 +115,9 @@ export function windowsOf(hours: HoursShape): TradingWindow[] {
   ];
 }
 
-/** The windows of the hours in words, eg: 08:00–10:00 (highlow), 12:00–14:00; empty while off. */
+/** The windows of the hours in words, eg: 08:00–10:00 (agente: highlow), 12:00–14:00; empty while off. */
 export function hoursWindows(status: TradingHoursStatus): string {
-  return status.enabled ? windowsOf(status).map(windowWithAgents).join(", ") : "";
+  return status.enabled ? windowsOf(status).map(windowDetails).join(", ") : "";
 }
 
 /** What the end of a window does, eg: zera as posições e cancela as ordens pendentes. */
@@ -143,11 +154,13 @@ export function lastEndLabel(end: TradingHoursEnd, zone: string): HoursLabel {
 }
 
 /**
- * A window of the form, as typed: its agents (none for all of them), and a
- * key that keeps its row while the list changes.
+ * A window of the form, as typed: its agents (none for all of them), its
+ * assets as the text typed (see parsePairs; blank for all of them), and a key
+ * that keeps its row while the list changes.
  */
-export interface WindowForm extends TradingWindow {
+export interface WindowForm extends Omit<TradingWindow, "pairs"> {
   agents: string[];
+  pairsText: string;
   key: string;
 }
 
@@ -160,9 +173,22 @@ export interface HoursForm {
 let lastKey = 0;
 
 /** window as a row of the form, with a key of its own. */
-export function windowForm(window: TradingWindow): WindowForm {
+export function windowForm({ pairs, ...window }: TradingWindow): WindowForm {
   lastKey += 1;
-  return { ...window, agents: window.agents ?? [], key: `w${lastKey}` };
+  return {
+    ...window,
+    agents: window.agents ?? [],
+    pairsText: (pairs ?? []).join(";"),
+    key: `w${lastKey}`,
+  };
+}
+
+/** The assets of text typed as "XAUUSDm;BTCUSDm": split by ;, trimmed, the blanks left out; the case kept. */
+export function parsePairs(text: string): string[] {
+  return text
+    .split(";")
+    .map((pair) => pair.trim())
+    .filter((pair) => pair !== "");
 }
 
 /** windows as the rows of the form. */
@@ -172,18 +198,23 @@ export function windowsForm(windows: TradingWindow[]): WindowForm[] {
 
 /**
  * The windows of the form as sent: in the order of the day, by their start,
- * without their keys; their agents only when some (none for all of them).
+ * without their keys; their agents and their assets only when some (none for
+ * all of them).
  */
 export function windowsRequest(windows: WindowForm[]): TradingWindow[] {
   return [...windows]
     .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
-    .map(({ start, end, agents, flatten, cancel_pending }) => ({
-      start,
-      end,
-      ...(agents.length > 0 ? { agents: [...agents] } : {}),
-      flatten,
-      cancel_pending,
-    }));
+    .map(({ start, end, agents, pairsText, flatten, cancel_pending }) => {
+      const pairs = parsePairs(pairsText);
+      return {
+        start,
+        end,
+        ...(agents.length > 0 ? { agents: [...agents] } : {}),
+        ...(pairs.length > 0 ? { pairs } : {}),
+        flatten,
+        cancel_pending,
+      };
+    });
 }
 
 /**
@@ -219,12 +250,17 @@ function clockOf(minutes: number): string {
   return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 }
 
+/** An asset as MT5 names it, eg: XAUUSDm (agentapi's symbol). */
+const symbol = /^[A-Za-z0-9][A-Za-z0-9._#-]{0,31}$/;
+
 /** The problems of a window of the form, by field. */
 export interface WindowErrors {
   start?: string;
   end?: string;
   /** The start not before the end. */
   window?: string;
+  /** An asset invalid or repeated. */
+  pairs?: string;
 }
 
 /** Why the windows of the form are refused, by row and for the whole list. */
@@ -238,11 +274,30 @@ export interface WindowsCheck {
 }
 
 /**
+ * Why the assets typed in window w (the i-th) are refused, as the controller
+ * refuses them: the first invalid or repeated one (the case kept, MT5's
+ * symbols telling it apart); undefined when they are taken. The window is
+ * named by its times, else by its place while they are typed.
+ */
+function pairsProblem(w: WindowForm, i: number): string | undefined {
+  const name = clock.test(w.start) && clock.test(w.end) ? windowLabel(w) : String(i + 1);
+  const pairs = parsePairs(w.pairsText);
+  for (const [at, pair] of pairs.entries()) {
+    if (!symbol.test(pair)) {
+      return `A janela ${name} tem um ativo inválido, ${JSON.stringify(pair)}: use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.`;
+    }
+    if (pairs.indexOf(pair) < at) return `A janela ${name} repete o ativo ${pair}.`;
+  }
+  return undefined;
+}
+
+/**
  * Why windows are refused as the controller refuses them
- * (agentapi.WindowsProblem): 24 at most, each start and end HH:MM, the start
- * before the end (a window never crossing midnight), none overlapping nor
- * touching another; and, required (the hours on), one at least. A window is
- * named by its place in the order of the user, from 1.
+ * (agentapi.WindowsProblem): 24 at most; each start and end HH:MM, the start
+ * before the end (a window never crossing midnight); its assets named as in
+ * MT5, none repeated; none overlapping nor touching another; and, required
+ * (the hours on), one at least. A window is named by its place in the order of
+ * the user, from 1.
  */
 export function windowsCheck(windows: WindowForm[], required: boolean): WindowsCheck {
   const rows: Record<string, WindowErrors> = {};
@@ -250,6 +305,8 @@ export function windowsCheck(windows: WindowForm[], required: boolean): WindowsC
   const tooMany =
     windows.length > MAX_WINDOWS ? `Use no máximo ${MAX_WINDOWS} janelas.` : undefined;
   if (tooMany) problems.push(tooMany);
+  // the times of every window before their assets, as the controller checks them
+  const pairProblems: string[] = [];
   windows.forEach((w, i) => {
     const errors: WindowErrors = {};
     if (!clock.test(w.start)) {
@@ -262,16 +319,19 @@ export function windowsCheck(windows: WindowForm[], required: boolean): WindowsC
       errors.window = `A janela ${windowLabel(w)} deve começar antes de terminar: uma janela não atravessa a meia-noite.`;
     }
     const first = errors.start ?? errors.end ?? errors.window;
-    if (first) {
-      rows[w.key] = errors;
-      problems.push(first);
-    }
+    if (first) problems.push(first);
+    errors.pairs = pairsProblem(w, i);
+    if (errors.pairs) pairProblems.push(errors.pairs);
+    if (first || errors.pairs) rows[w.key] = errors;
   });
+  problems.push(...pairProblems);
   // the first two windows overlapping or touching, in the order of the day,
-  // among the ones taken alone
-  const taken = windows
-    .filter((w) => !rows[w.key])
-    .sort((a, b) => minutesOf(a.start) - minutesOf(b.start));
+  // among the ones whose times are taken alone
+  const timed = (w: WindowForm) => {
+    const errors = rows[w.key];
+    return !errors || !(errors.start || errors.end || errors.window);
+  };
+  const taken = windows.filter(timed).sort((a, b) => minutesOf(a.start) - minutesOf(b.start));
   let overlap: string | undefined;
   for (let i = 1; i < taken.length && !overlap; i++) {
     const before = taken[i - 1];

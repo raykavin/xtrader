@@ -460,6 +460,45 @@ func TestTradingHours_AWindowForSomeAgents(t *testing.T) {
 	assert.Equal(t, []string{"orb2"}, hours.Settings().Windows[0].Agents)
 }
 
+// A window for some assets: inside it, the agents told the only assets they
+// may open positions on (their entries otherwise free), with why; in a window
+// for every asset, none; an asset invalid or repeated refused.
+func TestTradingHours_AWindowForSomeAssets(t *testing.T) {
+	s, clock, _ := newDailySupervised(t)
+	ctx := context.Background()
+	l := s.sup.daily
+	at := func(h, m int) { clock.set(time.Date(2026, 10, 29, h, m, 0, 0, belem(t))) }
+	call, _ := settingsSession(t, s.managed)
+	entries := func() agentapi.Entries {
+		t.Helper()
+		a, err := s.store.AgentByName(ctx, "trend")
+		require.NoError(t, err)
+		got, err := entriesOf(ctx, s.store, a)
+		require.NoError(t, err)
+		return got
+	}
+	at(9, 0)
+	got := putHours(t, call, ui.TradingHoursSettings{Enabled: true, Windows: []ui.TradingWindow{
+		{Start: "08:00", End: "10:00", Pairs: []string{"XAUUSDm", "BTCUSDm"}}, {Start: "12:00", End: "14:00"}}},
+		http.StatusOK)
+	assert.Equal(t, []string{"BTCUSDm", "XAUUSDm"}, got.Settings.Windows[0].Pairs, "kept")
+	first := entries()
+	assert.False(t, first.EntriesBlocked, "free, on its assets")
+	assert.ElementsMatch(t, []string{"XAUUSDm", "BTCUSDm"}, first.EntriesPairs)
+	assert.Contains(t, first.PairsReason, "Janela 08:00–10:00 só para os ativos")
+
+	at(12, 0)
+	require.NoError(t, l.evaluate(ctx))
+	second := entries()
+	assert.Empty(t, second.EntriesPairs, "every asset in the second window")
+	assert.Greater(t, second.EntriesRevision, first.EntriesRevision)
+
+	for _, pairs := range [][]string{{"XAU USDm"}, {"XAUUSDm", "XAUUSDm"}} {
+		putHours(t, call, ui.TradingHoursSettings{Enabled: true, Windows: []ui.TradingWindow{
+			{Start: "08:00", End: "10:00", Pairs: pairs}}}, http.StatusBadRequest)
+	}
+}
+
 // The pending orders canceled at the end without closing the positions: a
 // cancel_pending of every agent, the positions left with their stops.
 func TestTradingHours_CancelsOnlyThePendingOrders(t *testing.T) {

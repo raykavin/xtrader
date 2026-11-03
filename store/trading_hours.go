@@ -65,6 +65,15 @@ type TradingHoursWindowAgent struct {
 
 func (TradingHoursWindowAgent) TableName() string { return "trading_hours_window_agents" }
 
+// TradingHoursWindowPair is an asset of a window of the trading hours
+// (trading_hours_window_pairs).
+type TradingHoursWindowPair struct {
+	WindowID int64  `gorm:"primaryKey;autoIncrement:false"`
+	Pair     string `gorm:"primaryKey"`
+}
+
+func (TradingHoursWindowPair) TableName() string { return "trading_hours_window_pairs" }
+
 // Settings returns the hours as the dashboard takes them: their windows, the
 // first one also as its start, end and actions.
 func (h TradingHours) Settings() ui.TradingHoursSettings {
@@ -154,12 +163,21 @@ func (s *Store) TradingHours(ctx context.Context) (TradingHours, bool, error) {
 		Scan(&allowed).Error; err != nil {
 		return TradingHours{}, false, err
 	}
+	var pairs []TradingHoursWindowPair
+	if err := s.conn(ctx).Order("window_id, pair").Find(&pairs).Error; err != nil {
+		return TradingHours{}, false, err
+	}
 	for _, w := range rows {
 		window := ui.TradingWindow{Start: w.StartTime, End: w.EndTime, Flatten: w.Flatten,
 			CancelPending: w.CancelPending}
 		for _, a := range allowed {
 			if a.WindowID == w.ID {
 				window.Agents = append(window.Agents, a.Name)
+			}
+		}
+		for _, p := range pairs {
+			if p.WindowID == w.ID {
+				window.Pairs = append(window.Pairs, p.Pair)
 			}
 		}
 		hours.Windows = append(hours.Windows, window)
@@ -213,6 +231,11 @@ func (s *Store) SetTradingHours(ctx context.Context, settings ui.TradingHoursSet
 			for _, name := range w.Agents {
 				if err := s.conn(ctx).Create(&TradingHoursWindowAgent{WindowID: row.ID, AgentID: ids[name]}).
 					Error; err != nil {
+					return err
+				}
+			}
+			for _, pair := range w.Pairs {
+				if err := s.conn(ctx).Create(&TradingHoursWindowPair{WindowID: row.ID, Pair: pair}).Error; err != nil {
 					return err
 				}
 			}
@@ -292,34 +315,41 @@ func (s *Store) SetTradingHoursEnd(ctx context.Context, id int64, status string,
 
 // TradingHoursEntries returns whether the entries of the agent of id are
 // blocked by the trading hours (outside their windows, or in a window for other
-// agents, as recorded), why, and the revision of the trading hours (the last of
-// their events), which only grows.
-func (s *Store) TradingHoursEntries(ctx context.Context, id int64) (blocked bool, reason string, revision int64,
-	err error) {
+// agents, as recorded), why, the only assets it may open positions on in the
+// window open (pairs, none for all of them, and why), and the revision of the
+// trading hours (the last of their events), which only grows.
+func (s *Store) TradingHoursEntries(ctx context.Context, id int64) (blocked bool, reason string, pairs []string,
+	pairsReason string, revision int64, err error) {
 	state, found, err := s.TradingHoursState(ctx)
 	if err != nil {
-		return false, "", 0, err
+		return false, "", nil, "", 0, err
 	}
 	err = s.conn(ctx).Raw("SELECT COALESCE(MAX(id), 0) FROM trading_hours_events").Scan(&revision).Error
 	if err != nil {
-		return false, "", 0, err
+		return false, "", nil, "", 0, err
 	}
 	switch {
 	case found && state.Kind == HoursClosed:
 		blocked, reason = true, state.Reason
 	case found && state.Kind == HoursOpened:
 		var w ui.TradingWindow
-		if json.Unmarshal(state.Next, &w) != nil || len(w.Agents) == 0 {
+		if json.Unmarshal(state.Next, &w) != nil {
 			break
 		}
-		var name string
-		if err := s.conn(ctx).Raw("SELECT name FROM agents WHERE id = ?", id).Scan(&name).Error; err != nil {
-			return false, "", 0, err
+		if len(w.Agents) > 0 {
+			var name string
+			if err := s.conn(ctx).Raw("SELECT name FROM agents WHERE id = ?", id).Scan(&name).Error; err != nil {
+				return false, "", nil, "", 0, err
+			}
+			if !agentapi.WindowAllows(w, name) {
+				blocked = true
+				reason = fmt.Sprintf("Janela %s só para %s", agentapi.WindowLabel(w), strings.Join(w.Agents, ", "))
+				break
+			}
 		}
-		if !agentapi.WindowAllows(w, name) {
-			blocked = true
-			reason = fmt.Sprintf("Janela %s só para %s", agentapi.WindowLabel(w), strings.Join(w.Agents, ", "))
+		if len(w.Pairs) > 0 {
+			pairs, pairsReason = w.Pairs, agentapi.WindowPairsReason(w)
 		}
 	}
-	return blocked, reason, revision, nil
+	return blocked, reason, pairs, pairsReason, revision, nil
 }

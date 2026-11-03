@@ -331,6 +331,12 @@ func run() error {
 		return err
 	}
 	cfg.PositionSize = lots // shared: the MT5 lots are converted into units before the bot starts
+	// the assets of its entries, as the window of the trading hours open allows
+	// them: told by the controller live, by the trading hours of a backtest
+	cfg.PairGate = &agentapi.PairGate{}
+	if agent != nil {
+		agent.Gate(cfg.PairGate)
+	}
 	trader, err := llm.New(cfg, provider, llm.WithPrompt(prompt, overrides))
 	if agent != nil && (err != nil || *mode != "live") {
 		// the controller shows what came of the prompt of the settings; live,
@@ -391,6 +397,7 @@ func run() error {
 			btCfg.Leverage = max(*leverage, 1)
 			model := *providerName + " " + *modelName
 			hooks := backtest.Hooks{
+				Gate: cfg.PairGate,
 				Prepare: func(feed *exchange.BacktestFeed) {
 					backtestClock = feed.Now
 					trader.SetClock(feed.Now)

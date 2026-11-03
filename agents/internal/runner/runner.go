@@ -393,6 +393,13 @@ func run(agent Agent) error {
 		return err
 	}
 	filters.Agent, filters.Strategy, filters.Source = agent.Name, chosen.Name, sampleSource(*mode)
+	// the assets of its entries, as the window of the trading hours open allows
+	// them: told by the controller live, by the trading hours of a backtest
+	gate := &agentapi.PairGate{}
+	filters.Gate = gate
+	if remoteAgent != nil {
+		remoteAgent.Gate(gate)
+	}
 	switch {
 	case remoteAgent != nil:
 		filters.Agent = remoteAgent.Config.Name
@@ -463,6 +470,7 @@ func run(agent Agent) error {
 			cfg := btCfg
 			cfg.Leverage = max(*leverage, 1) // the margin of the leverage the strategy sizes with
 			hooks := backtestHooks(trader, cfg)
+			hooks.Gate = gate
 			if chosen.Name == pairsStrategy {
 				cfg, hooks = withoutProtection(cfg, hooks)
 			}

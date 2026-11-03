@@ -150,11 +150,16 @@ type Protection struct {
 // opens no position, nor adds to one, and only reduces the ones it holds (see
 // order.Controller.BlockEntries). Revision grows with every block and every
 // allowance, so that an agent never applies an older one after a newer, eg: a
-// runtime read before: 0 for an agent never blocked.
+// runtime read before: 0 for an agent never blocked. EntriesPairs, while
+// set, are the only assets the agent may open positions on (the window of the
+// trading hours open allowing them only), PairsReason why: its other entries
+// refused by its strategy (see PairGate), at the same revision.
 type Entries struct {
-	EntriesBlocked  bool   `json:"entries_blocked,omitempty"`
-	EntriesReason   string `json:"entries_reason,omitempty"`
-	EntriesRevision int64  `json:"entries_revision,omitempty"`
+	EntriesBlocked  bool     `json:"entries_blocked,omitempty"`
+	EntriesReason   string   `json:"entries_reason,omitempty"`
+	EntriesRevision int64    `json:"entries_revision,omitempty"`
+	EntriesPairs    []string `json:"entries_pairs,omitempty"`
+	PairsReason     string   `json:"pairs_reason,omitempty"`
 }
 
 // OrderIDsRequest is the payload of POST /order-ids: how many order IDs the

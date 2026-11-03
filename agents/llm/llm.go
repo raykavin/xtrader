@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/strategies"
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/indicator"
@@ -276,6 +277,11 @@ type Config struct {
 	NewsBlockBefore     time.Duration
 	NewsBlockAfter      time.Duration
 	NewsBlockImportance Importance
+
+	// PairGate, when set, tells the assets the agent may open positions on now
+	// (the window of the trading hours open): an entry on another refused when
+	// a decision is applied, as the daily limits and the news are
+	PairGate *agentapi.PairGate
 }
 
 // minConsultInterval is the least time between two consultations of the model
@@ -1470,6 +1476,10 @@ func (t *Trader) apply(df *model.Dataframe, broker service.Broker, st *promptSta
 		// the entries of the agent blocked by the supervisor or the dashboard:
 		// the broker would refuse the order anyway
 		if why := entriesBlockedBy(broker); why != "" {
+			return refused(why)
+		}
+		// the asset outside the ones of the window of the trading hours open
+		if allowed, why := t.cfg.PairGate.Allows(df.Pair); !allowed {
 			return refused(why)
 		}
 		// the daily limits again, whatever the decision: a close booked since

@@ -2535,14 +2535,17 @@ export interface DailyLimitsStatus {
  * TradingWindow is a window of the trading hours of a day: from Start to End
  * (HH:MM, of the zone of the controller, America/Belem; Start before End, a
  * window never crossing midnight; the end itself outside), the agents allowed
- * to open positions in it (Agents, by name; none for all of them), and what is
- * done at its end: every position of the agents closed (Flatten) and their
- * pending orders canceled (CancelPending), as checked, whatever its Agents.
+ * to open positions in it (Agents, by name; none for all of them) and the
+ * assets they may open them on (Pairs, eg: XAUUSDm; none for all of them),
+ * and what is done at its end: every position of the agents closed (Flatten)
+ * and their pending orders canceled (CancelPending), as checked, whatever its
+ * Agents and Pairs.
  */
 export interface TradingWindow {
   start: string;
   end: string;
   agents?: string[];
+  pairs?: string[];
   flatten: boolean;
   cancel_pending: boolean;
 }

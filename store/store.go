@@ -26,7 +26,7 @@ import (
 )
 
 // SchemaVersion is the version of sql/migrations the store needs.
-const SchemaVersion = 41
+const SchemaVersion = 42
 
 var (
 	// ErrNotFound is the error of a record that doesn't exist.
