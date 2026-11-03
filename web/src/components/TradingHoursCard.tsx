@@ -1,16 +1,18 @@
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
-import { fetchTradingHours, updateTradingHours } from "../api/client";
+import { fetchAgentSettings, fetchTradingHours, updateTradingHours } from "../api/client";
 import type { TradingHoursResponse } from "../api/types";
 import {
-  crossesMidnight,
-  endActionsText,
   type HoursForm,
   hoursError,
+  hoursSettings,
   hoursState,
   lastEndLabel,
+  windowsForm,
+  windowsOf,
 } from "../lib/tradingHours";
 import { Alert, Loading, Skeleton } from "./States";
 import { Switch } from "./Switch";
+import { TradingWindowsEditor } from "./TradingWindowsEditor";
 
 /** How often the state of the hours is read again, in ms. */
 const POLL = 5000;
@@ -21,8 +23,7 @@ function chip(tone: string): string {
 }
 
 function formOf(data: TradingHoursResponse): HoursForm {
-  const { enabled, start, end, flatten, cancel_pending } = data.settings;
-  return { enabled, start, end, flatten, cancel_pending };
+  return { enabled: data.settings.enabled, windows: windowsForm(windowsOf(data.settings)) };
 }
 
 /** The zone of the hours in words, eg: Belém. */
@@ -33,9 +34,10 @@ function zoneLabel(zone: string): string {
 
 /**
  * The trading hours of all the agents, on the tab Limites: on, no agent opens
- * a position before the start nor from the end; at the end the positions of
- * the agents are zeroed and their pending orders canceled, as checked; how
- * they stand now and how the last end went. A change applies at once.
+ * a position outside their windows (nor in a window limited to other agents,
+ * chosen among the ones on); at the end of each window the positions of the
+ * agents are zeroed and their pending orders canceled, as it checks; how they
+ * stand now and how the last end went. A change applies at once.
  */
 export function TradingHoursCard() {
   const id = useId();
@@ -45,6 +47,24 @@ export function TradingHoursCard() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // the agents on, by name: the ones a window may be limited to
+  const [agents, setAgents] = useState<string[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchAgentSettings(controller.signal)
+      .then((list) =>
+        setAgents(
+          list
+            .filter((a) => a.enabled)
+            .map((a) => a.name)
+            .sort((a, b) => a.localeCompare(b, "pt-BR")),
+        ),
+      )
+      .catch(() => {
+        // without them, a window keeps its agents and the button only shows them
+      });
+    return () => controller.abort();
+  }, []);
 
   const load = useCallback((signal?: AbortSignal) => {
     fetchTradingHours(signal)
@@ -97,7 +117,7 @@ export function TradingHoursCard() {
     }
     setBusy(true);
     setError(null);
-    updateTradingHours({ settings: { ...form }, reason: reason.trim() || undefined })
+    updateTradingHours({ settings: hoursSettings(form), reason: reason.trim() || undefined })
       .then((response) => {
         setData(response);
         setForm(formOf(response));
@@ -134,65 +154,22 @@ export function TradingHoursCard() {
           label="Ligado"
           disabled={busy}
         />
-        <div className="form-grid hours-times">
-          <div className="field">
-            <label className="field-label" htmlFor={`${id}-start`}>
-              Início
-            </label>
-            <input
-              id={`${id}-start`}
-              className="input mono"
-              type="time"
-              step={60}
-              value={form.start}
-              disabled={busy}
-              onChange={(e) => set("start", e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor={`${id}-end`}>
-              Fim
-            </label>
-            <input
-              id={`${id}-end`}
-              className="input mono"
-              type="time"
-              step={60}
-              value={form.end}
-              disabled={busy}
-              onChange={(e) => set("end", e.target.value)}
-            />
-          </div>
-        </div>
         <p className="field-hint">
-          Horário de {zone}. Fora dele, nenhum agente abre posição.
-          {crossesMidnight(form) && " O horário passa da meia-noite: termina no dia seguinte."}
+          Horário de {zone}. Fora das janelas, nenhum agente abre posição. Cada janela começa e
+          termina no mesmo dia.
         </p>
-        <fieldset className="hours-end">
-          <legend className="field-label">No fim do horário</legend>
-          <label className="hours-check">
-            <input
-              type="checkbox"
-              checked={form.flatten}
-              disabled={busy}
-              onChange={(e) => set("flatten", e.target.checked)}
-            />
-            Zerar todas as posições abertas
-          </label>
-          <label className="hours-check">
-            <input
-              type="checkbox"
-              checked={form.cancel_pending}
-              disabled={busy}
-              onChange={(e) => set("cancel_pending", e.target.checked)}
-            />
-            Cancelar todas as ordens pendentes
-          </label>
-          <p className="field-hint">
-            No fim, {endActionsText(form.flatten, form.cancel_pending)}. Só as posições e ordens dos
-            agentes: as manuais não são afetadas.
-          </p>
-        </fieldset>
+        <TradingWindowsEditor
+          windows={form.windows}
+          onChange={(windows) => set("windows", windows)}
+          required={form.enabled}
+          agents={agents}
+          unavailable="desligado"
+          disabled={busy}
+        />
+        <p className="field-hint">
+          No fim de cada janela, vale o que estiver marcado nela; sem nada marcado, só bloqueia
+          novas entradas. Só as posições e ordens dos agentes: as manuais não são afetadas.
+        </p>
         <div className="field">
           <label className="field-label" htmlFor={`${id}-reason`}>
             Motivo (registrado)

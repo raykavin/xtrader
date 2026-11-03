@@ -13,6 +13,7 @@ import (
 	"github.com/raykavin/xtrader/order"
 	"github.com/raykavin/xtrader/storage"
 	"github.com/raykavin/xtrader/tools/log"
+	"github.com/raykavin/xtrader/ui"
 )
 
 // limitZone is the zone of the days of the daily limits, as the controller
@@ -43,17 +44,20 @@ type guard struct {
 	revision   int64
 	stoppedOut bool
 	blocked    bool // the entries blocked, by the daily limit, the hours or the stop out
-	// the trading hours: their window closed now, seen open since the start,
-	// and their end to act on at the close of the candle
-	hoursClosed bool
-	hoursOpened bool
-	hoursEnd    bool
-	own         map[int64]string // the reasons of the orders of the guard, by order ID
-	warnings    []string
-	lastEquity  float64
-	equity      []Point
-	lastAt      time.Time
-	completed   int
+	// the trading hours: their windows (see agentapi.HoursWindows), outside
+	// them now, the window open (-1 for none) and seen open since the start,
+	// and the window whose end to act on at the close of the candle
+	hoursWindows []ui.TradingWindow
+	hoursClosed  bool
+	hoursAt      int
+	hoursOpened  bool
+	hoursEnd     *ui.TradingWindow
+	own          map[int64]string // the reasons of the orders of the guard, by order ID
+	warnings     []string
+	lastEquity   float64
+	equity       []Point
+	lastAt       time.Time
+	completed    int
 }
 
 func newGuard(cfg Config, controller *order.Controller, store storage.Storage, w *wallet,
@@ -63,7 +67,10 @@ func newGuard(cfg Config, controller *order.Controller, store storage.Storage, w
 		return nil, fmt.Errorf("backtest: the zone of the daily limits: %w", err)
 	}
 	g := &guard{cfg: cfg, controller: controller, storage: store, wallet: w, feed: feed, protection: protection,
-		zone: zone, own: make(map[int64]string)}
+		zone: zone, own: make(map[int64]string), hoursAt: -1}
+	if h := cfg.Hours; h != nil {
+		g.hoursWindows = agentapi.HoursWindows(h.Windows, h.Start, h.End, h.Flatten, h.CancelPending)
+	}
 	g.hold = controller.HoldEntries("the warm-up of the backtest, before its period")
 	return g, nil
 }
@@ -86,19 +93,20 @@ func (g *guard) tick(now time.Time) {
 			g.blockedDay = ""
 		}
 	}
-	// the trading hours: their window at the close of the candle; closing
-	// after it was open in the trading period, their end acted on once the
-	// candle closed (see OnCandle)
-	if h := g.cfg.Hours; h != nil {
-		open, _ := agentapi.TradingWindow(h.Start, h.End, now, g.zone)
-		switch {
-		case open:
-			g.hoursClosed = false
-			g.hoursOpened = g.hold == nil
-		case !g.hoursClosed:
-			g.hoursClosed = true
-			g.hoursEnd = g.hoursOpened && (h.Flatten || h.CancelPending)
+	// the trading hours: their window at the close of the candle; a window
+	// left after it was open in the trading period, its end acted on once the
+	// candle closed, as it checks (see OnCandle)
+	if g.cfg.Hours != nil {
+		open, _, _ := agentapi.TradingWindows(g.hoursWindows, now, g.zone)
+		if g.hoursAt >= 0 && open != g.hoursAt {
+			if was := g.hoursWindows[g.hoursAt]; g.hoursOpened && (was.Flatten || was.CancelPending) {
+				g.hoursEnd = &was
+			}
 			g.hoursOpened = false
+		}
+		g.hoursAt, g.hoursClosed = open, open < 0
+		if open >= 0 {
+			g.hoursOpened = g.hold == nil
 		}
 	}
 	g.setEntries()
@@ -164,9 +172,9 @@ func (g *guard) OnCandle(candle model.Candle) {
 		return
 	}
 
-	if g.hoursEnd {
-		g.hoursEnd = false
-		g.endHours()
+	if g.hoursEnd != nil {
+		g.endHours(*g.hoursEnd)
+		g.hoursEnd = nil
 	}
 
 	if g.cfg.DailyLoss <= 0 && g.cfg.DailyGain <= 0 {
@@ -197,13 +205,12 @@ func pendingEntry(o model.Order) bool {
 	return false
 }
 
-// endHours acts on the end of the window of the trading hours, as checked:
-// the pending entries canceled (CancelPending); the positions closed at the
-// market (Flatten), the legs protecting them canceled first. The entries left
-// pending without CancelPending, the positions open without Flatten. Holding
-// g.mu.
-func (g *guard) endHours() {
-	h := g.cfg.Hours
+// endHours acts on the end of the window h of the trading hours, as it
+// checks: the pending entries canceled (CancelPending); the positions closed at
+// the market (Flatten), the legs protecting them canceled first. The entries
+// left pending without CancelPending, the positions open without Flatten.
+// Holding g.mu.
+func (g *guard) endHours(h ui.TradingWindow) {
 	pending, err := g.storage.Orders(storage.WithStatus(model.OrderStatusTypeNew))
 	if err != nil {
 		log.Warnf("[BACKTEST] the pending orders: %v", err)

@@ -7958,10 +7958,6 @@ h3.md-heading {
   gap: var(--sp-3);
 }
 
-.hours-times {
-  max-width: 420px;
-}
-
 .hours-end {
   display: flex;
   flex-direction: column;
@@ -7996,6 +7992,153 @@ h3.md-heading {
   padding-block: 3px;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* the windows of the trading hours, in the settings and in a batch: a row by
+   window, its start and end beside its agents and what its end does; stacked
+   when narrow */
+.hours-windows {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.hours-window-list {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.hours-window {
+  display: grid;
+  grid-template-areas:
+    "head head head head"
+    "start end agents checks"
+    "error error error error";
+  grid-template-columns: minmax(0, 9rem) minmax(0, 9rem) minmax(0, 14rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.hours-window[data-invalid] {
+  border-color: var(--neg);
+}
+
+.hours-window-head {
+  display: flex;
+  grid-area: head;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.hours-window-title {
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hours-window-start {
+  grid-area: start;
+}
+
+.hours-window-end {
+  grid-area: end;
+}
+
+.hours-window-checks {
+  grid-area: checks;
+  min-width: 0;
+}
+
+.hours-window-agents {
+  grid-area: agents;
+}
+
+/* the agents of a window: all of them, the one, or how many, cut to fit */
+.hours-window-agents-button {
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.hours-window-agents-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hours-window-error {
+  grid-area: error;
+}
+
+@container (max-width: 759px) {
+  .hours-window {
+    grid-template-areas:
+      "head head head"
+      "start end agents"
+      "checks checks checks"
+      "error error error";
+    grid-template-columns: minmax(0, 9rem) minmax(0, 9rem) minmax(0, 1fr);
+  }
+}
+
+@container (max-width: 559px) {
+  .hours-window {
+    grid-template-areas:
+      "head head"
+      "start end"
+      "agents agents"
+      "checks checks"
+      "error error";
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* the dialog of the agents of a window: a checkbox by agent, in columns */
+.window-agents-body {
+  gap: var(--sp-3);
+}
+
+.window-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: var(--sp-2) var(--sp-4);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.window-agent {
+  min-width: 0;
+}
+
+.window-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-agent .tag {
+  flex: none;
+}
+
+.window-agents-all {
+  margin-right: auto;
 }
 
 /* the form of the daily limits, in their settings and in the dialog of an agent */

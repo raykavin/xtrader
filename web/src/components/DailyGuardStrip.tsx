@@ -15,7 +15,7 @@ import {
 import { formatMoney, signClass } from "../lib/format";
 import { hasExposure } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
-import { hoursState, hoursWindow } from "../lib/tradingHours";
+import { hoursState, hoursWindows } from "../lib/tradingHours";
 import { Icon } from "./Icon";
 import { useOpenPositions } from "./useOpenPositions";
 
@@ -248,7 +248,7 @@ export function DailyGuardStrip({
         {status.hours.enabled && (
           <span
             className={`${chipClass(status.hours.blocked ? "warn" : "on")} daily-strip-hours`}
-            title={`Horário de operação ${hoursWindow(status.hours)} (${zoneLabel(status.zone)})`}
+            title={`Horário de operação: ${hoursWindows(status.hours)} (${zoneLabel(status.zone)})`}
           >
             <Icon name="clock" size={13} />
             {hoursState(status.hours).text}

@@ -55,7 +55,7 @@ const intros: Record<SettingsTab, SectionIntro> = {
   limites: {
     title: "Limites",
     description:
-      "Perda e ganho máximos do dia, no total e por agente, e o horário de operação. Atingido um limite, o XTrader zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00; fora do horário, nenhum agente abre posição.",
+      "Perda e ganho máximos do dia, no total e por agente, e as janelas do horário de operação. Atingido um limite, o XTrader zera as posições, cancela as ordens pendentes de entrada e bloqueia as entradas até 00:00; fora das janelas, nenhum agente abre posição.",
   },
   noticias: {
     title: "Notícias",

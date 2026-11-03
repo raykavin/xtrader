@@ -4,22 +4,25 @@ import type { BacktestBatchInfo, BacktestCompatibility, BacktestsResponse } from
 import {
   type BacktestForm,
   backtestTimeframes,
+  batchHours,
   defaultForm,
   type FormErrors,
   formCalls,
   formPeriod,
   formRequest,
   hoursAssumption,
+  outsideWindows,
   pairsTested,
   runsOf,
   withHours,
 } from "../lib/backtest";
 import { formatMoney, formatNumber } from "../lib/format";
 import { timeframeLabel } from "../lib/timeframes";
-import { crossesMidnight, endActionsText } from "../lib/tradingHours";
+import { windowsOf } from "../lib/tradingHours";
 import { Icon } from "./Icon";
 import { Select } from "./Select";
 import { Alert } from "./States";
+import { TradingWindowsEditor } from "./TradingWindowsEditor";
 
 interface Props {
   read: BacktestsResponse;
@@ -52,7 +55,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
   const set = <K extends keyof BacktestForm>(field: K, value: BacktestForm[K]) => {
     if (field.startsWith("hours")) touchedHours.current = true;
     setForm((f) => ({ ...f, [field]: value }));
-    setErrors((e) => ({ ...e, [field]: undefined, hoursStart: undefined }));
+    setErrors((e) => ({ ...e, [field]: undefined, hoursWindows: undefined }));
   };
 
   // the trading hours of the agents (the tab Limites) as the hours of the
@@ -62,7 +65,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
     const controller = new AbortController();
     fetchTradingHours(controller.signal)
       .then(({ settings }) => {
-        if (!touchedHours.current && settings.start && settings.end) {
+        if (!touchedHours.current && windowsOf(settings).length > 0) {
           setForm((f) => withHours(f, settings));
         }
       })
@@ -83,6 +86,13 @@ export function BacktestConfigure({ read, onCreated }: Props) {
   const calls = formCalls(read.agents, form, period, maxCalls);
   const llmRuns = chosen.filter((a) => a.llm).length * (runsOf(form) / (form.agents.length || 1));
   const idle = chosen.filter((a) => pairsTested(a, form).length === 0);
+  // the agents a window may be limited to: the ones of the batch, else the
+  // ones that can run
+  const windowAgents =
+    form.agents.length > 0
+      ? form.agents
+      : read.agents.filter((a) => a.compatible).map((a) => a.agent);
+  const outside = outsideWindows(form);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -291,62 +301,22 @@ export function BacktestConfigure({ read, onCreated }: Props) {
           Aplicar o horário de operação
         </label>
         {form.hours && (
-          <>
-            <div className="form-grid bt-grid">
-              <div className="field" data-invalid={errors.hoursStart ? "" : undefined}>
-                <label className="field-label" htmlFor={`${id}-hoursStart`}>
-                  Início
-                </label>
-                <input
-                  id={`${id}-hoursStart`}
-                  className="input mono"
-                  type="time"
-                  step={60}
-                  value={form.hoursStart}
-                  aria-invalid={errors.hoursStart ? true : undefined}
-                  onChange={(e) => set("hoursStart", e.target.value)}
-                />
-              </div>
-              <div className="field" data-invalid={errors.hoursStart ? "" : undefined}>
-                <label className="field-label" htmlFor={`${id}-hoursEnd`}>
-                  Fim
-                </label>
-                <input
-                  id={`${id}-hoursEnd`}
-                  className="input mono"
-                  type="time"
-                  step={60}
-                  value={form.hoursEnd}
-                  aria-invalid={errors.hoursStart ? true : undefined}
-                  onChange={(e) => set("hoursEnd", e.target.value)}
-                />
-              </div>
-            </div>
-            {errors.hoursStart && <p className="field-error">{errors.hoursStart}</p>}
-            <div className="hours-end">
-              <span className="field-label">No fim do horário</span>
-              <label className="hours-check">
-                <input
-                  type="checkbox"
-                  checked={form.hoursFlatten}
-                  onChange={(e) => set("hoursFlatten", e.target.checked)}
-                />
-                Zerar todas as posições abertas
-              </label>
-              <label className="hours-check">
-                <input
-                  type="checkbox"
-                  checked={form.hoursCancel}
-                  onChange={(e) => set("hoursCancel", e.target.checked)}
-                />
-                Cancelar todas as ordens pendentes
-              </label>
-            </div>
-          </>
+          <TradingWindowsEditor
+            windows={form.hoursWindows}
+            onChange={(windows) => set("hoursWindows", windows)}
+            required
+            agents={windowAgents}
+            unavailable={form.agents.length > 0 ? "fora do lote" : undefined}
+          />
         )}
+        {outside.map((problem) => (
+          <p key={problem} className="field-error">
+            {problem}
+          </p>
+        ))}
         <p className="field-hint">
           {form.hours
-            ? `Horário de America/Belem: fora dele, nenhuma entrada; no fim, ${endActionsText(form.hoursFlatten, form.hoursCancel)}.${crossesMidnight({ start: form.hoursStart, end: form.hoursEnd }) ? " Passa da meia-noite: termina no dia seguinte." : ""}`
+            ? "Horário de America/Belem: fora das janelas, nenhuma entrada; no fim de cada janela, vale o que estiver marcado nela."
             : "Desligado, as execuções operam o dia todo."}{" "}
           Vem de Configurações › Limites; mudar aqui vale só para este lote.
         </p>
@@ -425,12 +395,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
             <span>Horário</span>
             <span>
               {form.hours
-                ? hoursAssumption({
-                    start: form.hoursStart,
-                    end: form.hoursEnd,
-                    flatten: form.hoursFlatten,
-                    cancel_pending: form.hoursCancel,
-                  })
+                ? hoursAssumption(batchHours(form.hoursWindows)) || "nenhuma janela"
                 : "o dia todo"}
             </span>
           </li>

@@ -872,6 +872,18 @@ func withParams(args []string, params map[string]string) []string {
 	return kept
 }
 
+// batchHoursProblem returns why the trading hours of a batch are refused, ""
+// when they aren't: its windows (its start and end as its only one, a client of
+// a single window), one at least, as the ones of the agents (see
+// agentapi.WindowsProblem).
+func batchHoursProblem(h ui.BacktestHours) string {
+	windows := agentapi.HoursWindows(h.Windows, h.Start, h.End, h.Flatten, h.CancelPending)
+	if len(windows) == 0 {
+		return "adicione ao menos uma janela"
+	}
+	return agentapi.WindowsProblem(windows)
+}
+
 // plan returns the batch request asks for, and its runs, each with its
 // config copied (see backtestSnapshot): refused (store.ErrInvalid) out of the
 // limits of the controller or for an agent that can't be backtested.
@@ -902,9 +914,8 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		return store.BacktestBatch{}, nil, invalid("o spread e a slippage devem ser 0 ou mais")
 	case !positive(request.DailyLoss) || !positive(request.DailyGain):
 		return store.BacktestBatch{}, nil, invalid("os limites diários devem ser 0 ou mais")
-	case request.Hours != nil && (!agentapi.ValidClock(request.Hours.Start) ||
-		!agentapi.ValidClock(request.Hours.End) || request.Hours.Start == request.Hours.End):
-		return store.BacktestBatch{}, nil, invalid("o horário de operação: início e fim HH:MM, diferentes")
+	case request.Hours != nil && batchHoursProblem(*request.Hours) != "":
+		return store.BacktestBatch{}, nil, invalid("o horário de operação: %s", batchHoursProblem(*request.Hours))
 	case request.LLMMaxCalls < 0 || !positive(request.LLMMaxCost):
 		return store.BacktestBatch{}, nil, invalid("os tetos do LLM devem ser 0 ou mais")
 	case request.Timeframe != "" && !slices.Contains(backtestTimeframesAllowed, request.Timeframe):
@@ -975,12 +986,24 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		}
 		command := strings.Fields(b.agents.Command(a.Kind))
 		timeframe := cmpOr(request.Timeframe, compat.Timeframe)
+		// the trading hours of the run: the windows of the batch its agent may
+		// open positions in
+		runAssumptions := assumptions
+		if h := assumptions.Hours; h != nil {
+			windows := agentapi.WindowsFor(agentapi.HoursWindows(h.Windows, h.Start, h.End, h.Flatten,
+				h.CancelPending), name)
+			if len(windows) == 0 {
+				return store.BacktestBatch{}, nil, invalid("o agente %s não está em nenhuma janela do horário: "+
+					"inclua-o numa janela ou tire-o do lote", name)
+			}
+			runAssumptions.Hours = &ui.BacktestHours{Windows: windows}
+		}
 		snap := backtestSnapshot{Agent: a.Name, Kind: a.Kind, Mode: a.Mode, Strategy: compat.Strategy, Pairs: pairs,
 			Timeframe: timeframe,
 			Args:      withParams(filterArgs(cfg.Args(), pairs, request.Timeframe, a.Kind == "llm"), request.Params),
 			Command:   command,
 			Code:      codeOf(command, b.agents.Dir), Protection: cfg.ProtectionSettings, Bridge: a.Account.BridgeURL,
-			Assumptions: assumptions}
+			Assumptions: runAssumptions}
 		if limits := a.DailyLimitOf(); limits.Enabled && request.DailyLoss == 0 && request.DailyGain == 0 {
 			snap.Notes = append(snap.Notes, "os limites diários do agente estão na moeda da conta e não foram "+
 				"aplicados (o backtest é na moeda de cotação); informe limites no lote para simulá-los")
