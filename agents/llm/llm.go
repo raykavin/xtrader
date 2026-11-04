@@ -282,6 +282,10 @@ type Config struct {
 	// (the window of the trading hours open): an entry on another refused when
 	// a decision is applied, as the daily limits and the news are
 	PairGate *agentapi.PairGate
+
+	// Claim, when set, claims an entry of a decision of the controller (the
+	// exposure limit of the agents), last, just before it is sent
+	Claim func(pair string, side model.SideType) (bool, string)
 }
 
 // minConsultInterval is the least time between two consultations of the model
@@ -1492,9 +1496,15 @@ func (t *Trader) apply(df *model.Dataframe, broker service.Broker, st *promptSta
 		if blocked := t.newsBlocked(df.Pair, now); blocked != "" {
 			return refused("no entry around the release " + blocked)
 		}
-		// and the position and the price of now, last
+		// and the position and the price of now
 		if why := t.recheck(df, broker, input, d); why != "" {
 			return refused(why)
+		}
+		// last, the exposure limit of the agents, claimed of the controller
+		if t.cfg.Claim != nil {
+			if granted, why := t.cfg.Claim(df.Pair, d.Action.side()); !granted {
+				return refused(why)
+			}
 		}
 		if d.Action.pendingKind() != "" {
 			placed, err := t.place(df, broker, d.Action, float64(input.EntrySize), *d.Entry, *d.StopLoss, profit)

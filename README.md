@@ -27,6 +27,8 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Proteção de posições: breakeven e trailing stop](#proteção-de-posições-breakeven-e-trailing-stop)
   - [Moeda da conta](#moeda-da-conta)
   - [Trava diária: limites de perda e ganho](#trava-diária-limites-de-perda-e-ganho)
+  - [Horário de operação](#horário-de-operação)
+  - [Exposição por ativo](#exposição-por-ativo)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Requisitos](#requisitos)
@@ -468,6 +470,20 @@ Um horário para todos os agentes (Configurações › Limites › **Horário de
   - Ligar o horário fora das janelas só bloqueia as entradas. Reiniciar a aplicação não repete as ações nem libera o bloqueio.
 - **Registro:** cada mudança do horário, cada abertura (com a janela) e fechamento e as ações do fim de cada janela (com a janela, a ação e o resultado) ficam em `trading_hours_events`; o id do último evento entra na revisão das entradas dos agentes.
 - **Onde aparece:** o card **Horário de operação** na aba Limites (estado e janelas) e, no card do limite diário do painel, um selo com um relógio: **Aberto · fecha às 10:00** ou **Fora do horário · abre às 12:00**, com as janelas ao passar o mouse.
+
+### Exposição por ativo
+
+Um máximo de agentes com posição no mesmo ativo e na mesma direção ao mesmo tempo, para todos os agentes (Configurações › Limites › **Exposição por ativo**): com 2, se `trend` e `orb` já estão comprados em XAUUSDm, um terceiro agente não compra XAUUSDm, mas pode vendê-lo ou comprar outro ativo.
+
+- **Máximo:** de 0 a 100 agentes, por ativo e direção (compras e vendas contam separadas). Em branco ou 0, sem limite.
+- **Por ativo (opcional):** um máximo próprio para alguns ativos, como o MT5 os nomeia, no formato `XAUUSDm=2;BTCUSDm=3`. Ele vale no lugar do máximo geral nesses ativos, e `0` tira o limite do ativo. Só os ativos do campo, sem o máximo geral, limitam só eles.
+- **Quem ocupa uma vaga:** cada agente com posição no ativo e na direção, lida das contas MT5 pelo número mágico, ou com uma ordem pendente de entrada nele (a pendente de um agente que já tem posição no ativo protege ou soma à posição, e não ocupa outra vaga). Um agente conta uma vez, quantas posições tiver. As posições manuais (sem o número mágico de um agente) e os agentes em paper não contam.
+- **Como é conferido:** antes de enviar cada entrada, o agente pede a vaga ao controller (`POST` em `agentapi.ExposurePath`, com o ativo e o lado). O controller atende um pedido por vez, com as contas lidas há no máximo 2 s, e reserva a vaga concedida por 2 minutos, até a ordem aparecer na conta. Assim, agentes que entram no mesmo segundo nunca passam juntos do limite, e uma vaga de uma ordem que não chegou a ser enviada volta a ficar livre. Um agente que já está no ativo e na direção sempre tem a vaga.
+- **Entrada recusada:** a estratégia não envia a ordem e registra o motivo, ex.: `Exposição máxima em XAUUSDm: 2 agentes já estão comprados (orb, trend)`. Sem ler alguma conta (bridge sem resposta, token recusado), as entradas com limite são recusadas (`Não foi possível conferir a exposição: sem leitura de …`): nada entra às cegas.
+- **Como chega aos agentes:** junto das entradas que o controller manda (`exposure` em `agentapi.Entries`). Com o limite ligado, o filtro de entradas (`entryfilter`) pede a vaga depois de os outros bloqueios terem deixado a entrada passar; num agente sem filtro configurado, ele é instalado só para isso. O agente LLM pede a vaga ao aplicar uma decisão, depois de conferir o limite diário, as notícias e os ativos da janela. Uma mudança do limite vale para as próximas entradas.
+- **O que nunca é limitado:** as saídas, os stops, os alvos, as ordens de proteção e as ordens manuais da boleta e do Telegram. O limite não fecha nada que já está aberto: se ele baixar com mais agentes no ativo, só as novas entradas esperam.
+- **Onde vale:** só nos agentes em live. Os agentes em paper, que não têm posições na conta, nunca são recusados nem ocupam vaga, e o backtest, em que cada agente roda sozinho, não é limitado.
+- **Onde fica:** em `exposure_limits` (migração 43), um registro só, com quem mudou por último.
 
 ### Painel web
 

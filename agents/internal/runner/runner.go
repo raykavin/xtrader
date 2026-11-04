@@ -399,6 +399,7 @@ func run(agent Agent) error {
 	filters.Gate = gate
 	if remoteAgent != nil {
 		remoteAgent.Gate(gate)
+		filters.Claim = remoteAgent.ClaimEntry // the exposure limit of the agents
 	}
 	switch {
 	case remoteAgent != nil:

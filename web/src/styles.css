@@ -7951,11 +7951,18 @@ h3.md-heading {
   gap: var(--sp-3);
 }
 
-/* the trading hours, on the tab Limites */
-.hours-body {
+/* the trading hours and the exposure limit, on the tab Limites */
+.hours-body,
+.exposure-body {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
+}
+
+/* the problems of the limits of the assets apart, one by line */
+.exposure-hints {
+  display: flex;
+  flex-direction: column;
 }
 
 .hours-end {

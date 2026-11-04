@@ -86,6 +86,7 @@ type Manager struct {
 	backlogs   *backlogs
 	dashboard  *Dashboard
 	bot        Bot
+	exposure   *exposureGuard // weighs the entries the agents claim, see ServeSettings
 
 	trigger chan struct{}
 
@@ -817,7 +818,8 @@ func combinedEntries(ctx context.Context, s *store.Store, id int64,
 	}
 	entries := agentapi.Entries{EntriesBlocked: supervision.EntriesBlocked || daily || hours,
 		EntriesRevision: supervision.EntriesRevision + dailyRevision + hoursRevision,
-		EntriesReason:   supervision.EntriesReason, EntriesPairs: pairs, PairsReason: pairsReason}
+		EntriesReason:   supervision.EntriesReason, EntriesPairs: pairs, PairsReason: pairsReason,
+		Exposure: exposureOn(ctx, s)}
 	if !daily && !hours {
 		return entries, nil
 	}

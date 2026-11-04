@@ -2622,6 +2622,32 @@ export interface TradingHoursRequest {
   reason?: string;
 }
 /**
+ * ExposureSettings is the exposure limit of the agents: at most MaxAgents
+ * agents holding a position or a pending entry on an asset in the same
+ * direction at once (0 for none), Pairs that limit for some assets apart (eg:
+ * XAUUSDm: 2, 0 for none on it); an entry beyond it refused, the exits, the
+ * stops, the targets and the orders by hand never. UpdatedBy and UpdatedAt
+ * (Unix seconds) tell the last change.
+ */
+export interface ExposureSettings {
+  max_agents: number /* int */;
+  pairs?: { [key: string]: number /* int */};
+  updated_by?: string;
+  updated_at?: number /* int64 */;
+}
+/**
+ * ExposureRequest is the body of PUT /api/settings/exposure.
+ */
+export interface ExposureRequest {
+  settings: ExposureSettings;
+}
+/**
+ * ExposureResponse answers GET and PUT /api/settings/exposure.
+ */
+export interface ExposureResponse {
+  settings: ExposureSettings;
+}
+/**
  * DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the
  * limits of all the agents together) and of PUT
  * /api/settings/agents/{name}/daily-limit (of an agent): the limits, why

@@ -202,6 +202,17 @@ func (c *Client) LeaseOrderIDs(ctx context.Context, count int64) (agentapi.Order
 	return ids, err
 }
 
+// ClaimEntry claims an entry on pair on side against the exposure limit of
+// the agents, see agentapi.ExposureClaim.
+func (c *Client) ClaimEntry(ctx context.Context, pair, side string) (agentapi.ExposureAnswer, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	var answer agentapi.ExposureAnswer
+	_, err := c.do(ctx, http.MethodPost, agentapi.ExposurePath, nil, agentapi.ExposureClaim{Pair: pair, Side: side},
+		&answer)
+	return answer, err
+}
+
 // Orders returns the orders of the agent after the ID after, by ID, limit at
 // most.
 func (c *Client) Orders(ctx context.Context, after int64, limit int) ([]model.Order, error) {

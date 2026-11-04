@@ -47,9 +47,14 @@ func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState
 	d.settings.trades = newPerformance(positions)
 	d.settings.mt5 = newMT5Accounts(s, manager, positions)
 	d.settings.paths = newExcursions(d.settings.trades)
+	if manager != nil {
+		manager.exposure = newExposureGuard(s, positions)
+	}
 }
 
 func (s *settings) routes(r chi.Router) {
+	r.Get("/settings/exposure", s.handleExposure)
+	r.Put("/settings/exposure", s.handleSetExposure)
 	r.Get("/settings/agents", s.handleAgents)
 	r.Post("/settings/agents", s.handleCreateAgent)
 	r.Patch("/settings/agents/{name}", s.handleAgent)

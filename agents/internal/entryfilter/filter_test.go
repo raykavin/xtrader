@@ -448,6 +448,60 @@ func TestFilter_GateAlone(t *testing.T) {
 	assert.InDelta(t, 0, asset, 1e-9, "flat")
 }
 
+// The exposure limit alone (no filter on): the strategy wrapped only for it,
+// each entry claimed of the controller with its asset and side and refused with
+// why when not granted; the exits and the orders protecting a position never
+// claimed.
+func TestFilter_ClaimAlone(t *testing.T) {
+	type claimed struct {
+		pair string
+		side model.SideType
+	}
+	var claims []claimed
+	refuse := true
+	s := &script{timeframe: "15m", warmup: 1}
+	wrapped, err := Wrap(s, Config{Claim: func(pair string, side model.SideType) (bool, string) {
+		claims = append(claims, claimed{pair, side})
+		if refuse {
+			return false, "Exposição máxima em BTCUSDT: 1 agente já está comprado (trend)"
+		}
+		return true, ""
+	}})
+	require.NoError(t, err)
+	_, isFilter := wrapped.(*filter)
+	require.True(t, isFilter, "wrapped for the claim")
+	b := newBench(t, wrapped)
+	var errs []error
+	step := 0
+	s.on = func(df *model.Dataframe, broker service.Broker) {
+		step++
+		switch step {
+		case 1: // refused: the entry not sent, with why
+			_, err := broker.CreateOrderMarket(model.SideTypeBuy, pair, 1)
+			errs = append(errs, err)
+			refuse = false
+		case 2: // granted: the entry sent, then its take profit and its exit not claimed
+			_, err := broker.CreateOrderMarket(model.SideTypeBuy, pair, 1)
+			errs = append(errs, err)
+			o, err := broker.CreateOrderLimit(model.SideTypeSell, pair, 1, 200)
+			errs = append(errs, err)
+			require.NoError(t, broker.Cancel(o))
+			_, err = broker.CreateOrderMarket(model.SideTypeSell, pair, 1)
+			errs = append(errs, err)
+		}
+	}
+	b.feed(line(2, 100, 1)...)
+	require.Len(t, errs, 4)
+	assert.ErrorIs(t, errs[0], order.ErrEntriesBlocked)
+	assert.ErrorContains(t, errs[0], "Exposição máxima em BTCUSDT: 1 agente já está comprado (trend)")
+	assert.NoError(t, errs[1], "granted")
+	assert.NoError(t, errs[2], "a take profit: protects")
+	assert.NoError(t, errs[3], "the exit passes")
+	assert.Equal(t, []claimed{{pair, model.SideTypeBuy}, {pair, model.SideTypeBuy}}, claims, "only the entries claimed")
+	asset, _, _ := b.wallet.Position(pair)
+	assert.InDelta(t, 0, asset, 1e-9, "flat")
+}
+
 // The exits are judged against the position the exchange holds too, the one
 // the strategies size them from, not only the one the order controller
 // follows, which lags it when a fill was dropped or its orders wiped: an exit
