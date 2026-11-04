@@ -258,8 +258,7 @@ func (s *settings) handleSetExposure(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	log.Infof("ui: the exposure limit set by %s: %d agents, by asset %v", by, limits.MaxAgents,
-		limits.Settings().Pairs)
+	log.Infof("ui: the exposure limit set by %s: %v", by, limits.Settings().Pairs)
 	agents, err := s.store.Agents(r.Context())
 	if err != nil {
 		log.Warnf("ui: the exposure limit not sent to the agents: %v", err)

@@ -17,12 +17,13 @@ import (
 )
 
 // The exposure limit of the agents, as they claim their entries: off, every
-// entry goes; on, an agent already on the asset in the direction goes, the
-// other direction counts apart, and past the limit an entry is refused with the
-// agents on it; agents claiming at the same second never pass it together, a
-// place granted held until its order shows or a while passes; a pending entry
-// takes a place; an asset with a limit of its own; an account that can't be read
-// lets nothing in blind.
+// entry goes; with a rule for the asset, an agent already on it in the
+// direction goes, the other direction counts apart, and past the limit an
+// entry is refused with the agents on it; an asset without a rule free;
+// agents claiming at the same second never pass it together, a place granted
+// held until its order shows or a while passes; a pending entry takes a place;
+// a rule changed or removed; an account that can't be read lets nothing in
+// blind.
 func TestExposure_Claims(t *testing.T) {
 	s, _, _ := newDailySupervised(t) // trend, magic 101
 	ctx := context.Background()
@@ -55,7 +56,8 @@ func TestExposure_Claims(t *testing.T) {
 	granted, _ := claim("orb", "XAUUSDm", "BUY")
 	assert.True(t, granted, "off: every entry goes")
 
-	set(ui.ExposureSettings{MaxAgents: 1})
+	rules := map[string]int{"XAUUSDm": 1, "BTCUSDm": 1, "EURUSDm": 1}
+	set(ui.ExposureSettings{Pairs: rules})
 	granted, reason := claim("orb", "XAUUSDm", "BUY")
 	assert.False(t, granted)
 	assert.Equal(t, "Exposição máxima em XAUUSDm: 1 agente já está comprado (trend)", reason)
@@ -63,6 +65,10 @@ func TestExposure_Claims(t *testing.T) {
 	assert.True(t, granted, "already on it")
 	granted, _ = claim("orb", "XAUUSDm", "SELL")
 	assert.True(t, granted, "the other direction apart")
+	s.bridge.set(protected(1, 101), position(2, 102, "USOILm", false, 0.01, 0, 0))
+	granted, _ = claim("sweeper", "USOILm", "BUY")
+	assert.True(t, granted, "no rule for USOILm: free")
+	s.bridge.set(protected(1, 101))
 	s.agent(t, "papertrend", "trend", true, func(a *store.Agent) { a.Mode = "paper" })
 	granted, _ = claim("papertrend", "XAUUSDm", "BUY")
 	assert.True(t, granted, "in paper: no position on an account")
@@ -89,16 +95,15 @@ func TestExposure_Claims(t *testing.T) {
 	assert.False(t, granted)
 	assert.Contains(t, reason, "(sweeper)")
 
-	// an asset with a limit of its own
-	set(ui.ExposureSettings{MaxAgents: 1, Pairs: map[string]int{"XAUUSDm": 2}})
+	// a rule changed, then removed
+	set(ui.ExposureSettings{Pairs: map[string]int{"XAUUSDm": 2, "EURUSDm": 1}})
 	granted, _ = claim("trend", "XAUUSDm", "BUY")
 	assert.True(t, granted, "2 places on XAUUSDm")
-	set(ui.ExposureSettings{MaxAgents: 1, Pairs: map[string]int{"XAUUSDm": 0}})
+	set(ui.ExposureSettings{Pairs: map[string]int{"EURUSDm": 1}})
 	granted, _ = claim("orb", "XAUUSDm", "BUY")
-	assert.True(t, granted, "none on XAUUSDm")
+	assert.True(t, granted, "no rule for XAUUSDm anymore")
 
 	// the account unread: nothing let in blind
-	set(ui.ExposureSettings{MaxAgents: 1})
 	s.bridge.mu.Lock()
 	s.bridge.status = http.StatusBadGateway
 	s.bridge.mu.Unlock()
@@ -117,12 +122,11 @@ func TestExposure_Settings(t *testing.T) {
 	ctx := context.Background()
 	call, _ := settingsSession(t, s.managed)
 	resp, body := call(http.MethodPut, "/api/settings/exposure", ui.ExposureRequest{Settings: ui.ExposureSettings{
-		MaxAgents: 2, Pairs: map[string]int{" XAUUSDm ": 1}}})
+		Pairs: map[string]int{" XAUUSDm ": 1, "BTCUSDm": 2}}})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	var got ui.ExposureResponse
 	require.NoError(t, json.Unmarshal([]byte(body), &got))
-	assert.Equal(t, 2, got.Settings.MaxAgents)
-	assert.Equal(t, map[string]int{"XAUUSDm": 1}, got.Settings.Pairs, "trimmed")
+	assert.Equal(t, map[string]int{"XAUUSDm": 1, "BTCUSDm": 2}, got.Settings.Pairs, "trimmed")
 	assert.Equal(t, "admin", got.Settings.UpdatedBy)
 
 	resp, body = call(http.MethodGet, "/api/settings/exposure", nil)
@@ -134,9 +138,8 @@ func TestExposure_Settings(t *testing.T) {
 	assert.True(t, entries.Exposure, "the agents told to claim their entries")
 
 	for _, refused := range []ui.ExposureSettings{
-		{MaxAgents: -1},
-		{MaxAgents: 101},
 		{Pairs: map[string]int{"XAU USD": 1}},
+		{Pairs: map[string]int{"XAUUSDm": 0}},
 		{Pairs: map[string]int{"XAUUSDm": 200}},
 	} {
 		resp, body = call(http.MethodPut, "/api/settings/exposure", ui.ExposureRequest{Settings: refused})

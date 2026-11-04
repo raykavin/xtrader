@@ -224,9 +224,10 @@ export function DailyLimitsSettings({ intro }: Props) {
             uma janela, faz isso ao voltar.
           </li>
           <li>
-            Exposição por ativo: antes de cada entrada, o agente pede a vaga ao XTrader; passado o
-            máximo de agentes no ativo e na direção, a entrada não é enviada, com o motivo. O limite
-            não fecha nada que já está aberto, e sem ler uma conta as entradas limitadas esperam.
+            Exposição por ativo: antes de cada entrada num ativo com regra, o agente pede a vaga ao
+            XTrader; passado o máximo de agentes da regra na mesma direção, a entrada não é enviada,
+            com o motivo. O limite não fecha nada que já está aberto, e sem ler uma conta as
+            entradas limitadas esperam.
           </li>
           <li>
             Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em

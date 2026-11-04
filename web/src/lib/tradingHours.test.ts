@@ -12,7 +12,6 @@ import {
   hoursWindows,
   MAX_WINDOWS,
   nextWindow,
-  parsePairs,
   type WindowForm,
   windowAllows,
   windowDetails,
@@ -53,7 +52,7 @@ const rows = (...windows: TradingWindow[]): WindowForm[] =>
   windows.map(({ pairs, ...w }, i) => ({
     ...w,
     agents: w.agents ?? [],
-    pairsText: (pairs ?? []).join(";"),
+    pairs: [...(pairs ?? [])],
     key: `k${i}`,
   }));
 
@@ -268,16 +267,10 @@ describe("the trading hours", () => {
     ).toEqual([window("08:00", "10:00", { agents: ["orb"] })]);
   });
 
-  it("takes the assets of a window typed separated by ;, the case kept", () => {
-    expect(parsePairs("")).toEqual([]);
-    expect(parsePairs(" ; ;")).toEqual([]);
-    expect(parsePairs("XAUUSDm")).toEqual(["XAUUSDm"]);
-    expect(parsePairs(" XAUUSDm ;BTCUSDm; USOILm;")).toEqual(["XAUUSDm", "BTCUSDm", "USOILm"]);
-    expect(parsePairs("xauusdm;XAUUSDm")).toEqual(["xauusdm", "XAUUSDm"]);
-    // kept as typed in the form, a list of before joined by ;
+  it("keeps the assets of a window as a list in the form, each a chip", () => {
     const [typed] = windowsForm([window("08:00", "10:00", { pairs: ["XAUUSDm", "BTCUSDm"] })]);
-    expect(typed?.pairsText).toBe("XAUUSDm;BTCUSDm");
-    expect(windowsForm([window("08:00", "10:00")])[0]?.pairsText).toBe("");
+    expect(typed?.pairs).toEqual(["XAUUSDm", "BTCUSDm"]);
+    expect(windowsForm([window("08:00", "10:00")])[0]?.pairs).toEqual([]);
   });
 
   it("names a window with its agents and its assets, each when some", () => {
@@ -300,28 +293,28 @@ describe("the trading hours", () => {
   });
 
   it("checks the assets of a window as the controller does", () => {
-    const check = (pairsText: string, from = "08:00", to = "10:00") =>
-      windowsCheck([{ ...rows(window(from, to))[0], pairsText } as WindowForm], true);
-    expect(check("").first).toBeNull();
-    expect(check("XAUUSDm;BTCUSDm;USOILm").first).toBeNull();
-    expect(check("US30.cash;GER40#;BRENT_X-1").first).toBeNull();
-    expect(check("XAUUSDm;xauusdm").first).toBeNull();
-    expect(check("XAUUSDm,BTCUSDm").first).toBe(
-      'A janela 08:00–10:00 tem um ativo inválido, "XAUUSDm,BTCUSDm": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+    const check = (pairs: string[], from = "08:00", to = "10:00") =>
+      windowsCheck([{ ...rows(window(from, to))[0], pairs } as WindowForm], true);
+    expect(check([]).first).toBeNull();
+    expect(check(["XAUUSDm", "BTCUSDm", "USOILm"]).first).toBeNull();
+    expect(check(["US30.cash", "GER40#", "BRENT_X-1"]).first).toBeNull();
+    expect(check(["XAUUSDm", "xauusdm"]).first).toBeNull();
+    expect(check(["XAUUSDm,BTCUSDm"]).first).toBe(
+      'A janela 08:00–10:00 tem um ativo inválido, "XAUUSDm,BTCUSDm": use o nome do ativo no MT5, ex.: XAUUSDm.',
     );
-    expect(check("XAU USD").rows.k0?.pairs).toBe(
-      'A janela 08:00–10:00 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+    expect(check(["XAU USD"]).rows.k0?.pairs).toBe(
+      'A janela 08:00–10:00 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm.',
     );
-    expect(check(".XAU").first).toContain('ativo inválido, ".XAU"');
-    expect(check("A".repeat(33)).first).toContain("ativo inválido");
-    expect(check("A".repeat(32)).first).toBeNull();
-    expect(check("XAUUSDm; BTCUSDm ;XAUUSDm").first).toBe(
+    expect(check([".XAU"]).first).toContain('ativo inválido, ".XAU"');
+    expect(check(["A".repeat(33)]).first).toContain("ativo inválido");
+    expect(check(["A".repeat(32)]).first).toBeNull();
+    expect(check(["XAUUSDm", "BTCUSDm", "XAUUSDm"]).first).toBe(
       "A janela 08:00–10:00 repete o ativo XAUUSDm.",
     );
     // named by its place while its times are typed, its times told first
-    const typing = check("XAU USD", "");
+    const typing = check(["XAU USD"], "");
     expect(typing.rows.k0?.pairs).toBe(
-      'A janela 1 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.',
+      'A janela 1 tem um ativo inválido, "XAU USD": use o nome do ativo no MT5, ex.: XAUUSDm.',
     );
     expect(typing.first).toBe("O início da janela 1 deve ser um horário HH:MM, de 00:00 a 23:59.");
     // the times of every window before the assets, the assets before the overlaps
@@ -350,7 +343,7 @@ describe("the trading hours", () => {
   it("sends the assets of a window as a list, only when some", () => {
     const sent = windowsRequest(
       rows(window("12:00", "14:00"), window("08:00", "10:00", { agents: ["orb"] })).map((w, i) =>
-        i === 0 ? { ...w, pairsText: " XAUUSDm; ;BTCUSDm " } : w,
+        i === 0 ? { ...w, pairs: ["XAUUSDm", "BTCUSDm"] } : w,
       ),
     );
     expect(sent).toEqual([

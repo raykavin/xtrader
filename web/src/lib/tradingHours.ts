@@ -3,6 +3,7 @@
 
 import type { TradingHoursSettings, TradingHoursStatus, TradingWindow } from "../api/types";
 import { timeIn } from "./dailyLimits";
+import { isSymbol } from "./symbols";
 
 /** A label and its tone, as the chips of the dashboard show them. */
 export interface HoursLabel {
@@ -124,12 +125,12 @@ export function endActionsText(flatten: boolean, cancelPending: boolean): string
 
 /**
  * A window of the form, as typed: its agents (none for all of them), its
- * assets as the text typed (see parsePairs; blank for all of them), and a key
- * that keeps its row while the list changes.
+ * assets, each a chip (none for all of them), and a key that keeps its row
+ * while the list changes.
  */
-export interface WindowForm extends Omit<TradingWindow, "pairs"> {
+export interface WindowForm extends TradingWindow {
   agents: string[];
-  pairsText: string;
+  pairs: string[];
   key: string;
 }
 
@@ -147,17 +148,9 @@ export function windowForm({ pairs, ...window }: TradingWindow): WindowForm {
   return {
     ...window,
     agents: window.agents ?? [],
-    pairsText: (pairs ?? []).join(";"),
+    pairs: [...(pairs ?? [])],
     key: `w${lastKey}`,
   };
-}
-
-/** The assets of text typed as "XAUUSDm;BTCUSDm": split by ;, trimmed, the blanks left out; the case kept. */
-export function parsePairs(text: string): string[] {
-  return text
-    .split(";")
-    .map((pair) => pair.trim())
-    .filter((pair) => pair !== "");
 }
 
 /** windows as the rows of the form. */
@@ -173,17 +166,14 @@ export function windowsForm(windows: TradingWindow[]): WindowForm[] {
 export function windowsRequest(windows: WindowForm[]): TradingWindow[] {
   return [...windows]
     .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
-    .map(({ start, end, agents, pairsText, flatten, cancel_pending }) => {
-      const pairs = parsePairs(pairsText);
-      return {
-        start,
-        end,
-        ...(agents.length > 0 ? { agents: [...agents] } : {}),
-        ...(pairs.length > 0 ? { pairs } : {}),
-        flatten,
-        cancel_pending,
-      };
-    });
+    .map(({ start, end, agents, pairs, flatten, cancel_pending }) => ({
+      start,
+      end,
+      ...(agents.length > 0 ? { agents: [...agents] } : {}),
+      ...(pairs.length > 0 ? { pairs: [...pairs] } : {}),
+      flatten,
+      cancel_pending,
+    }));
 }
 
 /**
@@ -219,9 +209,6 @@ function clockOf(minutes: number): string {
   return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 }
 
-/** An asset as MT5 names it, eg: XAUUSDm (agentapi's symbol). */
-const symbol = /^[A-Za-z0-9][A-Za-z0-9._#-]{0,31}$/;
-
 /** The problems of a window of the form, by field. */
 export interface WindowErrors {
   start?: string;
@@ -250,12 +237,11 @@ export interface WindowsCheck {
  */
 function pairsProblem(w: WindowForm, i: number): string | undefined {
   const name = clock.test(w.start) && clock.test(w.end) ? windowLabel(w) : String(i + 1);
-  const pairs = parsePairs(w.pairsText);
-  for (const [at, pair] of pairs.entries()) {
-    if (!symbol.test(pair)) {
-      return `A janela ${name} tem um ativo inválido, ${JSON.stringify(pair)}: use o nome do ativo no MT5, ex.: XAUUSDm, separados por ;.`;
+  for (const [at, pair] of w.pairs.entries()) {
+    if (!isSymbol(pair)) {
+      return `A janela ${name} tem um ativo inválido, ${JSON.stringify(pair)}: use o nome do ativo no MT5, ex.: XAUUSDm.`;
     }
-    if (pairs.indexOf(pair) < at) return `A janela ${name} repete o ativo ${pair}.`;
+    if (w.pairs.indexOf(pair) < at) return `A janela ${name} repete o ativo ${pair}.`;
   }
   return undefined;
 }
