@@ -31,6 +31,8 @@ import type {
   Decision,
   DecisionEvent,
   DecisionsResponse,
+  ExposureRequest,
+  ExposureResponse,
   LoginRequest,
   MT5AccountEventsResponse,
   MT5AccountInfo,
@@ -726,6 +728,11 @@ export function fetchTradingHours(signal?: AbortSignal): Promise<TradingHoursRes
   return getJSON<TradingHoursResponse>("/settings/trading-hours", signal);
 }
 
+/** The exposure limit of all the agents: at most so many on an asset in the same direction. */
+export function fetchExposure(signal?: AbortSignal): Promise<ExposureResponse> {
+  return getJSON<ExposureResponse>("/settings/exposure", signal);
+}
+
 /** The accounts of MetaTrader 5, never their password nor their token. */
 export function fetchMT5Accounts(signal?: AbortSignal): Promise<MT5AccountsResponse> {
   return getJSON<MT5AccountsResponse>("/settings/mt5-accounts", signal);
@@ -793,6 +800,11 @@ export function fetchMT5AccountEvents(
 /** Sets the trading hours of all the agents, applied at once: 400 when refused. */
 export function updateTradingHours(request: TradingHoursRequest): Promise<TradingHoursResponse> {
   return sendJSON<TradingHoursResponse>("PUT", "/settings/trading-hours", request);
+}
+
+/** Sets the exposure limit of all the agents, for their next entries: 400 when refused. */
+export function updateExposure(request: ExposureRequest): Promise<ExposureResponse> {
+  return sendJSON<ExposureResponse>("PUT", "/settings/exposure", request);
 }
 
 /** Reads once the MCP server of the calendar of each LLM agent with the token of the news. */

@@ -60,6 +60,7 @@ func (m *Manager) InternalHandler() http.Handler {
 		r.Get("/journal/memory", m.handleJournalMemory)
 		r.Post("/outbox", m.handleOutbox)
 		r.Post("/outbox/check", m.handleOutboxCheck)
+		r.Post(agentapi.ExposurePath, m.handleExposureClaim)
 	})
 	return r
 }

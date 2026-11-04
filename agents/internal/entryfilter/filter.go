@@ -107,7 +107,7 @@ func (f hfReleasesFilter) SetReleases(source strategies.Releases) { f.releases(s
 // can't be read.
 func Wrap(s strategy.Strategy, cfg Config) (strategy.Strategy, error) {
 	if !cfg.Enabled() {
-		if cfg.Gate == nil {
+		if cfg.Gate == nil && cfg.Claim == nil {
 			return s, nil
 		}
 		f := &filter{inner: s, cfg: cfg, pairs: make(map[string]*pairState), gateOnly: true,
@@ -396,6 +396,13 @@ func (f *filter) entry(pair string, side model.SideType, kind entryKind, level, 
 	}
 	reason := f.refusal(pair, st, side, features, computed)
 	f.mu.Unlock()
+	// last, the exposure limit of the agents: a place claimed of the
+	// controller, outside the lock (a request)
+	if reason == "" && f.cfg.Claim != nil {
+		if granted, why := f.cfg.Claim(pair, side); !granted {
+			reason = why
+		}
+	}
 
 	var err error
 	if reason == "" {

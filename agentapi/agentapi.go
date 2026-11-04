@@ -153,13 +153,34 @@ type Protection struct {
 // runtime read before: 0 for an agent never blocked. EntriesPairs, while
 // set, are the only assets the agent may open positions on (the window of the
 // trading hours open allowing them only), PairsReason why: its other entries
-// refused by its strategy (see PairGate), at the same revision.
+// refused by its strategy (see PairGate), at the same revision. Exposure
+// tells the exposure limit of the agents on: each entry claimed of the
+// controller first (see ExposureClaim).
 type Entries struct {
 	EntriesBlocked  bool     `json:"entries_blocked,omitempty"`
 	EntriesReason   string   `json:"entries_reason,omitempty"`
 	EntriesRevision int64    `json:"entries_revision,omitempty"`
 	EntriesPairs    []string `json:"entries_pairs,omitempty"`
 	PairsReason     string   `json:"pairs_reason,omitempty"`
+	Exposure        bool     `json:"exposure,omitempty"`
+}
+
+// ExposurePath is the path of the claims of an entry, POST, under Prefix.
+const ExposurePath = "/exposure/claim"
+
+// ExposureClaim is the payload of POST ExposurePath: an entry the agent is
+// about to send, on Pair, on Side (BUY or SELL), claimed against the exposure
+// limit of the agents (see ui.ExposureSettings).
+type ExposureClaim struct {
+	Pair string `json:"pair"`
+	Side string `json:"side"`
+}
+
+// ExposureAnswer answers an ExposureClaim: Granted, the entry may go (its
+// place held a while for the agent); else why not.
+type ExposureAnswer struct {
+	Granted bool   `json:"granted"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // OrderIDsRequest is the payload of POST /order-ids: how many order IDs the

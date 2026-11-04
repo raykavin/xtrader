@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/raykavin/xtrader/agentapi"
+	"github.com/raykavin/xtrader/model"
 	"math"
 	"slices"
 	"strings"
@@ -121,6 +122,10 @@ type Config struct {
 	// Gate, when set, tells the assets the strategy may open positions on now
 	// (the window of the trading hours open), asked before any filter
 	Gate *agentapi.PairGate
+	// Claim, when set, claims an entry the filters let through of the
+	// controller (the exposure limit of the agents), last, just before it is
+	// sent: whether it may go, and why not
+	Claim func(pair string, side model.SideType) (bool, string)
 }
 
 // Enabled reports whether a filter is on, or the samples recorded: off, the

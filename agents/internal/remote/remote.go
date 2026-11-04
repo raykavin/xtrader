@@ -19,10 +19,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/raykavin/xtrader/agentapi"
 	"github.com/raykavin/xtrader/agents/llm"
+	"github.com/raykavin/xtrader/model"
 	"github.com/raykavin/xtrader/tools/log"
 	"github.com/raykavin/xtrader/ui"
 )
@@ -48,6 +50,7 @@ type Agent struct {
 	mu         sync.Mutex
 	entries    Entries            // of the bot, see Supervise
 	gate       *agentapi.PairGate // the assets of its entries, see Gate
+	exposure   atomic.Bool        // the exposure limit on: its entries claimed, see ClaimEntry
 	protection Protection         // of the positions of the bot, see Protect
 	orders     *Orders
 	cancel     context.CancelFunc
@@ -228,6 +231,23 @@ func (a *Agent) Supervise(controller Entries) {
 	a.entries = controller
 	a.mu.Unlock()
 	applyEntries(a.Config.Name, controller, a.Config.Entries)
+	a.exposure.Store(a.Config.Entries.Exposure)
+}
+
+// ClaimEntry claims an entry of the bot on pair on side of the controller,
+// while the exposure limit of the agents is on (see agentapi.Entries), before
+// the bot sends it: whether it may go, and why not. A claim that can't be
+// asked refuses the entry, the limit unknown.
+func (a *Agent) ClaimEntry(pair string, side model.SideType) (bool, string) {
+	if !a.exposure.Load() {
+		return true, ""
+	}
+	answer, err := a.client.ClaimEntry(context.Background(), pair, string(side))
+	if err != nil {
+		log.Warnf("%s: the exposure of the entry on %s: %v", a.Config.Name, pair, err)
+		return false, "Não foi possível conferir a exposição no controller"
+	}
+	return answer.Granted, answer.Reason
 }
 
 // Gate has the assets the strategy of the bot may open positions on follow
@@ -298,6 +318,7 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 			if gate != nil {
 				applyPairs(gate, runtime.Entries)
 			}
+			a.exposure.Store(runtime.Entries.Exposure)
 			if protection != nil {
 				protection.Apply(runtime.ProtectionSettings, runtime.ProtectionArms)
 			}

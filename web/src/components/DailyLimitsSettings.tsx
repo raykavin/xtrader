@@ -12,6 +12,7 @@ import {
 } from "../lib/dailyLimits";
 import { formatProfit } from "../lib/format";
 import { DailyLimitFields } from "./DailyLimitFields";
+import { ExposureCard } from "./ExposureCard";
 import { PageHeader } from "./PageHeader";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, Loading, Skeleton } from "./States";
@@ -134,6 +135,8 @@ export function DailyLimitsSettings({ intro }: Props) {
 
       <TradingHoursCard />
 
+      <ExposureCard />
+
       <section className="card card-flush" aria-labelledby="daily-agents-title">
         <header className="card-header">
           <div className="card-heading">
@@ -219,6 +222,11 @@ export function DailyLimitsSettings({ intro }: Props) {
             as ordens pendentes de todos os agentes e ativos, conforme marcado nela; sem zerar, as
             posições abertas ficam como estão, com os stops. Se o XTrader estiver parado no fim de
             uma janela, faz isso ao voltar.
+          </li>
+          <li>
+            Exposição por ativo: antes de cada entrada, o agente pede a vaga ao XTrader; passado o
+            máximo de agentes no ativo e na direção, a entrada não é enviada, com o motivo. O limite
+            não fecha nada que já está aberto, e sem ler uma conta as entradas limitadas esperam.
           </li>
           <li>
             Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em

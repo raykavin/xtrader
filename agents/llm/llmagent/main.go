@@ -336,6 +336,7 @@ func run() error {
 	cfg.PairGate = &agentapi.PairGate{}
 	if agent != nil {
 		agent.Gate(cfg.PairGate)
+		cfg.Claim = agent.ClaimEntry // the exposure limit of the agents
 	}
 	trader, err := llm.New(cfg, provider, llm.WithPrompt(prompt, overrides))
 	if agent != nil && (err != nil || *mode != "live") {

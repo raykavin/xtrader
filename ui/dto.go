@@ -2292,6 +2292,29 @@ type TradingHoursRequest struct {
 	Reason   string               `json:"reason,omitempty"`
 }
 
+// ExposureSettings is the exposure limit of the agents: at most MaxAgents
+// agents holding a position or a pending entry on an asset in the same
+// direction at once (0 for none), Pairs that limit for some assets apart (eg:
+// XAUUSDm: 2, 0 for none on it); an entry beyond it refused, the exits, the
+// stops, the targets and the orders by hand never. UpdatedBy and UpdatedAt
+// (Unix seconds) tell the last change.
+type ExposureSettings struct {
+	MaxAgents int            `json:"max_agents"`
+	Pairs     map[string]int `json:"pairs,omitempty"`
+	UpdatedBy string         `json:"updated_by,omitempty"`
+	UpdatedAt int64          `json:"updated_at,omitempty"`
+}
+
+// ExposureRequest is the body of PUT /api/settings/exposure.
+type ExposureRequest struct {
+	Settings ExposureSettings `json:"settings"`
+}
+
+// ExposureResponse answers GET and PUT /api/settings/exposure.
+type ExposureResponse struct {
+	Settings ExposureSettings `json:"settings"`
+}
+
 // DailyLimitsRequest is the body of PUT /api/settings/daily-limits (the
 // limits of all the agents together) and of PUT
 // /api/settings/agents/{name}/daily-limit (of an agent): the limits, why
