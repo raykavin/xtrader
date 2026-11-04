@@ -1,85 +1,87 @@
 import { describe, expect, it } from "vitest";
-import {
-  type ExposureForm,
-  exposureForm,
-  exposureRequest,
-  pairLimitsText,
-  parsePairLimits,
-} from "./exposure";
+import { exposureCheck, exposureRules, MAX_ASSETS, type RuleForm, ruleForm } from "./exposure";
 
-const form = (fields: Partial<ExposureForm> = {}): ExposureForm => ({
-  maxAgents: "2",
-  pairsText: "",
-  ...fields,
-});
+const rows = (...rules: [string[], string][]): RuleForm[] =>
+  rules.map(([pairs, maxAgents]) => ruleForm(pairs, maxAgents));
 
-describe("the exposure limit", () => {
-  it("fills the form from the settings, no limit as a blank", () => {
-    expect(exposureForm({ max_agents: 0 })).toEqual({ maxAgents: "", pairsText: "" });
+describe("the rules of the exposure limit", () => {
+  it("shows the assets of the same limit in one rule, by name, the rules by their limit", () => {
+    expect(exposureRules({})).toEqual([]);
+    const rules = exposureRules({
+      pairs: { XAUUSDm: 2, USOILm: 4, BTCUSDm: 2, UKOILm: 4, "US500.cash": 1 },
+      updated_by: "admin",
+    });
+    expect(rules.map(({ pairs, maxAgents }) => [pairs, maxAgents])).toEqual([
+      [["US500.cash"], "1"],
+      [["BTCUSDm", "XAUUSDm"], "2"],
+      [["UKOILm", "USOILm"], "4"],
+    ]);
+    expect(new Set(rules.map((r) => r.key)).size).toBe(3);
+    expect(ruleForm()).toMatchObject({ pairs: [], maxAgents: "" });
+  });
+
+  it("sends the limit of each asset of each rule, no rule for off", () => {
     expect(
-      exposureForm({ max_agents: 2, pairs: { XAUUSDm: 2, BTCUSDm: 3 }, updated_by: "admin" }),
-    ).toEqual({ maxAgents: "2", pairsText: "XAUUSDm=2;BTCUSDm=3" });
-    expect(pairLimitsText(undefined)).toBe("");
-    expect(pairLimitsText({ USOILm: 0 })).toBe("USOILm=0");
-  });
-
-  it("takes the limits of the assets typed as ATIVO=número separated by ;, the case kept", () => {
-    expect(parsePairLimits("")).toEqual({ pairs: {}, errors: [] });
-    expect(parsePairLimits(" ; ;")).toEqual({ pairs: {}, errors: [] });
-    expect(parsePairLimits(" XAUUSDm = 2 ;BTCUSDm=3; USOILm=0;")).toEqual({
-      pairs: { XAUUSDm: 2, BTCUSDm: 3, USOILm: 0 },
-      errors: [],
+      exposureCheck(rows([["XAUUSDm", "BTCUSDm"], " 2 "], [["USOILm", "UKOILm"], "4"])),
+    ).toEqual({
+      request: { settings: { pairs: { XAUUSDm: 2, BTCUSDm: 2, USOILm: 4, UKOILm: 4 } } },
+      rows: {},
     });
-    expect(parsePairLimits("xauusdm=1;XAUUSDm=2").pairs).toEqual({ xauusdm: 1, XAUUSDm: 2 });
-    expect(parsePairLimits("US30.cash=1;GER40#=2;BRENT_X-1=100;XAUUSDm=02").errors).toEqual([]);
+    expect(exposureCheck(rows([["US500.cash", "btc#"], "100"])).request).toEqual({
+      settings: { pairs: { "US500.cash": 100, "btc#": 100 } },
+    });
+    expect(exposureCheck([])).toEqual({ request: { settings: { pairs: {} } }, rows: {} });
   });
 
-  it("tells why each entry is refused, once each", () => {
-    expect(parsePairLimits("XAUUSDm2;=2;BTCUSDm=").errors).toEqual([
-      "XAUUSDm2: use ATIVO=número, ex.: XAUUSDm=2.",
-      "=2: use ATIVO=número, ex.: XAUUSDm=2.",
-      "BTCUSDm=: use ATIVO=número, ex.: XAUUSDm=2.",
-    ]);
-    expect(parsePairLimits("XAU USD=2;.XAU=1").errors).toEqual([
-      "XAU USD: use o nome do ativo no MT5, ex.: XAUUSDm.",
-      ".XAU: use o nome do ativo no MT5, ex.: XAUUSDm.",
-    ]);
-    expect(parsePairLimits(`${"A".repeat(33)}=1`).errors).toHaveLength(1);
-    expect(parsePairLimits(`${"A".repeat(32)}=1`).errors).toEqual([]);
-    expect(parsePairLimits("XAUUSDm=101;BTCUSDm=-1;USOILm=1.5;US30=2=3").errors).toEqual([
-      "XAUUSDm: use um número inteiro de 0 a 100.",
-      "BTCUSDm: use um número inteiro de 0 a 100.",
-      "USOILm: use um número inteiro de 0 a 100.",
-      "US30: use um número inteiro de 0 a 100.",
-    ]);
-    expect(parsePairLimits("XAUUSDm=2;XAUUSDm=3;XAUUSDm=1")).toEqual({
-      pairs: { XAUUSDm: 2 },
-      errors: ["XAUUSDm: ativo repetido, deixe um só."],
+  it("drops a row left blank, never refusing it", () => {
+    expect(exposureCheck(rows([["XAUUSDm"], "2"], [[], " "]))).toEqual({
+      request: { settings: { pairs: { XAUUSDm: 2 } } },
+      rows: {},
     });
   });
 
-  it("checks the form as the controller does and sends the assets only when some", () => {
-    expect(exposureRequest(form())).toEqual({
-      request: { settings: { max_agents: 2 } },
-      errors: { pairs: [] },
-    });
-    expect(exposureRequest(form({ maxAgents: " " })).request).toEqual({
-      settings: { max_agents: 0 },
-    });
-    expect(
-      exposureRequest(form({ maxAgents: "0", pairsText: "XAUUSDm=2;BTCUSDm=0" })).request,
-    ).toEqual({ settings: { max_agents: 0, pairs: { XAUUSDm: 2, BTCUSDm: 0 } } });
-    expect(exposureRequest(form({ maxAgents: "100" })).request?.settings.max_agents).toBe(100);
-    expect(exposureRequest(form()).request?.settings).not.toHaveProperty("pairs");
-    for (const typed of ["101", "-1", "1.5", "dois"]) {
-      expect(exposureRequest(form({ maxAgents: typed }))).toEqual({
-        request: null,
-        errors: { maxAgents: "Use um número inteiro de 0 a 100.", pairs: [] },
-      });
-    }
-    expect(exposureRequest(form({ pairsText: "XAUUSDm=2;XAUUSDm=3" }))).toEqual({
-      request: null,
-      errors: { pairs: ["XAUUSDm: ativo repetido, deixe um só."] },
-    });
+  it("refuses each field of a rule with why, by its row", () => {
+    const rules = rows(
+      [[], "2"],
+      [["XAUUSDm", "XAU USDm"], "2"],
+      [["BTCUSDm"], ""],
+      [["USOILm"], "0"],
+      [["EURUSDm"], "101"],
+      [["GBPUSDm"], "1.5"],
+      [["USDJPYm"], "-1"],
+      [["A".repeat(33)], "1"],
+    );
+    const { request, rows: errors } = exposureCheck(rules);
+    expect(request).toBeNull();
+    expect(rules.map((r) => errors[r.key])).toEqual([
+      { pairs: "Informe ao menos um ativo." },
+      { pairs: "XAU USDm: use o nome do ativo no MT5, ex.: XAUUSDm." },
+      { maxAgents: "Informe o máximo de agentes." },
+      { maxAgents: "Use um número inteiro de 1 a 100." },
+      { maxAgents: "Use um número inteiro de 1 a 100." },
+      { maxAgents: "Use um número inteiro de 1 a 100." },
+      { maxAgents: "Use um número inteiro de 1 a 100." },
+      { pairs: `${"A".repeat(33)}: use o nome do ativo no MT5, ex.: XAUUSDm.` },
+    ]);
+    expect(exposureCheck(rows([["A".repeat(32)], "1"])).request).not.toBeNull();
+  });
+
+  it("refuses an asset in two rules, on the later one, the case telling them apart", () => {
+    const rules = rows([["XAUUSDm"], "0"], [["BTCUSDm", "XAUUSDm"], "2"], [["xauusdm"], "1"]);
+    const { request, rows: errors } = exposureCheck(rules);
+    expect(request).toBeNull();
+    expect(rules.map((r) => errors[r.key])).toEqual([
+      { maxAgents: "Use um número inteiro de 1 a 100." },
+      { pairs: "XAUUSDm já está em outra regra: deixe o ativo numa só." },
+      undefined,
+    ]);
+  });
+
+  it("refuses more assets than the controller takes, of all the rules", () => {
+    const pairs = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => `PAIR${from + i}`);
+    const many = rows([pairs(0, 30), "1"], [pairs(30, MAX_ASSETS - 29), "2"]);
+    expect(exposureCheck(many)).toMatchObject({ request: null, list: "Use no máximo 50 ativos." });
+    expect(exposureCheck(rows([pairs(0, MAX_ASSETS), "1"])).request).not.toBeNull();
   });
 });

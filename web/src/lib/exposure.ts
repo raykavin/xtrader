@@ -1,116 +1,97 @@
-// The exposure limit of all the agents on the dashboard: at most so many
-// agents on an asset in the same direction at once, and the form that sets
-// it, checked as the controller checks it.
+// The exposure limit of all the agents on the dashboard, by rules: for each
+// asset of a rule, at most so many agents on it in the same direction at
+// once; an asset without a rule without a limit. The form sets them a row by
+// rule, its assets (each a chip) and its limit, checked as the controller
+// checks them; the controller keeps the limit of each asset.
 
 import type { ExposureRequest, ExposureSettings } from "../api/types";
+import { isSymbol } from "./symbols";
 
-/** The largest limit, of all the assets or of one. */
+/** The largest limit of a rule. */
 export const MAX_EXPOSURE = 100;
 
-/** An asset as MT5 names it, eg: XAUUSDm (agentapi's symbol). */
-const symbol = /^[A-Za-z0-9][A-Za-z0-9._#-]{0,31}$/;
+/** The most assets limited, of all the rules (as the controller takes them). */
+export const MAX_ASSETS = 50;
 
-/** The form of the exposure limit, as typed: the numbers as text, a blank for none. */
-export interface ExposureForm {
-  /** The limit of every asset; blank or 0 for none. */
-  maxAgents: string;
-  /** The limits of some assets apart, as "XAUUSDm=2;BTCUSDm=3". */
-  pairsText: string;
-}
-
-/** The limits of some assets as typed, eg: XAUUSDm=2;BTCUSDm=3; blank for none. */
-export function pairLimitsText(pairs: Record<string, number> | undefined): string {
-  return Object.entries(pairs ?? {})
-    .map(([pair, limit]) => `${pair}=${limit}`)
-    .join(";");
-}
-
-/** The form of settings: no limit as a blank. */
-export function exposureForm(settings: ExposureSettings): ExposureForm {
-  return {
-    maxAgents: settings.max_agents > 0 ? String(settings.max_agents) : "",
-    pairsText: pairLimitsText(settings.pairs),
-  };
-}
-
-/** The limit of text, an integer from 0 to MAX_EXPOSURE; null when it isn't one. */
-function limitOf(text: string): number | null {
-  if (!/^\d+$/.test(text)) return null;
-  const limit = Number(text);
-  return limit <= MAX_EXPOSURE ? limit : null;
-}
-
-/**
- * The limits of some assets typed as "XAUUSDm=2;BTCUSDm=3": split by ; and by
- * the first =, trimmed, the blanks left out, the case of each asset kept (MT5
- * tells them apart); and why each entry is refused, in its order.
- */
-export function parsePairLimits(text: string): {
-  pairs: Record<string, number>;
-  errors: string[];
-} {
-  const pairs: Record<string, number> = {};
-  const errors: string[] = [];
-  // each problem told once, however many times it is typed
-  const refuse = (problem: string) => {
-    if (!errors.includes(problem)) errors.push(problem);
-  };
-  for (const item of text.split(";")) {
-    const entry = item.trim();
-    if (entry === "") continue;
-    const at = entry.indexOf("=");
-    const pair = (at < 0 ? entry : entry.slice(0, at)).trim();
-    const value = at < 0 ? "" : entry.slice(at + 1).trim();
-    if (at < 0 || pair === "" || value === "") {
-      refuse(`${entry}: use ATIVO=número, ex.: XAUUSDm=2.`);
-      continue;
-    }
-    if (!symbol.test(pair)) {
-      refuse(`${pair}: use o nome do ativo no MT5, ex.: XAUUSDm.`);
-      continue;
-    }
-    const limit = limitOf(value);
-    if (limit === null) {
-      refuse(`${pair}: use um número inteiro de 0 a ${MAX_EXPOSURE}.`);
-      continue;
-    }
-    if (Object.hasOwn(pairs, pair)) {
-      refuse(`${pair}: ativo repetido, deixe um só.`);
-      continue;
-    }
-    pairs[pair] = limit;
-  }
-  return { pairs, errors };
-}
-
-/** Why the fields of the form are refused: of the limit of every asset, and of each entry of the assets apart. */
-export interface ExposureErrors {
-  maxAgents?: string;
+/** A rule as a row of the form: its assets, its limit as typed, and a key of its own. */
+export interface RuleForm {
+  key: string;
   pairs: string[];
+  maxAgents: string;
+}
+
+let lastKey = 0;
+
+/** A row of a rule, blank by default, with a key of its own. */
+export function ruleForm(pairs: string[] = [], maxAgents = ""): RuleForm {
+  lastKey += 1;
+  return { key: `r${lastKey}`, pairs, maxAgents };
 }
 
 /**
- * The request of form, or why its fields are refused, as the controller would
- * refuse them (it checks them again): the limit of every asset an integer
- * from 0 to 100 (blank for 0, none), each asset as MT5 names it with an
- * integer from 0 to 100, none repeated; the assets apart only when some.
+ * The rules of settings as rows: the assets of the same limit in one rule,
+ * by their name, the rules by their limit.
  */
-export function exposureRequest(form: ExposureForm): {
-  request: ExposureRequest | null;
-  errors: ExposureErrors;
-} {
-  const errors: ExposureErrors = { pairs: [] };
-  const typed = form.maxAgents.trim();
-  const maxAgents = typed === "" ? 0 : limitOf(typed);
-  if (maxAgents === null) {
-    errors.maxAgents = `Use um número inteiro de 0 a ${MAX_EXPOSURE}.`;
+export function exposureRules(settings: ExposureSettings): RuleForm[] {
+  const byLimit = new Map<number, string[]>();
+  for (const [pair, limit] of Object.entries(settings.pairs ?? {})) {
+    byLimit.set(limit, [...(byLimit.get(limit) ?? []), pair]);
   }
-  const parsed = parsePairLimits(form.pairsText);
-  errors.pairs = parsed.errors;
-  if (maxAgents === null || parsed.errors.length > 0) return { request: null, errors };
-  const pairs = Object.keys(parsed.pairs).length > 0 ? parsed.pairs : undefined;
-  return {
-    request: { settings: { max_agents: maxAgents, ...(pairs ? { pairs } : {}) } },
-    errors,
-  };
+  return [...byLimit.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([limit, pairs]) =>
+      ruleForm(
+        pairs.sort((a, b) => a.localeCompare(b)),
+        String(limit),
+      ),
+    );
+}
+
+/** Why the fields of a rule are refused. */
+export interface RuleErrors {
+  pairs?: string;
+  maxAgents?: string;
+}
+
+/**
+ * The request of the rules, or why they are refused, as the controller would
+ * refuse them (it checks them again): each rule with an asset at least, each
+ * as MT5 names it (the case kept, MT5 telling them apart) and in one rule only;
+ * each limit an integer from 1 to MAX_EXPOSURE; at most MAX_ASSETS assets. A
+ * row left blank is dropped; no rule turns the limit off.
+ */
+export function exposureCheck(rules: RuleForm[]): {
+  request: ExposureRequest | null;
+  rows: Record<string, RuleErrors>;
+  list?: string;
+} {
+  const rows: Record<string, RuleErrors> = {};
+  const pairs: Record<string, number> = {};
+  const taken = rules.filter((rule) => rule.pairs.length > 0 || rule.maxAgents.trim() !== "");
+  const seen = new Set<string>();
+  let assets = 0;
+  for (const rule of taken) {
+    const errors: RuleErrors = {};
+    const invalid = rule.pairs.find((pair) => !isSymbol(pair));
+    const repeated = rule.pairs.find((pair, at) => seen.has(pair) || rule.pairs.indexOf(pair) < at);
+    if (rule.pairs.length === 0) errors.pairs = "Informe ao menos um ativo.";
+    else if (invalid !== undefined) {
+      errors.pairs = `${invalid}: use o nome do ativo no MT5, ex.: XAUUSDm.`;
+    } else if (repeated !== undefined) {
+      errors.pairs = `${repeated} já está em outra regra: deixe o ativo numa só.`;
+    }
+    for (const pair of rule.pairs) seen.add(pair);
+    assets += rule.pairs.length;
+    const typed = rule.maxAgents.trim();
+    const limit = /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
+    if (typed === "") errors.maxAgents = "Informe o máximo de agentes.";
+    else if (!(limit >= 1 && limit <= MAX_EXPOSURE)) {
+      errors.maxAgents = `Use um número inteiro de 1 a ${MAX_EXPOSURE}.`;
+    }
+    if (errors.pairs || errors.maxAgents) rows[rule.key] = errors;
+    else for (const pair of rule.pairs) pairs[pair] = limit;
+  }
+  const list = assets > MAX_ASSETS ? `Use no máximo ${MAX_ASSETS} ativos.` : undefined;
+  if (list || Object.keys(rows).length > 0) return { request: null, rows, list };
+  return { request: { settings: { pairs } }, rows };
 }

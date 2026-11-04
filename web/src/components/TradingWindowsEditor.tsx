@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isSymbol } from "../lib/symbols";
 import {
   agentsLabel,
   agentsTitle,
@@ -10,6 +11,7 @@ import {
   windowLabel,
   windowsCheck,
 } from "../lib/tradingHours";
+import { ChipInput } from "./ChipInput";
 import { DialogHeader } from "./Dialog";
 import { Icon } from "./Icon";
 
@@ -33,7 +35,7 @@ interface Props {
  * The windows of the trading hours, of the settings and of a batch: one row
  * by window, its start, its end, the agents that may open positions in it
  * (all of them by default, chosen in a dialog), the assets they may open them
- * on (all of them by default, typed separated by ;) and what its end does,
+ * on (all of them by default, each typed as a chip) and what its end does,
  * each removable; a button to add one, free of the others. The problems are told
  * as the controller tells them, each by the field or the row concerned, the
  * ones of the whole list under it.
@@ -156,18 +158,15 @@ export function TradingWindowsEditor({
                   <label className="field-label" htmlFor={fieldId(w, "pairs")}>
                     Ativos
                   </label>
-                  <input
+                  <ChipInput
                     id={fieldId(w, "pairs")}
-                    className="input mono"
-                    value={w.pairsText}
-                    placeholder="todos (ex.: XAUUSDm;BTCUSDm)"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    spellCheck={false}
+                    values={w.pairs}
+                    placeholder="todos (digite um e tecle Enter)"
                     disabled={disabled}
-                    aria-invalid={errors.pairs ? true : undefined}
-                    aria-describedby={errors.pairs ? fieldId(w, "pairs-error") : undefined}
-                    onChange={(e) => update(w.key, { pairsText: e.target.value })}
+                    invalid={Boolean(errors.pairs)}
+                    describedBy={errors.pairs ? fieldId(w, "pairs-error") : undefined}
+                    refused={(pair) => !isSymbol(pair)}
+                    onChange={(pairs) => update(w.key, { pairs })}
                   />
                   {errors.pairs && (
                     <span id={fieldId(w, "pairs-error")} className="field-error">

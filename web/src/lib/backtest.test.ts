@@ -302,14 +302,14 @@ describe("the form of a batch", () => {
     const f = withHours(form({}), hours);
     expect(f.hours).toBe(true);
     expect(f.hoursWindows.map(({ key: _, ...w }) => w)).toEqual([
-      { ...morning, agents: [], pairsText: "" },
-      { ...noon, agents: [], pairsText: "" },
+      { ...morning, agents: [], pairs: [] },
+      { ...noon, agents: [], pairs: [] },
     ]);
     expect(withHours(form({}), { ...hours, enabled: false }).hours).toBe(false);
     // the hours of a single window, of before
     expect(
       withHours(form({}), { ...hours, windows: [] }).hoursWindows.map(({ key: _, ...w }) => w),
-    ).toEqual([{ ...morning, agents: [], pairsText: "" }]);
+    ).toEqual([{ ...morning, agents: [], pairs: [] }]);
     // the windows sent in the order of the day, whatever the order typed
     const reversed = { ...f, hoursWindows: [...f.hoursWindows].reverse() };
     expect(formRequest(reversed, limits, now).request?.hours).toEqual({
@@ -456,7 +456,7 @@ describe("the form of a batch", () => {
       cancel_pending: false,
     };
     const f = withHours(form({ agents: ["a"] }), hours);
-    expect(f.hoursWindows[0]?.pairsText).toBe("XAUUSDm;BTCUSDm");
+    expect(f.hoursWindows[0]?.pairs).toEqual(["XAUUSDm", "BTCUSDm"]);
     expect(formRequest(f, limits, now).request?.hours).toEqual({
       windows: [{ ...morning, agents: ["a"], pairs: ["XAUUSDm", "BTCUSDm"] }],
       flatten: false,
@@ -464,14 +464,14 @@ describe("the form of a batch", () => {
     });
     const [first] = f.hoursWindows;
     if (!first) throw new Error("a window");
-    const typed = (pairsText: string) =>
-      formRequest({ ...f, hoursWindows: [{ ...first, pairsText }] }, limits, now);
-    expect(typed(" USOILm ; ").request?.hours?.windows?.[0]?.pairs).toEqual(["USOILm"]);
-    expect(typed("").request?.hours?.windows?.[0]).not.toHaveProperty("pairs");
-    expect(typed("USOILm;USOILm").errors.hoursWindows).toBe(
+    const typed = (pairs: string[]) =>
+      formRequest({ ...f, hoursWindows: [{ ...first, pairs }] }, limits, now);
+    expect(typed(["USOILm"]).request?.hours?.windows?.[0]?.pairs).toEqual(["USOILm"]);
+    expect(typed([]).request?.hours?.windows?.[0]).not.toHaveProperty("pairs");
+    expect(typed(["USOILm", "USOILm"]).errors.hoursWindows).toBe(
       "A janela 08:00–10:00 repete o ativo USOILm.",
     );
-    expect(typed("USOILm;USOILm").request).toBeNull();
+    expect(typed(["USOILm", "USOILm"]).request).toBeNull();
     expect(
       hoursAssumption({
         windows: [{ ...morning, agents: ["highlow"], pairs: ["XAUUSDm", "BTCUSDm"] }],
