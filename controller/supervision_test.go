@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,6 +139,9 @@ type fakeAgent struct {
 	// are canceled; closes the close requests it got
 	fills  map[int64]bridgePosition
 	closes []ui.SupervisionCloseRequest
+	// onClose is called as a close request comes, eg: to hold it until the
+	// closes of other agents came too
+	onClose func()
 }
 
 func newFakeAgent(t *testing.T, bridge *fakeBridge, magic int64) *fakeAgent {
@@ -216,6 +220,9 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/supervision/close":
 		var request ui.SupervisionCloseRequest
 		_ = json.NewDecoder(r.Body).Decode(&request)
+		if a.onClose != nil {
+			a.onClose()
+		}
 		a.closes = append(a.closes, request)
 		if request.Block && request.Revision >= a.revision {
 			a.blocked, a.reason, a.revision = true, request.Reason, request.Revision
@@ -988,6 +995,84 @@ func TestSupervisionAPI_CloseAll(t *testing.T) {
 		assert.False(t, a.SupervisionOf().EntriesBlocked, a.Name)
 		assert.Equal(t, before[i].DailyLimitOf(), a.DailyLimitOf(), a.Name)
 	}
+}
+
+// together returns a hook for the close requests of agents agents: each one
+// held until all of them came, and how many gave up waiting (their closes
+// asked one after the other: the first never sees the others).
+func together(agents int) (hook func(), gaveUp *atomic.Int32) {
+	var arrived sync.WaitGroup
+	arrived.Add(agents)
+	all := make(chan struct{})
+	go func() { arrived.Wait(); close(all) }()
+	gaveUp = new(atomic.Int32)
+	return func() {
+		arrived.Done()
+		select {
+		case <-all:
+		case <-time.After(5 * time.Second):
+			gaveUp.Add(1)
+		}
+	}, gaveUp
+}
+
+// The positions of the agents closed by every position zeroed are closed by
+// the agents together, not one after the other: their closes wait for the
+// bridge of their account at once.
+func TestSupervisionAPI_CloseAllTogether(t *testing.T) {
+	s := newSupervised(t)
+	hook, gaveUp := together(3)
+	for i, name := range []string{"fibonacci", "vwap", "orb"} {
+		s.liveAgent(t, name, int64(101+i), true).onClose = hook
+	}
+	s.bridge.set(protected(1, 101), protected(2, 102), protected(3, 103))
+	call, _ := settingsSession(t, s.managed)
+
+	resp, body := call(http.MethodPost, "/api/supervisor/close-all", ui.SupervisorCloseRequest{})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var result confirmResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &result))
+	assert.Equal(t, store.ActionSucceeded, result.Action.Status, body)
+	assert.Zero(t, gaveUp.Load(), "the three closes asked together")
+	positions, _ := itemsOf(result.Action.Result, "position")
+	assert.Equal(t, map[int64]string{1: itemDone, 2: itemDone, 3: itemDone}, positions)
+	agents := []string{}
+	for _, item := range result.Action.Result.Items {
+		if item.Kind == "orders" {
+			agents = append(agents, item.Agent)
+		}
+	}
+	assert.Equal(t, []string{"fibonacci", "orb", "vwap"}, agents, "what each did told in the order of their names")
+	assert.Empty(t, s.bridge.held())
+}
+
+// The positions of two agents closed by their × at once are closed together:
+// an action on an agent alone never waits for the one on another.
+func TestSupervisionAPI_AgentClosesTogether(t *testing.T) {
+	s := newSupervised(t)
+	hook, gaveUp := together(2)
+	s.liveAgent(t, "fibonacci", 101, true).onClose = hook
+	s.liveAgent(t, "vwap", 102, true).onClose = hook
+	s.bridge.set(protected(1, 101), protected(2, 102))
+	call, _ := settingsSession(t, s.managed)
+
+	statuses := make([]string, 2)
+	var wg sync.WaitGroup
+	for i, name := range []string{"fibonacci", "vwap"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, body := call(http.MethodPost, "/api/supervisor/agents/"+name+"/close", ui.SupervisorCloseRequest{})
+			var result confirmResponse
+			if resp.StatusCode == http.StatusOK && json.Unmarshal([]byte(body), &result) == nil {
+				statuses[i] = result.Action.Status
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, []string{store.ActionSucceeded, store.ActionSucceeded}, statuses)
+	assert.Zero(t, gaveUp.Load(), "the two closes asked together")
+	assert.Empty(t, s.bridge.held())
 }
 
 // The close of every position told as it went, never as a success because it

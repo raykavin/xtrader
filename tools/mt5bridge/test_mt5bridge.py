@@ -599,6 +599,95 @@ class SelectTest(BridgeTest):
         self.assertEqual(2, select.call_count)
 
 
+class SharedReadsTest(BridgeTest):
+    """Identical reads waiting for the terminal are served by one call, read
+    after they all arrived; a read arriving once the call has the terminal gets
+    a call of its own; other queries and the trading requests are never shared;
+    each request keeps its deadline."""
+
+    def concurrently(self, requests):
+        """Sends requests, (method, path, kwargs of request), together, while
+        the terminal is held, returning their answers in their order."""
+        answers = [None] * len(requests)
+
+        def send(i, method, path, kwargs):
+            answers[i] = self.request(method, path, **kwargs)
+        threads = [threading.Thread(target=send, args=(i,) + tuple(r)) for i, r in enumerate(requests)]
+        for thread in threads:
+            thread.start()
+            time.sleep(0.02)  # in their order
+        for thread in threads:
+            thread.join()
+        return answers
+
+    def calls(self, name):
+        return [args for called, args in PACKAGE.calls if called == name]
+
+    def test_identical_reads_queued_share_one_call(self):
+        PACKAGE.lists["orders_get"] = ({"ticket": 7},)
+        held = self.hold_terminal(0.5)
+        answers = self.concurrently([("GET", "/orders", {})] * 5)
+        held.join()
+        self.assertEqual([(200, [{"ticket": 7}])] * 5, answers)
+        self.assertEqual(1, len(self.calls("orders_get")), "one call for the five, read after they arrived")
+
+    def test_a_read_arriving_during_the_call_gets_its_own(self):
+        reads = iter([1, 2])
+        PACKAGE.lists["orders_get"] = lambda: ({"ticket": next(reads)},)
+        PACKAGE.slow["orders_get"] = 0.4
+        first = threading.Thread(target=lambda: self.assertEqual((200, [{"ticket": 1}]),
+                                                                 self.request("GET", "/orders")))
+        first.start()
+        time.sleep(0.15)  # the first one reading
+        self.assertEqual((200, [{"ticket": 2}]), self.request("GET", "/orders"), "never an answer read before it")
+        first.join()
+        self.assertEqual(2, len(self.calls("orders_get")))
+
+    def test_other_queries_are_not_shared(self):
+        held = self.hold_terminal(0.4)
+        answers = self.concurrently([("GET", "/deals?from=0&to=10", {}), ("GET", "/deals?from=0&to=20", {}),
+                                     ("GET", "/deals?to=10&from=0", {})])
+        held.join()
+        self.assertEqual([(200, [])] * 3, answers)
+        self.assertEqual([10, 20], sorted(int(to.timestamp()) for _, to in self.calls("history_deals_get")),
+                         "the same query in another order shared")
+
+    def test_trading_requests_are_never_shared(self):
+        held = self.hold_terminal(0.4)
+        answers = self.concurrently([("POST", "/order", {"body": {"action": 1, "symbol": "XAUUSDm", "volume": 0.01,
+                                                                   "type": 0, "magic": 424242, "comment": "a"}})] * 2)
+        held.join()
+        self.assertEqual([200, 200], [status for status, _ in answers])
+        self.assertEqual(2, len(PACKAGE.sends))
+
+    def test_a_failure_is_the_answer_of_all(self):
+        PACKAGE.lists["orders_get"] = None
+        PACKAGE.error = (-10005, "IPC timeout")
+        held = self.hold_terminal(0.4)
+        answers = self.concurrently([("GET", "/orders", {})] * 3)
+        held.join()
+        self.assertEqual([502] * 3, [status for status, _ in answers])
+        self.assertEqual(1, len(self.calls("orders_get")))
+
+    def test_each_keeps_its_deadline(self):
+        held = self.hold_terminal(0.8)
+        started = time.time()
+        answers = self.concurrently([("GET", "/orders", {}), ("GET", "/orders", {"left": 0.2})])
+        held.join()
+        self.assertEqual(200, answers[0][0])
+        self.assertEqual(504, answers[1][0], "the one joined gave up at its own deadline")
+        self.assertLess(time.time() - started, 2)
+        self.assertEqual(1, len(self.calls("orders_get")))
+
+    def test_one_joined_queues_again_when_the_call_gave_up_first(self):
+        held = self.hold_terminal(0.6)
+        answers = self.concurrently([("GET", "/orders", {"left": 0.2}), ("GET", "/orders", {"left": 3})])
+        held.join()
+        self.assertEqual(504, answers[0][0], "the first one gave up waiting for the terminal")
+        self.assertEqual(200, answers[1][0], "the second one, with time left, queued again")
+        self.assertEqual(1, len(self.calls("orders_get")))
+
+
 class EncodingTest(unittest.TestCase):
     @unittest.skipIf(numpy is None, "without numpy")
     def test_rates_json_of_a_structured_array(self):

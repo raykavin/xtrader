@@ -39,6 +39,11 @@ reads, the range is outside the history, answered empty as a range without
 candles, and only otherwise an error. The candles by position are read within
 the "Max. bars in chart" of the terminal (terminal_info().maxbars).
 
+The terminal serves one request at a time. Identical reads (a GET of the same
+route and query, eg: every agent polling /positions of the account) waiting for
+it together are served by one call (see Flights): an answer is never read
+before its request arrived. Trading requests are never shared.
+
 The terminal serves one request at a time. A request with a deadline waits for
 it until then at most, and POST /order is never sent to the terminal after it,
 eg: while the terminal reconnects: the client gave up by then. The deadline is
@@ -75,7 +80,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import MetaTrader5 as mt5
 
@@ -225,6 +230,7 @@ class Terminal:
         self.password = os.environ.get("MT5_PASSWORD", "") if self.session and self.session.get("legacy") else ""
         self.waiting = "" if self.session else "session"  # why no account is served: session or password
         self.instance = instance_of(getattr(args, "session", ""))  # tells this terminal apart, see instance_of
+        self.flights = Flights()  # the identical reads waiting for the terminal, see Flights
 
     def read_only(self):
         """Whether the account served refuses every trading request."""
@@ -344,19 +350,22 @@ class Terminal:
         self.selected.discard(symbol)
         return self.select(symbol)
 
-    def call(self, fn, deadline=None):
+    def call(self, fn, deadline=None, started=None):
         """Runs fn with the terminal, connecting again when it was lost, eg: the
         terminal closed, which initialize starts again with --path; self.info is
         its terminal_info(). An exception of fn is the terminal lost (503) only
         when terminal_info() no longer answers, else an error of the bridge
         (500). With a deadline (a time.monotonic()), it waits for the terminal
         until then at most, a request behind a slow one or a reconnection, and
-        refuses to start fn after it (504)."""
+        refuses to start fn after it (504). started, if any, is called once the
+        terminal is taken, before anything is read (see Flights)."""
         if deadline is None:
             self.lock.acquire()
         elif not self.lock.acquire(timeout=max(deadline - time.monotonic(), 0)):
             raise BridgeError(504, "the deadline of the request passed waiting for the terminal: not sent to it")
         try:
+            if started is not None:
+                started()
             check_deadline(deadline, "waiting for the terminal")
             self.info = mt5.terminal_info() if self.connected else None
             if self.connected and self.info is None:
@@ -378,6 +387,76 @@ class Terminal:
                 raise BridgeError(503, "terminal: %s" % exc)
         finally:
             self.lock.release()
+
+
+class Flight:
+    """A call of the terminal shared by identical reads, see Flights."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.started = False  # the terminal taken: no request joins it any more
+        self.result = None
+        self.error = None
+
+
+class Flights:
+    """The identical reads waiting for the terminal, served by one call of it.
+
+    A read (a GET of the same route and query) joins the call of an identical
+    one queued for the terminal and not started yet, and takes its answer:
+    read once the terminal is taken, after every request joined arrived, never
+    before. Once the call has the terminal, the next identical read queues a
+    call of its own. The agents polling the same account every second then cost
+    the terminal a call each round, not one each, and a trading request waits
+    behind a few calls rather than behind every copy of them.
+
+    Each request keeps its deadline: one joined gives up at its own, and when
+    the call it joined gave up waiting for the terminal (its deadline sooner),
+    it queues again while it still has time."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.queued = {}  # the call not started of each key
+
+    def run(self, key, call, deadline):
+        """The answer of call(started) for key, a call shared by the identical
+        reads queued meanwhile; started is to be called once the terminal is
+        taken (see Terminal.call). deadline is the one of the request, a
+        time.monotonic() or None."""
+        while True:
+            with self.lock:
+                flight = self.queued.get(key)
+                leader = flight is None
+                if leader:
+                    flight = Flight()
+                    self.queued[key] = flight
+            if leader:
+                try:
+                    flight.result = call(lambda: self.start(key, flight))
+                except BaseException as exc:  # handed to the ones joined too
+                    flight.error = exc
+                finally:
+                    self.start(key, flight, taken=False)
+                    flight.done.set()
+            else:
+                left = None if deadline is None else max(deadline - time.monotonic(), 0)
+                if not flight.done.wait(left):
+                    raise BridgeError(504, "the deadline of the request passed waiting for the terminal: "
+                                           "not sent to it")
+            if flight.error is None:
+                return flight.result
+            if not leader and not flight.started and (deadline is None or time.monotonic() < deadline):
+                continue  # the call joined gave up before the terminal: this one still has time
+            raise flight.error
+
+    def start(self, key, flight, taken=True):
+        """Closes flight to the requests arriving: the terminal taken (taken),
+        or the call over without it."""
+        with self.lock:
+            if taken:
+                flight.started = True
+            if self.queued.get(key) is flight:
+                del self.queued[key]
 
 
 def dumps(payload):
@@ -494,6 +573,7 @@ class Handler(BaseHTTPRequestHandler):
     token = ""
     read_only = False
     deadline = None  # of the request handled, see request_deadline
+    started = None  # of the read handled shared, see Flights
 
     def log_message(self, fmt, *args):
         if self.server.verbose:
@@ -555,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def run(self, fn):
         """Runs fn with the terminal, within the deadline of the request."""
-        return self.terminal.call(fn, self.deadline)
+        return self.terminal.call(fn, self.deadline, self.started)
 
     def respond(self, method):
         """The payload of the request, or its BridgeError."""
@@ -567,6 +647,13 @@ class Handler(BaseHTTPRequestHandler):
         route = ROUTES.get((method, url.path))
         if route is None:
             raise BridgeError(404, "no route %s %s" % (method, url.path))
+        if method == "GET" and url.path in SHARED:
+            key = (url.path, tuple(sorted(parse_qsl(url.query, keep_blank_values=True))))
+
+            def call(started):
+                self.started = started
+                return route(self, parse_qs(url.query), None)
+            return self.terminal.flights.run(key, call, self.deadline)
         body = json.loads(raw or b"{}") if method == "POST" else None
         return route(self, parse_qs(url.query), body)
 
@@ -833,6 +920,11 @@ ROUTES = {
     ("GET", "/session"): Handler.session,
     ("POST", "/session"): Handler.set_session,
 }
+
+# The reads shared by identical requests waiting for the terminal, see Flights:
+# the GETs through the terminal, never a trading request nor the session.
+SHARED = frozenset({"/health", "/account", "/symbol", "/tick", "/rates", "/positions", "/orders", "/deals",
+                    "/history_orders"})
 
 
 def loopback(host):
