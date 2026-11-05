@@ -14,6 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/raykavin/xtrader/agents/llm"
+	"github.com/raykavin/xtrader/internal/recovery"
 	"github.com/raykavin/xtrader/store"
 	"github.com/raykavin/xtrader/ui"
 )
@@ -80,14 +81,16 @@ func scopeOf(a store.SupervisorAction) (ui.SupervisorScope, ui.SupervisorOptions
 
 // execute executes the action a, claimed (executing), and records its result,
 // checked: the actions on several agents one at a time, an action on an agent
-// at a time, the locks of the agents in the order of their names.
+// at a time, the locks of the agents in the order of their names. The actions
+// on different agents alone run together, eg: the positions of two agents
+// closed by their × at once.
 func (s *Supervision) execute(ctx context.Context, a store.SupervisorAction) (string, ui.SupervisorResult) {
 	ctx = context.WithoutCancel(ctx) // an action begun ends, whatever the request
 	scope, options := scopeOf(a)
 	agents := slices.Clone(scope.Agents)
 	slices.Sort(agents)
 	agents = slices.Compact(agents)
-	if len(agents) > 1 || a.Action == store.ActionClosePositions {
+	if len(agents) > 1 {
 		s.bulk.Lock()
 		defer s.bulk.Unlock()
 	}
@@ -536,7 +539,9 @@ func holdOf(a store.Agent) int {
 // eg: zeroing all), an agent running cancels and closes under the same hold
 // of its entries, every pair of it, an agent not running has its orders
 // removed then whatever it holds closed: an entry filled meanwhile closed too,
-// and what the agents still hold after told.
+// and what the agents still hold after told. The agents are done together,
+// closeParallel at a time (see closeAgent), their items in the order of their
+// names.
 func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorAction, scope ui.SupervisorScope,
 	options ui.SupervisorOptions, by string) []ui.SupervisorResultItem {
 	before, err := s.read(ctx)
@@ -556,8 +561,6 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 		byAgent[position.Agent] = append(byAgent[position.Agent], position)
 	}
 
-	var items []ui.SupervisorResultItem
-	var unknownPairs = make(map[string]map[string]bool) // the pairs closed with an outcome unknown, by agent
 	names := slices.Sorted(maps.Keys(byAgent))
 	if options.Whole { // the agents shown without a position too: their pending entries canceled
 		for _, agent := range before.snapshot.Agents {
@@ -567,54 +570,34 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 		}
 		slices.Sort(names)
 	}
-	for _, name := range names {
-		agent, err := s.store.AgentByName(ctx, name)
-		if err != nil {
-			items = append(items, ui.SupervisorResultItem{Agent: name, Kind: "agent", Status: itemFailed,
-				Detail: err.Error()})
-			continue
-		}
-		running := s.running(name)
-		if options.CancelPending && !flatten { // when flattened, with the closes, see below
-			items = append(items, s.cancelPending(ctx, agent, nil)...)
-		}
-		revision := int64(0)
-		if options.KeepBlocked {
-			item := s.setEntries(ctx, agent, true, "encerramento de posições: "+a.Reason, by, &a.ID)
-			items = append(items, item)
-			if sup, err := s.store.AgentByName(ctx, name); err == nil {
-				if entries, err := entriesOf(ctx, s.store, sup); err == nil {
-					revision = entries.EntriesRevision
-				}
+	// the agents together, closeParallel at a time: their requests wait for
+	// the bridges of their accounts together rather than one after the other
+	closed := make([]agentClosed, len(names))
+	slots := make(chan struct{}, closeParallel)
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			if p := recovery.Call("the close of the agent "+name, time.Time{}, func() {
+				closed[i] = s.closeAgent(ctx, a, name, byAgent[name], before, options, by)
+			}); p != nil {
+				log.Errorf("supervisor: %v\n%s", p, p.Stack)
+				closed[i] = agentClosed{items: []ui.SupervisorResultItem{{Agent: name, Kind: "agent",
+					Status: itemUnknown, Detail: "erro interno ao encerrar: confira na conta"}}}
 			}
-		}
-		confirmed := byAgent[name]
-		switch {
-		case running:
-			closed, unknown := s.closeThroughAgent(ctx, agent, confirmed, before, options, revision, a.Reason)
-			items = append(items, closed...)
-			if len(unknown) > 0 {
-				unknownPairs[name] = unknown
-			}
-		case agent.Mode != "live":
-			if flatten {
-				items = append(items, s.cancelPending(ctx, agent, nil)...)
-			}
-			for _, position := range confirmed {
-				items = append(items, ui.SupervisorResultItem{Agent: name, Kind: "position", Pair: position.Pair,
-					Status: itemAlready, Detail: "agente em paper parado: a posição simulada não existe mais"})
-			}
-		default:
-			items = append(items, s.onBridge(ctx, agent, func(v *view, token string) []ui.SupervisorResultItem {
-				var items []ui.SupervisorResultItem
-				if flatten { // its orders removed first, then whatever it holds: an order filled meanwhile too
-					items = s.removeOrders(ctx, agent, v, token, nil)
-					if fresh, err := s.read(ctx); err == nil {
-						v = fresh
-					}
-				}
-				return append(items, s.closeOnBridge(ctx, agent, confirmed, v, token, flatten)...)
-			})...)
+		}()
+	}
+	wg.Wait()
+	var items []ui.SupervisorResultItem
+	unknownPairs := make(map[string]map[string]bool) // the pairs closed with an outcome unknown, by agent
+	// in the order of their names, whatever the order they ended in
+	for i, name := range names {
+		items = append(items, closed[i].items...)
+		if len(closed[i].unknown) > 0 {
+			unknownPairs[name] = closed[i].unknown
 		}
 	}
 	items, last := s.checkClosed(ctx, items, scope.Positions, unknownPairs)
@@ -622,6 +605,74 @@ func (s *Supervision) closePositions(ctx context.Context, a store.SupervisorActi
 		items = remaining(items, names, scope.Positions, last)
 	}
 	return items
+}
+
+// closeParallel is how many agents an action closes at once, see
+// closePositions.
+const closeParallel = 8
+
+// agentClosed is what closeAgent did on an agent: its items, and the pairs
+// whose outcome is unknown.
+type agentClosed struct {
+	items   []ui.SupervisorResultItem
+	unknown map[string]bool
+}
+
+// closeAgent does on the agent of name what the action a closing positions
+// asks (see closePositions): its entries kept blocked and its pending entries
+// canceled when asked, its positions confirmed closed through its API when
+// it runs, on its bridge when it doesn't (its launch fenced), with before, the
+// view read at the start. Run with the other agents of the action.
+func (s *Supervision) closeAgent(ctx context.Context, a store.SupervisorAction, name string,
+	confirmed []ui.SupervisorScopePosition, before *view, options ui.SupervisorOptions, by string) agentClosed {
+	flatten := options.Whole && options.CancelPending
+	var result agentClosed
+	agent, err := s.store.AgentByName(ctx, name)
+	if err != nil {
+		result.items = []ui.SupervisorResultItem{{Agent: name, Kind: "agent", Status: itemFailed,
+			Detail: err.Error()}}
+		return result
+	}
+	running := s.running(name)
+	if options.CancelPending && !flatten { // when flattened, with the closes, see below
+		result.items = append(result.items, s.cancelPending(ctx, agent, nil)...)
+	}
+	revision := int64(0)
+	if options.KeepBlocked {
+		item := s.setEntries(ctx, agent, true, "encerramento de posições: "+a.Reason, by, &a.ID)
+		result.items = append(result.items, item)
+		if sup, err := s.store.AgentByName(ctx, name); err == nil {
+			if entries, err := entriesOf(ctx, s.store, sup); err == nil {
+				revision = entries.EntriesRevision
+			}
+		}
+	}
+	switch {
+	case running:
+		closed, unknown := s.closeThroughAgent(ctx, agent, confirmed, before, options, revision, a.Reason)
+		result.items, result.unknown = append(result.items, closed...), unknown
+	case agent.Mode != "live":
+		if flatten {
+			result.items = append(result.items, s.cancelPending(ctx, agent, nil)...)
+		}
+		for _, position := range confirmed {
+			result.items = append(result.items, ui.SupervisorResultItem{Agent: name, Kind: "position",
+				Pair: position.Pair, Status: itemAlready,
+				Detail: "agente em paper parado: a posição simulada não existe mais"})
+		}
+	default:
+		result.items = append(result.items, s.onBridge(ctx, agent, func(v *view, token string) []ui.SupervisorResultItem {
+			var items []ui.SupervisorResultItem
+			if flatten { // its orders removed first, then whatever it holds: an order filled meanwhile too
+				items = s.removeOrders(ctx, agent, v, token, nil)
+				if fresh, err := s.read(ctx); err == nil {
+					v = fresh
+				}
+			}
+			return append(items, s.closeOnBridge(ctx, agent, confirmed, v, token, flatten)...)
+		})...)
+	}
+	return result
 }
 
 // remaining tells what the agents names still hold in last, the view read
