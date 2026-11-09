@@ -19,9 +19,10 @@ import (
 // The global parametrizer of the agents: a param changed on the agents
 // holding it, enabled or not, each agent's other params kept, the ones
 // without it left; added to them too when asked; the agents enabled restarted
-// when asked, the disabled ones left stopped; a key the params of an agent
-// refuse refused before anything changes; the edition of an agent alone
-// unchanged.
+// when asked, the disabled ones left stopped; the LLM agents only, the
+// enabled ones only, or both, the others untouched and never restarted; a key
+// the params of an agent refuse refused before anything changes; the edition
+// of an agent alone unchanged.
 func TestSettings_AgentsParam(t *testing.T) {
 	c := newManaged(t)
 	ctx := context.Background()
@@ -102,6 +103,34 @@ func TestSettings_AgentsParam(t *testing.T) {
 	assert.Equal(t, ui.AgentsParamResult{Agent: "gold", Enabled: true, Status: ui.ParamSkipped,
 		Detail: "parâmetro só para agentes LLM"}, results["gold"])
 
+	// the LLM agents only: the others untouched, never restarted
+	gold := c.manager.State("gold").PID
+	status, response, body = set(ui.AgentsParamRequest{Key: "timeframe", Value: "30m", AddMissing: true,
+		RestartActive: true, LLMOnly: true})
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Equal(t, map[string]ui.AgentsParamResult{
+		"gold":   {Agent: "gold", Enabled: true, Status: ui.ParamExcluded},
+		"silver": {Agent: "silver", Status: ui.ParamExcluded},
+		"llm":    {Agent: "llm", Enabled: true, Status: ui.ParamAdded, Restart: ui.ParamRestarted},
+	}, byAgent(response))
+	assert.NotContains(t, params("gold"), "timeframe")
+	assert.Equal(t, gold, c.manager.State("gold").PID, "out of the filter: not restarted")
+
+	// the enabled agents only: the disabled one untouched
+	status, response, body = set(ui.AgentsParamRequest{Key: "lot", Value: "0.04", EnabledOnly: true})
+	require.Equal(t, http.StatusOK, status, body)
+	results = byAgent(response)
+	assert.Equal(t, ui.ParamUpdated, results["gold"].Status)
+	assert.Equal(t, ui.ParamUpdated, results["llm"].Status)
+	assert.Equal(t, ui.ParamExcluded, results["silver"].Status)
+	assert.Equal(t, "0.03", params("silver")["lot"], "disabled: untouched")
+
+	// both: the LLM agents enabled
+	_, response, _ = set(ui.AgentsParamRequest{Key: "lot", Value: "0.05", LLMOnly: true, EnabledOnly: true})
+	results = byAgent(response)
+	assert.Equal(t, []string{ui.ParamExcluded, ui.ParamUpdated, ui.ParamExcluded},
+		[]string{results["gold"].Status, results["llm"].Status, results["silver"].Status})
+
 	// refused before anything changes
 	for _, refused := range []ui.AgentsParamRequest{
 		{Key: "", Value: "1"},
@@ -114,7 +143,7 @@ func TestSettings_AgentsParam(t *testing.T) {
 	}
 	_, body = call(http.MethodPost, "/api/settings/agents/params", ui.AgentsParamRequest{Key: "mode", Value: "paper"})
 	assert.Contains(t, body, "O parâmetro mode tem campo próprio")
-	assert.Equal(t, "0.03", params("gold")["lot"], "nothing changed by a refusal")
+	assert.Equal(t, "0.04", params("gold")["lot"], "nothing changed by a refusal")
 
 	// an agent alone, as before
 	resp, body := call(http.MethodPatch, "/api/settings/agents/gold",

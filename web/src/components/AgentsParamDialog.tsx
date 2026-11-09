@@ -7,6 +7,8 @@ import {
   agentsParamErrors,
   agentsParamRequest,
   emptyAgentsParamForm,
+  filtering,
+  inFilter,
   paramKeys,
   paramPreview,
   paramResultLabel,
@@ -33,10 +35,12 @@ const shownValues = 4;
 
 /**
  * The global parametrizer of the agents, in a modal dialog: a param set by its
- * key on every agent holding it, on the ones without it too when asked, then
- * the agents enabled restarted when asked. Before: the key suggested among the
- * ones of the agents, how many hold it and with which values, and what would
- * change; after: what was done on each agent, its failures first.
+ * key on every agent of the filter holding it (all of them, the LLM ones, the
+ * enabled ones, or both), on the ones without it too when asked, then the
+ * agents of the filter enabled restarted when asked. Before: the key
+ * suggested among the ones of the agents of the filter, how many hold it and
+ * with which values, and what would change; after: what was done on each
+ * agent of the filter, its failures first, the others counted.
  */
 export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   const id = useId();
@@ -61,10 +65,12 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
     setForm((f) => ({ ...f, [field]: value }));
 
   const errors = agentsParamErrors(form);
-  const usage = paramUsage(agents, form.key);
+  const scoped = agents.filter((a) => inFilter(a, form));
+  const usage = paramUsage(scoped, form.key);
   const preview = paramPreview(agents, form);
   const nothing = preview.update + preview.add === 0 && !form.restartActive;
-  const enabled = agents.filter((a) => a.enabled && a.launched).length;
+  const enabled = scoped.filter((a) => a.enabled && a.launched).length;
+  const ofFilter = filtering(form) ? " do filtro" : "";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -87,8 +93,8 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   const keyHint = (): string => {
     if (form.key.trim() === "")
       return "O nome da flag, sem o traço, como nos parâmetros do agente.";
-    if (usage.holding === 0) return "Nenhum agente tem essa chave.";
-    return `Presente em ${usage.holding} de ${agentsCount(agents.length)}.`;
+    if (usage.holding === 0) return `Nenhum agente${ofFilter} tem essa chave.`;
+    return `Presente em ${usage.holding} de ${agentsCount(scoped.length)}${ofFilter}.`;
   };
   const valueHint = (): string => {
     if (usage.values.length === 0) return "O valor que os agentes passam a usar.";
@@ -148,7 +154,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                   onBlur={() => setTouched((t) => ({ ...t, key: true }))}
                 />
                 <datalist id={`${id}-keys`}>
-                  {paramKeys(agents).map((key) => (
+                  {paramKeys(scoped).map((key) => (
                     <option key={key} value={key} />
                   ))}
                 </datalist>
@@ -191,6 +197,36 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                 <label className="hours-check">
                   <input
                     type="checkbox"
+                    checked={form.llmOnly}
+                    disabled={busy}
+                    aria-describedby={`${id}-llm-hint`}
+                    onChange={(e) => set("llmOnly", e.target.checked)}
+                  />
+                  Somente para agentes de LLM
+                </label>
+                <span id={`${id}-llm-hint`} className="field-hint">
+                  Os agentes de outros tipos ficam de fora: não mudam nem reiniciam.
+                </span>
+              </div>
+              <div className="agents-param-option">
+                <label className="hours-check">
+                  <input
+                    type="checkbox"
+                    checked={form.enabledOnly}
+                    disabled={busy}
+                    aria-describedby={`${id}-enabled-hint`}
+                    onChange={(e) => set("enabledOnly", e.target.checked)}
+                  />
+                  Somente para os agentes ativos
+                </label>
+                <span id={`${id}-enabled-hint`} className="field-hint">
+                  Os agentes desligados ficam de fora e não mudam.
+                </span>
+              </div>
+              <div className="agents-param-option">
+                <label className="hours-check">
+                  <input
+                    type="checkbox"
                     checked={form.addMissing}
                     disabled={busy}
                     aria-describedby={`${id}-add-hint`}
@@ -199,8 +235,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                   Adicionar para agentes sem o parâmetro
                 </label>
                 <span id={`${id}-add-hint`} className="field-hint">
-                  Desmarcada, só os agentes que já têm a chave mudam. Um parâmetro do LLM (llm-,
-                  calendar-, news-) só entra nos agentes LLM.
+                  Desmarcada, só os agentes que já têm a chave mudam.
                 </span>
               </div>
               <div className="agents-param-option">
@@ -212,10 +247,10 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                     aria-describedby={`${id}-restart-hint`}
                     onChange={(e) => set("restartActive", e.target.checked)}
                   />
-                  Reiniciar todos os agentes ativos
+                  Reiniciar os agentes ativos
                 </label>
                 <span id={`${id}-restart-hint`} className="field-hint">
-                  {`Depois de salvar, reinicia ${enabled === 1 ? "o agente ligado" : `os ${enabled} agentes ligados`} para aplicar o valor; os desligados continuam desligados. Desmarcada, os ligados aplicam o valor no próximo reinício.`}
+                  {`Depois de salvar, reinicia ${enabled === 1 ? `o agente ligado${ofFilter}` : `os ${enabled} agentes ligados${ofFilter}`} para aplicar o valor; os desligados continuam desligados. Desmarcada, os ligados aplicam o valor no próximo reinício.`}
                 </span>
               </div>
             </fieldset>
@@ -269,6 +304,9 @@ function previewText(preview: ReturnType<typeof paramPreview>): string {
     preview.without > 0
       ? `${agentsCount(preview.without)} ${preview.without === 1 ? "fica" : "ficam"} sem o parâmetro`
       : "",
+    preview.excluded > 0
+      ? `${agentsCount(preview.excluded)} ${preview.excluded === 1 ? "fica" : "ficam"} fora do filtro`
+      : "",
     preview.restart > 0
       ? `${preview.restart === 1 ? "1 agente ligado reinicia" : `${preview.restart} agentes ligados reiniciam`}`
       : "",
@@ -297,7 +335,7 @@ function Results({
             "Os agentes ligados que mudaram aplicam o valor no próximo reinício (Reinício pendente)."}
         </Alert>
         <ul className="agents-param-results" aria-label="Resultado por agente">
-          {sortedResults(response.results).map((result) => {
+          {sortedResults(response.results.filter((r) => r.status !== "excluded")).map((result) => {
             const change = paramResultLabel(result);
             const restart = restartLabel(result, asked);
             return (

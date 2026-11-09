@@ -909,15 +909,20 @@ type AgentSettingsRequest struct {
 
 // AgentsParamRequest is the body of POST /api/settings/agents/params, the
 // global parametrizer of the agents: the param Key, the name of a flag without
-// its dash (eg: lot), set to Value on every agent holding it, on the ones
-// without it too when AddMissing, each agent's other params and settings
-// kept; then, when RestartActive, every agent enabled restarted, the disabled
-// ones left stopped. Key and Value are checked as the params of an agent are.
+// its dash (eg: lot), set to Value on every agent of the filter holding it, on
+// the ones without it too when AddMissing, each agent's other params and
+// settings kept; then, when RestartActive, every agent of the filter enabled
+// restarted, the disabled ones left stopped. The filter is every agent, the
+// LLM ones only when LLMOnly, the enabled ones only when EnabledOnly (both:
+// the LLM ones enabled). Key and Value are checked as the params of an agent
+// are.
 type AgentsParamRequest struct {
 	Key           string `json:"key"`
 	Value         string `json:"value"`
 	AddMissing    bool   `json:"add_missing,omitempty"`
 	RestartActive bool   `json:"restart_active,omitempty"`
+	LLMOnly       bool   `json:"llm_only,omitempty"`
+	EnabledOnly   bool   `json:"enabled_only,omitempty"`
 }
 
 // The outcomes of the global parametrizer on an agent, see AgentsParamResult.
@@ -927,6 +932,7 @@ const (
 	ParamUnchanged = "unchanged" // the value it had already
 	ParamSkipped   = "skipped"   // left as it was, Detail telling why
 	ParamFailed    = "failed"    // refused on this agent, Detail telling why
+	ParamExcluded  = "excluded"  // out of the filter: untouched, never restarted
 )
 
 // The restarts of the global parametrizer, see AgentsParamResult.
@@ -938,10 +944,11 @@ const (
 
 // AgentsParamResult is what POST /api/settings/agents/params did on an agent:
 // Status ParamUpdated (Previous the value it had), ParamAdded,
-// ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why); and, the
-// restart asked, Restart ParamRestarted, ParamRestartFailed or
-// ParamRestartLeft (RestartDetail telling why), "" for an agent disabled,
-// left stopped. Enabled tells whether the agent is enabled.
+// ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why), or
+// ParamExcluded out of the filter; and, the restart asked, Restart
+// ParamRestarted, ParamRestartFailed or ParamRestartLeft (RestartDetail
+// telling why), "" for an agent disabled, left stopped, or out of the filter.
+// Enabled tells whether the agent is enabled.
 type AgentsParamResult struct {
 	Agent         string `json:"agent"`
 	Enabled       bool   `json:"enabled"`

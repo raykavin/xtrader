@@ -24,12 +24,13 @@ var paramStatus = map[string]string{store.ParamUpdated: ui.ParamUpdated, store.P
 	store.ParamUnchanged: ui.ParamUnchanged, store.ParamSkipped: ui.ParamSkipped}
 
 // handleAgentsParam is the global parametrizer of the agents, see
-// ui.AgentsParamRequest: the param set on each agent in turn (see
-// store.SetAgentParam), one refused on an agent told and the others done all
-// the same; the agents changed applied (their restart pending, see
-// AgentSettings.RestartPending); then, when asked, every agent enabled
-// restarted, whatever its param did, the disabled ones left stopped. It goes
-// on to the end once begun, whatever the request.
+// ui.AgentsParamRequest: the param set on each agent of the filter in turn
+// (see store.SetAgentParam), one refused on an agent told and the others done
+// all the same, the agents out of the filter untouched; the agents changed
+// applied (their restart pending, see AgentSettings.RestartPending); then,
+// when asked, every agent of the filter enabled restarted, whatever its param
+// did, the disabled ones left stopped. It goes on to the end once begun,
+// whatever the request.
 func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 	var request ui.AgentsParamRequest
 	if !decode(w, r, &request) {
@@ -54,6 +55,11 @@ func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 	changed := 0
 	for i, a := range agents {
 		result := ui.AgentsParamResult{Agent: a.Name, Enabled: a.Enabled}
+		if !inParamFilter(request, a) {
+			result.Status = ui.ParamExcluded
+			results[i] = result
+			continue
+		}
 		set, err := s.store.SetAgentParam(ctx, a.ID, key, value, request.AddMissing)
 		if err != nil {
 			result.Status, result.Detail = ui.ParamFailed, userMessage(err)
@@ -70,8 +76,9 @@ func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 		results[i] = result
 	}
 	by := userOf(ctx)
-	log.Infof("ui: the param %s set on %d of %d agents by %s (added where missing: %t, restart: %t)", key, changed,
-		len(agents), by, request.AddMissing, request.RestartActive)
+	log.Infof("ui: the param %s set on %d of %d agents by %s (added where missing: %t, restart: %t, LLM only: %t, "+
+		"enabled only: %t)", key, changed, len(agents), by, request.AddMissing, request.RestartActive,
+		request.LLMOnly, request.EnabledOnly)
 	if changed > 0 {
 		if err := s.manager.Reconcile(ctx); err != nil {
 			log.Errorf("ui: %v", err)
@@ -83,16 +90,22 @@ func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ui.AgentsParamResponse{Key: key, Value: value, Results: results})
 }
 
-// restartEnabled restarts every agent of agents enabled, restartParallel at a
-// time, telling how in its result of results (by their index): restarted,
-// failed, or left when the controller doesn't launch it. The disabled ones are
-// left stopped.
+// inParamFilter reports whether the agent a is in the filter of the request,
+// see ui.AgentsParamRequest.
+func inParamFilter(request ui.AgentsParamRequest, a store.Agent) bool {
+	return (!request.LLMOnly || a.Kind == "llm") && (!request.EnabledOnly || a.Enabled)
+}
+
+// restartEnabled restarts every agent of agents enabled and in the filter,
+// restartParallel at a time, telling how in its result of results (by their
+// index): restarted, failed, or left when the controller doesn't launch it.
+// The disabled ones are left stopped, the ones out of the filter untouched.
 func (s *settings) restartEnabled(ctx context.Context, agents []store.Agent, results []ui.AgentsParamResult) {
 	slots := make(chan struct{}, restartParallel)
 	var wg sync.WaitGroup
 	for i, a := range agents {
 		switch {
-		case !a.Enabled:
+		case !a.Enabled || results[i].Status == ui.ParamExcluded:
 			continue
 		case !a.Launched:
 			results[i].Restart = ui.ParamRestartLeft
