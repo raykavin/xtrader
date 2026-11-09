@@ -44,9 +44,16 @@ func TestSettings_AgentsParam(t *testing.T) {
 		}
 		return resp.StatusCode, response, body
 	}
+	// the result of each agent, its single param told apart below
 	byAgent := func(response ui.AgentsParamResponse) map[string]ui.AgentsParamResult {
 		results := make(map[string]ui.AgentsParamResult)
 		for _, result := range response.Results {
+			if len(result.Params) == 1 {
+				param := result.Params[0]
+				assert.Equal(t, result.Previous, param.Previous, result.Agent)
+				assert.Contains(t, []string{result.Status, ""}, param.Status, result.Agent)
+			}
+			result.Params = nil
 			results[result.Agent] = result
 		}
 		return results
@@ -150,4 +157,68 @@ func TestSettings_AgentsParam(t *testing.T) {
 		ui.AgentSettingsRequest{Params: map[string]string{"pair": "XAUUSDm", "lot": "0.05"}})
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 	assert.Equal(t, store.Params{"pair": "XAUUSDm", "lot": "0.05"}, params("gold"))
+}
+
+// Several params set at once on each agent: each told on each agent, all set
+// together (the pair and the lot of its pairs), one refused refusing them all
+// on that agent; a key repeated or too many refused before anything changes.
+func TestSettings_AgentsParams(t *testing.T) {
+	c := newManaged(t)
+	ctx := context.Background()
+	c.agent(t, "gold", "trend", false)
+	c.agent(t, "silver", "trend", false, func(a *store.Agent) { delete(a.Params, "lot") })
+	call, _ := settingsSession(t, c)
+	set := func(request ui.AgentsParamRequest) (int, ui.AgentsParamResponse, string) {
+		t.Helper()
+		resp, body := call(http.MethodPost, "/api/settings/agents/params", request)
+		var response ui.AgentsParamResponse
+		if resp.StatusCode == http.StatusOK {
+			require.NoError(t, json.Unmarshal([]byte(body), &response))
+		}
+		return resp.StatusCode, response, body
+	}
+	params := func(name string) store.Params {
+		t.Helper()
+		a, err := c.store.AgentByName(ctx, name)
+		require.NoError(t, err)
+		return a.AllParams()
+	}
+
+	status, response, body := set(ui.AgentsParamRequest{Params: []ui.AgentParam{
+		{Key: " pair ", Value: " XAUUSDm;BTCUSDm "},
+		{Key: "lot", Value: "XAUUSDm=0.01;BTCUSDm=0.02"},
+	}})
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Equal(t, []ui.AgentParam{{Key: "pair", Value: "XAUUSDm;BTCUSDm"},
+		{Key: "lot", Value: "XAUUSDm=0.01;BTCUSDm=0.02"}}, response.Params, "trimmed")
+	assert.Equal(t, "pair", response.Key, "the first one")
+	results := make(map[string]ui.AgentsParamResult)
+	for _, result := range response.Results {
+		results[result.Agent] = result
+	}
+	assert.Equal(t, ui.AgentsParamResult{Agent: "gold", Status: ui.ParamUpdated, Params: []ui.AgentParamResult{
+		{Key: "pair", Status: ui.ParamUpdated, Previous: "XAUUSDm"},
+		{Key: "lot", Status: ui.ParamUpdated, Previous: "0.01"},
+	}}, results["gold"])
+	assert.Equal(t, ui.AgentsParamResult{Agent: "silver", Status: ui.ParamUpdated, Params: []ui.AgentParamResult{
+		{Key: "pair", Status: ui.ParamUpdated, Previous: "XAUUSDm"},
+		{Key: "lot", Status: ui.ParamSkipped, Detail: "sem o parâmetro"},
+	}}, results["silver"])
+	assert.Equal(t, store.Params{"pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.02"}, params("gold"),
+		"both set together")
+	assert.Equal(t, store.Params{"pair": "XAUUSDm;BTCUSDm"}, params("silver"))
+
+	for _, refused := range []ui.AgentsParamRequest{
+		{Params: []ui.AgentParam{{Key: "lot", Value: "1"}, {Key: " lot", Value: "2"}}},
+		{Params: []ui.AgentParam{{Key: "lot", Value: "1"}, {Key: "mode", Value: "paper"}}},
+		{Params: []ui.AgentParam{{Key: "lot", Value: "1"}, {Key: "", Value: "2"}}},
+		{Params: make([]ui.AgentParam, ui.MaxAgentsParams+1)},
+	} {
+		status, _, body := set(refused)
+		assert.Equal(t, http.StatusBadRequest, status, body)
+	}
+	_, body = call(http.MethodPost, "/api/settings/agents/params", ui.AgentsParamRequest{Params: []ui.AgentParam{
+		{Key: "lot", Value: "1"}, {Key: "lot", Value: "2"}}})
+	assert.Contains(t, body, "A chave lot está repetida")
+	assert.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.02", params("gold")["lot"], "nothing changed by a refusal")
 }

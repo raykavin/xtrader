@@ -81,3 +81,50 @@ func TestSetAgentParam(t *testing.T) {
 	assert.ErrorContains(t, CheckParam("mode", "live"), "o parâmetro mode tem campo próprio")
 	assert.NoError(t, CheckParam("lot", ""), "an empty value, as in the form of an agent")
 }
+
+// Several params set on an agent at once, under one lock: each told as it
+// went (changed, added, the value it had already, skipped), its other params
+// kept, written once; one refused refuses them all, nothing changed on it.
+func TestSetAgentParams(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	trend, err := s.CreateAgent(ctx, Agent{Name: "trend", Kind: "trend", Enabled: true, Mode: "paper",
+		APIAddress: "localhost:5590", Launched: true,
+		Params: Params{"pair": "XAUUSDm", "lot": "0.01", "timeframe": "15m"}}, AgentSecrets{})
+	require.NoError(t, err)
+	params := func() Params {
+		t.Helper()
+		got, err := s.Agent(ctx, trend.ID)
+		require.NoError(t, err)
+		return got.AllParams()
+	}
+
+	sets, err := s.SetAgentParams(ctx, trend.ID, []ParamChange{
+		{Name: "pair", Value: "XAUUSDm;BTCUSDm"},
+		{Name: "lot", Value: "XAUUSDm=0.01;BTCUSDm=0.02"},
+		{Name: "timeframe", Value: "15m"},
+		{Name: "stop-atr", Value: "2"},
+		{Name: "llm-min-stop-atr", Value: "1"},
+	}, true)
+	require.NoError(t, err)
+	assert.Equal(t, []ParamSet{
+		{Status: ParamUpdated, Had: "XAUUSDm"},
+		{Status: ParamUpdated, Had: "0.01"},
+		{Status: ParamUnchanged, Had: "15m"},
+		{Status: ParamAdded},
+		{Status: ParamSkipped, Detail: "parâmetro só para agentes LLM"},
+	}, sets)
+	assert.Equal(t, Params{"pair": "XAUUSDm;BTCUSDm", "lot": "XAUUSDm=0.01;BTCUSDm=0.02", "timeframe": "15m",
+		"stop-atr": "2"}, params())
+
+	sets, err = s.SetAgentParams(ctx, trend.ID, []ParamChange{{Name: "pair", Value: "XAUUSDm;BTCUSDm"},
+		{Name: "lot", Value: "XAUUSDm=0.01;BTCUSDm=0.02"}}, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ParamUnchanged, ParamUnchanged}, []string{sets[0].Status, sets[1].Status},
+		"nothing to write")
+
+	_, err = s.SetAgentParams(ctx, trend.ID, []ParamChange{{Name: "lot", Value: "0.05"},
+		{Name: "mode", Value: "live"}}, true)
+	assert.ErrorIs(t, err, ErrInvalid)
+	assert.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.02", params()["lot"], "one refused: none changed")
+}
