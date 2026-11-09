@@ -1048,16 +1048,21 @@ export interface AgentSettingsRequest {
 /**
  * AgentsParamRequest is the body of POST /api/settings/agents/params, the
  * global parametrizer of the agents: the param Key, the name of a flag without
- * its dash (eg: lot), set to Value on every agent holding it, on the ones
- * without it too when AddMissing, each agent's other params and settings
- * kept; then, when RestartActive, every agent enabled restarted, the disabled
- * ones left stopped. Key and Value are checked as the params of an agent are.
+ * its dash (eg: lot), set to Value on every agent of the filter holding it, on
+ * the ones without it too when AddMissing, each agent's other params and
+ * settings kept; then, when RestartActive, every agent of the filter enabled
+ * restarted, the disabled ones left stopped. The filter is every agent, the
+ * LLM ones only when LLMOnly, the enabled ones only when EnabledOnly (both:
+ * the LLM ones enabled). Key and Value are checked as the params of an agent
+ * are.
  */
 export interface AgentsParamRequest {
   key: string;
   value: string;
   add_missing?: boolean;
   restart_active?: boolean;
+  llm_only?: boolean;
+  enabled_only?: boolean;
 }
 /**
  * The outcomes of the global parametrizer on an agent, see AgentsParamResult.
@@ -1080,6 +1085,10 @@ export const ParamSkipped = "skipped"; // left as it was, Detail telling why
  */
 export const ParamFailed = "failed"; // refused on this agent, Detail telling why
 /**
+ * The outcomes of the global parametrizer on an agent, see AgentsParamResult.
+ */
+export const ParamExcluded = "excluded"; // out of the filter: untouched, never restarted
+/**
  * The restarts of the global parametrizer, see AgentsParamResult.
  */
 export const ParamRestarted = "restarted"; // stopped and launched again
@@ -1094,10 +1103,11 @@ export const ParamRestartLeft = "skipped"; // not restarted, RestartDetail telli
 /**
  * AgentsParamResult is what POST /api/settings/agents/params did on an agent:
  * Status ParamUpdated (Previous the value it had), ParamAdded,
- * ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why); and, the
- * restart asked, Restart ParamRestarted, ParamRestartFailed or
- * ParamRestartLeft (RestartDetail telling why), "" for an agent disabled,
- * left stopped. Enabled tells whether the agent is enabled.
+ * ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why), or
+ * ParamExcluded out of the filter; and, the restart asked, Restart
+ * ParamRestarted, ParamRestartFailed or ParamRestartLeft (RestartDetail
+ * telling why), "" for an agent disabled, left stopped, or out of the filter.
+ * Enabled tells whether the agent is enabled.
  */
 export interface AgentsParamResult {
   agent: string;

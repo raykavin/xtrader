@@ -5,6 +5,8 @@ import {
   agentsParamErrors,
   agentsParamRequest,
   emptyAgentsParamForm,
+  filtering,
+  inFilter,
   paramKeys,
   paramPreview,
   paramResultLabel,
@@ -78,12 +80,35 @@ describe("the global parametrizer", () => {
     );
   });
 
-  it("sends the key and the value trimmed, with both options", () => {
+  it("sends the key and the value trimmed, with the options and the filters", () => {
     expect(
       agentsParamRequest(
-        form({ key: " lot ", value: " 0.02 ", addMissing: true, restartActive: false }),
+        form({
+          key: " lot ",
+          value: " 0.02 ",
+          addMissing: true,
+          restartActive: false,
+          llmOnly: true,
+        }),
       ),
-    ).toEqual({ key: "lot", value: "0.02", add_missing: true, restart_active: false });
+    ).toEqual({
+      key: "lot",
+      value: "0.02",
+      add_missing: true,
+      restart_active: false,
+      llm_only: true,
+      enabled_only: false,
+    });
+  });
+
+  it("filters the LLM agents, the enabled ones, or the LLM ones enabled", () => {
+    const names = (f: AgentsParamForm) => agents.filter((a) => inFilter(a, f)).map((a) => a.name);
+    expect(names(form({}))).toEqual(["gold", "btc", "silver", "apart", "llm"]);
+    expect(names(form({ llmOnly: true }))).toEqual(["llm"]);
+    expect(names(form({ enabledOnly: true }))).toEqual(["gold", "btc", "apart", "llm"]);
+    expect(names(form({ llmOnly: true, enabledOnly: true }))).toEqual(["llm"]);
+    expect(filtering(form({}))).toBe(false);
+    expect(filtering(form({ enabledOnly: true }))).toBe(true);
   });
 
   it("suggests the keys of the agents and tells how a key stands", () => {
@@ -104,6 +129,7 @@ describe("the global parametrizer", () => {
       add: 0,
       unchanged: 1,
       without: 2,
+      excluded: 0,
       restart: 0,
     });
     expect(
@@ -111,10 +137,26 @@ describe("the global parametrizer", () => {
         agents,
         form({ key: "lot", value: "0.02", addMissing: true, restartActive: true }),
       ),
-    ).toEqual({ update: 2, add: 2, unchanged: 1, without: 0, restart: 3 });
+    ).toEqual({ update: 2, add: 2, unchanged: 1, without: 0, excluded: 0, restart: 3 });
     expect(
       paramPreview(agents, form({ key: "llm-consult-interval", value: "15m", addMissing: true })),
-    ).toEqual({ update: 0, add: 1, unchanged: 0, without: 4, restart: 0 });
+    ).toEqual({ update: 0, add: 1, unchanged: 0, without: 4, excluded: 0, restart: 0 });
+    // the agents out of the filter left out, never restarted
+    expect(
+      paramPreview(
+        agents,
+        form({
+          key: "lot",
+          value: "0.02",
+          addMissing: true,
+          restartActive: true,
+          enabledOnly: true,
+        }),
+      ),
+    ).toEqual({ update: 2, add: 2, unchanged: 0, without: 0, excluded: 1, restart: 3 });
+    expect(
+      paramPreview(agents, form({ key: "lot", value: "0.03", restartActive: true, llmOnly: true })),
+    ).toEqual({ update: 0, add: 0, unchanged: 0, without: 1, excluded: 4, restart: 1 });
   });
 
   it("labels what was done on each agent", () => {
@@ -127,6 +169,10 @@ describe("the global parametrizer", () => {
     expect(paramResultLabel(result({ status: "added" }))).toEqual({
       label: "Adicionado",
       tone: "on",
+    });
+    expect(paramResultLabel(result({ status: "excluded" }))).toEqual({
+      label: "Fora do filtro",
+      tone: "off",
     });
     expect(paramResultLabel(result({ status: "unchanged" })).label).toBe("Já tinha o valor");
     expect(paramResultLabel(result({ status: "skipped", detail: "sem o parâmetro" }))).toEqual({
@@ -170,9 +216,11 @@ describe("the global parametrizer", () => {
       result({ agent: "llm", status: "added", restart: "restarted" }),
       result({ agent: "x", status: "skipped", restart: "failed" }),
       result({ agent: "y", status: "failed" }),
+      result({ agent: "z1", status: "excluded" }),
+      result({ agent: "z2", status: "excluded" }),
     ];
     expect(paramSummary(results, true)).toEqual({
-      params: "2 alterados, 1 adicionado, 1 ignorado, 1 falha",
+      params: "2 alterados, 1 adicionado, 1 ignorado, 1 falha, 2 fora do filtro",
       restarts: "1 reiniciado, 1 não reiniciado",
     });
     expect(paramSummary([result({ status: "unchanged" })], false)).toEqual({

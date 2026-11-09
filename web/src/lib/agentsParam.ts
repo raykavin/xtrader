@@ -1,7 +1,8 @@
 // The global parametrizer of the agents: a param set by its key on every
-// agent holding it, on the ones without it when asked, then the agents
-// enabled restarted when asked; checked as the params of an agent are, and
-// what it did on each agent told.
+// agent of the filter holding it (all of them, the LLM ones, the enabled
+// ones, or the LLM ones enabled), on the ones without it when asked, then the
+// agents of the filter enabled restarted when asked; checked as the params of
+// an agent are, and what it did on each agent told.
 
 import type { AgentSettings, AgentsParamRequest, AgentsParamResult } from "../api/types";
 import { llmParam, paramKeyError, paramValueError, type Tone } from "./settings";
@@ -12,8 +13,12 @@ export interface AgentsParamForm {
   value: string;
   /** Adicionar para agentes sem o parâmetro. */
   addMissing: boolean;
-  /** Reiniciar todos os agentes ativos. */
+  /** Reiniciar os agentes ativos (of the filter). */
   restartActive: boolean;
+  /** Somente para agentes de LLM. */
+  llmOnly: boolean;
+  /** Somente para os agentes ativos. */
+  enabledOnly: boolean;
 }
 
 /** An empty form: the switches off. */
@@ -22,7 +27,19 @@ export const emptyAgentsParamForm: AgentsParamForm = {
   value: "",
   addMissing: false,
   restartActive: false,
+  llmOnly: false,
+  enabledOnly: false,
 };
+
+/** Whether agent is in the filter of form: an LLM one when llmOnly, enabled when enabledOnly. */
+export function inFilter(agent: AgentSettings, form: AgentsParamForm): boolean {
+  return (!form.llmOnly || agent.kind === "llm") && (!form.enabledOnly || agent.enabled);
+}
+
+/** Whether form filters the agents: the LLM ones or the enabled ones only. */
+export function filtering(form: AgentsParamForm): boolean {
+  return form.llmOnly || form.enabledOnly;
+}
 
 /**
  * Why the key and the value are refused, as the controller refuses them, by
@@ -45,6 +62,8 @@ export function agentsParamRequest(form: AgentsParamForm): AgentsParamRequest {
     value: form.value.trim(),
     add_missing: form.addMissing,
     restart_active: form.restartActive,
+    llm_only: form.llmOnly,
+    enabled_only: form.enabledOnly,
   };
 }
 
@@ -86,18 +105,29 @@ export function paramUsage(
  * What the parametrizer would do on agents as the page has them: how many
  * would have their value changed, the param added, be left with the value
  * they have already, be left without it (not added, or a param of a language
- * model on an agent of another kind); and how many agents enabled the
- * controller launches would restart. The controller decides on each agent as
- * it is then.
+ * model on an agent of another kind), be out of the filter; and how many
+ * agents of the filter enabled the controller launches would restart. The
+ * controller decides on each agent as it is then.
  */
 export function paramPreview(
   agents: AgentSettings[],
   form: AgentsParamForm,
-): { update: number; add: number; unchanged: number; without: number; restart: number } {
+): {
+  update: number;
+  add: number;
+  unchanged: number;
+  without: number;
+  excluded: number;
+  restart: number;
+} {
   const key = form.key.trim();
   const value = form.value.trim();
-  const preview = { update: 0, add: 0, unchanged: 0, without: 0, restart: 0 };
+  const preview = { update: 0, add: 0, unchanged: 0, without: 0, excluded: 0, restart: 0 };
   for (const agent of agents) {
+    if (!inFilter(agent, form)) {
+      preview.excluded++;
+      continue;
+    }
     if (Object.hasOwn(agent.params, key)) {
       if (agent.params[key] === value) preview.unchanged++;
       else preview.update++;
@@ -141,6 +171,8 @@ export function paramResultLabel(result: AgentsParamResult): ResultLabel {
       return { label: "Adicionado", tone: "on" };
     case "unchanged":
       return { label: "Já tinha o valor", tone: "info" };
+    case "excluded":
+      return { label: "Fora do filtro", tone: "off" };
     case "skipped":
       return {
         label: "Ignorado",
@@ -187,8 +219,8 @@ function counted(count: number, one: string, many: string): string {
 
 /**
  * The summary of results, of the outcomes there are, eg: "2 alterados, 1
- * adicionado, 40 ignorados, 1 falha"; and of the restarts when asked, eg: "3
- * reiniciados, 1 não reiniciado".
+ * adicionado, 4 ignorados, 1 falha, 40 fora do filtro"; and of the restarts
+ * when asked, eg: "3 reiniciados, 1 não reiniciado".
  */
 export function paramSummary(
   results: AgentsParamResult[],
@@ -201,6 +233,7 @@ export function paramSummary(
     [count("unchanged"), "já tinha o valor", "já tinham o valor"],
     [count("skipped"), "ignorado", "ignorados"],
     [count("failed"), "falha", "falhas"],
+    [count("excluded"), "fora do filtro", "fora do filtro"],
   ] as const;
   const params =
     parts
