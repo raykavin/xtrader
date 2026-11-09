@@ -8130,6 +8130,51 @@ h3.md-heading {
 
 /* the global parametrizer of the agents: its options, its preview, and what
    it did on each agent */
+/* the params of the global parametrizer, a row each: its key beside its
+   value and its button removing it; stacked on a phone */
+.agents-param-rows {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.agents-param-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agents-param-remove {
+  margin-top: 22px; /* beside the fields, past their labels */
+}
+
+@media (max-width: 640px) {
+  .agents-param-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .agents-param-row .field:nth-child(2) {
+    grid-row: 2;
+  }
+}
+
+.agents-param-change {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.agents-param-keys {
+  margin: 0;
+  padding: 0;
+  color: var(--text-2);
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
 .agents-param-options {
   display: grid;
   gap: var(--sp-3);

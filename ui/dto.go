@@ -913,22 +913,34 @@ type AgentSettingsRequest struct {
 	MT5AccountID *int64 `json:"mt5_account_id,omitempty"`
 }
 
+// AgentParam is a param set by the global parametrizer: the name of a flag
+// without its dash (eg: lot) and its value.
+type AgentParam struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// MaxAgentsParams is the most params the global parametrizer sets at once.
+const MaxAgentsParams = 20
+
 // AgentsParamRequest is the body of POST /api/settings/agents/params, the
-// global parametrizer of the agents: the param Key, the name of a flag without
-// its dash (eg: lot), set to Value on every agent of the filter holding it, on
-// the ones without it too when AddMissing, each agent's other params and
-// settings kept; then, when RestartActive, every agent of the filter enabled
-// restarted, the disabled ones left stopped. The filter is every agent, the
-// LLM ones only when LLMOnly, the enabled ones only when EnabledOnly (both:
-// the LLM ones enabled). Key and Value are checked as the params of an agent
-// are.
+// global parametrizer of the agents: the params of Params (or the one of Key
+// and Value, without Params), each set on every agent of the filter holding
+// it, on the ones without it too when AddMissing, all at once on each agent
+// (one refused, none set on it), each agent's other params and settings kept;
+// then, when RestartActive, every agent of the filter enabled restarted, the
+// disabled ones left stopped. The filter is every agent, the LLM ones only
+// when LLMOnly, the enabled ones only when EnabledOnly (both: the LLM ones
+// enabled). The params are checked as the params of an agent are, a key once,
+// MaxAgentsParams at most.
 type AgentsParamRequest struct {
-	Key           string `json:"key"`
-	Value         string `json:"value"`
-	AddMissing    bool   `json:"add_missing,omitempty"`
-	RestartActive bool   `json:"restart_active,omitempty"`
-	LLMOnly       bool   `json:"llm_only,omitempty"`
-	EnabledOnly   bool   `json:"enabled_only,omitempty"`
+	Key           string       `json:"key,omitempty"`
+	Value         string       `json:"value,omitempty"`
+	Params        []AgentParam `json:"params,omitempty"`
+	AddMissing    bool         `json:"add_missing,omitempty"`
+	RestartActive bool         `json:"restart_active,omitempty"`
+	LLMOnly       bool         `json:"llm_only,omitempty"`
+	EnabledOnly   bool         `json:"enabled_only,omitempty"`
 }
 
 // The outcomes of the global parametrizer on an agent, see AgentsParamResult.
@@ -948,28 +960,45 @@ const (
 	ParamRestartLeft   = "skipped"   // not restarted, RestartDetail telling why
 )
 
-// AgentsParamResult is what POST /api/settings/agents/params did on an agent:
-// Status ParamUpdated (Previous the value it had), ParamAdded,
-// ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why), or
-// ParamExcluded out of the filter; and, the restart asked, Restart
-// ParamRestarted, ParamRestartFailed or ParamRestartLeft (RestartDetail
-// telling why), "" for an agent disabled, left stopped, or out of the filter.
-// Enabled tells whether the agent is enabled.
-type AgentsParamResult struct {
-	Agent         string `json:"agent"`
-	Enabled       bool   `json:"enabled"`
-	Status        string `json:"status"`
-	Previous      string `json:"previous,omitempty"`
-	Detail        string `json:"detail,omitempty"`
-	Restart       string `json:"restart,omitempty"`
-	RestartDetail string `json:"restart_detail,omitempty"`
+// AgentParamResult is what the global parametrizer did with a param on an
+// agent: Status ParamUpdated (Previous the value it had), ParamAdded,
+// ParamUnchanged or ParamSkipped (Detail telling why).
+type AgentParamResult struct {
+	Key      string `json:"key"`
+	Status   string `json:"status"`
+	Previous string `json:"previous,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
-// AgentsParamResponse answers POST /api/settings/agents/params: the param set,
-// trimmed, and what was done on each agent, in the order of the dashboard.
+// AgentsParamResult is what POST /api/settings/agents/params did on an agent:
+// Params what it did with each param, in their order, and Status all of them
+// told at once: ParamFailed when they were refused on it (Detail telling why,
+// none set, Params empty), ParamExcluded out of the filter, else ParamUpdated
+// when a value changed, ParamAdded when a param was added only, ParamUnchanged
+// when it had them all already, ParamSkipped (Detail telling why with a
+// single param). With a single param, Previous is the value it had. And, the
+// restart asked, Restart ParamRestarted, ParamRestartFailed or
+// ParamRestartLeft (RestartDetail telling why), "" for an agent disabled,
+// left stopped, or out of the filter. Enabled tells whether the agent is
+// enabled.
+type AgentsParamResult struct {
+	Agent         string             `json:"agent"`
+	Enabled       bool               `json:"enabled"`
+	Status        string             `json:"status"`
+	Previous      string             `json:"previous,omitempty"`
+	Detail        string             `json:"detail,omitempty"`
+	Params        []AgentParamResult `json:"params,omitempty"`
+	Restart       string             `json:"restart,omitempty"`
+	RestartDetail string             `json:"restart_detail,omitempty"`
+}
+
+// AgentsParamResponse answers POST /api/settings/agents/params: the params
+// set, trimmed (Key and Value the first one), and what was done on each agent,
+// in the order of the dashboard.
 type AgentsParamResponse struct {
 	Key     string              `json:"key"`
 	Value   string              `json:"value"`
+	Params  []AgentParam        `json:"params"`
 	Results []AgentsParamResult `json:"results"`
 }
 

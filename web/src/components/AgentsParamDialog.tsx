@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { setAgentsParam } from "../api/client";
-import type { AgentSettings, AgentsParamResponse } from "../api/types";
+import { type AgentSettings, type AgentsParamResponse, MaxAgentsParams } from "../api/types";
 import {
   type AgentsParamForm,
   agentsCount,
@@ -9,21 +9,26 @@ import {
   emptyAgentsParamForm,
   filtering,
   inFilter,
+  type ParamRowForm,
+  paramKeyLabel,
   paramKeys,
   paramPreview,
   paramResultLabel,
+  paramRow,
   paramSummary,
   paramUsage,
   type ResultLabel,
+  refused,
   restartLabel,
   sortedResults,
+  typedParams,
 } from "../lib/agentsParam";
 import { DialogHeader } from "./Dialog";
 import { Icon } from "./Icon";
 import { Alert } from "./States";
 
 interface Props {
-  /** The agents as the page has them: the suggestions of the key and the preview. */
+  /** The agents as the page has them: the suggestions of the keys and the preview. */
   agents: AgentSettings[];
   /** Tells the page the agents changed, once the parametrizer ran. */
   onApplied: () => void;
@@ -34,48 +39,80 @@ interface Props {
 const shownValues = 4;
 
 /**
- * The global parametrizer of the agents, in a modal dialog: a param set by its
- * key on every agent of the filter holding it (all of them, the LLM ones, the
- * enabled ones, or both), on the ones without it too when asked, then the
- * agents of the filter enabled restarted when asked. Before: the key
- * suggested among the ones of the agents of the filter, how many hold it and
- * with which values, and what would change; after: what was done on each
- * agent of the filter, its failures first, the others counted.
+ * The global parametrizer of the agents, in a modal dialog: params set by
+ * their keys, a row each (added by +), on every agent of the filter holding
+ * them (all of them, the LLM ones, the enabled ones, or both), on the ones
+ * without them too when asked, all at once on each agent, then the agents of
+ * the filter enabled restarted when asked. Before: the keys suggested among
+ * the ones of the agents of the filter, how many hold each and with which
+ * values, and what would change; after: what was done on each agent of the
+ * filter, with each param, its failures first, the others counted.
  */
 export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
-  const keyField = useRef<HTMLInputElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
   const [form, setForm] = useState<AgentsParamForm>(emptyAgentsParamForm);
-  const [touched, setTouched] = useState<{ key?: boolean; value?: boolean }>({});
+  // the fields left once, and all of them once applying was tried
+  const [touched, setTouched] = useState<Set<string>>(new Set());
+  const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<AgentsParamResponse | null>(null);
   // the restart as asked for the results shown
   const [asked, setAsked] = useState(false);
+  // the field to focus once the rows changed: the key of a row added, the
+  // button to add after one removed
+  const focus = useRef<string | null>(null);
 
   useEffect(() => {
     const element = dialog.current;
     if (element && !element.open) element.showModal();
-    keyField.current?.focus(); // the dialog focuses its first button
+    element?.querySelector<HTMLInputElement>("input.input")?.focus(); // the first key, not the first button
   }, []);
+
+  useEffect(() => {
+    if (focus.current === null) return;
+    const target =
+      focus.current === "add" ? addRef.current : document.getElementById(focus.current);
+    focus.current = null;
+    target?.focus();
+  });
 
   const close = () => dialog.current?.close();
   const set = <K extends keyof AgentsParamForm>(field: K, value: AgentsParamForm[K]) =>
     setForm((f) => ({ ...f, [field]: value }));
+  const updateRow = (rowId: number, change: Partial<ParamRowForm>) =>
+    setForm((f) => ({
+      ...f,
+      rows: f.rows.map((row) => (row.id === rowId ? { ...row, ...change } : row)),
+    }));
+  const addRow = () => {
+    const row = paramRow();
+    focus.current = `${id}-${row.id}-key`;
+    setForm((f) => ({ ...f, rows: [...f.rows, row] }));
+  };
+  const removeRow = (rowId: number) => {
+    focus.current = "add";
+    setForm((f) => ({ ...f, rows: f.rows.filter((row) => row.id !== rowId) }));
+  };
+  const leave = (field: string) => setTouched((t) => new Set(t).add(field));
+  const shown = (field: string) => tried || touched.has(field);
 
   const errors = agentsParamErrors(form);
   const scoped = agents.filter((a) => inFilter(a, form));
-  const usage = paramUsage(scoped, form.key);
+  const keys = paramKeys(scoped);
   const preview = paramPreview(agents, form);
   const nothing = preview.update + preview.add === 0 && !form.restartActive;
   const enabled = scoped.filter((a) => a.enabled && a.launched).length;
   const ofFilter = filtering(form) ? " do filtro" : "";
+  const typed = typedParams(form);
+  const full = form.rows.length >= MaxAgentsParams;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setTouched({ key: true, value: true });
-    if (busy || errors.key || errors.value || nothing) return;
+    setTried(true);
+    if (busy || refused(errors) || nothing) return;
     setBusy(true);
     setError(null);
     try {
@@ -90,19 +127,26 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
     }
   };
 
-  const keyHint = (): string => {
-    if (form.key.trim() === "")
-      return "O nome da flag, sem o traço, como nos parâmetros do agente.";
+  const keyHint = (key: string): string => {
+    if (key.trim() === "") return "O nome da flag, sem o traço, como nos parâmetros do agente.";
+    const usage = paramUsage(scoped, key);
     if (usage.holding === 0) return `Nenhum agente${ofFilter} tem essa chave.`;
     return `Presente em ${usage.holding} de ${agentsCount(scoped.length)}${ofFilter}.`;
   };
-  const valueHint = (): string => {
+  const valueHint = (key: string): string => {
+    const usage = paramUsage(scoped, key);
     if (usage.values.length === 0) return "O valor que os agentes passam a usar.";
     const values = usage.values
       .slice(0, shownValues)
       .map((v) => `${v.value === "" ? "vazio" : v.value} (${v.count})`)
       .join(", ");
     return `Valores atuais: ${values}${usage.values.length > shownValues ? ", …" : ""}.`;
+  };
+  const subtitle = (done: AgentsParamResponse): string => {
+    const params = done.params ?? [{ key: done.key, value: done.value }];
+    const [first] = params;
+    if (params.length === 1 && first) return `${first.key} = ${first.value || "vazio"}`;
+    return params.map((p) => p.key).join(", ");
   };
 
   return (
@@ -119,7 +163,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
       <DialogHeader
         id={`${id}-title`}
         title="Parametrizador global"
-        subtitle={response ? `${response.key} = ${response.value || "vazio"}` : undefined}
+        subtitle={response ? subtitle(response) : undefined}
         onClose={close}
         disabled={busy}
       />
@@ -129,67 +173,106 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
         <form className="dialog-form" onSubmit={submit} noValidate>
           <div className="dialog-body">
             <p className="dialog-lead">
-              Altera um parâmetro em todos os agentes, pela chave. Os outros parâmetros e as
-              configurações de cada agente não mudam.
+              Altera parâmetros em todos os agentes, pela chave, todos de uma vez em cada agente. Os
+              outros parâmetros e as configurações de cada agente não mudam.
             </p>
-            <div className="form-grid">
-              <div className="field" data-invalid={touched.key && errors.key ? "" : undefined}>
-                <label className="field-label" htmlFor={`${id}-key`}>
-                  Chave do parâmetro
-                </label>
-                <input
-                  id={`${id}-key`}
-                  ref={keyField}
-                  className="input mono"
-                  list={`${id}-keys`}
-                  value={form.key}
-                  placeholder="ex.: lot"
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={busy}
-                  aria-invalid={touched.key && errors.key ? true : undefined}
-                  aria-describedby={`${id}-key-hint`}
-                  onChange={(e) => set("key", e.target.value)}
-                  onBlur={() => setTouched((t) => ({ ...t, key: true }))}
-                />
-                <datalist id={`${id}-keys`}>
-                  {paramKeys(scoped).map((key) => (
-                    <option key={key} value={key} />
-                  ))}
-                </datalist>
-                <span
-                  id={`${id}-key-hint`}
-                  className={touched.key && errors.key ? "field-error" : "field-hint"}
-                >
-                  {touched.key && errors.key ? errors.key : keyHint()}
-                </span>
-              </div>
-              <div className="field" data-invalid={touched.value && errors.value ? "" : undefined}>
-                <label className="field-label" htmlFor={`${id}-value`}>
-                  Novo valor
-                </label>
-                <input
-                  id={`${id}-value`}
-                  className="input mono"
-                  value={form.value}
-                  placeholder="ex.: 0.02"
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={busy}
-                  aria-invalid={touched.value && errors.value ? true : undefined}
-                  aria-describedby={`${id}-value-hint`}
-                  onChange={(e) => set("value", e.target.value)}
-                  onBlur={() => setTouched((t) => ({ ...t, value: true }))}
-                />
-                <span
-                  id={`${id}-value-hint`}
-                  className={touched.value && errors.value ? "field-error" : "field-hint"}
-                >
-                  {touched.value && errors.value ? errors.value : valueHint()}
-                </span>
-              </div>
+            <datalist id={`${id}-keys`}>
+              {keys.map((key) => (
+                <option key={key} value={key} />
+              ))}
+            </datalist>
+            <div className="agents-param-rows">
+              {form.rows.map((row, index) => {
+                const problems = errors.rows[row.id] ?? {};
+                const keyField = `${id}-${row.id}-key`;
+                const valueField = `${id}-${row.id}-value`;
+                const keyError = shown(keyField) ? problems.key : undefined;
+                const valueError = shown(valueField) ? problems.value : undefined;
+                const name = row.key.trim() || String(index + 1);
+                return (
+                  <fieldset
+                    key={row.id}
+                    className="agents-param-row"
+                    aria-label={`Parâmetro ${index + 1}`}
+                  >
+                    <div className="field" data-invalid={keyError ? "" : undefined}>
+                      <label className="field-label" htmlFor={keyField}>
+                        Chave do parâmetro
+                      </label>
+                      <input
+                        id={keyField}
+                        className="input mono"
+                        list={`${id}-keys`}
+                        value={row.key}
+                        placeholder="ex.: lot"
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy}
+                        aria-invalid={keyError ? true : undefined}
+                        aria-describedby={`${keyField}-hint`}
+                        onChange={(e) => updateRow(row.id, { key: e.target.value })}
+                        onBlur={() => leave(keyField)}
+                      />
+                      <span
+                        id={`${keyField}-hint`}
+                        className={keyError ? "field-error" : "field-hint"}
+                      >
+                        {keyError ?? keyHint(row.key)}
+                      </span>
+                    </div>
+                    <div className="field" data-invalid={valueError ? "" : undefined}>
+                      <label className="field-label" htmlFor={valueField}>
+                        Novo valor
+                      </label>
+                      <input
+                        id={valueField}
+                        className="input mono"
+                        value={row.value}
+                        placeholder="ex.: 0.02"
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy}
+                        aria-invalid={valueError ? true : undefined}
+                        aria-describedby={`${valueField}-hint`}
+                        onChange={(e) => updateRow(row.id, { value: e.target.value })}
+                        onBlur={() => leave(valueField)}
+                      />
+                      <span
+                        id={`${valueField}-hint`}
+                        className={valueError ? "field-error" : "field-hint"}
+                      >
+                        {valueError ?? valueHint(row.key)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost btn-icon agents-param-remove"
+                      aria-label={`Remover o parâmetro ${name}`}
+                      title="Remover"
+                      disabled={busy || form.rows.length === 1}
+                      onClick={() => removeRow(row.id)}
+                    >
+                      <Icon name="trash" size={15} />
+                    </button>
+                  </fieldset>
+                );
+              })}
+            </div>
+            {errors.list && <p className="field-error">{errors.list}</p>}
+            <div>
+              <button
+                ref={addRef}
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || full}
+                title={full ? `Use no máximo ${MaxAgentsParams} parâmetros de uma vez.` : undefined}
+                onClick={addRow}
+              >
+                <Icon name="plus" size={14} />
+                Adicionar parâmetro
+              </button>
             </div>
             <fieldset className="agents-param-options">
               <legend className="sr-only">Opções</legend>
@@ -250,17 +333,17 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                   Reiniciar os agentes ativos
                 </label>
                 <span id={`${id}-restart-hint`} className="field-hint">
-                  {`Depois de salvar, reinicia ${enabled === 1 ? `o agente ligado${ofFilter}` : `os ${enabled} agentes ligados${ofFilter}`} para aplicar o valor; os desligados continuam desligados. Desmarcada, os ligados aplicam o valor no próximo reinício.`}
+                  {`Depois de salvar, reinicia ${enabled === 1 ? `o agente ligado${ofFilter}` : `os ${enabled} agentes ligados${ofFilter}`} para aplicar os valores; os desligados continuam desligados. Desmarcada, os ligados aplicam os valores no próximo reinício.`}
                 </span>
               </div>
             </fieldset>
-            {form.key.trim() !== "" && !errors.key && !errors.value && (
+            {typed.some((param) => param.key !== "") && !refused(errors) && (
               <p className="agents-param-preview" aria-live="polite">
                 {previewText(preview)}
               </p>
             )}
             {error && (
-              <Alert tone="error" title="O parâmetro não foi aplicado">
+              <Alert tone="error" title="Os parâmetros não foram aplicados">
                 {error}
               </Alert>
             )}
@@ -290,7 +373,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   );
 }
 
-/** What the preview tells before applying, eg: "Altera 40 agentes e adiciona em 2; 3 já têm esse valor." */
+/** What the preview tells before applying, eg: "Altera 40 agentes e adiciona em 2; 3 já têm os valores." */
 function previewText(preview: ReturnType<typeof paramPreview>): string {
   const changes = [
     preview.update > 0 ? `altera ${agentsCount(preview.update)}` : "",
@@ -299,10 +382,10 @@ function previewText(preview: ReturnType<typeof paramPreview>): string {
   const head = changes.length > 0 ? changes.join(" e ") : "não altera nenhum agente";
   const rest = [
     preview.unchanged > 0
-      ? `${agentsCount(preview.unchanged)} já ${preview.unchanged === 1 ? "tem" : "têm"} esse valor`
+      ? `${agentsCount(preview.unchanged)} já ${preview.unchanged === 1 ? "tem" : "têm"} os valores`
       : "",
     preview.without > 0
-      ? `${agentsCount(preview.without)} ${preview.without === 1 ? "fica" : "ficam"} sem o parâmetro`
+      ? `${agentsCount(preview.without)} ${preview.without === 1 ? "fica" : "ficam"} sem os parâmetros`
       : "",
     preview.excluded > 0
       ? `${agentsCount(preview.excluded)} ${preview.excluded === 1 ? "fica" : "ficam"} fora do filtro`
@@ -332,18 +415,28 @@ function Results({
       <div className="dialog-body">
         <Alert tone={failed ? "warn" : "success"} title={summary.params}>
           {summary.restarts ??
-            "Os agentes ligados que mudaram aplicam o valor no próximo reinício (Reinício pendente)."}
+            "Os agentes ligados que mudaram aplicam os valores no próximo reinício (Reinício pendente)."}
         </Alert>
         <ul className="agents-param-results" aria-label="Resultado por agente">
           {sortedResults(response.results.filter((r) => r.status !== "excluded")).map((result) => {
             const change = paramResultLabel(result);
             const restart = restartLabel(result, asked);
+            const several = (result.params?.length ?? 0) > 1;
             return (
               <li key={result.agent} className="agents-param-result">
                 <span className="agents-param-agent mono" title={result.agent}>
                   {result.agent}
                 </span>
-                <Outcome outcome={change} />
+                <span className="agents-param-change">
+                  <Outcome outcome={change} />
+                  {several && (
+                    <ul className="agents-param-keys">
+                      {result.params?.map((param) => (
+                        <li key={param.key}>{paramKeyLabel(param)}</li>
+                      ))}
+                    </ul>
+                  )}
+                </span>
                 {restart && <Outcome outcome={restart} />}
               </li>
             );

@@ -1,16 +1,30 @@
-// The global parametrizer of the agents: a param set by its key on every
-// agent of the filter holding it (all of them, the LLM ones, the enabled
-// ones, or the LLM ones enabled), on the ones without it when asked, then the
-// agents of the filter enabled restarted when asked; checked as the params of
-// an agent are, and what it did on each agent told.
+// The global parametrizer of the agents: params set by their key on every
+// agent of the filter holding them (all of them, the LLM ones, the enabled
+// ones, or the LLM ones enabled), on the ones without them when asked, all at
+// once on each agent, then the agents of the filter enabled restarted when
+// asked; checked as the params of an agent are, and what it did on each agent
+// told.
 
-import type { AgentSettings, AgentsParamRequest, AgentsParamResult } from "../api/types";
+import {
+  type AgentParamResult,
+  type AgentSettings,
+  type AgentsParamRequest,
+  type AgentsParamResult,
+  MaxAgentsParams,
+} from "../api/types";
 import { llmParam, paramKeyError, paramValueError, type Tone } from "./settings";
+
+/** A param of the form, as typed: its key and its value, and an ID of its own. */
+export interface ParamRowForm {
+  id: number;
+  key: string;
+  value: string;
+}
 
 /** The form of the global parametrizer, as typed. */
 export interface AgentsParamForm {
-  key: string;
-  value: string;
+  /** The params, in the order typed. */
+  rows: ParamRowForm[];
   /** Adicionar para agentes sem o parâmetro. */
   addMissing: boolean;
   /** Reiniciar os agentes ativos (of the filter). */
@@ -21,15 +35,24 @@ export interface AgentsParamForm {
   enabledOnly: boolean;
 }
 
-/** An empty form: the switches off. */
-export const emptyAgentsParamForm: AgentsParamForm = {
-  key: "",
-  value: "",
-  addMissing: false,
-  restartActive: false,
-  llmOnly: false,
-  enabledOnly: false,
-};
+let lastRow = 0;
+
+/** A param of the form, blank by default, with an ID of its own. */
+export function paramRow(key = "", value = ""): ParamRowForm {
+  lastRow += 1;
+  return { id: lastRow, key, value };
+}
+
+/** An empty form: a param to type, the switches off. */
+export function emptyAgentsParamForm(): AgentsParamForm {
+  return {
+    rows: [paramRow()],
+    addMissing: false,
+    restartActive: false,
+    llmOnly: false,
+    enabledOnly: false,
+  };
+}
 
 /** Whether agent is in the filter of form: an LLM one when llmOnly, enabled when enabledOnly. */
 export function inFilter(agent: AgentSettings, form: AgentsParamForm): boolean {
@@ -41,25 +64,59 @@ export function filtering(form: AgentsParamForm): boolean {
   return form.llmOnly || form.enabledOnly;
 }
 
+/** The params of form that were typed, trimmed: a row left blank dropped. */
+export function typedParams(form: AgentsParamForm): { id: number; key: string; value: string }[] {
+  return form.rows
+    .map((row) => ({ id: row.id, key: row.key.trim(), value: row.value.trim() }))
+    .filter((row) => row.key !== "" || row.value !== "");
+}
+
+/** Why the params of the form are refused, by row, and of the whole list. */
+export interface AgentsParamErrors {
+  rows: Record<number, { key?: string; value?: string }>;
+  list?: string;
+}
+
 /**
- * Why the key and the value are refused, as the controller refuses them, by
- * field; {} when taken. A param of a language model is taken, set on the LLM
- * agents only.
+ * Why the params of form are refused, as the controller refuses them: each
+ * key and value as the params of an agent (a param of a language model taken,
+ * set on the LLM agents only), a key once, MaxAgentsParams at most, one at
+ * least. A row left blank is dropped, not refused.
  */
-export function agentsParamErrors(form: AgentsParamForm): { key?: string; value?: string } {
-  const errors: { key?: string; value?: string } = {};
-  const key = paramKeyError(form.key, "llm");
-  if (key) errors.key = key;
-  const value = paramValueError(form.value, form.key.trim());
-  if (value) errors.value = value;
+export function agentsParamErrors(form: AgentsParamForm): AgentsParamErrors {
+  const errors: AgentsParamErrors = { rows: {} };
+  const typed = typedParams(form);
+  const first = form.rows[0];
+  if (typed.length === 0 && first) {
+    errors.rows[first.id] = { key: "Informe o nome do parâmetro." };
+    return errors;
+  }
+  const seen = new Set<string>();
+  for (const row of typed) {
+    const problems: { key?: string; value?: string } = {};
+    const key = paramKeyError(row.key, "llm");
+    if (key) problems.key = key;
+    else if (seen.has(row.key)) problems.key = "Chave repetida: deixe uma só.";
+    seen.add(row.key);
+    const value = paramValueError(row.value, row.key);
+    if (value) problems.value = value;
+    if (problems.key || problems.value) errors.rows[row.id] = problems;
+  }
+  if (typed.length > MaxAgentsParams) {
+    errors.list = `Use no máximo ${MaxAgentsParams} parâmetros de uma vez.`;
+  }
   return errors;
 }
 
-/** The request of form, its key and value trimmed. */
+/** Whether errors refuse the form. */
+export function refused(errors: AgentsParamErrors): boolean {
+  return errors.list !== undefined || Object.keys(errors.rows).length > 0;
+}
+
+/** The request of form: its params typed, trimmed, with the options and the filters. */
 export function agentsParamRequest(form: AgentsParamForm): AgentsParamRequest {
   return {
-    key: form.key.trim(),
-    value: form.value.trim(),
+    params: typedParams(form).map(({ key, value }) => ({ key, value })),
     add_missing: form.addMissing,
     restart_active: form.restartActive,
     llm_only: form.llmOnly,
@@ -102,12 +159,12 @@ export function paramUsage(
 }
 
 /**
- * What the parametrizer would do on agents as the page has them: how many
- * would have their value changed, the param added, be left with the value
- * they have already, be left without it (not added, or a param of a language
- * model on an agent of another kind), be out of the filter; and how many
- * agents of the filter enabled the controller launches would restart. The
- * controller decides on each agent as it is then.
+ * What the parametrizer would do on agents as the page has them, each agent
+ * counted once: how many would have a value changed, params added only, be
+ * left with the values they have already, be left without them (not added, or
+ * params of a language model on an agent of another kind), be out of the
+ * filter; and how many agents of the filter enabled the controller launches
+ * would restart. The controller decides on each agent as it is then.
  */
 export function paramPreview(
   agents: AgentSettings[],
@@ -120,22 +177,28 @@ export function paramPreview(
   excluded: number;
   restart: number;
 } {
-  const key = form.key.trim();
-  const value = form.value.trim();
+  const params = typedParams(form).filter((param) => param.key !== "");
   const preview = { update: 0, add: 0, unchanged: 0, without: 0, excluded: 0, restart: 0 };
   for (const agent of agents) {
     if (!inFilter(agent, form)) {
       preview.excluded++;
       continue;
     }
-    if (Object.hasOwn(agent.params, key)) {
-      if (agent.params[key] === value) preview.unchanged++;
-      else preview.update++;
-    } else if (form.addMissing && (!llmParam(key) || agent.kind === "llm")) {
-      preview.add++;
-    } else {
-      preview.without++;
+    let change = false;
+    let add = false;
+    let same = false;
+    for (const { key, value } of params) {
+      if (Object.hasOwn(agent.params, key)) {
+        if (agent.params[key] === value) same = true;
+        else change = true;
+      } else if (form.addMissing && (!llmParam(key) || agent.kind === "llm")) {
+        add = true;
+      }
     }
+    if (change) preview.update++;
+    else if (add) preview.add++;
+    else if (same) preview.unchanged++;
+    else preview.without++;
     if (form.restartActive && agent.enabled && agent.launched) preview.restart++;
   }
   return preview;
@@ -160,17 +223,17 @@ function capitalized(text: string): string {
 
 /** How the change of the param on an agent shows, see AgentsParamResult. */
 export function paramResultLabel(result: AgentsParamResult): ResultLabel {
+  // several params: each one told apart, see paramKeyLabel
+  const several = (result.params?.length ?? 0) > 1;
   switch (result.status) {
     case "updated":
-      return {
-        label: "Alterado",
-        tone: "on",
-        detail: `Antes: ${result.previous ? result.previous : "vazio"}`,
-      };
+      return several
+        ? { label: "Alterado", tone: "on" }
+        : { label: "Alterado", tone: "on", detail: `Antes: ${result.previous || "vazio"}` };
     case "added":
       return { label: "Adicionado", tone: "on" };
     case "unchanged":
-      return { label: "Já tinha o valor", tone: "info" };
+      return { label: several ? "Já tinha os valores" : "Já tinha o valor", tone: "info" };
     case "excluded":
       return { label: "Fora do filtro", tone: "off" };
     case "skipped":
@@ -185,6 +248,24 @@ export function paramResultLabel(result: AgentsParamResult): ResultLabel {
         tone: "error",
         ...(result.detail ? { detail: result.detail } : {}),
       };
+  }
+}
+
+/**
+ * What was done with a param on an agent, in a line, eg: "lot: alterado
+ * (antes 0.01)", "pair: adicionado", "llm-x: ignorado (parâmetro só para
+ * agentes LLM)": the params of an agent told apart when there are several.
+ */
+export function paramKeyLabel(param: AgentParamResult): string {
+  switch (param.status) {
+    case "updated":
+      return `${param.key}: alterado (antes ${param.previous || "vazio"})`;
+    case "added":
+      return `${param.key}: adicionado`;
+    case "unchanged":
+      return `${param.key}: já tinha o valor`;
+    default:
+      return param.detail ? `${param.key}: ignorado (${param.detail})` : `${param.key}: ignorado`;
   }
 }
 

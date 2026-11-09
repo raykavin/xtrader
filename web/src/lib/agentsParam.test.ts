@@ -7,11 +7,14 @@ import {
   emptyAgentsParamForm,
   filtering,
   inFilter,
+  paramKeyLabel,
   paramKeys,
   paramPreview,
   paramResultLabel,
+  paramRow,
   paramSummary,
   paramUsage,
+  refused,
   restartLabel,
   sortedResults,
 } from "./agentsParam";
@@ -48,10 +51,25 @@ const agents = [
   agent({ name: "llm", kind: "llm", params: { pair: "XAUUSDm", "llm-min-stop-atr": "1" } }),
 ];
 
-const form = (fields: Partial<AgentsParamForm>): AgentsParamForm => ({
-  ...emptyAgentsParamForm,
+/** The fields of a form: a single param by key and value, or several by params. */
+type Fields = Partial<Omit<AgentsParamForm, "rows">> & {
+  key?: string;
+  value?: string;
+  params?: [string, string][];
+};
+
+const form = ({ key, value, params, ...fields }: Fields): AgentsParamForm => ({
+  ...emptyAgentsParamForm(),
+  rows: params ? params.map(([k, v]) => paramRow(k, v)) : [paramRow(key ?? "", value ?? "")],
   ...fields,
 });
+
+/** Why each param of the form of fields is refused, in their order ({} when taken), and the whole list. */
+const errorsOf = (fields: Fields) => {
+  const f = form(fields);
+  const errors = agentsParamErrors(f);
+  return { rows: f.rows.map((row) => errors.rows[row.id] ?? {}), list: errors.list };
+};
 
 const result = (fields: Partial<AgentsParamResult>): AgentsParamResult => ({
   agent: "gold",
@@ -61,39 +79,62 @@ const result = (fields: Partial<AgentsParamResult>): AgentsParamResult => ({
 });
 
 describe("the global parametrizer", () => {
-  it("checks the key and the value as the params of an agent, a param of the LLM taken", () => {
-    expect(agentsParamErrors(form({ key: "lot", value: "0.02" }))).toEqual({});
-    expect(agentsParamErrors(form({ key: "llm-min-stop-atr", value: "2" }))).toEqual({});
-    expect(agentsParamErrors(form({ key: "lot", value: "" }))).toEqual({});
-    expect(agentsParamErrors(form({ key: "", value: "1" })).key).toBe(
-      "Informe o nome do parâmetro.",
-    );
-    expect(agentsParamErrors(form({ key: "-lot", value: "1" })).key).toBe(
-      "Sem o traço: lot, não -lot.",
-    );
-    expect(agentsParamErrors(form({ key: "Lot", value: "1" })).key).toContain("letras minúsculas");
-    expect(agentsParamErrors(form({ key: "mode", value: "paper" })).key).toContain(
-      "configuração do próprio agente",
-    );
-    expect(agentsParamErrors(form({ key: "lot", value: "lot = 0.02" })).value).toContain(
-      "repete o nome",
-    );
+  it("checks each key and value as the params of an agent, a param of the LLM taken", () => {
+    const first = (fields: Fields) => errorsOf(fields).rows[0] ?? {};
+    expect(first({ key: "lot", value: "0.02" })).toEqual({});
+    expect(first({ key: "llm-min-stop-atr", value: "2" })).toEqual({});
+    expect(first({ key: "lot", value: "" })).toEqual({});
+    expect(first({ key: "", value: "1" }).key).toBe("Informe o nome do parâmetro.");
+    expect(first({ key: "", value: "" }).key).toBe("Informe o nome do parâmetro.");
+    expect(first({ key: "-lot", value: "1" }).key).toBe("Sem o traço: lot, não -lot.");
+    expect(first({ key: "Lot", value: "1" }).key).toContain("letras minúsculas");
+    expect(first({ key: "mode", value: "paper" }).key).toContain("configuração do próprio agente");
+    expect(first({ key: "lot", value: "lot = 0.02" }).value).toContain("repete o nome");
+    expect(refused(agentsParamErrors(form({ key: "lot", value: "1" })))).toBe(false);
+    expect(refused(agentsParamErrors(form({ key: "Lot", value: "1" })))).toBe(true);
   });
 
-  it("sends the key and the value trimmed, with the options and the filters", () => {
+  it("checks several params: a key once, a row left blank dropped, at most 20", () => {
+    expect(
+      errorsOf({
+        params: [
+          ["pair", "XAUUSDm;BTCUSDm"],
+          ["lot", "XAUUSDm=0.01;BTCUSDm=0.02"],
+          ["", ""],
+        ],
+      }),
+    ).toEqual({ rows: [{}, {}, {}], list: undefined });
+    expect(
+      errorsOf({
+        params: [
+          ["lot", "1"],
+          [" lot ", "2"],
+        ],
+      }).rows,
+    ).toEqual([{}, { key: "Chave repetida: deixe uma só." }]);
+    const many = Array.from({ length: 21 }, (_, i): [string, string] => [`p${i}`, "1"]);
+    expect(errorsOf({ params: many }).list).toBe("Use no máximo 20 parâmetros de uma vez.");
+  });
+
+  it("sends the params typed, trimmed, with the options and the filters", () => {
     expect(
       agentsParamRequest(
         form({
-          key: " lot ",
-          value: " 0.02 ",
+          params: [
+            [" pair ", " XAUUSDm;BTCUSDm "],
+            ["", ""],
+            ["lot", "XAUUSDm=0.01;BTCUSDm=0.02"],
+          ],
           addMissing: true,
           restartActive: false,
           llmOnly: true,
         }),
       ),
     ).toEqual({
-      key: "lot",
-      value: "0.02",
+      params: [
+        { key: "pair", value: "XAUUSDm;BTCUSDm" },
+        { key: "lot", value: "XAUUSDm=0.01;BTCUSDm=0.02" },
+      ],
       add_missing: true,
       restart_active: false,
       llm_only: true,
@@ -157,6 +198,64 @@ describe("the global parametrizer", () => {
     expect(
       paramPreview(agents, form({ key: "lot", value: "0.03", restartActive: true, llmOnly: true })),
     ).toEqual({ update: 0, add: 0, unchanged: 0, without: 1, excluded: 4, restart: 1 });
+  });
+
+  it("previews each agent once across several params", () => {
+    // silver changes its lot; the others get the new key only, their lot as it is or added
+    expect(
+      paramPreview(
+        agents,
+        form({
+          params: [
+            ["lot", "0.01"],
+            ["timeframe", "15m"],
+          ],
+          addMissing: true,
+        }),
+      ),
+    ).toEqual({ update: 1, add: 4, unchanged: 0, without: 0, excluded: 0, restart: 0 });
+    expect(
+      paramPreview(
+        agents,
+        form({
+          params: [
+            ["lot", "0.01"],
+            ["pair", "XAUUSDm"],
+          ],
+        }),
+      ),
+    ).toEqual({ update: 2, add: 0, unchanged: 3, without: 0, excluded: 0, restart: 0 });
+  });
+
+  it("labels each param of an agent when there are several", () => {
+    const several = result({
+      status: "updated",
+      params: [
+        { key: "lot", status: "updated", previous: "0.01" },
+        { key: "pair", status: "added" },
+        { key: "timeframe", status: "unchanged" },
+        { key: "llm-x", status: "skipped", detail: "parâmetro só para agentes LLM" },
+      ],
+    });
+    expect(paramResultLabel(several)).toEqual({ label: "Alterado", tone: "on" });
+    expect(several.params?.map(paramKeyLabel)).toEqual([
+      "lot: alterado (antes 0.01)",
+      "pair: adicionado",
+      "timeframe: já tinha o valor",
+      "llm-x: ignorado (parâmetro só para agentes LLM)",
+    ]);
+    expect(
+      paramResultLabel(
+        result({
+          status: "unchanged",
+          params: [
+            { key: "a", status: "unchanged" },
+            { key: "b", status: "unchanged" },
+          ],
+        }),
+      ).label,
+    ).toBe("Já tinha os valores");
+    expect(paramKeyLabel({ key: "lot", status: "updated" })).toBe("lot: alterado (antes vazio)");
   });
 
   it("labels what was done on each agent", () => {
