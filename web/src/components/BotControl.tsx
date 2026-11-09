@@ -63,13 +63,10 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
       showFeedback({ tone: "ok", text: "Bot iniciado." });
     });
 
+  // stopped: the control itself tells it (Iniciar bot), no note
   const handleStop = () =>
     run(async () => {
       onControlsChange(await stopBot(agent));
-      showFeedback({
-        tone: "ok",
-        text: "Bot parado. Novas ordens, inclusive stops de proteção, serão rejeitadas até você iniciá-lo.",
-      });
     });
 
   return (
