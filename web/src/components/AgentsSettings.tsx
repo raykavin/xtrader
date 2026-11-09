@@ -22,6 +22,7 @@ import {
 import { byActor } from "../lib/supervisor";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
+import { AgentsParamDialog } from "./AgentsParamDialog";
 import { ConfirmButton } from "./ConfirmButton";
 import { DailyLimitDialog } from "./DailyLimitDialog";
 import { Icon } from "./Icon";
@@ -63,6 +64,7 @@ type Editing = { agent: AgentSettings } | "new" | null;
 export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: Props) {
   const id = useId();
   const [editing, setEditing] = useState<Editing>(null);
+  const [parametrizing, setParametrizing] = useState(false);
   // the kind of the group shown: the first group until another is chosen
   const [kind, setKind] = useState<string | null>(null);
   const groups = agentGroups(agents);
@@ -100,6 +102,17 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
       Novo agente
     </button>
   );
+  const actions = (
+    <div className="agents-actions">
+      {agents.length > 0 && (
+        <button type="button" className="btn" onClick={() => setParametrizing(true)}>
+          <Icon name="settings" />
+          Parametrizador global
+        </button>
+      )}
+      {create}
+    </div>
+  );
 
   return (
     <div className="settings-section">
@@ -107,7 +120,7 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
         eyebrow="Configurações"
         title={intro.title}
         description={intro.description}
-        actions={create}
+        actions={actions}
       />
       {!shown ? (
         <div className="card">
@@ -153,6 +166,13 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
               : onChange
           }
           onClose={() => setEditing(null)}
+        />
+      )}
+      {parametrizing && (
+        <AgentsParamDialog
+          agents={agents}
+          onApplied={onReload}
+          onClose={() => setParametrizing(false)}
         />
       )}
     </div>
