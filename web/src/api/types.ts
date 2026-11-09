@@ -906,6 +906,14 @@ export interface AgentSettings {
   exited?: boolean;
   last_exit?: string;
   launch_error?: string;
+  /**
+   * BotStopped tells that a user stopped its bot (Parar bot, /stop), by
+   * BotStoppedBy at BotStoppedAt (Unix seconds): it starts stopped, whatever
+   * restarts it, until a user starts it
+   */
+  bot_stopped?: boolean;
+  bot_stopped_by?: string;
+  bot_stopped_at?: number /* int64 */;
   outbox?: AgentOutbox;
   params: { [key: string]: string};
   account?: AgentAccountSettings;

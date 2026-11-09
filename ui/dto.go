@@ -766,33 +766,39 @@ type ErrorResponse struct {
 // dashboard, whatever its trade panel, and from Telegram, its controls on
 // there; false for the other kinds.
 type AgentSettings struct {
-	Name            string                `json:"name"`
-	Kind            string                `json:"kind"`
-	Mode            string                `json:"mode"`
-	APIAddress      string                `json:"api_address"`
-	Enabled         bool                  `json:"enabled"`
-	Launched        bool                  `json:"launched"`
-	Restart         bool                  `json:"restart"`
-	TradePanel      bool                  `json:"trade_panel"`
-	TelegramControl bool                  `json:"telegram_control"`
-	Reanalysis      bool                  `json:"reanalysis"`
-	Running         bool                  `json:"running"`
-	RestartPending  bool                  `json:"restart_pending"`
-	Restarts        int                   `json:"restarts,omitempty"`
-	Restarting      bool                  `json:"restarting,omitempty"`
-	Exited          bool                  `json:"exited,omitempty"`
-	LastExit        string                `json:"last_exit,omitempty"`
-	LaunchError     string                `json:"launch_error,omitempty"`
-	Outbox          *AgentOutbox          `json:"outbox,omitempty"`
-	Params          map[string]string     `json:"params"`
-	Account         *AgentAccountSettings `json:"account,omitempty"`
-	MT5AccountID    int64                 `json:"mt5_account_id,omitempty"` // the account of MT5 it trades, see MT5AccountInfo
-	LLM             *AgentLLMSettings     `json:"llm,omitempty"`
-	Model           string                `json:"model,omitempty"`
-	PromptID        *int64                `json:"prompt_id,omitempty"`
-	PromptStatus    *AgentPromptStatus    `json:"prompt_status,omitempty"`
-	Secrets         AgentSecretsPresent   `json:"secrets"`
-	Supervision     *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	Mode            string `json:"mode"`
+	APIAddress      string `json:"api_address"`
+	Enabled         bool   `json:"enabled"`
+	Launched        bool   `json:"launched"`
+	Restart         bool   `json:"restart"`
+	TradePanel      bool   `json:"trade_panel"`
+	TelegramControl bool   `json:"telegram_control"`
+	Reanalysis      bool   `json:"reanalysis"`
+	Running         bool   `json:"running"`
+	RestartPending  bool   `json:"restart_pending"`
+	Restarts        int    `json:"restarts,omitempty"`
+	Restarting      bool   `json:"restarting,omitempty"`
+	Exited          bool   `json:"exited,omitempty"`
+	LastExit        string `json:"last_exit,omitempty"`
+	LaunchError     string `json:"launch_error,omitempty"`
+	// BotStopped tells that a user stopped its bot (Parar bot, /stop), by
+	// BotStoppedBy at BotStoppedAt (Unix seconds): it starts stopped, whatever
+	// restarts it, until a user starts it
+	BotStopped   bool                  `json:"bot_stopped,omitempty"`
+	BotStoppedBy string                `json:"bot_stopped_by,omitempty"`
+	BotStoppedAt int64                 `json:"bot_stopped_at,omitempty"`
+	Outbox       *AgentOutbox          `json:"outbox,omitempty"`
+	Params       map[string]string     `json:"params"`
+	Account      *AgentAccountSettings `json:"account,omitempty"`
+	MT5AccountID int64                 `json:"mt5_account_id,omitempty"` // the account of MT5 it trades, see MT5AccountInfo
+	LLM          *AgentLLMSettings     `json:"llm,omitempty"`
+	Model        string                `json:"model,omitempty"`
+	PromptID     *int64                `json:"prompt_id,omitempty"`
+	PromptStatus *AgentPromptStatus    `json:"prompt_status,omitempty"`
+	Secrets      AgentSecretsPresent   `json:"secrets"`
+	Supervision  *AgentSupervisionInfo `json:"supervision,omitempty"` // absent for an agent never supervised
 	// Protection is the protection of its open positions (breakeven, trailing
 	// stop), all off unless set, applied live
 	Protection ProtectionSettings `json:"protection"`

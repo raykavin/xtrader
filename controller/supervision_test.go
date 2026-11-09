@@ -5,6 +5,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -142,6 +143,10 @@ type fakeAgent struct {
 	// onClose is called as a close request comes, eg: to hold it until the
 	// closes of other agents came too
 	onClose func()
+	// bot is the status of its bot, stopped and started from the dashboard;
+	// refuseBot refuses that (403)
+	bot       string
+	refuseBot bool
 }
 
 func newFakeAgent(t *testing.T, bridge *fakeBridge, magic int64) *fakeAgent {
@@ -178,6 +183,21 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.URL.Path == "/api/pairs" {
 		_ = json.NewEncoder(w).Encode(ui.PairsResponse{Pairs: []string{"XAUUSDm", "BTCUSDm"}})
+		return
+	}
+	if r.URL.Path == "/api/controls/stop" || r.URL.Path == "/api/controls/start" {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.refuseBot {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"Painel de trading bloqueado."}`))
+			return
+		}
+		a.bot = "running"
+		if r.URL.Path == "/api/controls/stop" {
+			a.bot = "stopped"
+		}
+		_, _ = fmt.Fprintf(w, `{"status":%q}`, a.bot)
 		return
 	}
 	if r.Header.Get(ui.ChannelHeader) != string(ui.ChannelSupervisor) {

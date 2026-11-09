@@ -60,6 +60,8 @@ export function agentState(agent: AgentSettings): { label: string; tone: Tone; m
   if (agent.launch_error) return { label: "Não iniciado", tone: "warn", mark: "stop" };
   if (agent.running && agent.restarting)
     return { label: "Reiniciando", tone: "warn", mark: "stop" };
+  if (agent.running && agent.bot_stopped)
+    return { label: "Bot parado", tone: "warn", mark: "stop" };
   if (agent.running && agent.restart_pending) return { label: "Reinício pendente", tone: "warn" };
   if (agent.running) return { label: "Executando", tone: "on", mark: "play" };
   if (!agent.launched) return { label: "Iniciado à parte", tone: "off" };
@@ -74,8 +76,12 @@ export function agentState(agent: AgentSettings): { label: string; tone: Tone; m
  */
 export function agentNote(agent: AgentSettings): string {
   if (agent.launch_error) return `Não iniciado: ${agent.launch_error}`;
-  if (agent.restart_pending)
-    return "Configurações de inicialização alteradas: reinicie para aplicá-las.";
+  const pending = "Configurações de inicialização alteradas: reinicie para aplicá-las.";
+  if (agent.bot_stopped) {
+    const note = botStoppedNote(agent);
+    return agent.restart_pending ? `${note} ${pending}` : note;
+  }
+  if (agent.restart_pending) return pending;
   const exit = agent.last_exit ? `Última saída: ${agent.last_exit}` : "";
   if (agent.exited) {
     const note =
@@ -86,6 +92,25 @@ export function agentNote(agent: AgentSettings): string {
   if (restarts === 0) return exit;
   const times = restarts === 1 ? "1 vez" : `${restarts} vezes`;
   return exit ? `${exit}. Reiniciado ${times}` : `Reiniciado ${times}`;
+}
+
+/**
+ * The note of an agent whose bot a user stopped: by whom (the user, or
+ * Telegram) and when, by the clock of the browser, and that it stays stopped
+ * whatever restarts it, until it is started.
+ */
+export function botStoppedNote(agent: AgentSettings): string {
+  const who = agent.bot_stopped_by ?? "";
+  const by = who.startsWith("telegram:") ? " pelo Telegram" : who !== "" ? ` por ${who}` : "";
+  const at = agent.bot_stopped_at
+    ? ` em ${new Date(agent.bot_stopped_at * 1000).toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`
+    : "";
+  return `Bot parado${by}${at}: continua parado mesmo se o agente reiniciar, até ser iniciado no painel (Iniciar bot) ou pelo /start.`;
 }
 
 /** How long ago, as the note of the outbox tells it: "12 min", "3 h", "2 dias". */

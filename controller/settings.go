@@ -161,6 +161,9 @@ func (s *settings) agentSettings(a store.Agent) ui.AgentSettings {
 		Exited: state.Exited, LastExit: state.LastExit, LaunchError: state.LaunchError, Outbox: s.manager.Outbox(a.ID),
 		Params: a.AllParams(), Supervision: supervisionInfo(a), Protection: a.ProtectionOf(),
 		DailyLimit: a.DailyLimitOf()}
+	if stopped, by, at := a.BotStopped(); stopped {
+		settings.BotStopped, settings.BotStoppedBy, settings.BotStoppedAt = true, by, at.Unix()
+	}
 	if acc := a.Account; acc != nil {
 		settings.Account = &ui.AgentAccountSettings{BridgeURL: acc.BridgeURL, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}

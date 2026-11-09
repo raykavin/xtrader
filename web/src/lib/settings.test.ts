@@ -14,6 +14,7 @@ import {
   agentState,
   agentSummary,
   agentUpdateRequest,
+  botStoppedNote,
   commentError,
   csrfToken,
   httpURLError,
@@ -72,6 +73,26 @@ describe("agents", () => {
   it("labels the kinds", () => {
     expect(agentKindLabel("trend")).toBe("Tendência");
     expect(agentKindLabel("other")).toBe("other");
+  });
+
+  it("tells a bot a user stopped, kept stopped whatever restarts the agent", () => {
+    const stopped = agent({
+      running: true,
+      bot_stopped: true,
+      bot_stopped_by: "admin",
+      bot_stopped_at: Math.floor(new Date(2026, 10, 9, 11, 36).getTime() / 1000),
+    });
+    expect(agentState(stopped)).toEqual({ label: "Bot parado", tone: "warn", mark: "stop" });
+    expect(agentNote(stopped)).toBe(
+      "Bot parado por admin em 09/11, 11:36: continua parado mesmo se o agente reiniciar, até ser iniciado no painel (Iniciar bot) ou pelo /start.",
+    );
+    expect(botStoppedNote(agent({ bot_stopped: true, bot_stopped_by: "telegram:42" }))).toBe(
+      "Bot parado pelo Telegram: continua parado mesmo se o agente reiniciar, até ser iniciado no painel (Iniciar bot) ou pelo /start.",
+    );
+    expect(agentNote(agent({ running: true, bot_stopped: true, restart_pending: true }))).toContain(
+      "reinicie para aplicá-las",
+    );
+    expect(agentState(agent({ running: false, bot_stopped: true })).label).toBe("Parado");
   });
 
   it("tells the state of the process", () => {

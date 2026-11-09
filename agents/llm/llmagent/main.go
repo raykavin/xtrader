@@ -573,7 +573,8 @@ func paper(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, d
 		return err
 	}
 	if agent != nil {
-		agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not
+		agent.Supervise(bot.Controller())           // its entries, blocked by the controller or not
+		agent.KeepBotStopped(ctx, bot.Controller()) // its bot stopped by a user, kept so
 	}
 	// the protection of its positions, the costs those of the paper wallet
 	protect.Attach(ctx, bot, wallet, trader.Timeframe(), false, agent, chart)
@@ -661,7 +662,8 @@ func live(ctx context.Context, settings xtrader.Settings, trader *llm.Trader, da
 	if err != nil {
 		return err
 	}
-	agent.Supervise(bot.Controller()) // its entries, blocked by the controller or not, before it trades
+	agent.Supervise(bot.Controller())           // its entries, blocked by the controller or not, before it trades
+	agent.KeepBotStopped(ctx, bot.Controller()) // its bot stopped by a user, kept so
 	// the protection of its positions
 	protect.Attach(ctx, bot, broker, trader.Timeframe(), true, agent, chart)
 
