@@ -202,6 +202,8 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/agents", d.handleAgents)
+		r.Post("/agents/{agent}/controls/stop", d.handleBotControl(true))   // recorded, see recordBotControl
+		r.Post("/agents/{agent}/controls/start", d.handleBotControl(false)) // and its start
 		r.HandleFunc("/agents/{agent}/*", d.handleAgent)
 		if d.settings != nil {
 			d.settings.routes(r)

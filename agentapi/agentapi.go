@@ -63,6 +63,10 @@ type Config struct {
 	LLM             *LLM              `json:"llm,omitempty"`
 	Prompt          *Prompt           `json:"prompt,omitempty"` // of an LLM agent, nil for its default one
 	News            *News             `json:"news,omitempty"`   // see News
+	// BotStopped tells that a user stopped the bot of the agent (Parar bot,
+	// /stop) and never started it since: it starts stopped, see
+	// remote.Agent.KeepBotStopped
+	BotStopped bool `json:"bot_stopped,omitempty"`
 }
 
 // News is the news feature of all the agents, set on the dashboard (the tab

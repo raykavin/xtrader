@@ -408,6 +408,7 @@ func (t *Telegram) handleStart(m *tb.Message) {
 		return
 	}
 	if t.call(m, a, http.MethodPost, "controls/start", nil, nil) {
+		t.dashboard.recordBotControl(t.ctx, a.Name, false, by(m))
 		t.reply(m, a, "Bot started.", t.menu)
 	}
 }
@@ -426,6 +427,7 @@ func (t *Telegram) handleStop(m *tb.Message) {
 		return
 	}
 	if t.call(m, a, http.MethodPost, "controls/stop", nil, nil) {
+		t.dashboard.recordBotControl(t.ctx, a.Name, true, by(m))
 		t.reply(m, a, "Bot stopped. New orders are rejected until /start — including protective stops, "+
 			"so any open position is left unprotected.", t.menu)
 	}

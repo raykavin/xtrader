@@ -126,6 +126,7 @@ func configOf(ctx context.Context, st *store.Store, a store.Agent) (agentapi.Con
 	cfg := agentapi.Config{ID: a.ID, Name: a.Name, Kind: a.Kind, Mode: a.Mode, APIAddress: a.APIAddress,
 		TradePanel: a.TradePanel, TelegramControl: a.TelegramControl, Reanalysis: a.ReanalysisAllowed(),
 		Entries: entries, Protection: protection, Params: a.Params}
+	cfg.BotStopped, _, _ = a.BotStopped()
 	if acc := a.Account; acc != nil {
 		cfg.Account = &agentapi.Account{BridgeURL: acc.BridgeURL, BridgeToken: secrets.BridgeToken, Magic: acc.Magic,
 			Comment: acc.Comment, RealAllowed: acc.RealAllowed}
