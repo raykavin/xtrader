@@ -307,6 +307,11 @@ const reservedParams = new Set([
 /** The prefixes of the params of a language model, the ones of an LLM agent only. */
 const llmParamPrefixes = ["llm-", "calendar-", "news-"];
 
+/** Whether the param name is one of a language model, of an LLM agent only (llm-, calendar-, news-). */
+export function llmParam(name: string): boolean {
+  return llmParamPrefixes.some((prefix) => name.startsWith(prefix));
+}
+
 /** Whether text has a control character, as Go tells them (unicode.IsControl). */
 function hasControl(text: string): boolean {
   for (const char of text) {
@@ -449,7 +454,7 @@ export function paramKeyError(key: string, kind: string): string | null {
   if (reservedParams.has(name)) {
     return `${name} é uma configuração do próprio agente, não um parâmetro.`;
   }
-  if (kind !== "llm" && llmParamPrefixes.some((prefix) => name.startsWith(prefix))) {
+  if (kind !== "llm" && llmParam(name)) {
     return "Parâmetro só para agentes LLM.";
   }
   return null;

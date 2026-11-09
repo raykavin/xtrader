@@ -483,25 +483,38 @@ func checkParams(a Agent) error {
 	params := a.AllParams()
 	for _, name := range slices.Sorted(maps.Keys(params)) {
 		value := params[name]
+		if err := checkParam(name, value, " do agente "+a.Name); err != nil {
+			return err
+		}
 		switch {
-		case !paramNameRegexp.MatchString(name):
-			return fmt.Errorf("%w: o nome do parâmetro %q do agente %s deve ser o de uma flag: letras minúsculas, "+
-				"números e -", ErrInvalid, name, a.Name)
-		case columnFlags[name]:
-			return fmt.Errorf("%w: o parâmetro %s do agente %s tem campo próprio: altere-o lá, não nos parâmetros",
-				ErrInvalid, name, a.Name)
-		case len(value) > maxParamValue || !oneLine(value):
-			return fmt.Errorf("%w: o parâmetro %s do agente %s deve ficar numa linha só, com até %d bytes", ErrInvalid,
-				name, a.Name, maxParamValue)
-		case repeatsName(name, value):
-			return fmt.Errorf("%w: o valor do parâmetro %s do agente %s repete o nome: informe só o que vem depois "+
-				"do =", ErrInvalid, name, a.Name)
 		case llmParam(name) && a.Kind != "llm":
 			return fmt.Errorf("%w: o parâmetro %s do agente %s é só para agentes LLM", ErrInvalid, name, a.Name)
 		case llmParam(name) && a.LLM == nil:
 			return fmt.Errorf("%w: o parâmetro %s do agente %s é do LLM, que o agente não tem", ErrInvalid, name,
 				a.Name)
 		}
+	}
+	return nil
+}
+
+// checkParam checks the param name of value, of an agent when of tells it
+// (eg: " do agente orb"): the name of a flag, none of a field (see
+// columnFlags), the value a line of text of maxParamValue bytes at most, not
+// the line of the param pasted whole (see repeatsName).
+func checkParam(name, value, of string) error {
+	switch {
+	case !paramNameRegexp.MatchString(name):
+		return fmt.Errorf("%w: o nome do parâmetro %q%s deve ser o de uma flag: letras minúsculas, números e -",
+			ErrInvalid, name, of)
+	case columnFlags[name]:
+		return fmt.Errorf("%w: o parâmetro %s%s tem campo próprio: altere-o lá, não nos parâmetros", ErrInvalid,
+			name, of)
+	case len(value) > maxParamValue || !oneLine(value):
+		return fmt.Errorf("%w: o parâmetro %s%s deve ficar numa linha só, com até %d bytes", ErrInvalid, name, of,
+			maxParamValue)
+	case repeatsName(name, value):
+		return fmt.Errorf("%w: o valor do parâmetro %s%s repete o nome: informe só o que vem depois do =",
+			ErrInvalid, name, of)
 	}
 	return nil
 }
@@ -781,37 +794,50 @@ func (s *Store) sealInto(column *[]byte, place string, secret Secret) error {
 // reanalysis of an agent of another kind than llm (ErrInvalid).
 func (s *Store) UpdateAgent(ctx context.Context, id int64, update AgentUpdate) (Agent, error) {
 	err := s.Transaction(ctx, func(ctx context.Context) error {
-		var agent Agent
-		err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
-			First(&agent, id).Error
+		agent, err := s.lockedAgent(ctx, id)
 		if err != nil {
-			return notFound(err, fmt.Sprintf("o agente %d", id))
-		}
-		change := update.apply(agent)
-		if err := checkReanalysis(change.agent); err != nil {
 			return err
 		}
-		if !update.switchesOnly() {
-			if err := checkAgent(change.agent); err != nil {
-				return err
-			}
-		}
-		if update.APIAddress != nil && !strings.EqualFold(change.agent.APIAddress, agent.APIAddress) {
-			if err := s.checkAddressFree(ctx, id, change.agent.APIAddress); err != nil {
-				return err
-			}
-		}
-		if update.touchesBook() {
-			if err := s.checkBookFree(ctx, id, change.agent); err != nil {
-				return err
-			}
-		}
-		return s.saveChange(ctx, agent, change)
+		return s.updateLocked(ctx, agent, update)
 	})
 	if err != nil {
 		return Agent{}, err
 	}
 	return s.Agent(ctx, id)
+}
+
+// lockedAgent returns the agent of id, its row locked until the end of the
+// transaction of ctx, with all it has.
+func (s *Store) lockedAgent(ctx context.Context, id int64) (Agent, error) {
+	var agent Agent
+	err := s.conn(ctx).Clauses(lockForUpdate()).Preload("Account").Preload("MT5Link.Account").Preload("LLM").Preload("Reanalysis").Preload("Supervision").Preload("Protection").Preload("DailyLimit").
+		First(&agent, id).Error
+	return agent, notFound(err, fmt.Sprintf("o agente %d", id))
+}
+
+// updateLocked applies update to the agent, its row locked (see lockedAgent),
+// checked as UpdateAgent checks it.
+func (s *Store) updateLocked(ctx context.Context, agent Agent, update AgentUpdate) error {
+	change := update.apply(agent)
+	if err := checkReanalysis(change.agent); err != nil {
+		return err
+	}
+	if !update.switchesOnly() {
+		if err := checkAgent(change.agent); err != nil {
+			return err
+		}
+	}
+	if update.APIAddress != nil && !strings.EqualFold(change.agent.APIAddress, agent.APIAddress) {
+		if err := s.checkAddressFree(ctx, agent.ID, change.agent.APIAddress); err != nil {
+			return err
+		}
+	}
+	if update.touchesBook() {
+		if err := s.checkBookFree(ctx, agent.ID, change.agent); err != nil {
+			return err
+		}
+	}
+	return s.saveChange(ctx, agent, change)
 }
 
 // saveChange writes the change c of the agent a, its account, its language

@@ -13,6 +13,8 @@ import type {
   AgentSettingsRequest,
   AgentSettingsResponse,
   AgentStatus,
+  AgentsParamRequest,
+  AgentsParamResponse,
   AgentsResponse,
   BacktestBatchInfo,
   BacktestRequest,
@@ -474,6 +476,16 @@ export function renameAgent(name: string, newName: string): Promise<AgentSetting
 /** Restarts an agent, eg: to apply the settings waiting for it. */
 export function restartAgent(name: string): Promise<AgentSettings> {
   return postJSON<AgentSettings>(`/settings/agents/${encodeURIComponent(name)}/restart`);
+}
+
+/**
+ * Sets a param on every agent holding it, on the ones without it too when
+ * asked, then restarts the agents enabled when asked: what was done on each
+ * agent, a failure on one told with the others done. 400 when the key or the
+ * value is refused, nothing changed.
+ */
+export function setAgentsParam(request: AgentsParamRequest): Promise<AgentsParamResponse> {
+  return postJSON<AgentsParamResponse>("/settings/agents/params", request);
 }
 
 /** The accounting periods of an agent, the current one first: none before its first reset. */

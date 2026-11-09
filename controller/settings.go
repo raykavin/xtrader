@@ -57,6 +57,7 @@ func (s *settings) routes(r chi.Router) {
 	r.Put("/settings/exposure", s.handleSetExposure)
 	r.Get("/settings/agents", s.handleAgents)
 	r.Post("/settings/agents", s.handleCreateAgent)
+	r.Post("/settings/agents/params", s.handleAgentsParam)
 	r.Patch("/settings/agents/{name}", s.handleAgent)
 	r.Delete("/settings/agents/{name}", s.handleDeleteAgent)
 	r.Post("/settings/agents/{name}/restart", s.handleRestart)

@@ -907,6 +907,59 @@ type AgentSettingsRequest struct {
 	MT5AccountID *int64 `json:"mt5_account_id,omitempty"`
 }
 
+// AgentsParamRequest is the body of POST /api/settings/agents/params, the
+// global parametrizer of the agents: the param Key, the name of a flag without
+// its dash (eg: lot), set to Value on every agent holding it, on the ones
+// without it too when AddMissing, each agent's other params and settings
+// kept; then, when RestartActive, every agent enabled restarted, the disabled
+// ones left stopped. Key and Value are checked as the params of an agent are.
+type AgentsParamRequest struct {
+	Key           string `json:"key"`
+	Value         string `json:"value"`
+	AddMissing    bool   `json:"add_missing,omitempty"`
+	RestartActive bool   `json:"restart_active,omitempty"`
+}
+
+// The outcomes of the global parametrizer on an agent, see AgentsParamResult.
+const (
+	ParamUpdated   = "updated"   // its value changed
+	ParamAdded     = "added"     // added, the agent without it
+	ParamUnchanged = "unchanged" // the value it had already
+	ParamSkipped   = "skipped"   // left as it was, Detail telling why
+	ParamFailed    = "failed"    // refused on this agent, Detail telling why
+)
+
+// The restarts of the global parametrizer, see AgentsParamResult.
+const (
+	ParamRestarted     = "restarted" // stopped and launched again
+	ParamRestartFailed = "failed"    // RestartDetail telling why
+	ParamRestartLeft   = "skipped"   // not restarted, RestartDetail telling why
+)
+
+// AgentsParamResult is what POST /api/settings/agents/params did on an agent:
+// Status ParamUpdated (Previous the value it had), ParamAdded,
+// ParamUnchanged, ParamSkipped or ParamFailed (Detail telling why); and, the
+// restart asked, Restart ParamRestarted, ParamRestartFailed or
+// ParamRestartLeft (RestartDetail telling why), "" for an agent disabled,
+// left stopped. Enabled tells whether the agent is enabled.
+type AgentsParamResult struct {
+	Agent         string `json:"agent"`
+	Enabled       bool   `json:"enabled"`
+	Status        string `json:"status"`
+	Previous      string `json:"previous,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Restart       string `json:"restart,omitempty"`
+	RestartDetail string `json:"restart_detail,omitempty"`
+}
+
+// AgentsParamResponse answers POST /api/settings/agents/params: the param set,
+// trimmed, and what was done on each agent, in the order of the dashboard.
+type AgentsParamResponse struct {
+	Key     string              `json:"key"`
+	Value   string              `json:"value"`
+	Results []AgentsParamResult `json:"results"`
+}
+
 // OpenPositionsResponse is the payload of GET /api/positions/open: the open
 // profit of the agents, the profit and the swap of the positions they hold
 // open now on their MT5 accounts, as the terminals report them (the closed

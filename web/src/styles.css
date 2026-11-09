@@ -8119,6 +8119,93 @@ h3.md-heading {
   accent-color: var(--accent);
 }
 
+/* the actions of the page of the agents: the global parametrizer beside the
+   button creating an agent, wrapping on a phone */
+.agents-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* the global parametrizer of the agents: its options, its preview, and what
+   it did on each agent */
+.agents-param-options {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agents-param-option {
+  display: grid;
+  gap: 2px;
+}
+
+.agents-param-option .field-hint {
+  padding-left: 24px; /* under the label, past the checkbox */
+}
+
+.agents-param-preview {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.agents-param-results {
+  display: grid;
+  max-height: min(50vh, 420px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.agents-param-result {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+.agents-param-result + .agents-param-result {
+  border-top: 1px solid var(--border);
+}
+
+.agents-param-agent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-param-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.agents-param-detail {
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .agents-param-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* the windows of the trading hours, in the settings and in a batch: a row by
    window, its start and end beside its agents, its assets and what its end
    does; on two lines when narrower, stacked on a phone */
