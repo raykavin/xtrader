@@ -17,6 +17,7 @@ import {
   outboxNote,
   promptStatusLabel,
   reanalysisHint,
+  searchAgents,
   tradePanelHint,
 } from "../lib/settings";
 import { byActor } from "../lib/supervisor";
@@ -59,7 +60,9 @@ type Editing = { agent: AgentSettings } | "new" | null;
  * the prompt of an LLM agent with what came of its last switch, its secrets
  * (written, never read) and its restart, the settings of its launch changed.
  * New agents and the settings of each one are edited in a dialog; a disabled
- * one is deleted, its orders and its decisions kept.
+ * one is deleted, its orders and its decisions kept. A search lists the
+ * agents of every group matching it, by their name, kind, strategy, pairs or
+ * model, in place of the group shown.
  */
 export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: Props) {
   const id = useId();
@@ -67,8 +70,11 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
   const [parametrizing, setParametrizing] = useState(false);
   // the kind of the group shown: the first group until another is chosen
   const [kind, setKind] = useState<string | null>(null);
+  // the search typed: the agents of every group matching it, in place of the group
+  const [query, setQuery] = useState("");
   const groups = agentGroups(agents);
   const shown = groups.find((g) => g.kind === kind) ?? groups[0];
+  const found = query.trim() === "" ? null : searchAgents(agents, query);
   const strategies = groups.filter((g) => g.kind !== "llm");
   // the agent edited as the list has it now, eg: running or not
   const edited =
@@ -84,10 +90,13 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
         key={group.kind}
         type="button"
         className="filter-chip"
-        aria-pressed={group === shown}
+        aria-pressed={found === null && group === shown}
         aria-controls={`${id}-agents`}
         aria-label={`${group.label}: ${group.agents.length} ${group.agents.length === 1 ? "agente" : "agentes"}, ${enabled}`}
-        onClick={() => setKind(group.kind)}
+        onClick={() => {
+          setKind(group.kind);
+          setQuery(""); // the group, not the search
+        }}
       >
         {group.label}
         <span className="filter-count">{group.agents.length}</span>
@@ -128,6 +137,41 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
         </div>
       ) : (
         <>
+          <search className="agents-search">
+            <Icon name="search" size={16} />
+            <input
+              type="search"
+              className="input agents-search-input"
+              value={query}
+              placeholder="Buscar agente por nome, estratégia, ativo ou modelo"
+              aria-label="Buscar agentes em todos os grupos"
+              aria-controls={`${id}-agents`}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+            />
+            {query !== "" && (
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost btn-icon agents-search-clear"
+                aria-label="Limpar a busca"
+                title="Limpar"
+                onClick={() => setQuery("")}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            )}
+          </search>
+          {found !== null && (
+            <p className="agents-search-note" aria-live="polite">
+              {found.length === 0
+                ? `Nenhum agente encontrado para “${query.trim()}”.`
+                : `${found.length === 1 ? "1 agente encontrado" : `${found.length} agentes encontrados`} em todos os grupos.`}
+            </p>
+          )}
           <fieldset className="filter-bar" aria-label="Grupos de agentes">
             {groups.filter((g) => g.kind === "llm").map(groupButton)}
             {strategies.length > 0 && (
@@ -140,7 +184,7 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
             )}
           </fieldset>
           <div id={`${id}-agents`} className="agent-grid">
-            {shown.agents.map((agent) => (
+            {(found ?? shown.agents).map((agent) => (
               <AgentCard
                 key={agent.name}
                 agent={agent}

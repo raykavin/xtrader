@@ -29,6 +29,7 @@ import {
   promptLabel,
   promptNameError,
   promptStatusLabel,
+  searchAgents,
   settingsTabFromHash,
   settingsTabs,
   usernameError,
@@ -73,6 +74,42 @@ describe("agents", () => {
   it("labels the kinds", () => {
     expect(agentKindLabel("trend")).toBe("Tendência");
     expect(agentKindLabel("other")).toBe("other");
+  });
+
+  it("searches the agents of every group by name, kind, strategy, pairs or model", () => {
+    const agents = [
+      agent({
+        name: "llm-smc",
+        kind: "llm",
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      }),
+      agent({
+        name: "donchian",
+        kind: "breakout",
+        params: { strategy: "donchian", pair: "USTECm" },
+      }),
+      agent({
+        name: "macdtrend",
+        kind: "trend",
+        params: { strategy: "macdtrend", pair: "XAUUSDm" },
+      }),
+      agent({
+        name: "rsitrend",
+        kind: "momentum",
+        params: { strategy: "rsitrend", pair: "XAUUSDm" },
+      }),
+    ];
+    const names = (query: string) => searchAgents(agents, query).map((a) => a.name);
+    expect(names("")).toEqual(["llm-smc", "macdtrend", "rsitrend", "donchian"]);
+    expect(names("  ")).toHaveLength(4);
+    expect(names("TREND")).toEqual(["macdtrend", "rsitrend"]);
+    expect(names("rompimento")).toEqual(["donchian"]);
+    expect(names("tendência")).toEqual(["macdtrend"]);
+    expect(names("tendencia")).toEqual(["macdtrend"]);
+    expect(names("ustecm")).toEqual(["donchian"]);
+    expect(names("sonnet")).toEqual(["llm-smc"]);
+    expect(names("xau rsi")).toEqual(["rsitrend"]);
+    expect(names("nada")).toEqual([]);
   });
 
   it("tells a bot a user stopped, kept stopped whatever restarts the agent", () => {

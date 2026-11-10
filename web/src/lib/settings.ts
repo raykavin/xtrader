@@ -193,6 +193,39 @@ export function agentGroups(agents: AgentSettings[]): AgentGroup[] {
   });
 }
 
+/** text folded for a search: lowercase, without its accents. */
+function folded(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+/**
+ * The agents matching query, of every group, in the order of their groups: by
+ * their name, their kind, their strategy, their pairs or the model of an LLM
+ * agent, ignoring the case and the accents, every word of query in one of
+ * them; all the agents for a blank query.
+ */
+export function searchAgents(agents: AgentSettings[], query: string): AgentSettings[] {
+  const ordered = agentGroups(agents).flatMap((group) => group.agents);
+  const words = folded(query).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return ordered;
+  return ordered.filter((agent) => {
+    const text = folded(
+      [
+        agent.name,
+        agent.kind,
+        agentKindLabel(agent.kind),
+        agent.params.strategy ?? "",
+        agent.params.pair ?? "",
+        agent.llm?.model ?? agent.model ?? "",
+      ].join(" "),
+    );
+    return words.every((word) => text.includes(word));
+  });
+}
+
 /**
  * What tells an agent apart on its card, of its params that have it: its
  * pairs, its timeframe, and its strategy, or the model of an LLM agent.
