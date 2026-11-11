@@ -1364,16 +1364,79 @@ type BacktestCompatibility struct {
 	Reason     string   `json:"reason,omitempty"`
 }
 
-// BacktestsResponse is the payload of GET /api/backtests: the last batches,
-// the newest first, the agents with their compatibility, and the limits of
-// a batch.
+// BacktestsResponse is the payload of GET /api/backtests: the batches, the
+// newest first, the last ones or the page asked for (see PageInfo), the runs
+// queued or running of every batch (Running), every batch as the choice of
+// its results (Choices), the agents with their compatibility, and the limits
+// of a batch.
 type BacktestsResponse struct {
+	PageInfo      `tstype:",extends"`
 	Batches       []BacktestBatchInfo     `json:"batches"`
+	Running       int                     `json:"running"`
+	Choices       []BacktestBatchChoice   `json:"choices"`
 	Agents        []BacktestCompatibility `json:"agents"`
 	MaxPeriodDays int                     `json:"max_period_days"`
 	MaxRuns       int                     `json:"max_runs"`
 	LLMMaxCalls   int                     `json:"llm_max_calls"`
 	LLMMaxCost    float64                 `json:"llm_max_cost"`
+}
+
+// BacktestBatchChoice is a batch as the choice of its results: its ID, its
+// name and its period.
+type BacktestBatchChoice struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	From int64  `json:"from"`
+	To   int64  `json:"to"`
+}
+
+// The columns the comparison of a batch sorts by, see
+// BacktestComparisonResponse: the agent, by name; the net, the return, the
+// drawdown (the shallowest first), the return over the drawdown, the profit
+// factor, the win rate, the trades and the positive months of the fit; the
+// return over the drawdown of the validation.
+const (
+	CompareAgent      = "agent"
+	CompareNet        = "net"
+	CompareReturn     = "return"
+	CompareDrawdown   = "drawdown"
+	CompareRatio      = "ratio"
+	CompareFactor     = "factor"
+	CompareWinRate    = "winrate"
+	CompareTrades     = "trades"
+	CompareMonths     = "months"
+	CompareValidation = "validation"
+)
+
+// BacktestComparisonRow is an agent of a batch compared: what it trades, its
+// run of the fit and of the validation (when asked), and whether the
+// validation degraded from the fit (a positive fit with a negative
+// validation, or the return over the drawdown of the validation under half of
+// the fit's).
+type BacktestComparisonRow struct {
+	Agent      string           `json:"agent"`
+	Kind       string           `json:"kind"`
+	Strategy   string           `json:"strategy,omitempty"`
+	Pairs      []string         `json:"pairs"`
+	LLM        bool             `json:"llm"`
+	Fit        *BacktestRunInfo `json:"fit,omitempty"`
+	Validation *BacktestRunInfo `json:"validation,omitempty"`
+	Degraded   bool             `json:"degraded"`
+}
+
+// BacktestComparisonResponse is the payload of GET
+// /api/backtests/{id}/comparison: the batch (without its runs), the rows of
+// its agents kept by the filters (?min_trades=, ?llm=), sorted (?sort=, one
+// of the Compare columns, ?order=, asc or desc), the page asked for (see
+// PageInfo); the rows the filters hide, what differs between all of them
+// (eg: the assets) and the runs of the batch queued or running.
+type BacktestComparisonResponse struct {
+	PageInfo    `tstype:",extends"`
+	Batch       BacktestBatchInfo       `json:"batch"`
+	Rows        []BacktestComparisonRow `json:"rows"`
+	Hidden      int                     `json:"hidden"`
+	Differences []string                `json:"differences"`
+	Active      int                     `json:"active"`
 }
 
 // PerformanceResponse is the payload of GET /api/performance: the trades of

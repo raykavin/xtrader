@@ -1726,17 +1726,143 @@ export interface BacktestCompatibility {
   reason?: string;
 }
 /**
- * BacktestsResponse is the payload of GET /api/backtests: the last batches,
- * the newest first, the agents with their compatibility, and the limits of
- * a batch.
+ * BacktestsResponse is the payload of GET /api/backtests: the batches, the
+ * newest first, the last ones or the page asked for (see PageInfo), the runs
+ * queued or running of every batch (Running), every batch as the choice of
+ * its results (Choices), the agents with their compatibility, and the limits
+ * of a batch.
  */
-export interface BacktestsResponse {
+export interface BacktestsResponse extends PageInfo {
   batches: BacktestBatchInfo[];
+  running: number /* int */;
+  choices: BacktestBatchChoice[];
   agents: BacktestCompatibility[];
   max_period_days: number /* int */;
   max_runs: number /* int */;
   llm_max_calls: number /* int */;
   llm_max_cost: number /* float64 */;
+}
+/**
+ * BacktestBatchChoice is a batch as the choice of its results: its ID, its
+ * name and its period.
+ */
+export interface BacktestBatchChoice {
+  id: number /* int64 */;
+  name: string;
+  from: number /* int64 */;
+  to: number /* int64 */;
+}
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareAgent = "agent";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareNet = "net";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareReturn = "return";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareDrawdown = "drawdown";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareRatio = "ratio";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareFactor = "factor";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareWinRate = "winrate";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareTrades = "trades";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareMonths = "months";
+/**
+ * The columns the comparison of a batch sorts by, see
+ * BacktestComparisonResponse: the agent, by name; the net, the return, the
+ * drawdown (the shallowest first), the return over the drawdown, the profit
+ * factor, the win rate, the trades and the positive months of the fit; the
+ * return over the drawdown of the validation.
+ */
+export const CompareValidation = "validation";
+/**
+ * BacktestComparisonRow is an agent of a batch compared: what it trades, its
+ * run of the fit and of the validation (when asked), and whether the
+ * validation degraded from the fit (a positive fit with a negative
+ * validation, or the return over the drawdown of the validation under half of
+ * the fit's).
+ */
+export interface BacktestComparisonRow {
+  agent: string;
+  kind: string;
+  strategy?: string;
+  pairs: string[];
+  llm: boolean;
+  fit?: BacktestRunInfo;
+  validation?: BacktestRunInfo;
+  degraded: boolean;
+}
+/**
+ * BacktestComparisonResponse is the payload of GET
+ * /api/backtests/{id}/comparison: the batch (without its runs), the rows of
+ * its agents kept by the filters (?min_trades=, ?llm=), sorted (?sort=, one
+ * of the Compare columns, ?order=, asc or desc), the page asked for (see
+ * PageInfo); the rows the filters hide, what differs between all of them
+ * (eg: the assets) and the runs of the batch queued or running.
+ */
+export interface BacktestComparisonResponse extends PageInfo {
+  batch: BacktestBatchInfo;
+  rows: BacktestComparisonRow[];
+  hidden: number /* int */;
+  differences: string[];
+  active: number /* int */;
 }
 /**
  * PerformanceResponse is the payload of GET /api/performance: the trades of

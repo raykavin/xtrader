@@ -165,6 +165,36 @@ func (s *Store) BacktestBatches(ctx context.Context, limit int) ([]BacktestBatch
 	return batches, nil
 }
 
+// FindBacktestBatches returns the batches of q, the newest first.
+func (s *Store) FindBacktestBatches(ctx context.Context, q ListQuery) (Listed[BacktestBatch], error) {
+	listed, err := list[batchRow](s.conn(ctx).Model(&batchRow{}), q, newestFirst("created_at", "id"))
+	return listedAs(listed, batchRow.batch), err
+}
+
+// BacktestBatchChoices returns every batch, the newest first, with its ID,
+// its name and its period only.
+func (s *Store) BacktestBatchChoices(ctx context.Context) ([]BacktestBatch, error) {
+	var rows []batchRow
+	err := s.conn(ctx).Select("id, name, period_from, period_to, created_at").
+		Order("created_at DESC, id DESC").Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	batches := make([]BacktestBatch, 0, len(rows))
+	for _, row := range rows {
+		batches = append(batches, row.batch())
+	}
+	return batches, nil
+}
+
+// CountActiveBacktestRuns returns the runs queued or running, of every batch.
+func (s *Store) CountActiveBacktestRuns(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.conn(ctx).Model(&backtestRunRow{}).Where("status IN ?", []string{BacktestQueued, BacktestRunning}).
+		Count(&count).Error
+	return count, err
+}
+
 // BacktestBatch returns the batch of id, ErrNotFound without one.
 func (s *Store) BacktestBatch(ctx context.Context, id int64) (BacktestBatch, error) {
 	var row batchRow

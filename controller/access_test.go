@@ -106,6 +106,7 @@ var routePermissions = map[string][]string{
 	"GET /api/backtests":                   {ui.PermBacktestsView},
 	"POST /api/backtests":                  {ui.PermBacktestsManage},
 	"DELETE /api/backtests/{id}":           {ui.PermBacktestsManage},
+	"GET /api/backtests/{id}/comparison":   {ui.PermBacktestsView},
 	"GET /api/backtests/runs/{id}":         {ui.PermBacktestsView},
 	"POST /api/backtests/runs/{id}/cancel": {ui.PermBacktestsManage},
 }
