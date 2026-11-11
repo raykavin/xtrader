@@ -156,6 +156,7 @@ describe("the accounts of MT5", () => {
     const preview = {
       active: true,
       current: ["Real"],
+      from: ["Real"],
       linked: ["trend", "orb"],
       running: ["trend", "orb"],
       exposure: [],
@@ -170,6 +171,7 @@ describe("the accounts of MT5", () => {
       switchQuestion(account(), {
         active: false,
         current: ["Real"],
+        from: ["Real"],
         linked: ["trend"],
         running: ["trend"],
         exposure: [],
@@ -178,13 +180,27 @@ describe("the accounts of MT5", () => {
       "Desativar a conta Real? O terminal deixa de servi-la. O agente trend, em execução no terminal, será parado.",
     );
     expect(
-      switchQuestion(demo, { active: true, current: [], linked: [], running: [], exposure: [] }),
+      switchQuestion(demo, {
+        active: true,
+        current: [],
+        from: [],
+        linked: [],
+        running: [],
+        exposure: [],
+      }),
     ).toBe("Logar o terminal na conta 87654321?");
     expect(moveAgentsLabel(preview)).toBe(
       "Levar os 2 agentes da conta Real para esta conta (voltam a ser iniciados nela)",
     );
     expect(moveAgentsLabel({ ...preview, linked: ["trend"] })).toBe(
       "Levar o agente trend da conta Real para esta conta (volta a ser iniciado nela)",
+    );
+    // no account active on the terminal: the agents of its inactive accounts
+    expect(moveAgentsLabel({ ...preview, current: [], from: ["USD"] })).toBe(
+      "Levar os 2 agentes da conta USD para esta conta (voltam a ser iniciados nela)",
+    );
+    expect(moveAgentsLabel({ ...preview, current: [], from: ["USD", "Real"] })).toBe(
+      "Levar os 2 agentes das contas USD, Real para esta conta (voltam a ser iniciados nela)",
     );
     expect(moveAgentsLabel({ ...preview, active: false })).toBe("");
     expect(moveAgentsLabel({ ...preview, linked: [] })).toBe("");

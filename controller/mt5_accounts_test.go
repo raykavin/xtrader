@@ -360,7 +360,8 @@ func TestMT5Accounts_InUse(t *testing.T) {
 // terminal can't log in the new one. The accounts and the agents of another
 // terminal are never touched, on the same host too; two URLs of one terminal
 // are told the same by its instance, the agents of the account left moved to
-// the one activated when asked; a deactivation stops the agents too.
+// the one activated when asked (the ones of its inactive accounts, with none
+// active on it); a deactivation stops the agents too.
 func TestMT5Accounts_SwitchCoordinated(t *testing.T) {
 	s := newMT5Supervised(t)
 	ctx := context.Background()
@@ -465,4 +466,25 @@ func TestMT5Accounts_SwitchCoordinated(t *testing.T) {
 	orb, err = s.store.AgentByName(ctx, "orb")
 	require.NoError(t, err)
 	assert.Contains(t, s.dashboard.mt5Hold(orb), "está inativa", "a deactivation moves none")
+
+	// no account active on the terminal (as a switch failed leaves it): the
+	// agents of its inactive accounts follow the account activated, the ones
+	// of another terminal never
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/deactivate", third.ID), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	preview = switchPreview(t, call, demo.ID, true)
+	assert.Empty(t, preview.Current)
+	assert.Equal(t, []string{third.Name}, preview.From)
+	assert.Equal(t, []string{"trend"}, preview.Linked)
+	resp, body = call(http.MethodPost, fmt.Sprintf("/api/settings/mt5-accounts/%d/activate", demo.ID),
+		ui.MT5SwitchRequest{MoveAgents: true})
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	assert.True(t, active(demo.ID))
+	trend, err = s.store.AgentByName(ctx, "trend")
+	require.NoError(t, err)
+	assert.Equal(t, demo.ID, trend.MT5AccountOf().ID, "moved from the inactive account of the terminal")
+	assert.Empty(t, s.dashboard.mt5Hold(trend), "started on it")
+	orb, err = s.store.AgentByName(ctx, "orb")
+	require.NoError(t, err)
+	assert.Equal(t, second.ID, orb.MT5AccountOf().ID, "the agent of another terminal never moved")
 }

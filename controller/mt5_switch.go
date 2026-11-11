@@ -43,7 +43,11 @@ type switchPlan struct {
 	m       *mt5Accounts
 	leaving []store.MT5Account
 	agents  []string
-	linked  []store.Agent // the agents of the accounts leaving it
+	// from are the accounts whose agents follow an activation (linked): the
+	// ones leaving the terminal; with none active on it, its inactive ones
+	// holding agents, idle as long as no account of the terminal is active.
+	from   []store.MT5Account
+	linked []store.Agent // the agents of the accounts of from
 }
 
 // running returns the agents of the plan running.
@@ -61,10 +65,17 @@ func (p switchPlan) running() []string {
 // touches on its terminal. The terminal of an account is the one its bridge
 // reaches: the same for two accounts of the same host and port, or whose
 // bridges tell the same instance (two URLs of one terminal), never for two
-// terminals of one host. Activating needs the bridge of target reached.
+// terminals of one host. Activating needs the bridge of target reached; the
+// agents following it are the ones of the accounts leaving the terminal, or,
+// with none active on it (a switch failed before), the ones of its inactive
+// accounts, see switchPlan.
 func (m *mt5Accounts) planSwitch(ctx context.Context, target store.MT5Account, active bool) (switchPlan, error) {
 	plan := switchPlan{m: m}
 	accounts, err := m.store.MT5Accounts(ctx)
+	if err != nil {
+		return plan, err
+	}
+	agents, err := m.store.Agents(ctx)
 	if err != nil {
 		return plan, err
 	}
@@ -74,32 +85,39 @@ func (m *mt5Accounts) planSwitch(ctx context.Context, target store.MT5Account, a
 			return plan, fmt.Errorf("o terminal da conta %s não respondeu (%s): nada foi trocado", target.Name,
 				bridgeError(err))
 		}
+		sameTerminal := func(other store.MT5Account) bool {
+			if other.BridgeKey == target.BridgeKey {
+				return true
+			}
+			if instance == "" {
+				return false
+			}
+			theirs, err := m.instanceOf(ctx, other)
+			return err == nil && theirs == instance
+		}
 		for _, other := range accounts {
-			if other.ID == target.ID || !other.Active {
-				continue
-			}
-			same := other.BridgeKey == target.BridgeKey
-			if !same && instance != "" {
-				theirs, err := m.instanceOf(ctx, other)
-				same = err == nil && theirs == instance
-			}
-			if same {
+			if other.ID != target.ID && other.Active && sameTerminal(other) {
 				plan.leaving = append(plan.leaving, other)
+			}
+		}
+		plan.from = plan.leaving
+		if len(plan.leaving) == 0 {
+			for _, other := range accounts {
+				if other.ID != target.ID && !other.Active && holdsAgents(agents, other.ID) && sameTerminal(other) {
+					plan.from = append(plan.from, other)
+				}
 			}
 		}
 	} else if target.Active {
 		plan.leaving = []store.MT5Account{target}
+		plan.from = plan.leaving
 	}
 	bridges := []string{target.BridgeURL}
 	for _, leaving := range plan.leaving {
 		bridges = append(bridges, leaving.BridgeURL)
 	}
-	agents, err := m.store.Agents(ctx)
-	if err != nil {
-		return plan, err
-	}
 	for _, a := range agents {
-		if account := a.MT5AccountOf(); account != nil && slices.ContainsFunc(plan.leaving,
+		if account := a.MT5AccountOf(); account != nil && slices.ContainsFunc(plan.from,
 			func(l store.MT5Account) bool { return l.ID == account.ID }) {
 			plan.linked = append(plan.linked, a)
 		}
@@ -111,6 +129,15 @@ func (m *mt5Accounts) planSwitch(ctx context.Context, target store.MT5Account, a
 		}
 	}
 	return plan, nil
+}
+
+// holdsAgents reports whether an agent of agents is linked to the account of
+// MT5 id.
+func holdsAgents(agents []store.Agent, id int64) bool {
+	return slices.ContainsFunc(agents, func(a store.Agent) bool {
+		account := a.MT5AccountOf()
+		return account != nil && account.ID == id
+	})
 }
 
 // exposureOf returns the positions and the pending orders of the agents open
@@ -136,7 +163,8 @@ func (m *mt5Accounts) exposureOf(ctx context.Context, leaving []store.MT5Account
 //     checked on the account: anything still open refuses the switch;
 //  3. target made the account of the terminal, and the terminal logged in
 //     it: the account it left made active again when it can't log in; the
-//     agents of the accounts it left moved to target once logged in, asked
+//     agents of the accounts it left (of its inactive accounts, with none
+//     active on it, see switchPlan) moved to target once logged in, asked
 //     (moveAgents);
 //  4. the agents released: the ones of the account active started again.
 //
@@ -229,7 +257,7 @@ func (m *mt5Accounts) switchAccount(ctx context.Context, target store.MT5Account
 			}
 			if len(plan.linked) > 0 {
 				log.Infof("mt5 accounts: %d agents of %s moved to %s by %s", len(plan.linked),
-					namesOf(plan.leaving), target.Name, change.By)
+					namesOf(plan.from), target.Name, change.By)
 			}
 		}
 		return nil

@@ -105,17 +105,19 @@ export function switchQuestion(account: MT5AccountInfo, preview: MT5SwitchPrevie
 
 /**
  * The option of a switch moving the agents of the account leaving the
- * terminal to the one activated (see MT5SwitchRequest), "" with none to move.
+ * terminal to the one activated (see MT5SwitchRequest), or of its inactive
+ * accounts with none active on it (MT5SwitchPreview.from), "" with none to move.
  */
 export function moveAgentsLabel(preview: MT5SwitchPreview): string {
   const linked = preview.linked ?? [];
   if (!preview.active || linked.length === 0) return "";
-  const from = preview.current.join(", ");
+  const accounts = preview.from?.length ? preview.from : preview.current;
+  const from = `${accounts.length > 1 ? "das contas" : "da conta"} ${accounts.join(", ")}`;
   const [who, started] =
     linked.length === 1
       ? [`o agente ${linked[0]}`, "volta a ser iniciado nela"]
       : [`os ${linked.length} agentes`, "voltam a ser iniciados nela"];
-  return `Levar ${who} da conta ${from} para esta conta (${started})`;
+  return `Levar ${who} ${from} para esta conta (${started})`;
 }
 
 /** The form of an account of MT5, as typed: its secrets apart (written only). */

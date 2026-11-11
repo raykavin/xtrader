@@ -775,12 +775,15 @@ func (s *settings) handleMT5Switch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := r.URL.Query().Get("active") != "false"
-	preview := ui.MT5SwitchPreview{Active: active, Current: []string{}, Linked: []string{}, Running: []string{},
-		Exposure: []string{}}
+	preview := ui.MT5SwitchPreview{Active: active, Current: []string{}, From: []string{}, Linked: []string{},
+		Running: []string{}, Exposure: []string{}}
 	plan, err := s.mt5.planSwitch(r.Context(), account, active)
 	if err == nil {
 		for _, leaving := range plan.leaving {
 			preview.Current = append(preview.Current, leaving.Name)
+		}
+		for _, from := range plan.from {
+			preview.From = append(preview.From, from.Name)
 		}
 		for _, a := range plan.linked {
 			preview.Linked = append(preview.Linked, a.Name)
