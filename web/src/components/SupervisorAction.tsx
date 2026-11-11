@@ -5,6 +5,7 @@ import {
   type SupervisorDecision,
 } from "../api/client";
 import type { SupervisorActionInfo, SupervisorResultItem } from "../api/types";
+import { PermTradingOperate } from "../api/types";
 import { formatPrice, formatProfit, formatQuantity, signClass } from "../lib/format";
 import { sideLabel } from "../lib/labels";
 import {
@@ -21,6 +22,7 @@ import {
   scopeProfit,
   scopeText,
 } from "../lib/supervisor";
+import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 
@@ -80,6 +82,7 @@ export function SupervisorActionCard({
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const status = actionStatusLabel(action.status);
   const waiting = awaitingDecision(action, now);
+  const operate = useCan(PermTradingOperate); // confirmed or refused by a user allowed to operate only
 
   // a proposal expires while shown
   useEffect(() => {
@@ -199,7 +202,10 @@ export function SupervisorActionCard({
         </ul>
       )}
 
-      {waiting && onDecided && (
+      {waiting && onDecided && !operate && (
+        <p className="sup-expiry">Aguardando a confirmação de um usuário que pode operar.</p>
+      )}
+      {waiting && onDecided && operate && (
         <div className="sup-action-buttons">
           {weighty(action) ? (
             <ConfirmButton

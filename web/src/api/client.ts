@@ -59,6 +59,9 @@ import type {
   PromptsResponse,
   ReanalysisRequest,
   ReanalysisResponse,
+  RoleInfo,
+  RoleRequest,
+  RolesResponse,
   SessionResponse,
   Snapshot,
   SupervisorActionInfo,
@@ -558,14 +561,34 @@ export function createUser(request: UserRequest): Promise<UserInfo> {
   return postJSON<UserInfo>("/users", request);
 }
 
-/** Changes a user: its password, or enabled. */
+/** Changes a user: its password, its role (0 takes it away), or enabled. */
 export function updateUser(id: number, request: UserRequest): Promise<UserInfo> {
   return sendJSON<UserInfo>("PATCH", `/users/${id}`, request);
 }
 
-/** Deletes a user, never the last one enabled. */
+/** Deletes a user, never the last one enabled, nor the last one managing the users. */
 export function deleteUser(id: number): Promise<void> {
   return sendJSON<void>("DELETE", `/users/${id}`);
+}
+
+/** The roles of the users, the fixed one first, and the catalog of the permissions. */
+export function fetchRoles(signal?: AbortSignal): Promise<RolesResponse> {
+  return getJSON<RolesResponse>("/roles", signal);
+}
+
+/** Creates a role, of its name and its permissions. */
+export function createRole(request: RoleRequest): Promise<RoleInfo> {
+  return postJSON<RoleInfo>("/roles", request);
+}
+
+/** Changes a role, of the fields set: never the fixed one. */
+export function updateRole(id: number, request: RoleRequest): Promise<RoleInfo> {
+  return sendJSON<RoleInfo>("PATCH", `/roles/${id}`, request);
+}
+
+/** Deletes a role no user holds, never the fixed one. */
+export function deleteRole(id: number): Promise<void> {
+  return sendJSON<void>("DELETE", `/roles/${id}`);
 }
 
 /** The settings of the supervisor of the agents and its state, never its key. */

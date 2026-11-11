@@ -1,7 +1,9 @@
 import { type FormEvent, useState } from "react";
 import { addTelegramUser, deleteTelegramUser, updateTelegramSettings } from "../api/client";
 import type { TelegramSettingsResponse } from "../api/types";
+import { PermTelegramManage } from "../api/types";
 import { parseTelegramID } from "../lib/settings";
+import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
@@ -24,6 +26,7 @@ interface Props {
  * prompts from Telegram.
  */
 export function TelegramSettings({ intro, telegram, onChange }: Props) {
+  const manage = useCan(PermTelegramManage); // changed by a user allowed to only, seen by the others
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userID, setUserID] = useState("");
@@ -78,7 +81,7 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
             <Switch
               label="Bot ligado"
               checked={telegram.enabled}
-              disabled={busy}
+              disabled={busy || !manage}
               onChange={(enabled) => run(() => updateTelegramSettings({ enabled }))}
             />
             {telegram.enabled && !telegram.has_token && (
@@ -88,7 +91,7 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
               <SecretField
                 label="Token do bot"
                 set={telegram.has_token}
-                disabled={busy}
+                disabled={busy || !manage}
                 placeholder="123456:ABC…"
                 onSave={async (token) => {
                   onChange(await updateTelegramSettings({ token }));
@@ -133,13 +136,15 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
                       <td data-label="Nome">{user.name || "—"}</td>
                       <td className="cell-actions">
                         <div className="row-actions">
-                          <ConfirmButton
-                            label="Remover"
-                            ariaLabel={`Remover ${user.name || user.telegram_id}`}
-                            question={`Remover ${user.name || user.telegram_id}?`}
-                            disabled={busy}
-                            onConfirm={() => run(() => deleteTelegramUser(user.id))}
-                          />
+                          {manage && (
+                            <ConfirmButton
+                              label="Remover"
+                              ariaLabel={`Remover ${user.name || user.telegram_id}`}
+                              question={`Remover ${user.name || user.telegram_id}?`}
+                              disabled={busy}
+                              onConfirm={() => run(() => deleteTelegramUser(user.id))}
+                            />
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -148,39 +153,41 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
               </table>
             </div>
           )}
-          <form className="card-footer inline-form" onSubmit={add} aria-label="Autorizar usuário">
-            <div className="field">
-              <label className="field-label" htmlFor="telegram-user-id">
-                ID no Telegram
-              </label>
-              <input
-                id="telegram-user-id"
-                className="input mono"
-                inputMode="numeric"
-                placeholder="ex.: 123456789"
-                value={userID}
-                disabled={busy}
-                onChange={(e) => setUserID(e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="telegram-user-name">
-                Nome <span className="optional">(opcional)</span>
-              </label>
-              <input
-                id="telegram-user-name"
-                className="input"
-                placeholder="ex.: Maria"
-                value={name}
-                disabled={busy}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary" disabled={busy || id === null}>
-              <Icon name="plus" />
-              Autorizar
-            </button>
-          </form>
+          {manage && (
+            <form className="card-footer inline-form" onSubmit={add} aria-label="Autorizar usuário">
+              <div className="field">
+                <label className="field-label" htmlFor="telegram-user-id">
+                  ID no Telegram
+                </label>
+                <input
+                  id="telegram-user-id"
+                  className="input mono"
+                  inputMode="numeric"
+                  placeholder="ex.: 123456789"
+                  value={userID}
+                  disabled={busy}
+                  onChange={(e) => setUserID(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label className="field-label" htmlFor="telegram-user-name">
+                  Nome <span className="optional">(opcional)</span>
+                </label>
+                <input
+                  id="telegram-user-name"
+                  className="input"
+                  placeholder="ex.: Maria"
+                  value={name}
+                  disabled={busy}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={busy || id === null}>
+                <Icon name="plus" />
+                Autorizar
+              </button>
+            </form>
+          )}
         </section>
       </div>
     </div>

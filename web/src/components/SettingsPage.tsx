@@ -3,22 +3,33 @@ import {
   fetchAgentSettings,
   fetchMT5Accounts,
   fetchPrompts,
-  fetchSessionInfo,
+  fetchRoles,
   fetchSupervisorSettings,
   fetchTelegramSettings,
   fetchUsers,
 } from "../api/client";
-import type {
-  AgentSettings,
-  MT5AccountInfo,
-  PromptInfo,
-  SupervisorSettingsResponse,
-  TelegramSettingsResponse,
-  UserInfo,
+import {
+  type AgentSettings,
+  type MT5AccountInfo,
+  PermAgentsManage,
+  PermAgentsView,
+  PermMT5AccountsView,
+  PermPromptsView,
+  PermSupervisorView,
+  PermTelegramView,
+  PermUsersManage,
+  PermUsersView,
+  type PromptInfo,
+  type RolesResponse,
+  type SupervisorSettingsResponse,
+  type TelegramSettingsResponse,
+  type UserInfo,
 } from "../api/types";
+import { allowedTabs, can, shownTab } from "../lib/access";
 import { terminalsOf } from "../lib/mt5Accounts";
 import { type SettingsTab, settingsTabFromHash } from "../lib/settings";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
+import { useAccess } from "./AccessContext";
 import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
 import { DailyLimitsSettings } from "./DailyLimitsSettings";
@@ -27,6 +38,7 @@ import { MT5AccountsSettings } from "./MT5AccountsSettings";
 import { NewsSettings } from "./NewsSettings";
 import { PageHeader } from "./PageHeader";
 import { PromptsSettings } from "./PromptsSettings";
+import { RolesSettings } from "./RolesSettings";
 import { Alert, Loading, Skeleton } from "./States";
 import { SupervisorSettings } from "./SupervisorSettings";
 import { TelegramSettings } from "./TelegramSettings";
@@ -82,9 +94,9 @@ const intros: Record<SettingsTab, SectionIntro> = {
     description: "Só os IDs autorizados controlam os agentes e os prompts pelo bot.",
   },
   usuarios: {
-    title: "Usuários",
+    title: "Usuários e papéis",
     description:
-      "Quem pode entrar no painel. Desativar, excluir ou trocar a senha de um usuário encerra as sessões dele.",
+      "Quem pode entrar no painel e o que cada um vê e faz, pelo papel. Um usuário sem papel não entra. Desativar, excluir, trocar a senha ou tirar o papel de um usuário encerra as sessões dele.",
   },
   layout: {
     title: "Layout",
@@ -96,18 +108,29 @@ const intros: Record<SettingsTab, SectionIntro> = {
  * The page of the settings of the controller, kept in its database, a
  * section at a time: the agents, the prompts of the LLM agents, the Telegram
  * bot and the users of the dashboard. The section shown is the hash of the
- * URL, eg: #prompts, chosen in the navigation of the page.
+ * URL, eg: #prompts, chosen in the navigation of the page; only the sections
+ * the role of the user shows, and only their data read.
  */
 export function SettingsPage() {
+  const access = useAccess();
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  const [tab, setTab] = useState<SettingsTab>(() => settingsTabFromHash(window.location.hash));
+  const [wanted, setTab] = useState<SettingsTab>(() => settingsTabFromHash(window.location.hash));
+  const tab = shownTab(access, wanted) ?? wanted;
+  const shown = allowedTabs(access);
+  const seesAgents = can(access, PermAgentsView);
+  const seesTelegram = can(access, PermTelegramView);
+  const seesSupervisor = can(access, PermSupervisorView);
+  const seesAccounts = can(access, PermMT5AccountsView);
+  const seesPrompts = can(access, PermPromptsView, PermAgentsManage); // the prompt of an agent
+  const seesUsers = can(access, PermUsersView);
+  const current = access.username ?? "";
   const [agents, setAgents] = useState<AgentSettings[] | null>(null);
   const [prompts, setPrompts] = useState<PromptInfo[] | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettingsResponse | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorSettingsResponse | null>(null);
   const [users, setUsers] = useState<UserInfo[] | null>(null);
+  const [roles, setRoles] = useState<RolesResponse | null>(null);
   const [accounts, setAccounts] = useState<MT5AccountInfo[] | null>(null);
-  const [current, setCurrent] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -127,51 +150,46 @@ export function SettingsPage() {
     [],
   );
   const loadPrompts = useCallback(() => {
-    fetchPrompts().then(setPrompts).catch(fail);
-  }, [fail]);
+    if (seesPrompts) fetchPrompts().then(setPrompts).catch(fail);
+  }, [fail, seesPrompts]);
   const loadUsers = useCallback(() => {
+    if (!seesUsers) return;
     fetchUsers().then(setUsers).catch(fail);
-  }, [fail]);
+    fetchRoles().then(setRoles).catch(fail); // the users of each role
+  }, [fail, seesUsers]);
 
   useEffect(() => {
     const controller = new AbortController();
+    const failed = (e: unknown) => {
+      if (!controller.signal.aborted) fail(e);
+    };
     const poll = () => {
-      fetchAgentSettings(controller.signal)
-        .then((list) => {
-          setAgents(list);
-          setError(null);
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) fail(e);
-        });
-      fetchTelegramSettings(controller.signal)
-        .then(setTelegram)
-        .catch((e) => {
-          if (!controller.signal.aborted) fail(e);
-        });
-      fetchSupervisorSettings(controller.signal)
-        .then(setSupervisor)
-        .catch((e) => {
-          if (!controller.signal.aborted) fail(e);
-        });
-      fetchMT5Accounts(controller.signal)
-        .then((response) => setAccounts(response.accounts))
-        .catch(() => {
-          // the count only: the tab tells its own error
-        });
+      if (seesAgents) {
+        fetchAgentSettings(controller.signal)
+          .then((list) => {
+            setAgents(list);
+            setError(null);
+          })
+          .catch(failed);
+      }
+      if (seesTelegram) fetchTelegramSettings(controller.signal).then(setTelegram).catch(failed);
+      if (seesSupervisor)
+        fetchSupervisorSettings(controller.signal).then(setSupervisor).catch(failed);
+      if (seesAccounts) {
+        fetchMT5Accounts(controller.signal)
+          .then((response) => setAccounts(response.accounts))
+          .catch(() => {
+            // the count only: the tab tells its own error
+          });
+      }
     };
     poll();
     const timer = window.setInterval(poll, POLL);
-    fetchSessionInfo(controller.signal)
-      .then((s) => setCurrent(s.username ?? ""))
-      .catch(() => {
-        // the users are told apart without it
-      });
     return () => {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [fail]);
+  }, [fail, seesAgents, seesTelegram, seesSupervisor, seesAccounts]);
   useEffect(() => loadPrompts(), [loadPrompts]);
   useEffect(() => loadUsers(), [loadUsers]);
 
@@ -243,7 +261,7 @@ export function SettingsPage() {
         </Alert>
       )}
 
-      <Panel tab="agentes" shown={tab}>
+      <Panel tab="agentes" shown={tab} allowed={shown}>
         {agents === null ? (
           <SectionLoading intro={intros.agentes} cards />
         ) : (
@@ -256,23 +274,23 @@ export function SettingsPage() {
           />
         )}
       </Panel>
-      <Panel tab="contas" shown={tab}>
+      <Panel tab="contas" shown={tab} allowed={shown}>
         <MT5AccountsSettings intro={intros.contas} />
       </Panel>
-      <Panel tab="limites" shown={tab}>
+      <Panel tab="limites" shown={tab} allowed={shown}>
         <DailyLimitsSettings intro={intros.limites} />
       </Panel>
-      <Panel tab="noticias" shown={tab}>
+      <Panel tab="noticias" shown={tab} allowed={shown}>
         <NewsSettings intro={intros.noticias} />
       </Panel>
-      <Panel tab="prompts" shown={tab}>
+      <Panel tab="prompts" shown={tab} allowed={shown}>
         {prompts === null ? (
           <SectionLoading intro={intros.prompts} />
         ) : (
           <PromptsSettings intro={intros.prompts} prompts={prompts} onChange={loadPrompts} />
         )}
       </Panel>
-      <Panel tab="supervisor" shown={tab}>
+      <Panel tab="supervisor" shown={tab} allowed={shown}>
         {supervisor === null ? (
           <SectionLoading intro={intros.supervisor} />
         ) : (
@@ -283,42 +301,56 @@ export function SettingsPage() {
           />
         )}
       </Panel>
-      <Panel tab="telegram" shown={tab}>
+      <Panel tab="telegram" shown={tab} allowed={shown}>
         {telegram === null ? (
           <SectionLoading intro={intros.telegram} />
         ) : (
           <TelegramSettings intro={intros.telegram} telegram={telegram} onChange={setTelegram} />
         )}
       </Panel>
-      <Panel tab="usuarios" shown={tab}>
-        {users === null ? (
+      <Panel tab="usuarios" shown={tab} allowed={shown}>
+        {users === null || roles === null ? (
           <SectionLoading intro={intros.usuarios} />
         ) : (
           <UsersSettings
             intro={intros.usuarios}
             users={users}
+            roles={roles.roles}
             current={current}
             onChange={loadUsers}
-          />
+          >
+            <RolesSettings
+              roles={roles.roles}
+              areas={roles.areas}
+              manage={can(access, PermUsersManage)}
+              onChange={loadUsers}
+            />
+          </UsersSettings>
         )}
       </Panel>
-      <Panel tab="layout" shown={tab}>
+      <Panel tab="layout" shown={tab} allowed={shown}>
         <LayoutSettings intro={intros.layout} />
       </Panel>
     </AppShell>
   );
 }
 
-/** The panel of a section, kept while hidden: what is typed in it survives a switch. */
+/**
+ * The panel of a section, kept while hidden: what is typed in it survives a
+ * switch; not drawn at all when the role of the user doesn't show it.
+ */
 function Panel({
   tab,
   shown,
+  allowed,
   children,
 }: {
   tab: SettingsTab;
   shown: SettingsTab;
+  allowed: SettingsTab[];
   children: ReactNode;
 }) {
+  if (!allowed.includes(tab)) return null;
   return (
     <section className="settings-panel" aria-label={intros[tab].title} hidden={tab !== shown}>
       {children}

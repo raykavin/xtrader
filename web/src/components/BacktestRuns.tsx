@@ -11,11 +11,14 @@ interface Props {
   batches: BacktestBatchInfo[];
   /** The batch just queued, marked. */
   highlight: number | null;
-  onCancel: (run: number) => void;
-  onDelete: (batch: number) => void;
+  /** Cancels a run; none to a user who may not manage the backtests. */
+  onCancel?: (run: number) => void;
+  /** Deletes a batch; none to a user who may not manage the backtests. */
+  onDelete?: (batch: number) => void;
   /** Shows the results of a batch. */
   onOpen: (batch: number) => void;
-  onNew: () => void;
+  /** Configures a new batch; none to a user who may not manage the backtests. */
+  onNew?: () => void;
 }
 
 /** The day of a Unix time in the time of the browser, as the period was asked, eg: 01/10/2026. */
@@ -46,9 +49,11 @@ export function BacktestRuns({ batches, highlight, onCancel, onDelete, onOpen, o
         icon="trend"
         title="Nenhum backtest ainda"
         action={
-          <button type="button" className="btn btn-sm" onClick={onNew}>
-            Configurar um lote
-          </button>
+          onNew && (
+            <button type="button" className="btn btn-sm" onClick={onNew}>
+              Configurar um lote
+            </button>
+          )
         }
       />
     );
@@ -80,15 +85,17 @@ export function BacktestRuns({ batches, highlight, onCancel, onDelete, onOpen, o
                   <Icon name="results" size={14} />
                   Resultados
                 </button>
-                <ConfirmButton
-                  label="Excluir"
-                  icon="trash"
-                  question="Excluir o lote e seus resultados?"
-                  ariaLabel={`Excluir o lote ${batch.name || batch.id}`}
-                  disabled={busy}
-                  title={busy ? "Cancele as execuções em andamento para excluir" : undefined}
-                  onConfirm={() => onDelete(batch.id)}
-                />
+                {onDelete && (
+                  <ConfirmButton
+                    label="Excluir"
+                    icon="trash"
+                    question="Excluir o lote e seus resultados?"
+                    ariaLabel={`Excluir o lote ${batch.name || batch.id}`}
+                    disabled={busy}
+                    title={busy ? "Cancele as execuções em andamento para excluir" : undefined}
+                    onConfirm={() => onDelete(batch.id)}
+                  />
+                )}
               </div>
             </header>
             <div className="table-wrap">
@@ -121,7 +128,7 @@ export function BacktestRuns({ batches, highlight, onCancel, onDelete, onOpen, o
 }
 
 /** A run: its status and progress, its error below it. */
-function RunRow({ run, onCancel }: { run: BacktestRunInfo; onCancel: (run: number) => void }) {
+function RunRow({ run, onCancel }: { run: BacktestRunInfo; onCancel?: (run: number) => void }) {
   const status = runStatusLabels[run.status] ?? { text: run.status, tone: "off" as const };
   const progress = progressOf(run);
   const end = run.finished_at ?? (run.started_at ? Date.now() / 1000 : undefined);
@@ -153,7 +160,7 @@ function RunRow({ run, onCancel }: { run: BacktestRunInfo; onCancel: (run: numbe
           {run.started_at && end ? formatDuration(end - run.started_at) : "—"}
         </td>
         <td className="num" data-label="Ações">
-          {active(run) && (
+          {active(run) && onCancel && (
             <ConfirmButton
               label="Cancelar"
               icon="close"

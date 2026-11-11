@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { reanalyze } from "../api/client";
 import type { Decision } from "../api/types";
+import { PermTradingOperate } from "../api/types";
 import {
   decisionActionLabel,
   decisionOutcomeLabel,
@@ -14,6 +15,7 @@ import {
 } from "../lib/decisions";
 import { formatTime } from "../lib/format";
 import { pageRows } from "../lib/pagination";
+import { useCan } from "./AccessContext";
 import { Icon } from "./Icon";
 import { Paginator } from "./Paginator";
 import { ReanalysisDialog } from "./ReanalysisDialog";
@@ -52,6 +54,7 @@ export function DecisionsPanel({
   const [page, setPage] = useState(0);
   const timer = useRef<number | undefined>(undefined);
   const button = reanalysisButton(reanalysis);
+  const operate = useCan(PermTradingOperate); // asked by a user allowed to operate only
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
@@ -74,16 +77,18 @@ export function DecisionsPanel({
           {decisions.length === 1 ? "1 decisão" : `${decisions.length} decisões`} em{" "}
           <strong>{pair}</strong> do modelo <strong>{model}</strong>
         </p>
-        <button
-          type="button"
-          className="btn btn-sm btn-primary"
-          disabled={reanalysis !== "enabled"}
-          title={button.title}
-          onClick={() => setAsking(true)}
-        >
-          <Icon name="sparkles" size={14} />
-          {button.label}
-        </button>
+        {operate && (
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={reanalysis !== "enabled"}
+            title={button.title}
+            onClick={() => setAsking(true)}
+          >
+            <Icon name="sparkles" size={14} />
+            {button.label}
+          </button>
+        )}
       </div>
       {feedback && (
         <Alert tone={feedback.tone === "ok" ? "success" : "error"}>{feedback.text}</Alert>

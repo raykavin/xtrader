@@ -41,6 +41,9 @@ export function nextPage(search: string, origin: string): string {
 export const LOGIN_CLOSED =
   "O painel não tem usuários: defina bootstrap.username e bootstrap.password no config.yml do controller, ou importe os da versão anterior com o migrator.";
 
+/** The message of a login refused to a user without a role, its password right. */
+export const NO_ROLE = "Seu usuário não tem um papel atribuído: peça acesso a um administrador.";
+
 /**
  * The message of a login refused: the same for any wrong credential, never
  * telling which one.
@@ -48,6 +51,7 @@ export const LOGIN_CLOSED =
 export function loginError(error: unknown): string {
   if (error instanceof APIError) {
     if (error.status === 401) return "Usuário ou senha inválidos.";
+    if (error.status === 403) return NO_ROLE;
     if (error.status === 503) return LOGIN_CLOSED;
     if (error.status === 429) {
       const wait = error.retryAfter ?? 0;
