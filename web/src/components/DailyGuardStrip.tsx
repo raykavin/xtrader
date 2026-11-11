@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { closeAllPositions, fetchDailyGuard } from "../api/client";
 import type { DailyLimitsStatus } from "../api/types";
+import { PermTradingOperate } from "../api/types";
 import {
   type DailyTone,
   flattenLabel,
@@ -16,6 +17,7 @@ import { formatMoney, signClass } from "../lib/format";
 import { hasExposure } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { hoursState, hoursWindows } from "../lib/tradingHours";
+import { useCan } from "./AccessContext";
 import { Icon } from "./Icon";
 import { useOpenPositions } from "./useOpenPositions";
 
@@ -217,6 +219,7 @@ export function DailyGuardStrip({
   /** Across the panel, atop it: the figures more spaced. */
   wide?: boolean;
 }) {
+  const operate = useCan(PermTradingOperate); // zerar tudo to a user allowed to operate only
   if (!status) return null;
   const global = status.global;
   const guarded = Object.values(guardedAgents(status));
@@ -257,7 +260,7 @@ export function DailyGuardStrip({
         {flatten && (
           <span className={`${chipClass(flatten.tone)} daily-strip-flatten`}>{flatten.text}</span>
         )}
-        <CloseAll />
+        {operate && <CloseAll />}
       </div>
       {tone !== "off" && (
         <div className="daily-strip-body">

@@ -1,8 +1,10 @@
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { fetchNewsSettings, testNews, updateNewsSettings } from "../api/client";
 import type { NewsSettingsResponse, NewsTestResponse } from "../api/types";
+import { PermNewsManage } from "../api/types";
 import { formatTime } from "../lib/format";
 import { newsState, newsStatusLabel } from "../lib/news";
+import { useCan } from "./AccessContext";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
@@ -58,6 +60,7 @@ function minutesError(text: string): string | null {
  * runtime.
  */
 export function NewsSettings({ intro }: Props) {
+  const manage = useCan(PermNewsManage); // changed and tested by a user allowed to only, seen by the others
   const [data, setData] = useState<NewsSettingsResponse | null>(null);
   const [form, setForm] = useState<RulesForm | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,7 +200,7 @@ export function NewsSettings({ intro }: Props) {
         <div className="card-body news-body">
           <Switch
             checked={data.enabled}
-            disabled={busy}
+            disabled={busy || !manage}
             onChange={toggle}
             label="Consultar o calendário e bloquear por notícia"
           />
@@ -205,7 +208,7 @@ export function NewsSettings({ intro }: Props) {
           <SecretField
             label="Token do servidor MCP"
             set={data.token_set}
-            disabled={busy}
+            disabled={busy || !manage}
             placeholder="o token de Ferramentas › Opções › Servidor MCP"
             onSave={saveToken}
           />
@@ -229,100 +232,106 @@ export function NewsSettings({ intro }: Props) {
               Servidor e janela da notícia
             </h2>
           </div>
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={testing}
-            onClick={runTest}
-            title={`Consulta uma vez o servidor e o token salvos${data.enabled ? "" : ", mesmo com as notícias desligadas"}`}
-          >
-            <Icon name="restart" size={14} />
-            {testing ? "Testando…" : "Testar conexão"}
-          </button>
+          {manage && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={testing}
+              onClick={runTest}
+              title={`Consulta uma vez o servidor e o token salvos${data.enabled ? "" : ", mesmo com as notícias desligadas"}`}
+            >
+              <Icon name="restart" size={14} />
+              {testing ? "Testando…" : "Testar conexão"}
+            </button>
+          )}
         </header>
         <form className="card-body news-body" onSubmit={saveRules} noValidate>
-          <div className="field" data-invalid={errors.url ? "" : undefined}>
-            <label className="field-label" htmlFor={`${id}-url`}>
-              Servidor MCP do calendário
-            </label>
-            <input
-              id={`${id}-url`}
-              className="input mono"
-              inputMode="url"
-              value={form.url}
-              placeholder="http://mt5:22347/mcp"
-              onChange={(e) => set("url")(e.target.value)}
-            />
-            <span className={errors.url ? "field-error" : "field-hint"}>
-              {errors.url ?? "O servidor MCP do terminal MT5. Em branco, nada é consultado."}
-            </span>
-            {test && (
-              <ul className="news-results" aria-label="Resultado do teste">
-                {test.results.map((result) => {
-                  const label = newsStatusLabel(result.status);
-                  return (
-                    <li key={result.url || "none"} className="news-result">
-                      <span className={chip(label.tone)}>{label.text}</span>
-                      {result.url && <span className="mono news-url">{result.url}</span>}
-                      <span className="field-hint">
-                        {label.hint}
-                        {result.detail ? ` (${result.detail})` : ""}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
+          <fieldset className="fieldset-contents" disabled={!manage}>
+            <div className="field" data-invalid={errors.url ? "" : undefined}>
+              <label className="field-label" htmlFor={`${id}-url`}>
+                Servidor MCP do calendário
+              </label>
+              <input
+                id={`${id}-url`}
+                className="input mono"
+                inputMode="url"
+                value={form.url}
+                placeholder="http://mt5:22347/mcp"
+                onChange={(e) => set("url")(e.target.value)}
+              />
+              <span className={errors.url ? "field-error" : "field-hint"}>
+                {errors.url ?? "O servidor MCP do terminal MT5. Em branco, nada é consultado."}
+              </span>
+              {test && (
+                <ul className="news-results" aria-label="Resultado do teste">
+                  {test.results.map((result) => {
+                    const label = newsStatusLabel(result.status);
+                    return (
+                      <li key={result.url || "none"} className="news-result">
+                        <span className={chip(label.tone)}>{label.text}</span>
+                        {result.url && <span className="mono news-url">{result.url}</span>}
+                        <span className="field-hint">
+                          {label.hint}
+                          {result.detail ? ` (${result.detail})` : ""}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+            <div className="form-grid news-window">
+              <div className="field" data-invalid={errors.before ? "" : undefined}>
+                <label className="field-label" htmlFor={`${id}-before`}>
+                  Minutos antes
+                </label>
+                <input
+                  id={`${id}-before`}
+                  className="input mono"
+                  inputMode="numeric"
+                  value={form.before}
+                  onChange={(e) => set("before")(e.target.value)}
+                />
+                {errors.before && <span className="field-error">{errors.before}</span>}
+              </div>
+              <div className="field" data-invalid={errors.after ? "" : undefined}>
+                <label className="field-label" htmlFor={`${id}-after`}>
+                  Minutos depois
+                </label>
+                <input
+                  id={`${id}-after`}
+                  className="input mono"
+                  inputMode="numeric"
+                  value={form.after}
+                  onChange={(e) => set("after")(e.target.value)}
+                />
+                {errors.after && <span className="field-error">{errors.after}</span>}
+              </div>
+              <div className="field">
+                <span className="field-label">Importância das divulgações</span>
+                <Select
+                  caption="Importância das divulgações"
+                  value={form.importance}
+                  options={importances}
+                  onChange={set("importance")}
+                />
+              </div>
+            </div>
+            <p className="field-hint">
+              Dos minutos antes aos minutos depois de uma divulgação nas moedas de um ativo, nenhum
+              agente abre posição nele. No início da janela, as ordens pendentes de entrada do ativo
+              são canceladas e as posições nele são fechadas a mercado. Com os dois em 0, não há
+              bloqueio.
+            </p>
+            {manage && (
+              <div className="news-actions">
+                {saved && <span className="msg msg-ok">Salvo e aplicado aos agentes.</span>}
+                <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>
+                  Salvar
+                </button>
+              </div>
             )}
-          </div>
-          <div className="form-grid news-window">
-            <div className="field" data-invalid={errors.before ? "" : undefined}>
-              <label className="field-label" htmlFor={`${id}-before`}>
-                Minutos antes
-              </label>
-              <input
-                id={`${id}-before`}
-                className="input mono"
-                inputMode="numeric"
-                value={form.before}
-                onChange={(e) => set("before")(e.target.value)}
-              />
-              {errors.before && <span className="field-error">{errors.before}</span>}
-            </div>
-            <div className="field" data-invalid={errors.after ? "" : undefined}>
-              <label className="field-label" htmlFor={`${id}-after`}>
-                Minutos depois
-              </label>
-              <input
-                id={`${id}-after`}
-                className="input mono"
-                inputMode="numeric"
-                value={form.after}
-                onChange={(e) => set("after")(e.target.value)}
-              />
-              {errors.after && <span className="field-error">{errors.after}</span>}
-            </div>
-            <div className="field">
-              <span className="field-label">Importância das divulgações</span>
-              <Select
-                caption="Importância das divulgações"
-                value={form.importance}
-                options={importances}
-                onChange={set("importance")}
-              />
-            </div>
-          </div>
-          <p className="field-hint">
-            Dos minutos antes aos minutos depois de uma divulgação nas moedas de um ativo, nenhum
-            agente abre posição nele. No início da janela, as ordens pendentes de entrada do ativo
-            são canceladas e as posições nele são fechadas a mercado. Com os dois em 0, não há
-            bloqueio.
-          </p>
-          <div className="news-actions">
-            {saved && <span className="msg msg-ok">Salvo e aplicado aos agentes.</span>}
-            <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>
-              Salvar
-            </button>
-          </div>
+          </fieldset>
         </form>
       </section>
     </>

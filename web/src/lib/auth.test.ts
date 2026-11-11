@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APIError, retryAfterSeconds } from "../api/errors";
-import { LOGIN_CLOSED, loginError, nextPage } from "./auth";
+import { LOGIN_CLOSED, loginError, NO_ROLE, nextPage } from "./auth";
 
 const ORIGIN = "https://xtrader.example";
 
@@ -65,6 +65,7 @@ describe("loginError", () => {
       "Usuário ou senha inválidos.",
     );
     expect(loginError(new APIError("no credentials", 503))).toBe(LOGIN_CLOSED);
+    expect(loginError(new APIError("no role", 403))).toBe(NO_ROLE);
     expect(loginError(new APIError("invalid JSON payload", 400))).toBe(
       "Não foi possível entrar. Tente novamente.",
     );

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelBacktestRun, deleteBacktest, fetchBacktests } from "../api/client";
 import type { BacktestBatchInfo, BacktestsResponse } from "../api/types";
+import { PermBacktestsManage } from "../api/types";
 import { active } from "../lib/backtest";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
+import { useCan } from "./AccessContext";
 import { AppShell } from "./AppShell";
 import { BacktestConfigure } from "./BacktestConfigure";
 import { BacktestResults } from "./BacktestResults";
@@ -70,8 +72,12 @@ function useBacktests() {
  * a batch configured, its runs followed, their results compared.
  */
 export function BacktestingPage() {
+  // started, canceled and deleted by a user allowed to only, followed by the others
+  const manage = useCan(PermBacktestsManage);
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  const [view, setView] = useState<View>("configure");
+  const [view, setView] = useState<View>(manage ? "configure" : "runs");
+  const shownViews = manage ? views : views.filter((v) => v.id !== "configure");
+  const configure = manage ? () => setView("configure") : undefined;
   const [batch, setBatch] = useState<number | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const { read, error, refresh } = useBacktests();
@@ -142,7 +148,7 @@ export function BacktestingPage() {
           <Tabs
             label="Seções do backtesting"
             idPrefix="bt"
-            items={views.map((v) => ({
+            items={shownViews.map((v) => ({
               ...v,
               count: v.id === "runs" && running > 0 ? running : undefined,
             }))}
@@ -150,16 +156,16 @@ export function BacktestingPage() {
             onChange={setView}
           />
           <div id={ids.panel} role="tabpanel" aria-labelledby={ids.tab} className="perf-panel">
-            {view === "configure" ? (
+            {view === "configure" && manage ? (
               <BacktestConfigure read={read} onCreated={created} />
             ) : view === "runs" ? (
               <BacktestRuns
                 batches={batches}
                 highlight={batch}
-                onCancel={(id) => act(() => cancelBacktestRun(id))}
-                onDelete={(id) => act(() => deleteBacktest(id))}
+                onCancel={manage ? (id) => act(() => cancelBacktestRun(id)) : undefined}
+                onDelete={manage ? (id) => act(() => deleteBacktest(id)) : undefined}
                 onOpen={open}
-                onNew={() => setView("configure")}
+                onNew={configure}
               />
             ) : (
               <BacktestResults
@@ -167,7 +173,7 @@ export function BacktestingPage() {
                 batch={batch}
                 onBatch={setBatch}
                 theme={theme}
-                onNew={() => setView("configure")}
+                onNew={configure}
               />
             )}
           </div>

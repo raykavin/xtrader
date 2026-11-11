@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { fetchAgentSettings, fetchTradingHours, updateTradingHours } from "../api/client";
 import type { TradingHoursResponse } from "../api/types";
+import { PermLimitsManage } from "../api/types";
 import {
   type HoursForm,
   hoursError,
@@ -9,6 +10,7 @@ import {
   windowsForm,
   windowsOf,
 } from "../lib/tradingHours";
+import { useCan } from "./AccessContext";
 import { Alert, Loading, Skeleton } from "./States";
 import { Switch } from "./Switch";
 import { TradingWindowsEditor } from "./TradingWindowsEditor";
@@ -39,6 +41,7 @@ function zoneLabel(zone: string): string {
  * stand now and how the last end went. A change applies at once.
  */
 export function TradingHoursCard() {
+  const manage = useCan(PermLimitsManage); // changed by a user allowed to only, seen by the others
   const id = useId();
   const [data, setData] = useState<TradingHoursResponse | null>(null);
   const [form, setForm] = useState<HoursForm | null>(null);
@@ -139,49 +142,53 @@ export function TradingHoursCard() {
         <span className={chip(state.tone)}>{state.text}</span>
       </header>
       <form className="card-body hours-body" onSubmit={submit} noValidate>
-        {error && <Alert tone="error">{error}</Alert>}
-        <Switch
-          checked={form.enabled}
-          onChange={(value) => set("enabled", value)}
-          label="Ligado"
-          disabled={busy}
-        />
-        <p className="field-hint">
-          Horário de {zone}. Fora das janelas, nenhum agente abre posição. Cada janela começa e
-          termina no mesmo dia.
-        </p>
-        <TradingWindowsEditor
-          windows={form.windows}
-          onChange={(windows) => set("windows", windows)}
-          required={form.enabled}
-          agents={agents}
-          unavailable="desligado"
-          disabled={busy}
-        />
-        <p className="field-hint">
-          Agentes e ativos de uma janela: sem nenhum, valem todos. No fim de cada janela, vale o que
-          estiver marcado nela, para todos os agentes e ativos; sem nada marcado, só bloqueia novas
-          entradas. Só as posições e ordens dos agentes: as manuais não são afetadas.
-        </p>
-        <div className="field">
-          <label className="field-label" htmlFor={`${id}-reason`}>
-            Motivo (registrado)
-          </label>
-          <input
-            id={`${id}-reason`}
-            className="input"
-            value={reason}
+        <fieldset className="fieldset-contents" disabled={!manage}>
+          {error && <Alert tone="error">{error}</Alert>}
+          <Switch
+            checked={form.enabled}
+            onChange={(value) => set("enabled", value)}
+            label="Ligado"
             disabled={busy}
-            placeholder="opcional"
-            onChange={(e) => setReason(e.target.value)}
           />
-        </div>
-        <div className="daily-actions">
-          {saved && <span className="dialog-foot-hint">{saved}</span>}
-          <button type="submit" className="btn btn-primary" disabled={busy || invalid !== null}>
-            {busy ? "Salvando…" : "Salvar"}
-          </button>
-        </div>
+          <p className="field-hint">
+            Horário de {zone}. Fora das janelas, nenhum agente abre posição. Cada janela começa e
+            termina no mesmo dia.
+          </p>
+          <TradingWindowsEditor
+            windows={form.windows}
+            onChange={(windows) => set("windows", windows)}
+            required={form.enabled}
+            agents={agents}
+            unavailable="desligado"
+            disabled={busy}
+          />
+          <p className="field-hint">
+            Agentes e ativos de uma janela: sem nenhum, valem todos. No fim de cada janela, vale o
+            que estiver marcado nela, para todos os agentes e ativos; sem nada marcado, só bloqueia
+            novas entradas. Só as posições e ordens dos agentes: as manuais não são afetadas.
+          </p>
+          <div className="field">
+            <label className="field-label" htmlFor={`${id}-reason`}>
+              Motivo (registrado)
+            </label>
+            <input
+              id={`${id}-reason`}
+              className="input"
+              value={reason}
+              disabled={busy}
+              placeholder="opcional"
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </div>
+          {manage && (
+            <div className="daily-actions">
+              {saved && <span className="dialog-foot-hint">{saved}</span>}
+              <button type="submit" className="btn btn-primary" disabled={busy || invalid !== null}>
+                {busy ? "Salvando…" : "Salvar"}
+              </button>
+            </div>
+          )}
+        </fieldset>
       </form>
     </section>
   );

@@ -7,6 +7,7 @@ import {
   updateAgentSettings,
 } from "../api/client";
 import type { AgentSettings, AgentSettingsRequest, PromptInfo } from "../api/types";
+import { PermAgentsManage, PermLimitsManage, PermTradingOperate } from "../api/types";
 import {
   type AgentGroup,
   agentGroups,
@@ -21,6 +22,7 @@ import {
   tradePanelHint,
 } from "../lib/settings";
 import { byActor } from "../lib/supervisor";
+import { useCan } from "./AccessContext";
 import { AgentForm } from "./AgentForm";
 import { AgentResultsDialog } from "./AgentResultsDialog";
 import { AgentsParamDialog } from "./AgentsParamDialog";
@@ -65,6 +67,7 @@ type Editing = { agent: AgentSettings } | "new" | null;
  * model, in place of the group shown.
  */
 export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: Props) {
+  const manageAgents = useCan(PermAgentsManage);
   const id = useId();
   const [editing, setEditing] = useState<Editing>(null);
   const [parametrizing, setParametrizing] = useState(false);
@@ -105,15 +108,15 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
     );
   };
 
-  const create = (
+  const create = manageAgents ? (
     <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
       <Icon name="plus" />
       Novo agente
     </button>
-  );
+  ) : undefined;
   const actions = (
     <div className="agents-actions">
-      {agents.length > 0 && (
+      {manageAgents && agents.length > 0 && (
         <button type="button" className="btn" onClick={() => setParametrizing(true)}>
           <Icon name="settings" />
           Parametrizador global
@@ -243,6 +246,11 @@ function AgentCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // changed by a user allowed to only: its entries by one allowed to operate,
+  // its daily limit by one allowed to change the limits
+  const manage = useCan(PermAgentsManage);
+  const operate = useCan(PermTradingOperate);
+  const setLimits = useCan(PermLimitsManage);
   const [results, setResults] = useState(false);
   const [protection, setProtection] = useState(false);
   const [dailyLimit, setDailyLimit] = useState(false);
@@ -367,21 +375,21 @@ function AgentCard({
           <Switch
             label="Ligado"
             checked={agent.enabled}
-            disabled={busy}
+            disabled={busy || !manage}
             title="Ligado, o controller inicia o agente; desligado, o agente para"
             onChange={(enabled) => change({ enabled })}
           />
           <Switch
             label="Painel de trading"
             checked={paper || agent.trade_panel}
-            disabled={busy || paper}
+            disabled={busy || paper || !manage}
             title={channelsTitle ?? tradePanelHint}
             onChange={(trade_panel) => change({ trade_panel })}
           />
           <Switch
             label="Controle via Telegram"
             checked={paper || agent.telegram_control}
-            disabled={busy || paper}
+            disabled={busy || paper || !manage}
             title={channelsTitle}
             onChange={(telegram_control) => change({ telegram_control })}
           />
@@ -389,7 +397,7 @@ function AgentCard({
             <Switch
               label="Permitir reanálise"
               checked={agent.reanalysis}
-              disabled={busy}
+              disabled={busy || !manage}
               title={reanalysisHint}
               onChange={(reanalysis) => change({ reanalysis })}
             />
@@ -400,16 +408,26 @@ function AgentCard({
       {llm && (
         <div className="agent-block field">
           <span className="field-label">Prompt</span>
-          <Select
-            caption="Prompt"
-            value={agent.prompt_id ? String(agent.prompt_id) : DEFAULT_PROMPT}
-            options={options}
-            onChange={(value) =>
-              change(
-                value === DEFAULT_PROMPT ? { default_prompt: true } : { prompt_id: Number(value) },
-              )
-            }
-          />
+          {manage ? (
+            <Select
+              caption="Prompt"
+              value={agent.prompt_id ? String(agent.prompt_id) : DEFAULT_PROMPT}
+              options={options}
+              onChange={(value) =>
+                change(
+                  value === DEFAULT_PROMPT
+                    ? { default_prompt: true }
+                    : { prompt_id: Number(value) },
+                )
+              }
+            />
+          ) : (
+            <span className="mono">
+              {options.find(
+                (o) => o.value === (agent.prompt_id ? String(agent.prompt_id) : DEFAULT_PROMPT),
+              )?.label ?? `prompt ${agent.prompt_id}`}
+            </span>
+          )}
           {status && (
             <p
               className={
@@ -437,7 +455,7 @@ function AgentCard({
             <SecretField
               label="Chave da API do LLM"
               set={agent.secrets.llm_api_key}
-              disabled={busy}
+              disabled={busy || !manage}
               onSave={secret("llm_api_key")}
             />
           )}
@@ -449,7 +467,7 @@ function AgentCard({
             <SecretField
               label="Token da bridge MT5"
               set={agent.secrets.bridge_token}
-              disabled={busy}
+              disabled={busy || !manage}
               onSave={secret("bridge_token")}
             />
           )}
@@ -498,52 +516,60 @@ function AgentCard({
             <Icon name="results" size={14} />
             Resultados
           </button>
-          <button
-            type="button"
-            className={agentProtected(agent) ? "btn btn-sm protection-on" : "btn btn-sm"}
-            aria-label={`Proteção de posições de ${agent.name}`}
-            title="Breakeven e trailing stop das posições, e o que o XTrader AI pode acionar"
-            onClick={() => setProtection(true)}
-          >
-            <Icon name="shield" size={14} />
-            Proteção
-          </button>
-          <button
-            type="button"
-            className={agent.daily_limit?.enabled ? "btn btn-sm protection-on" : "btn btn-sm"}
-            aria-label={`Limite diário de ${agent.name}`}
-            title="Perda e ganho máximos do dia deste agente: atingido um, fecha as posições dele e bloqueia as entradas até 00:00"
-            onClick={() => setDailyLimit(true)}
-          >
-            <Icon name="alert" size={14} />
-            Limite diário
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            aria-label={`Editar ${agent.name}`}
-            disabled={busy}
-            onClick={onEdit}
-          >
-            <Icon name="edit" size={14} />
-            Editar
-          </button>
-          <button
-            type="button"
-            className={agent.restart_pending ? "btn btn-sm btn-primary" : "btn btn-sm"}
-            aria-label={`Reiniciar ${agent.name}`}
-            title={
-              agent.restart_pending
-                ? "Aplica as configurações de inicialização alteradas"
-                : undefined
-            }
-            disabled={busy || !agent.enabled || !agent.launched}
-            onClick={restart}
-          >
-            <Icon name="restart" size={14} />
-            Reiniciar
-          </button>
-          {blocked ? (
+          {manage && (
+            <button
+              type="button"
+              className={agentProtected(agent) ? "btn btn-sm protection-on" : "btn btn-sm"}
+              aria-label={`Proteção de posições de ${agent.name}`}
+              title="Breakeven e trailing stop das posições, e o que o XTrader AI pode acionar"
+              onClick={() => setProtection(true)}
+            >
+              <Icon name="shield" size={14} />
+              Proteção
+            </button>
+          )}
+          {setLimits && (
+            <button
+              type="button"
+              className={agent.daily_limit?.enabled ? "btn btn-sm protection-on" : "btn btn-sm"}
+              aria-label={`Limite diário de ${agent.name}`}
+              title="Perda e ganho máximos do dia deste agente: atingido um, fecha as posições dele e bloqueia as entradas até 00:00"
+              onClick={() => setDailyLimit(true)}
+            >
+              <Icon name="alert" size={14} />
+              Limite diário
+            </button>
+          )}
+          {manage && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Editar ${agent.name}`}
+              disabled={busy}
+              onClick={onEdit}
+            >
+              <Icon name="edit" size={14} />
+              Editar
+            </button>
+          )}
+          {manage && (
+            <button
+              type="button"
+              className={agent.restart_pending ? "btn btn-sm btn-primary" : "btn btn-sm"}
+              aria-label={`Reiniciar ${agent.name}`}
+              title={
+                agent.restart_pending
+                  ? "Aplica as configurações de inicialização alteradas"
+                  : undefined
+              }
+              disabled={busy || !agent.enabled || !agent.launched}
+              onClick={restart}
+            >
+              <Icon name="restart" size={14} />
+              Reiniciar
+            </button>
+          )}
+          {!operate ? null : blocked ? (
             <button
               type="button"
               className="btn btn-sm"
@@ -566,28 +592,32 @@ function AgentCard({
               onConfirm={() => entries(true)}
             />
           )}
-          <button
-            type="button"
-            className="btn btn-sm"
-            aria-label={`Renomear ${agent.name}`}
-            title={renameTitle}
-            disabled={busy || agent.enabled || stopping}
-            onClick={() => setRenaming(true)}
-          >
-            <Icon name="rename" size={14} />
-            Renomear
-          </button>
-          <span className="agent-actions-end">
-            <ConfirmButton
-              label="Excluir"
-              icon="trash"
-              ariaLabel={`Excluir ${agent.name}`}
-              question={`Excluir ${agent.name}?`}
+          {manage && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              aria-label={`Renomear ${agent.name}`}
+              title={renameTitle}
               disabled={busy || agent.enabled || stopping}
-              title={deleteTitle}
-              onConfirm={remove}
-            />
-          </span>
+              onClick={() => setRenaming(true)}
+            >
+              <Icon name="rename" size={14} />
+              Renomear
+            </button>
+          )}
+          {manage && (
+            <span className="agent-actions-end">
+              <ConfirmButton
+                label="Excluir"
+                icon="trash"
+                ariaLabel={`Excluir ${agent.name}`}
+                question={`Excluir ${agent.name}?`}
+                disabled={busy || agent.enabled || stopping}
+                title={deleteTitle}
+                onConfirm={remove}
+              />
+            </span>
+          )}
         </div>
       </footer>
       {error && (

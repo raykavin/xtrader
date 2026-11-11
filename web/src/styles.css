@@ -9365,3 +9365,77 @@ circle.perf-down {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* the fields of a form shown read-only to a user who may not change them:
+   a fieldset disabling every control inside, without a box of its own
+   (fieldset-contents) or without its border (fieldset-plain) */
+.fieldset-contents {
+  display: contents;
+}
+
+.fieldset-plain {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+/* the roles of the users: the name over its description in the list, and the
+   permissions as a matrix of the areas in the dialog, each area named over
+   what it holds */
+.role-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.role-cell .tag {
+  margin-left: 6px;
+}
+
+.role-desc {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.role-summary {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.role-matrix-field {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.role-matrix {
+  width: 100%;
+}
+
+.role-matrix tbody th[scope="row"] {
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+}
+
+.role-area {
+  display: block;
+}
+
+.role-matrix td {
+  width: 1%;
+}

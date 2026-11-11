@@ -10,6 +10,7 @@ import {
   updateMT5Account,
 } from "../api/client";
 import type { MT5AccountInfo, MT5AccountTest, MT5SwitchPreview } from "../api/types";
+import { PermMT5AccountsManage } from "../api/types";
 import { formatTime } from "../lib/format";
 import {
   type AccountField,
@@ -27,6 +28,7 @@ import {
   sessionLabel,
   switchQuestion,
 } from "../lib/mt5Accounts";
+import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
@@ -304,6 +306,7 @@ function OpenList({ items }: { items: string[] }) {
 
 /** The card of an account: how it stands, its agents, and its actions. */
 function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange: () => void }) {
+  const manage = useCan(PermMT5AccountsManage); // changed, switched and tested by a user allowed to only
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -401,7 +404,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
         <Switch
           label="Ativa no terminal"
           checked={turning ?? account.active}
-          disabled={busy || turning !== null}
+          disabled={busy || turning !== null || !manage}
           title="Ligada, o terminal desta bridge fica logado nela e os agentes dela são iniciados"
           onChange={turn}
         />
@@ -503,54 +506,56 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
               label="Senha da conta"
               set={account.password_set}
               onSave={saveSecret("password")}
-              disabled={busy}
+              disabled={busy || !manage}
             />
             <SecretField
               label="Token da bridge"
               set={account.token_set}
               onSave={saveSecret("bridge_token")}
-              disabled={busy}
+              disabled={busy || !manage}
             />
           </div>
-          <div className="mt5-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                setError(null);
-                testMT5Account(account.id)
-                  .then((result) => {
-                    setTest(result);
-                    onChange();
-                  })
-                  .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-                  .finally(() => setBusy(false));
-              }}
-            >
-              <Icon name="success" size={14} /> Testar conexão
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={busy}
-              onClick={() => setEditing(true)}
-            >
-              <Icon name="edit" size={14} /> Editar
-            </button>
-            {!account.active && (
-              <ConfirmButton
-                label="Excluir"
-                question="Excluir a conta? O histórico dela é mantido."
-                disabled={busy || account.agents.length > 0}
-                title={
-                  account.agents.length > 0 ? "Associe os agentes a outra conta antes" : undefined
-                }
-                onConfirm={() => run(() => deleteMT5Account(account.id))}
-              />
-            )}
-          </div>
+          {manage && (
+            <div className="mt5-actions">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError(null);
+                  testMT5Account(account.id)
+                    .then((result) => {
+                      setTest(result);
+                      onChange();
+                    })
+                    .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                <Icon name="success" size={14} /> Testar conexão
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={() => setEditing(true)}
+              >
+                <Icon name="edit" size={14} /> Editar
+              </button>
+              {!account.active && (
+                <ConfirmButton
+                  label="Excluir"
+                  question="Excluir a conta? O histórico dela é mantido."
+                  disabled={busy || account.agents.length > 0}
+                  title={
+                    account.agents.length > 0 ? "Associe os agentes a outra conta antes" : undefined
+                  }
+                  onConfirm={() => run(() => deleteMT5Account(account.id))}
+                />
+              )}
+            </div>
+          )}
         </>
       )}
     </article>
@@ -565,6 +570,7 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
  * one account at a time: activating another one is refused while it is in use.
  */
 export function MT5AccountsSettings({ intro }: Props) {
+  const manage = useCan(PermMT5AccountsManage);
   const [accounts, setAccounts] = useState<MT5AccountInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -596,6 +602,7 @@ export function MT5AccountsSettings({ intro }: Props) {
         title={intro.title}
         description={intro.description}
         actions={
+          manage &&
           !adding && (
             <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
               <Icon name="plus" size={16} /> Nova conta

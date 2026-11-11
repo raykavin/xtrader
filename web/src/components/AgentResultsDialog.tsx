@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchAgentPeriods, fetchPairs, fetchSnapshot, resetAgentResults } from "../api/client";
 import type { AgentPeriod, AgentSettings, Snapshot } from "../api/types";
+import { PermAgentsManage } from "../api/types";
 import { formatMoney, formatNumber, formatPercent, formatTime, signClass } from "../lib/format";
 import { type PeriodResult, parseAmount, periodResults, resetPeriods } from "../lib/periods";
+import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { DialogHeader } from "./Dialog";
 import { Alert, EmptyState, Loading, Skeleton } from "./States";
@@ -158,6 +160,7 @@ function PeriodSection({
  * come from the orders the agent holds: unknown while it is offline.
  */
 export function AgentResultsDialog({ agent, onClose }: Props) {
+  const manage = useCan(PermAgentsManage); // the results reset by a user allowed to change the agents only
   const dialog = useRef<HTMLDialogElement>(null);
   const [periods, setPeriods] = useState<AgentPeriod[] | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[] | null>(null);
@@ -294,60 +297,63 @@ export function AgentResultsDialog({ agent, onClose }: Props) {
           </section>
         )}
 
-        <section className="dialog-section results-reset" aria-labelledby="results-reset-title">
-          <h3 id="results-reset-title" className="section-title">
-            Redefinir resultados
-          </h3>
-          <p className="field-hint">
-            Os cards de todos os ativos (Operações, Taxa de acerto, Lucro líquido e Fator de lucro)
-            passam a contar só as operações fechadas a partir de agora. O período atual fica salvo
-            com os resultados dele. O histórico de ordens, as posições abertas e as ordens pendentes
-            não mudam; uma posição aberta entra no novo período quando for fechada.
-          </p>
-          <div className="results-fields">
-            <label className="field">
-              <span className="field-label">Depósito (saldo inicial)</span>
-              <input
-                className="input mono"
-                inputMode="decimal"
-                placeholder="1.000,00"
-                value={deposit}
-                disabled={busy}
-                aria-invalid={deposit !== "" && amount === null}
-                onChange={(e) => setDeposit(e.target.value)}
+        {manage && (
+          <section className="dialog-section results-reset" aria-labelledby="results-reset-title">
+            <h3 id="results-reset-title" className="section-title">
+              Redefinir resultados
+            </h3>
+            <p className="field-hint">
+              Os cards de todos os ativos (Operações, Taxa de acerto, Lucro líquido e Fator de
+              lucro) passam a contar só as operações fechadas a partir de agora. O período atual
+              fica salvo com os resultados dele. O histórico de ordens, as posições abertas e as
+              ordens pendentes não mudam; uma posição aberta entra no novo período quando for
+              fechada.
+            </p>
+            <div className="results-fields">
+              <label className="field">
+                <span className="field-label">Depósito (saldo inicial)</span>
+                <input
+                  className="input mono"
+                  inputMode="decimal"
+                  placeholder="1.000,00"
+                  value={deposit}
+                  disabled={busy}
+                  aria-invalid={deposit !== "" && amount === null}
+                  onChange={(e) => setDeposit(e.target.value)}
+                />
+              </label>
+              <label className="field results-currency">
+                <span className="field-label">Moeda</span>
+                <input
+                  className="input mono"
+                  maxLength={3}
+                  placeholder="BRL"
+                  value={fixed ?? currency}
+                  readOnly={fixed !== undefined}
+                  title={
+                    fixed === undefined
+                      ? undefined
+                      : snapshots?.some((s) => s.account_currency)
+                        ? "Moeda da conta do agente"
+                        : "Moeda da simulação"
+                  }
+                  disabled={busy}
+                  aria-invalid={currency !== "" && !/^[A-Z]{3}$/.test(code)}
+                  onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                />
+              </label>
+              <ConfirmButton
+                label="Redefinir resultados"
+                question="Redefinir os resultados de todos os ativos?"
+                disabled={busy || invalid !== null}
+                title={invalid ?? "Começa um novo período com o depósito informado"}
+                onConfirm={reset}
               />
-            </label>
-            <label className="field results-currency">
-              <span className="field-label">Moeda</span>
-              <input
-                className="input mono"
-                maxLength={3}
-                placeholder="BRL"
-                value={fixed ?? currency}
-                readOnly={fixed !== undefined}
-                title={
-                  fixed === undefined
-                    ? undefined
-                    : snapshots?.some((s) => s.account_currency)
-                      ? "Moeda da conta do agente"
-                      : "Moeda da simulação"
-                }
-                disabled={busy}
-                aria-invalid={currency !== "" && !/^[A-Z]{3}$/.test(code)}
-                onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-              />
-            </label>
-            <ConfirmButton
-              label="Redefinir resultados"
-              question="Redefinir os resultados de todos os ativos?"
-              disabled={busy || invalid !== null}
-              title={invalid ?? "Começa um novo período com o depósito informado"}
-              onConfirm={reset}
-            />
-          </div>
-          {feedback && <Alert tone="success">{feedback}</Alert>}
-          {stale && <Alert tone="warn">{stale}</Alert>}
-        </section>
+            </div>
+            {feedback && <Alert tone="success">{feedback}</Alert>}
+            {stale && <Alert tone="warn">{stale}</Alert>}
+          </section>
+        )}
 
         {earlier.length > 0 && (
           <section className="dialog-section">

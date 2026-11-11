@@ -13,6 +13,7 @@ import type {
   SupervisorSettingsRequest,
   SupervisorSettingsResponse,
 } from "../api/types";
+import { PermSupervisorChat, PermSupervisorManage } from "../api/types";
 import { featureLabel } from "../lib/protection";
 import {
   actionLabel,
@@ -25,6 +26,7 @@ import {
   protectionStatusLabel,
   protectionStops,
 } from "../lib/supervisor";
+import { useCan } from "./AccessContext";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
 import { SecretField } from "./SecretField";
@@ -78,6 +80,10 @@ function formOf(settings: SupervisorSettingsResponse): Form {
  * does alone; its analyses and the record of the actions of the supervision.
  */
 export function SupervisorSettings({ intro, settings, onChange }: Props) {
+  // changed by a user allowed to only, seen by the others; an analysis asked
+  // by one allowed to change it or to use the chat
+  const manage = useCan(PermSupervisorManage);
+  const mayAnalyze = useCan(PermSupervisorManage, PermSupervisorChat);
   const [form, setForm] = useState<Form>(() => formOf(settings));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,15 +196,17 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
         title={intro.title}
         description={intro.description}
         actions={
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!ready || settings.analyzing}
-            onClick={analyze}
-          >
-            <Icon name="restart" />
-            {settings.analyzing ? "Analisando…" : "Analisar agora"}
-          </button>
+          mayAnalyze && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!ready || settings.analyzing}
+              onClick={analyze}
+            >
+              <Icon name="restart" />
+              {settings.analyzing ? "Analisando…" : "Analisar agora"}
+            </button>
+          )
         }
       />
       {error && (
@@ -223,7 +231,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <Switch
               label="XTrader AI ligado"
               checked={settings.enabled}
-              disabled={busy || (!settings.enabled && !ready)}
+              disabled={busy || !manage || (!settings.enabled && !ready)}
               title={ready ? undefined : "Defina o provedor, o modelo e a chave antes"}
               onChange={(enabled) => run({ enabled })}
             />
@@ -245,7 +253,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <Switch
               label="Bloquear novas entradas"
               checked={settings.autonomy.block_entries}
-              disabled={busy}
+              disabled={busy || !manage}
               title="O agente não abre nem aumenta posições; continua gerenciando as que tem"
               onChange={(block_entries) =>
                 run({ autonomy: { ...settings.autonomy, block_entries } })
@@ -254,7 +262,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <Switch
               label="Parar o agente quando zerado"
               checked={settings.autonomy.stop_when_flat}
-              disabled={busy}
+              disabled={busy || !manage}
               title="Exige duas análises seguidas; o agente é desligado quando ficar sem posição e sem ordem pendente"
               onChange={(stop_when_flat) =>
                 run({ autonomy: { ...settings.autonomy, stop_when_flat } })
@@ -263,7 +271,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <Switch
               label="Cancelar ordens pendentes de entrada"
               checked={settings.autonomy.cancel_pending}
-              disabled={busy}
+              disabled={busy || !manage}
               onChange={(cancel_pending) =>
                 run({ autonomy: { ...settings.autonomy, cancel_pending } })
               }
@@ -289,145 +297,151 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             onSubmit={save}
             aria-label="Configurações do XTrader AI"
           >
-            <div className="form-grid">
+            <fieldset className="fieldset-contents" disabled={!manage}>
+              <div className="form-grid">
+                <div className="field">
+                  <label className="field-label" htmlFor="supervisor-interval">
+                    Intervalo (minutos)
+                  </label>
+                  <input
+                    id="supervisor-interval"
+                    className="input"
+                    inputMode="numeric"
+                    list="supervisor-intervals"
+                    {...field("intervalMinutes")}
+                  />
+                  <datalist id="supervisor-intervals">
+                    {intervalOptions.map((seconds) => (
+                      <option key={seconds} value={seconds / 60}>
+                        {formatInterval(seconds)}
+                      </option>
+                    ))}
+                  </datalist>
+                  {intervalProblem && <p className="field-error">{intervalProblem}</p>}
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="supervisor-timeout">
+                    Tempo máximo de resposta (s)
+                  </label>
+                  <input
+                    id="supervisor-timeout"
+                    className="input"
+                    inputMode="numeric"
+                    {...field("timeoutSeconds")}
+                  />
+                  {timeoutProblem && <p className="field-error">{timeoutProblem}</p>}
+                </div>
+                <div className="field">
+                  <span className="field-label">Provedor</span>
+                  <Select
+                    caption="Provedor"
+                    value={form.provider || null}
+                    placeholder="Escolha"
+                    options={[
+                      { value: "openai", label: "OpenAI" },
+                      { value: "anthropic", label: "Anthropic" },
+                    ]}
+                    onChange={(provider) => setForm((f) => ({ ...f, provider }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="supervisor-model">
+                    Modelo
+                  </label>
+                  <input
+                    id="supervisor-model"
+                    className="input mono"
+                    placeholder="ex.: gpt-5"
+                    {...field("model")}
+                  />
+                </div>
+                <div className="field">
+                  <span className="field-label">Raciocínio</span>
+                  <Select
+                    caption="Raciocínio"
+                    value={form.reasoning}
+                    options={efforts.map((effort) => ({
+                      value: effort,
+                      label: effort || "padrão do modelo",
+                    }))}
+                    onChange={(reasoning) => setForm((f) => ({ ...f, reasoning }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="supervisor-tokens">
+                    Máximo de tokens <span className="optional">(opcional)</span>
+                  </label>
+                  <input
+                    id="supervisor-tokens"
+                    className="input"
+                    inputMode="numeric"
+                    placeholder={`padrão: ${settings.default_max_tokens}`}
+                    aria-describedby="supervisor-tokens-hint"
+                    {...field("maxTokens")}
+                  />
+                  {tokensProblem && <p className="field-error">{tokensProblem}</p>}
+                  <p id="supervisor-tokens-hint" className="field-hint">
+                    O raciocínio conta no limite: um modelo que raciocina (gpt-5, o3, Claude com
+                    raciocínio) pode gastar os {settings.default_max_tokens} tokens pensando e não
+                    responder. Nesses modelos, use 16000 ou mais e aumente o tempo máximo de
+                    resposta.
+                  </p>
+                </div>
+                <div className="field form-wide">
+                  <label className="field-label" htmlFor="supervisor-base-url">
+                    URL base <span className="optional">(opcional)</span>
+                  </label>
+                  <input
+                    id="supervisor-base-url"
+                    className="input mono"
+                    placeholder="padrão do provedor"
+                    {...field("baseURL")}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="supervisor-actions">
+                    Ações sem confirmação por análise
+                  </label>
+                  <input
+                    id="supervisor-actions"
+                    className="input"
+                    inputMode="numeric"
+                    {...field("maxActions")}
+                  />
+                  {actionsProblem && <p className="field-error">{actionsProblem}</p>}
+                </div>
+              </div>
               <div className="field">
-                <label className="field-label" htmlFor="supervisor-interval">
-                  Intervalo (minutos)
+                <label className="field-label" htmlFor="supervisor-instructions">
+                  Instruções e critérios
                 </label>
-                <input
-                  id="supervisor-interval"
-                  className="input"
-                  inputMode="numeric"
-                  list="supervisor-intervals"
-                  {...field("intervalMinutes")}
+                <textarea
+                  id="supervisor-instructions"
+                  className="textarea"
+                  rows={12}
+                  {...field("instructions")}
                 />
-                <datalist id="supervisor-intervals">
-                  {intervalOptions.map((seconds) => (
-                    <option key={seconds} value={seconds / 60}>
-                      {formatInterval(seconds)}
-                    </option>
-                  ))}
-                </datalist>
-                {intervalProblem && <p className="field-error">{intervalProblem}</p>}
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor="supervisor-timeout">
-                  Tempo máximo de resposta (s)
-                </label>
-                <input
-                  id="supervisor-timeout"
-                  className="input"
-                  inputMode="numeric"
-                  {...field("timeoutSeconds")}
-                />
-                {timeoutProblem && <p className="field-error">{timeoutProblem}</p>}
-              </div>
-              <div className="field">
-                <span className="field-label">Provedor</span>
-                <Select
-                  caption="Provedor"
-                  value={form.provider || null}
-                  placeholder="Escolha"
-                  options={[
-                    { value: "openai", label: "OpenAI" },
-                    { value: "anthropic", label: "Anthropic" },
-                  ]}
-                  onChange={(provider) => setForm((f) => ({ ...f, provider }))}
-                />
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor="supervisor-model">
-                  Modelo
-                </label>
-                <input
-                  id="supervisor-model"
-                  className="input mono"
-                  placeholder="ex.: gpt-5"
-                  {...field("model")}
-                />
-              </div>
-              <div className="field">
-                <span className="field-label">Raciocínio</span>
-                <Select
-                  caption="Raciocínio"
-                  value={form.reasoning}
-                  options={efforts.map((effort) => ({
-                    value: effort,
-                    label: effort || "padrão do modelo",
-                  }))}
-                  onChange={(reasoning) => setForm((f) => ({ ...f, reasoning }))}
-                />
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor="supervisor-tokens">
-                  Máximo de tokens <span className="optional">(opcional)</span>
-                </label>
-                <input
-                  id="supervisor-tokens"
-                  className="input"
-                  inputMode="numeric"
-                  placeholder={`padrão: ${settings.default_max_tokens}`}
-                  aria-describedby="supervisor-tokens-hint"
-                  {...field("maxTokens")}
-                />
-                {tokensProblem && <p className="field-error">{tokensProblem}</p>}
-                <p id="supervisor-tokens-hint" className="field-hint">
-                  O raciocínio conta no limite: um modelo que raciocina (gpt-5, o3, Claude com
-                  raciocínio) pode gastar os {settings.default_max_tokens} tokens pensando e não
-                  responder. Nesses modelos, use 16000 ou mais e aumente o tempo máximo de resposta.
+                <p className="field-hint">
+                  Separe problemas operacionais, de risco e de desempenho. Não há limites
+                  financeiros fixos: o XTrader AI compara com os limites configurados em cada
+                  agente.
                 </p>
               </div>
-              <div className="field form-wide">
-                <label className="field-label" htmlFor="supervisor-base-url">
-                  URL base <span className="optional">(opcional)</span>
-                </label>
-                <input
-                  id="supervisor-base-url"
-                  className="input mono"
-                  placeholder="padrão do provedor"
-                  {...field("baseURL")}
-                />
-              </div>
-              <div className="field">
-                <label className="field-label" htmlFor="supervisor-actions">
-                  Ações sem confirmação por análise
-                </label>
-                <input
-                  id="supervisor-actions"
-                  className="input"
-                  inputMode="numeric"
-                  {...field("maxActions")}
-                />
-                {actionsProblem && <p className="field-error">{actionsProblem}</p>}
-              </div>
-            </div>
-            <div className="field">
-              <label className="field-label" htmlFor="supervisor-instructions">
-                Instruções e critérios
-              </label>
-              <textarea
-                id="supervisor-instructions"
-                className="textarea"
-                rows={12}
-                {...field("instructions")}
-              />
-              <p className="field-hint">
-                Separe problemas operacionais, de risco e de desempenho. Não há limites financeiros
-                fixos: o XTrader AI compara com os limites configurados em cada agente.
-              </p>
-            </div>
-            <div className="form-actions">
-              {saved && <span className="msg msg-ok">Salvo.</span>}
-              <button type="submit" className="btn btn-primary" disabled={busy || invalid}>
-                Salvar
-              </button>
-            </div>
+              {manage && (
+                <div className="form-actions">
+                  {saved && <span className="msg msg-ok">Salvo.</span>}
+                  <button type="submit" className="btn btn-primary" disabled={busy || invalid}>
+                    Salvar
+                  </button>
+                </div>
+              )}
+            </fieldset>
           </form>
           <div className="card-footer secret-list">
             <SecretField
               label="Chave da API"
               set={settings.api_key_set}
-              disabled={busy}
+              disabled={busy || !manage}
               onSave={async (api_key) => {
                 await run({ api_key });
               }}

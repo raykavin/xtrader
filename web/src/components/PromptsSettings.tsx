@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { deletePrompt } from "../api/client";
 import type { PromptInfo } from "../api/types";
+import { PermPromptsManage } from "../api/types";
 import { formatTime } from "../lib/format";
+import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
@@ -26,6 +28,7 @@ type Editing = { id: number } | "new" | null;
  * prompt from their next analysis.
  */
 export function PromptsSettings({ intro, prompts, onChange }: Props) {
+  const manage = useCan(PermPromptsManage); // changed by a user allowed to only, read by the others
   const [editing, setEditing] = useState<Editing>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,12 +42,12 @@ export function PromptsSettings({ intro, prompts, onChange }: Props) {
     }
   };
 
-  const create = (
+  const create = manage ? (
     <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
       <Icon name="plus" />
       Novo prompt
     </button>
-  );
+  ) : undefined;
 
   return (
     <div className="settings-section">
@@ -119,24 +122,26 @@ export function PromptsSettings({ intro, prompts, onChange }: Props) {
                         <button
                           type="button"
                           className="btn btn-xs"
-                          aria-label={`Editar ${prompt.name}`}
+                          aria-label={`${manage ? "Editar" : "Ver"} ${prompt.name}`}
                           onClick={() => setEditing({ id: prompt.id })}
                         >
-                          <Icon name="edit" size={13} />
-                          Editar
+                          <Icon name={manage ? "edit" : "eye"} size={13} />
+                          {manage ? "Editar" : "Ver"}
                         </button>
-                        <ConfirmButton
-                          label="Excluir"
-                          ariaLabel={`Excluir ${prompt.name}`}
-                          question={`Excluir ${prompt.name}?`}
-                          disabled={prompt.used_by.length > 0}
-                          title={
-                            prompt.used_by.length > 0
-                              ? "Em uso: troque o prompt dos agentes antes"
-                              : undefined
-                          }
-                          onConfirm={() => remove(prompt)}
-                        />
+                        {manage && (
+                          <ConfirmButton
+                            label="Excluir"
+                            ariaLabel={`Excluir ${prompt.name}`}
+                            question={`Excluir ${prompt.name}?`}
+                            disabled={prompt.used_by.length > 0}
+                            title={
+                              prompt.used_by.length > 0
+                                ? "Em uso: troque o prompt dos agentes antes"
+                                : undefined
+                            }
+                            onConfirm={() => remove(prompt)}
+                          />
+                        )}
                       </div>
                     </td>
                   </tr>

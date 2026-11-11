@@ -1,8 +1,10 @@
 import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { fetchSessionInfo } from "../api/client";
+import { PermSupervisorChat } from "../api/types";
+import { type Access, allowedTabs, can, canSee } from "../lib/access";
 import { dashboardHref, sessionStore, settingsHref } from "../lib/nav";
 import type { SettingsTab } from "../lib/settings";
 import type { Theme } from "../lib/theme";
+import { useAccess } from "./AccessContext";
 import { Footer } from "./Footer";
 import { Header } from "./Header";
 import { Icon, type IconName } from "./Icon";
@@ -67,17 +69,8 @@ export function AppShell({
 }: Props) {
   const drawer = useRef<HTMLDialogElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [user, setUser] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchSessionInfo(controller.signal)
-      .then((s) => setUser(s.username || undefined))
-      .catch(() => {
-        // the bar shows without the user
-      });
-    return () => controller.abort();
-  }, []);
+  const access = useAccess();
+  const user = access.username;
 
   // The drawer, a modal dialog: Esc and the backdrop close it, the focus
   // kept inside while open; closed once the window is wide enough for the
@@ -121,6 +114,7 @@ export function AppShell({
         menuOpen={menuOpen}
         nav={
           <Navigation
+            access={access}
             page={page}
             section={section}
             hints={hints}
@@ -152,6 +146,7 @@ export function AppShell({
           </button>
         </div>
         <Navigation
+          access={access}
           page={page}
           section={section}
           hints={hints}
@@ -165,19 +160,24 @@ export function AppShell({
         {children}
       </main>
       <Footer />
-      <SupervisorChat />
+      {can(access, PermSupervisorChat) && <SupervisorChat />}
     </div>
   );
 }
 
-/** The links of the navigation, the page shown marked: a segmented bar, or the list of the drawer. */
+/**
+ * The links of the navigation the access of the user shows, the page shown
+ * marked: a segmented bar, or the list of the drawer.
+ */
 function Navigation({
+  access,
   page,
   section,
   hints,
   onNavigate,
   where,
 }: {
+  access: Access;
   page: Props["page"];
   section?: SettingsTab;
   hints?: Props["hints"];
@@ -218,48 +218,61 @@ function Navigation({
       <span className="nav-label">Backtesting</span>
     </a>
   );
-  const links = sections.map(({ tab, label, icon }) => {
-    const hint = hints?.[tab];
-    return (
-      <a
-        key={tab}
-        className="nav-link"
-        href={settingsHref(tab)}
-        aria-current={page === "settings" && section === tab ? "page" : undefined}
-        onClick={(e) => onNavigate(tab, e)}
-      >
-        <Icon name={icon} size={where === "bar" ? 15 : 18} className="nav-icon" />
-        <span className="nav-label">{label}</span>
-        {hint && (
-          <span className={hint.tone ? `nav-hint ${hint.tone}` : "nav-hint"}>{hint.text}</span>
-        )}
-      </a>
-    );
-  });
+  const shown = allowedTabs(access);
+  const links = sections
+    .filter(({ tab }) => shown.includes(tab))
+    .map(({ tab, label, icon }) => {
+      const hint = hints?.[tab];
+      return (
+        <a
+          key={tab}
+          className="nav-link"
+          href={settingsHref(tab)}
+          aria-current={page === "settings" && section === tab ? "page" : undefined}
+          onClick={(e) => onNavigate(tab, e)}
+        >
+          <Icon name={icon} size={where === "bar" ? 15 : 18} className="nav-icon" />
+          <span className="nav-label">{label}</span>
+          {hint && (
+            <span className={hint.tone ? `nav-hint ${hint.tone}` : "nav-hint"}>{hint.text}</span>
+          )}
+        </a>
+      );
+    });
+
+  const pages = (
+    <>
+      {canSee(access, "dashboard") && dashboard}
+      {canSee(access, "performance") && performance}
+      {canSee(access, "backtesting") && backtesting}
+    </>
+  );
+  const anyPage =
+    canSee(access, "dashboard") || canSee(access, "performance") || canSee(access, "backtesting");
 
   if (where === "bar") {
     return (
       <nav className="appnav" aria-label="Navegação principal">
-        {dashboard}
-        {performance}
-        {backtesting}
-        <span className="appnav-divider" aria-hidden="true" />
+        {pages}
+        {anyPage && links.length > 0 && <span className="appnav-divider" aria-hidden="true" />}
         {links}
       </nav>
     );
   }
   return (
     <nav className="nav-groups">
-      <div className="nav-group">
-        <span className="nav-heading">Operação</span>
-        {dashboard}
-        {performance}
-        {backtesting}
-      </div>
-      <div className="nav-group">
-        <span className="nav-heading">Configurações</span>
-        {links}
-      </div>
+      {anyPage && (
+        <div className="nav-group">
+          <span className="nav-heading">Operação</span>
+          {pages}
+        </div>
+      )}
+      {links.length > 0 && (
+        <div className="nav-group">
+          <span className="nav-heading">Configurações</span>
+          {links}
+        </div>
+      )}
     </nav>
   );
 }

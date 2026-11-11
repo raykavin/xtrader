@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { type DailyLimitOutcome, setDailyLimits } from "../api/client";
 import type { DailyLimitPreview, DailyLimitSettings, DailyLimitsResponse } from "../api/types";
+import { PermLimitsManage } from "../api/types";
 import {
   type DailyLimitForm,
   dailyLimitErrors,
@@ -8,6 +9,7 @@ import {
   dailyLimitSettings,
   resultAmount,
 } from "../lib/dailyLimits";
+import { useCan } from "./AccessContext";
 import { Alert } from "./States";
 import { Switch } from "./Switch";
 
@@ -32,6 +34,7 @@ interface Props {
  * back with what it would do, to confirm before it is applied.
  */
 export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
+  const manage = useCan(PermLimitsManage); // changed by a user allowed to only, seen by the others
   const global = agent === undefined;
   const [form, setForm] = useState<DailyLimitForm>(() => dailyLimitForm(settings));
   const [reason, setReason] = useState("");
@@ -105,7 +108,7 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
   );
 
   return (
-    <div className="daily-fields">
+    <fieldset className="daily-fields fieldset-plain" disabled={!manage}>
       {error && <Alert tone="error">{error}</Alert>}
       <Switch
         checked={form.enabled}
@@ -152,33 +155,40 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
           ))}
         </Alert>
       )}
-      <div className="daily-actions">
-        {saved && <span className="dialog-foot-hint">{saved}</span>}
-        {preview ? (
-          <>
-            <button type="button" className="btn" disabled={busy} onClick={() => setPreview(null)}>
-              Cancelar
-            </button>
+      {manage && (
+        <div className="daily-actions">
+          {saved && <span className="dialog-foot-hint">{saved}</span>}
+          {preview ? (
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => setPreview(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={busy || invalid}
+                onClick={() => save(true)}
+              >
+                {busy ? "Aplicando…" : "Confirmar e aplicar"}
+              </button>
+            </>
+          ) : (
             <button
               type="button"
-              className="btn btn-danger"
+              className="btn btn-primary"
               disabled={busy || invalid}
-              onClick={() => save(true)}
+              onClick={() => save(false)}
             >
-              {busy ? "Aplicando…" : "Confirmar e aplicar"}
+              {busy ? "Salvando…" : "Salvar"}
             </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy || invalid}
-            onClick={() => save(false)}
-          >
-            {busy ? "Salvando…" : "Salvar"}
-          </button>
-        )}
-      </div>
-    </div>
+          )}
+        </div>
+      )}
+    </fieldset>
   );
 }

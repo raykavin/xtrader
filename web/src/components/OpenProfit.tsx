@@ -6,6 +6,7 @@ import type {
   CurrencyAmount,
   OpenPositionsResponse,
 } from "../api/types";
+import { PermTradingOperate } from "../api/types";
 import {
   type ClosedPeriod,
   type ClosedRange,
@@ -35,6 +36,7 @@ import {
 } from "../lib/openPL";
 import { type CloseOutcome, closeOutcome } from "../lib/supervisor";
 import { palettes, type Theme } from "../lib/theme";
+import { useCan } from "./AccessContext";
 import { ClosedPeriodDialog } from "./ClosedPeriodDialog";
 import { Icon } from "./Icon";
 import { Sparkline } from "./Sparkline";
@@ -246,6 +248,7 @@ function AgentTile({
   const state = agentOpenState(line, open);
   const note = openNotes[state];
   const closing = useCloseAgent(line.agent);
+  const operate = useCan(PermTradingOperate); // the × to a user allowed to operate only
   const positions = line.positions === 1 ? "1 posição" : `${line.positions} posições`;
   return (
     <li
@@ -275,7 +278,7 @@ function AgentTile({
               {amountsText(line.open, several)}
             </span>
           )}
-          {(line.positions > 0 || closing.busy) && (
+          {operate && (line.positions > 0 || closing.busy) && (
             <button
               type="button"
               className={`openpl-close${closing.busy ? " is-busy" : ""}`}

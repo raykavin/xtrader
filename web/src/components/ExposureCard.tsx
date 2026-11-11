@@ -1,7 +1,9 @@
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { fetchExposure, updateExposure } from "../api/client";
+import { PermLimitsManage } from "../api/types";
 import { exposureCheck, exposureRules, type RuleForm, ruleForm } from "../lib/exposure";
 import { isSymbol } from "../lib/symbols";
+import { useCan } from "./AccessContext";
 import { ChipInput } from "./ChipInput";
 import { Icon } from "./Icon";
 import { Alert, Loading, Skeleton } from "./States";
@@ -15,6 +17,7 @@ import { Alert, Loading, Skeleton } from "./States";
  * asset now isn't told here. A change holds for the next entries.
  */
 export function ExposureCard() {
+  const manage = useCan(PermLimitsManage); // changed by a user allowed to only, seen by the others
   const id = useId();
   const [rules, setRules] = useState<RuleForm[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,108 +103,120 @@ export function ExposureCard() {
         </div>
       </header>
       <form className="card-body exposure-body" onSubmit={submit} noValidate>
-        {error && <Alert tone="error">{error}</Alert>}
-        <p className="field-hint">
-          Em cada ativo da regra, no máximo essa quantidade de agentes com posição ou ordem pendente
-          de entrada nele na mesma direção: compras e vendas contam separadas. Um ativo sem regra
-          não tem limite. Saídas, stops, alvos e ordens manuais nunca são limitados; não vale em
-          paper nem no backtest.
-        </p>
-        {rules.length === 0 ? (
-          <p className="field-hint">Nenhuma regra: nenhum ativo tem limite.</p>
-        ) : (
-          <div className="exposure-rule-list">
-            {rules.map((rule, index) => {
-              const errors = check.rows[rule.key] ?? {};
-              const name = rule.pairs.length > 0 ? rule.pairs.join(", ") : String(index + 1);
-              return (
-                <fieldset
-                  key={rule.key}
-                  className="hours-window exposure-rule"
-                  aria-labelledby={fieldId(rule, "title")}
-                  data-invalid={errors.pairs || errors.maxAgents ? "" : undefined}
-                >
-                  <div className="hours-window-head">
-                    <span id={fieldId(rule, "title")} className="hours-window-title">
-                      Regra {index + 1}
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost btn-icon"
-                      aria-label={`Remover a regra de ${name}`}
-                      title="Remover"
-                      disabled={busy}
-                      onClick={() => remove(rule.key)}
+        <fieldset className="fieldset-contents" disabled={!manage}>
+          {error && <Alert tone="error">{error}</Alert>}
+          <p className="field-hint">
+            Em cada ativo da regra, no máximo essa quantidade de agentes com posição ou ordem
+            pendente de entrada nele na mesma direção: compras e vendas contam separadas. Um ativo
+            sem regra não tem limite. Saídas, stops, alvos e ordens manuais nunca são limitados; não
+            vale em paper nem no backtest.
+          </p>
+          {rules.length === 0 ? (
+            <p className="field-hint">Nenhuma regra: nenhum ativo tem limite.</p>
+          ) : (
+            <div className="exposure-rule-list">
+              {rules.map((rule, index) => {
+                const errors = check.rows[rule.key] ?? {};
+                const name = rule.pairs.length > 0 ? rule.pairs.join(", ") : String(index + 1);
+                return (
+                  <fieldset
+                    key={rule.key}
+                    className="hours-window exposure-rule"
+                    aria-labelledby={fieldId(rule, "title")}
+                    data-invalid={errors.pairs || errors.maxAgents ? "" : undefined}
+                  >
+                    <div className="hours-window-head">
+                      <span id={fieldId(rule, "title")} className="hours-window-title">
+                        Regra {index + 1}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost btn-icon"
+                        aria-label={`Remover a regra de ${name}`}
+                        title="Remover"
+                        disabled={busy}
+                        onClick={() => remove(rule.key)}
+                      >
+                        <Icon name="trash" size={15} />
+                      </button>
+                    </div>
+                    <div
+                      className="field exposure-rule-pairs"
+                      data-invalid={errors.pairs ? "" : undefined}
                     >
-                      <Icon name="trash" size={15} />
-                    </button>
-                  </div>
-                  <div
-                    className="field exposure-rule-pairs"
-                    data-invalid={errors.pairs ? "" : undefined}
-                  >
-                    <label className="field-label" htmlFor={fieldId(rule, "pairs")}>
-                      Ativos
-                    </label>
-                    <ChipInput
-                      id={fieldId(rule, "pairs")}
-                      values={rule.pairs}
-                      placeholder="digite um ativo e tecle Enter"
-                      disabled={busy}
-                      invalid={Boolean(errors.pairs)}
-                      describedBy={errors.pairs ? fieldId(rule, "pairs-error") : undefined}
-                      refused={(pair) => !isSymbol(pair)}
-                      onChange={(pairs) => update(rule.key, { pairs })}
-                    />
-                    {errors.pairs && (
-                      <span id={fieldId(rule, "pairs-error")} className="field-error">
-                        {errors.pairs}
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    className="field exposure-rule-max"
-                    data-invalid={errors.maxAgents ? "" : undefined}
-                  >
-                    <label className="field-label" htmlFor={fieldId(rule, "max")}>
-                      Máximo de agentes
-                    </label>
-                    <input
-                      id={fieldId(rule, "max")}
-                      className="input mono"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      value={rule.maxAgents}
-                      placeholder="ex.: 2"
-                      disabled={busy}
-                      aria-invalid={errors.maxAgents ? true : undefined}
-                      aria-describedby={errors.maxAgents ? fieldId(rule, "max-error") : undefined}
-                      onChange={(e) => update(rule.key, { maxAgents: e.target.value })}
-                    />
-                    {errors.maxAgents && (
-                      <span id={fieldId(rule, "max-error")} className="field-error">
-                        {errors.maxAgents}
-                      </span>
-                    )}
-                  </div>
-                </fieldset>
-              );
-            })}
-          </div>
-        )}
-        {check.list && <p className="field-error">{check.list}</p>}
-        <div>
-          <button ref={addRef} type="button" className="btn btn-sm" disabled={busy} onClick={add}>
-            <Icon name="plus" size={14} />
-            Adicionar regra
-          </button>
-        </div>
-        <div className="daily-actions">
-          {saved && <span className="dialog-foot-hint">{saved}</span>}
-          <button type="submit" className="btn btn-primary" disabled={busy || !check.request}>
-            {busy ? "Salvando…" : "Salvar"}
-          </button>
-        </div>
+                      <label className="field-label" htmlFor={fieldId(rule, "pairs")}>
+                        Ativos
+                      </label>
+                      <ChipInput
+                        id={fieldId(rule, "pairs")}
+                        values={rule.pairs}
+                        placeholder="digite um ativo e tecle Enter"
+                        disabled={busy}
+                        invalid={Boolean(errors.pairs)}
+                        describedBy={errors.pairs ? fieldId(rule, "pairs-error") : undefined}
+                        refused={(pair) => !isSymbol(pair)}
+                        onChange={(pairs) => update(rule.key, { pairs })}
+                      />
+                      {errors.pairs && (
+                        <span id={fieldId(rule, "pairs-error")} className="field-error">
+                          {errors.pairs}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="field exposure-rule-max"
+                      data-invalid={errors.maxAgents ? "" : undefined}
+                    >
+                      <label className="field-label" htmlFor={fieldId(rule, "max")}>
+                        Máximo de agentes
+                      </label>
+                      <input
+                        id={fieldId(rule, "max")}
+                        className="input mono"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={rule.maxAgents}
+                        placeholder="ex.: 2"
+                        disabled={busy}
+                        aria-invalid={errors.maxAgents ? true : undefined}
+                        aria-describedby={errors.maxAgents ? fieldId(rule, "max-error") : undefined}
+                        onChange={(e) => update(rule.key, { maxAgents: e.target.value })}
+                      />
+                      {errors.maxAgents && (
+                        <span id={fieldId(rule, "max-error")} className="field-error">
+                          {errors.maxAgents}
+                        </span>
+                      )}
+                    </div>
+                  </fieldset>
+                );
+              })}
+            </div>
+          )}
+          {check.list && <p className="field-error">{check.list}</p>}
+          {manage && (
+            <>
+              <div>
+                <button
+                  ref={addRef}
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy}
+                  onClick={add}
+                >
+                  <Icon name="plus" size={14} />
+                  Adicionar regra
+                </button>
+              </div>
+              <div className="daily-actions">
+                {saved && <span className="dialog-foot-hint">{saved}</span>}
+                <button type="submit" className="btn btn-primary" disabled={busy || !check.request}>
+                  {busy ? "Salvando…" : "Salvar"}
+                </button>
+              </div>
+            </>
+          )}
+        </fieldset>
       </form>
     </section>
   );

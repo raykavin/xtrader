@@ -18,6 +18,8 @@ import type {
   Order,
   Snapshot,
 } from "./api/types";
+import { PermTradingOperate } from "./api/types";
+import { useCan } from "./components/AccessContext";
 import { AgentBar } from "./components/AgentBar";
 import { AppShell } from "./components/AppShell";
 import { ControlPanel } from "./components/ControlPanel";
@@ -525,7 +527,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       : view?.key !== shownKey
         ? { text: `Carregando candles de ${timeframeLabel(shown)}…` }
         : null;
-  const interactive = controls?.enabled === true;
+  // the orders and the ticket to a user allowed to operate only
+  const operate = useCan(PermTradingOperate);
+  const interactive = operate && controls?.enabled === true;
   const ticket = useMemo(() => ({ levels, onLevel: setLevel }), [levels, setLevel]);
 
   // the query of the panel, kept for the way back from the settings
@@ -693,7 +697,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     onShow={setShownDecision}
                   />
                 ) : undefined,
-                ticket: (
+                ticket: operate ? (
                   <ControlPanel
                     agent={agent}
                     pair={snapshot.pair}
@@ -707,7 +711,7 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     levels={levels}
                     onLevelsChange={setLevels}
                   />
-                ),
+                ) : undefined,
                 activity: (
                   <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
                     <div className="lists-head">

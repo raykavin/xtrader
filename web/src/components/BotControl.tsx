@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { startBot, stopBot } from "../api/client";
 import type { ControlsResponse } from "../api/types";
+import { PermTradingOperate } from "../api/types";
+import { useCan } from "./AccessContext";
 import { StatusIcon } from "./StatusIcon";
 
 interface Props {
@@ -25,7 +27,9 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const feedbackTimer = useRef<number | undefined>(undefined);
 
-  const enabled = controls?.bot_control === true;
+  // operated by a user allowed to only: the others see how the bot stands
+  const operate = useCan(PermTradingOperate);
+  const enabled = operate && controls?.bot_control === true;
   const running = controls?.status === "running";
 
   // Another agent starts over.
@@ -76,7 +80,7 @@ export function BotControl({ agent, controls, onControlsChange }: Props) {
         {!enabled && (
           <span className="status-chip">
             <StatusIcon />
-            {controls === null ? "…" : "Desligado"}
+            {controls === null ? "…" : !operate ? (running ? "Executando" : "Parado") : "Desligado"}
           </span>
         )}
         {!enabled ? null : running ? (

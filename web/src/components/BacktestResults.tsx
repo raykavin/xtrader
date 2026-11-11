@@ -29,7 +29,8 @@ interface Props {
   batch: number | null;
   onBatch: (batch: number) => void;
   theme: Theme;
-  onNew: () => void;
+  /** Configures a new batch; none to a user who may not manage the backtests. */
+  onNew?: () => void;
 }
 
 /** A share without its sign, eg: 42,5%. */
@@ -92,9 +93,11 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
         icon="results"
         title="Nenhum resultado ainda"
         action={
-          <button type="button" className="btn btn-sm" onClick={onNew}>
-            Configurar um lote
-          </button>
+          onNew && (
+            <button type="button" className="btn btn-sm" onClick={onNew}>
+              Configurar um lote
+            </button>
+          )
         }
       >
         Aparecem quando as execuções de um lote terminam.
