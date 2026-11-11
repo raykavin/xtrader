@@ -30,6 +30,7 @@ func (b *Backtests) routes(r chi.Router) {
 	r.With(view).Get("/backtests", b.handleList)
 	r.With(manage).Post("/backtests", b.handleCreate)
 	r.With(manage).Delete("/backtests/{id}", b.handleDelete)
+	r.With(view).Get("/backtests/{id}/comparison", b.handleComparison)
 	r.With(view).Get("/backtests/runs/{id}", b.handleRun)
 	r.With(manage).Post("/backtests/runs/{id}/cancel", b.handleCancel)
 }
@@ -59,14 +60,41 @@ func backtestRunInfo(run store.BacktestRun) ui.BacktestRunInfo {
 	return info
 }
 
-// handleList answers the last batches with their runs, the agents and their
-// compatibility, and the limits, see ui.BacktestsResponse.
+// backtestBatchInfo returns batch as the dashboard shows it, without its runs.
+func backtestBatchInfo(batch store.BacktestBatch) ui.BacktestBatchInfo {
+	info := ui.BacktestBatchInfo{ID: batch.ID, Name: batch.Name, From: batch.From.Unix(), To: batch.To.Unix(),
+		ValidationShare: batch.ValidationShare, CreatedBy: batch.CreatedBy, CreatedAt: batch.CreatedAt.Unix(),
+		Runs: []ui.BacktestRunInfo{}}
+	_ = json.Unmarshal(batch.Assumptions, &info.Assumptions)
+	return info
+}
+
+// handleList answers the batches with their runs, the last ones or the page
+// asked for (see listQuery), the runs queued or running, every batch as a
+// choice, the agents and their compatibility, and the limits, see
+// ui.BacktestsResponse.
 func (b *Backtests) handleList(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	batches, err := b.store.BacktestBatches(ctx, backtestBatchesShown)
-	if err != nil {
-		b.fail(w, err)
+	q, ok := listQuery(w, r)
+	if !ok {
 		return
+	}
+	ctx := r.Context()
+	var batches []store.BacktestBatch
+	var page ui.PageInfo
+	if q.Paged() {
+		listed, err := b.store.FindBacktestBatches(ctx, q)
+		if err != nil {
+			b.fail(w, err)
+			return
+		}
+		batches, page = listed.Rows, pageInfo(listed)
+	} else {
+		var err error
+		if batches, err = b.store.BacktestBatches(ctx, backtestBatchesShown); err != nil {
+			b.fail(w, err)
+			return
+		}
+		page = wholePage(len(batches))
 	}
 	ids := make([]int64, 0, len(batches))
 	for _, batch := range batches {
@@ -77,19 +105,27 @@ func (b *Backtests) handleList(w http.ResponseWriter, r *http.Request) {
 		b.fail(w, err)
 		return
 	}
+	running, err := b.store.CountActiveBacktestRuns(ctx)
+	if err != nil {
+		b.fail(w, err)
+		return
+	}
+	choices, err := b.store.BacktestBatchChoices(ctx)
+	if err != nil {
+		b.fail(w, err)
+		return
+	}
 	agents, err := b.store.Agents(ctx)
 	if err != nil {
 		b.fail(w, err)
 		return
 	}
-	response := ui.BacktestsResponse{Batches: make([]ui.BacktestBatchInfo, 0, len(batches)),
+	response := ui.BacktestsResponse{PageInfo: page, Batches: make([]ui.BacktestBatchInfo, 0, len(batches)),
+		Running: int(running), Choices: make([]ui.BacktestBatchChoice, 0, len(choices)),
 		Agents: make([]ui.BacktestCompatibility, 0, len(agents)), MaxPeriodDays: b.cfg.MaxPeriodDays,
 		MaxRuns: b.cfg.MaxRuns, LLMMaxCalls: b.cfg.LLMMaxCalls, LLMMaxCost: b.cfg.LLMMaxCost}
 	for _, batch := range batches {
-		info := ui.BacktestBatchInfo{ID: batch.ID, Name: batch.Name, From: batch.From.Unix(), To: batch.To.Unix(),
-			ValidationShare: batch.ValidationShare, CreatedBy: batch.CreatedBy, CreatedAt: batch.CreatedAt.Unix(),
-			Runs: []ui.BacktestRunInfo{}}
-		_ = json.Unmarshal(batch.Assumptions, &info.Assumptions)
+		info := backtestBatchInfo(batch)
 		for _, run := range runs {
 			if run.BatchID == batch.ID {
 				info.Runs = append(info.Runs, backtestRunInfo(run))
@@ -97,11 +133,61 @@ func (b *Backtests) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		response.Batches = append(response.Batches, info)
 	}
+	for _, choice := range choices {
+		response.Choices = append(response.Choices, ui.BacktestBatchChoice{ID: choice.ID, Name: choice.Name,
+			From: choice.From.Unix(), To: choice.To.Unix()})
+	}
 	for _, a := range agents {
 		response.Agents = append(response.Agents, b.compatibility(a))
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, response)
+}
+
+// handleComparison answers the comparison of the runs of the batch of the
+// path, a row by agent: the page asked for (see listQuery) of the rows kept by
+// the filters, sorted (see comparisonOf), with the rows hidden, what differs
+// between all of them and the runs of the batch still to end, see
+// ui.BacktestComparisonResponse; 404 for a batch unknown.
+func (b *Backtests) handleComparison(w http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(w, r, "id")
+	if !ok {
+		return
+	}
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	c, ok := comparisonOf(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	batch, err := b.store.BacktestBatch(ctx, id)
+	if err != nil {
+		b.fail(w, err)
+		return
+	}
+	runs, err := b.store.BacktestRuns(ctx, []int64{id}, false)
+	if err != nil {
+		b.fail(w, err)
+		return
+	}
+	infos := make([]ui.BacktestRunInfo, 0, len(runs))
+	active := 0
+	for _, run := range runs {
+		infos = append(infos, backtestRunInfo(run))
+		if !run.Final() {
+			active++
+		}
+	}
+	all := comparisonRows(infos)
+	kept := filterRows(all, c)
+	sortRows(kept, c)
+	rows, page := pageSlice(kept, q)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, ui.BacktestComparisonResponse{PageInfo: page, Batch: backtestBatchInfo(batch), Rows: rows,
+		Hidden: len(all) - len(kept), Differences: conditionDifferences(all), Active: active})
 }
 
 // handleCreate queues the batch of the body, see ui.BacktestRequest: 201
