@@ -18,13 +18,14 @@ type Model struct {
 	DeletedAt gorm.DeletedAt `json:"-"`
 }
 
-// User is a user of the dashboard.
+// User is a user of the dashboard: RoleLink its role, see RoleOf.
 type User struct {
 	Model
 	Username     string     `json:"username"`
 	PasswordHash string     `json:"-"`
 	Enabled      bool       `json:"enabled"`
 	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	RoleLink     *UserRole  `gorm:"foreignKey:UserID" json:"-"`
 }
 
 // Prompt is a prompt of the LLM agents, the strategy the model trades.
