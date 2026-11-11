@@ -427,11 +427,266 @@ export interface LoginRequest {
 /**
  * SessionResponse tells whether the request carries a session of the
  * dashboard, and its user: the answer of GET /api/auth/session, of the login
- * and of the logout.
+ * and of the logout. Role is the role of the user, Permissions what it may
+ * see and do, the implied ones included (see Effective).
  */
 export interface SessionResponse {
   authenticated: boolean;
   username?: string;
+  role?: RoleRef;
+  permissions?: string[];
+}
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermDashboardView = "dashboard:view"; // the panel: the agents, their charts, decisions, positions and the guard of the day
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermTradingOperate = "trading:operate"; // the bots started and stopped, the orders, the reanalyses, the closes, the entries blocked, the actions of XTrader AI confirmed
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermSupervisorChat = "supervisor:chat"; // the chat of XTrader AI and its analysis on demand
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermPerformanceView = "performance:view"; // the page of the performance
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermBacktestsView = "backtests:view"; // the backtests run
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermBacktestsManage = "backtests:manage"; // the backtests started, canceled and deleted
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermAgentsView = "agents:view"; // the settings of the agents and their results
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermAgentsManage = "agents:manage"; // the agents created, changed, restarted, renamed and deleted
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermMT5AccountsView = "mt5-accounts:view"; // the accounts of MT5
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermMT5AccountsManage = "mt5-accounts:manage"; // the accounts of MT5 changed, switched and tested
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermLimitsView = "limits:view"; // the daily limits, the trading hours and the exposure
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermLimitsManage = "limits:manage"; // the limits changed, of each agent too
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermNewsView = "news:view"; // the settings of the news
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermNewsManage = "news:manage"; // the settings of the news changed and tested
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermPromptsView = "prompts:view"; // the prompts of the LLM agents
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermPromptsManage = "prompts:manage"; // the prompts created, changed and deleted
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermSupervisorView = "supervisor:view"; // the settings of XTrader AI, its actions and protections
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermSupervisorManage = "supervisor:manage"; // the settings of XTrader AI changed
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermTelegramView = "telegram:view"; // the settings of the Telegram bot
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermTelegramManage = "telegram:manage"; // the Telegram bot changed, its users authorized
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermUsersView = "users:view"; // the users of the dashboard and their roles
+/**
+ * The permissions of the users of the dashboard, "area:action", granted by
+ * their role (see RoleInfo) and checked by the controller on every route of
+ * its API: an area seen (view), changed (manage) or operated. The catalog,
+ * with the labels the dashboard shows, is PermissionAreas; Effective adds the
+ * implied ones: manage implies view, trading:operate and supervisor:chat the
+ * panel (dashboard:view).
+ */
+export const PermUsersManage = "users:manage"; // the users and the roles created, changed and deleted
+/**
+ * PermissionArea is an area of the dashboard in the catalog of the
+ * permissions (see PermissionAreas): its permission to see it (View) and the
+ * one to change or operate it (Manage), "" when it has none, with the labels
+ * the dashboard shows of each.
+ */
+export interface PermissionArea {
+  key: string;
+  label: string;
+  hint: string;
+  view?: string;
+  view_label?: string;
+  manage?: string;
+  manage_label?: string;
+}
+/**
+ * RoleRef names a role of the users of the dashboard.
+ */
+export interface RoleRef {
+  id: number /* int64 */;
+  name: string;
+}
+/**
+ * RoleInfo is a role of the users of the dashboard: the permissions it grants
+ * as set (every one for the fixed role, Fixed, which can't be changed nor
+ * deleted), Users the number of users holding it; its time in Unix seconds.
+ */
+export interface RoleInfo {
+  id: number /* int64 */;
+  name: string;
+  description: string;
+  fixed: boolean;
+  permissions: string[];
+  users: number /* int64 */;
+  updated_by?: string;
+  updated_at: number /* int64 */;
+}
+/**
+ * RolesResponse is the payload of GET /api/roles: the roles, by name, and the
+ * catalog of the permissions, in the order of the dashboard.
+ */
+export interface RolesResponse {
+  roles: RoleInfo[];
+  areas: PermissionArea[];
+}
+/**
+ * RoleRequest is the payload of POST /api/roles (Name and Permissions) and of
+ * PATCH /api/roles/{id}, of the fields set.
+ */
+export interface RoleRequest {
+  name?: string;
+  description?: string;
+  permissions?: string[];
 }
 /**
  * MetricUpdate carries the latest point of one indicator metric.
@@ -1752,12 +2007,14 @@ export interface TelegramUserRequest {
   name: string;
 }
 /**
- * UserInfo is a user of the dashboard, its times in Unix seconds.
+ * UserInfo is a user of the dashboard, its times in Unix seconds: Role its
+ * role, nil for none (it can't log in).
  */
 export interface UserInfo {
   id: number /* int64 */;
   username: string;
   enabled: boolean;
+  role?: RoleRef;
   last_login_at?: number /* int64 */;
   created_at: number /* int64 */;
 }
@@ -1768,13 +2025,15 @@ export interface UsersResponse {
   users: UserInfo[];
 }
 /**
- * UserRequest is the payload of POST /api/users (Username and Password) and
- * of PATCH /api/users/{id}, of the fields set.
+ * UserRequest is the payload of POST /api/users (Username, Password and
+ * RoleID) and of PATCH /api/users/{id}, of the fields set: a RoleID 0 takes
+ * its role away, the user then refused at the login.
  */
 export interface UserRequest {
   username?: string;
   password?: string;
   enabled?: boolean;
+  role_id?: number /* int64 */;
 }
 /**
  * SupervisionState is the answer of GET /api/supervision of an agent, to the

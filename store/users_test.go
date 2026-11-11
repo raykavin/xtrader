@@ -99,6 +99,8 @@ func TestBootstrap_OnlyOnAnEmptyDatabase(t *testing.T) {
 	created, err = s.Bootstrap(ctx, "admin2", "second password")
 	require.NoError(t, err)
 	require.False(t, created, "a user exists")
-	_, err = s.Authenticate(ctx, "admin", "first password")
+	user, err := s.Authenticate(ctx, "admin", "first password")
 	require.NoError(t, err)
+	require.NotNil(t, user.RoleOf(), "the first user administers")
+	require.True(t, user.RoleOf().Fixed())
 }

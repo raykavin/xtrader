@@ -355,10 +355,93 @@ type LoginRequest struct {
 
 // SessionResponse tells whether the request carries a session of the
 // dashboard, and its user: the answer of GET /api/auth/session, of the login
-// and of the logout.
+// and of the logout. Role is the role of the user, Permissions what it may
+// see and do, the implied ones included (see Effective).
 type SessionResponse struct {
-	Authenticated bool   `json:"authenticated"`
-	Username      string `json:"username,omitempty"`
+	Authenticated bool     `json:"authenticated"`
+	Username      string   `json:"username,omitempty"`
+	Role          *RoleRef `json:"role,omitempty"`
+	Permissions   []string `json:"permissions,omitempty"`
+}
+
+// The permissions of the users of the dashboard, "area:action", granted by
+// their role (see RoleInfo) and checked by the controller on every route of
+// its API: an area seen (view), changed (manage) or operated. The catalog,
+// with the labels the dashboard shows, is PermissionAreas; Effective adds the
+// implied ones: manage implies view, trading:operate and supervisor:chat the
+// panel (dashboard:view).
+const (
+	PermDashboardView     = "dashboard:view"      // the panel: the agents, their charts, decisions, positions and the guard of the day
+	PermTradingOperate    = "trading:operate"     // the bots started and stopped, the orders, the reanalyses, the closes, the entries blocked, the actions of XTrader AI confirmed
+	PermSupervisorChat    = "supervisor:chat"     // the chat of XTrader AI and its analysis on demand
+	PermPerformanceView   = "performance:view"    // the page of the performance
+	PermBacktestsView     = "backtests:view"      // the backtests run
+	PermBacktestsManage   = "backtests:manage"    // the backtests started, canceled and deleted
+	PermAgentsView        = "agents:view"         // the settings of the agents and their results
+	PermAgentsManage      = "agents:manage"       // the agents created, changed, restarted, renamed and deleted
+	PermMT5AccountsView   = "mt5-accounts:view"   // the accounts of MT5
+	PermMT5AccountsManage = "mt5-accounts:manage" // the accounts of MT5 changed, switched and tested
+	PermLimitsView        = "limits:view"         // the daily limits, the trading hours and the exposure
+	PermLimitsManage      = "limits:manage"       // the limits changed, of each agent too
+	PermNewsView          = "news:view"           // the settings of the news
+	PermNewsManage        = "news:manage"         // the settings of the news changed and tested
+	PermPromptsView       = "prompts:view"        // the prompts of the LLM agents
+	PermPromptsManage     = "prompts:manage"      // the prompts created, changed and deleted
+	PermSupervisorView    = "supervisor:view"     // the settings of XTrader AI, its actions and protections
+	PermSupervisorManage  = "supervisor:manage"   // the settings of XTrader AI changed
+	PermTelegramView      = "telegram:view"       // the settings of the Telegram bot
+	PermTelegramManage    = "telegram:manage"     // the Telegram bot changed, its users authorized
+	PermUsersView         = "users:view"          // the users of the dashboard and their roles
+	PermUsersManage       = "users:manage"        // the users and the roles created, changed and deleted
+)
+
+// PermissionArea is an area of the dashboard in the catalog of the
+// permissions (see PermissionAreas): its permission to see it (View) and the
+// one to change or operate it (Manage), "" when it has none, with the labels
+// the dashboard shows of each.
+type PermissionArea struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Hint        string `json:"hint"`
+	View        string `json:"view,omitempty"`
+	ViewLabel   string `json:"view_label,omitempty"`
+	Manage      string `json:"manage,omitempty"`
+	ManageLabel string `json:"manage_label,omitempty"`
+}
+
+// RoleRef names a role of the users of the dashboard.
+type RoleRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// RoleInfo is a role of the users of the dashboard: the permissions it grants
+// as set (every one for the fixed role, Fixed, which can't be changed nor
+// deleted), Users the number of users holding it; its time in Unix seconds.
+type RoleInfo struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Fixed       bool     `json:"fixed"`
+	Permissions []string `json:"permissions"`
+	Users       int64    `json:"users"`
+	UpdatedBy   string   `json:"updated_by,omitempty"`
+	UpdatedAt   int64    `json:"updated_at"`
+}
+
+// RolesResponse is the payload of GET /api/roles: the roles, by name, and the
+// catalog of the permissions, in the order of the dashboard.
+type RolesResponse struct {
+	Roles []RoleInfo       `json:"roles"`
+	Areas []PermissionArea `json:"areas"`
+}
+
+// RoleRequest is the payload of POST /api/roles (Name and Permissions) and of
+// PATCH /api/roles/{id}, of the fields set.
+type RoleRequest struct {
+	Name        *string   `json:"name,omitempty"`
+	Description *string   `json:"description,omitempty"`
+	Permissions *[]string `json:"permissions,omitempty"`
 }
 
 // MetricUpdate carries the latest point of one indicator metric.
@@ -1544,13 +1627,15 @@ type TelegramUserRequest struct {
 	Name       string `json:"name"`
 }
 
-// UserInfo is a user of the dashboard, its times in Unix seconds.
+// UserInfo is a user of the dashboard, its times in Unix seconds: Role its
+// role, nil for none (it can't log in).
 type UserInfo struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	Enabled     bool   `json:"enabled"`
-	LastLoginAt *int64 `json:"last_login_at,omitempty"`
-	CreatedAt   int64  `json:"created_at"`
+	ID          int64    `json:"id"`
+	Username    string   `json:"username"`
+	Enabled     bool     `json:"enabled"`
+	Role        *RoleRef `json:"role,omitempty"`
+	LastLoginAt *int64   `json:"last_login_at,omitempty"`
+	CreatedAt   int64    `json:"created_at"`
 }
 
 // UsersResponse is the payload of GET /api/users, by username.
@@ -1558,12 +1643,14 @@ type UsersResponse struct {
 	Users []UserInfo `json:"users"`
 }
 
-// UserRequest is the payload of POST /api/users (Username and Password) and
-// of PATCH /api/users/{id}, of the fields set.
+// UserRequest is the payload of POST /api/users (Username, Password and
+// RoleID) and of PATCH /api/users/{id}, of the fields set: a RoleID 0 takes
+// its role away, the user then refused at the login.
 type UserRequest struct {
 	Username string  `json:"username,omitempty"`
 	Password *string `json:"password,omitempty"`
 	Enabled  *bool   `json:"enabled,omitempty"`
+	RoleID   *int64  `json:"role_id,omitempty"`
 }
 
 // SupervisionState is the answer of GET /api/supervision of an agent, to the

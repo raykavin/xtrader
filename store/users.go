@@ -71,17 +71,17 @@ func (s *Store) CreateUser(ctx context.Context, username, password string) (User
 	return user, nil
 }
 
-// Users returns the users, by username.
+// Users returns the users, by username, with their roles.
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	var users []User
-	err := s.conn(ctx).Order("lower(username)").Find(&users).Error
+	err := s.conn(ctx).Preload("RoleLink.Role").Order("lower(username)").Find(&users).Error
 	return users, err
 }
 
-// User returns the user of id.
+// User returns the user of id, with its role and the permissions of it.
 func (s *Store) User(ctx context.Context, id int64) (User, error) {
 	var user User
-	err := s.conn(ctx).First(&user, id).Error
+	err := s.conn(ctx).Preload("RoleLink.Role.Permissions").First(&user, id).Error
 	return user, notFound(err, fmt.Sprintf("o usuário %d", id))
 }
 
@@ -102,9 +102,10 @@ func (s *Store) SetPassword(ctx context.Context, id int64, password string) erro
 }
 
 // SetUserEnabled enables or disables the user of id: the last user enabled
-// can't be disabled, which would lock the dashboard.
+// can't be disabled, nor the last one able to manage the users and the roles
+// (see guardAdmins), which would lock the dashboard.
 func (s *Store) SetUserEnabled(ctx context.Context, id int64, enabled bool) error {
-	return s.Transaction(ctx, func(ctx context.Context) error {
+	return s.guardAdmins(ctx, func(ctx context.Context) error {
 		if !enabled {
 			if err := s.keepOneEnabled(ctx, id); err != nil {
 				return err
@@ -114,9 +115,10 @@ func (s *Store) SetUserEnabled(ctx context.Context, id int64, enabled bool) erro
 	})
 }
 
-// DeleteUser deletes the user of id: not the last one enabled.
+// DeleteUser deletes the user of id, its role with it: not the last one
+// enabled, nor the last one able to manage the users and the roles.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	return s.Transaction(ctx, func(ctx context.Context) error {
+	return s.guardAdmins(ctx, func(ctx context.Context) error {
 		if err := s.keepOneEnabled(ctx, id); err != nil {
 			return err
 		}
@@ -124,7 +126,10 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		if result.Error == nil && result.RowsAffected == 0 {
 			return fmt.Errorf("%w: o usuário %d não existe", ErrNotFound, id)
 		}
-		return result.Error
+		if result.Error != nil {
+			return result.Error
+		}
+		return s.conn(ctx).Where("user_id = ?", id).Delete(&UserRole{}).Error
 	})
 }
 
@@ -152,11 +157,12 @@ func (s *Store) updateUser(ctx context.Context, id int64, columns map[string]int
 }
 
 // Authenticate returns the enabled user of username whose password is
-// password, else ErrCredentials, and keeps the time of the login.
+// password, with its role (see User), else ErrCredentials, and keeps the time
+// of the login.
 func (s *Store) Authenticate(ctx context.Context, username, password string) (User, error) {
 	var user User
-	err := s.conn(ctx).Where("lower(username) = lower(?) AND enabled", strings.TrimSpace(username)).
-		First(&user).Error
+	err := s.conn(ctx).Preload("RoleLink.Role.Permissions").
+		Where("lower(username) = lower(?) AND enabled", strings.TrimSpace(username)).First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		_ = bcrypt.CompareHashAndPassword(dummyHash(), []byte(password))
 		return User{}, ErrCredentials
@@ -168,7 +174,7 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (Us
 		return User{}, ErrCredentials
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	if err := s.conn(ctx).Model(&user).UpdateColumn("last_login_at", now).Error; err != nil {
+	if err := s.conn(ctx).Model(&User{}).Where("id = ?", user.ID).UpdateColumn("last_login_at", now).Error; err != nil {
 		return User{}, err
 	}
 	user.LastLoginAt = &now
@@ -176,7 +182,8 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (Us
 }
 
 // Bootstrap creates the first user, username with password, when the
-// database has none, and reports whether it did.
+// database has none, the fixed role of the administrators given to it, and
+// reports whether it did.
 func (s *Store) Bootstrap(ctx context.Context, username, password string) (bool, error) {
 	created := false
 	err := s.Transaction(ctx, func(ctx context.Context) error {
@@ -188,7 +195,15 @@ func (s *Store) Bootstrap(ctx context.Context, username, password string) (bool,
 		if err != nil || count > 0 {
 			return err
 		}
-		if _, err := s.CreateUser(ctx, username, password); err != nil {
+		user, err := s.CreateUser(ctx, username, password)
+		if err != nil {
+			return err
+		}
+		admin, err := s.AdminRole(ctx)
+		if err != nil {
+			return err
+		}
+		if err := s.SetUserRole(ctx, user.ID, admin.ID, "bootstrap"); err != nil {
 			return err
 		}
 		created = true

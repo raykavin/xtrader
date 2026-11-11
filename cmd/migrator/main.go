@@ -100,6 +100,17 @@ func up(ctx context.Context, cfg *config.Config) error {
 	}
 	log.Infof("[MIGRATOR] schema at version %d at least, as the controller needs", store.SchemaVersion)
 
+	// the users of a dashboard without roles yet: the fixed role of the
+	// administrators, the access they had kept; once
+	assigned, err := s.MigrateUserRoles(ctx)
+	if err != nil {
+		return err
+	}
+	if assigned > 0 {
+		log.Infof("[MIGRATOR] users: the role Administrador given to the %d users of the dashboard, which had no "+
+			"roles before (Configurações > Usuários e papéis)", assigned)
+	}
+
 	// the tokens of the calendar the agents kept each, carried to the news
 	news, err := s.MigrateNewsToken(ctx)
 	if err != nil {
