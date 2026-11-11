@@ -8092,6 +8092,34 @@ h3.md-heading {
   grid-area: pairs;
 }
 
+/* the rules of the agents per asset: as the ones of the exposure, its assets
+   beside the button of its agents */
+.hours-window.asset-rule {
+  grid-template-areas:
+    "head head"
+    "pairs agents";
+  grid-template-columns: minmax(0, 1fr) minmax(0, 13rem);
+  align-content: start;
+}
+
+@container (max-width: 479px) {
+  .hours-window.asset-rule {
+    grid-template-areas:
+      "head"
+      "pairs"
+      "agents";
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.asset-rule-pairs {
+  grid-area: pairs;
+}
+
+.asset-rule-agents {
+  grid-area: agents;
+}
+
 .exposure-rule-max {
   grid-area: max;
 }
