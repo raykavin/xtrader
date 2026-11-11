@@ -367,8 +367,7 @@ func settingsSession(t *testing.T, c *managed) (func(method, path string, body i
 func settingsSessionIn(t *testing.T, c *managed, base context.Context) (
 	func(method, path string, body interface{}) (*http.Response, string), *httptest.Server) {
 	t.Helper()
-	_, err := c.store.CreateUser(context.Background(), "admin", "admin-password")
-	require.NoError(t, err)
+	createAdmin(t, c.store, "admin", "admin-password")
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("app"), 0o644))
 	srv := httptest.NewUnstartedServer(c.dashboard.auth.protect(c.dashboard.router(bundle{dir: dir, version: "v1"},
@@ -889,12 +888,22 @@ func TestSettingsAPI_TelegramAndUsers(t *testing.T) {
 	resp, _ = call(http.MethodDelete, fmt.Sprintf("/api/settings/telegram/users/%d", telegram.Users[0].ID), nil)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	resp, body = call(http.MethodPost, "/api/users", ui.UserRequest{Username: "second", Password: secret("second-pw1")})
+	var admin store.User
+	adminRole, err := c.store.AdminRole(context.Background())
+	require.NoError(t, err)
+	resp, body = call(http.MethodPost, "/api/users", ui.UserRequest{Username: "second", Password: secret("second-pw1"),
+		RoleID: &adminRole.ID})
 	require.Equal(t, http.StatusCreated, resp.StatusCode, body)
 	var second ui.UserInfo
 	require.NoError(t, json.Unmarshal([]byte(body), &second))
-	resp, _ = call(http.MethodPost, "/api/users", ui.UserRequest{Username: "third", Password: secret("short")})
+	require.NotNil(t, second.Role)
+	assert.Equal(t, "Administrador", second.Role.Name)
+	resp, _ = call(http.MethodPost, "/api/users", ui.UserRequest{Username: "third", Password: secret("short"),
+		RoleID: &adminRole.ID})
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp, body = call(http.MethodPost, "/api/users", ui.UserRequest{Username: "fourth", Password: secret("fourth-pw1")})
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "a role needed")
+	assert.Contains(t, body, "papel")
 	resp, body = call(http.MethodGet, "/api/users", nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "password")
@@ -906,7 +915,7 @@ func TestSettingsAPI_TelegramAndUsers(t *testing.T) {
 	resp, _ = do(t, http.MethodGet, srv.URL+"/api/agents", "", secondCookies)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "its sessions closed by the new password")
 
-	admin, err := c.store.Authenticate(context.Background(), "admin", "admin-password")
+	admin, err = c.store.Authenticate(context.Background(), "admin", "admin-password")
 	require.NoError(t, err)
 	resp, _ = call(http.MethodPatch, fmt.Sprintf("/api/users/%d", second.ID), ui.UserRequest{Enabled: boolPtr(false)})
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

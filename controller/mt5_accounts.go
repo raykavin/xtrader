@@ -600,15 +600,16 @@ func secretWord(secret *string) string {
 }
 
 func (s *settings) mt5Routes(r chi.Router) {
-	r.Get("/settings/mt5-accounts", s.handleMT5Accounts)
-	r.Post("/settings/mt5-accounts", s.handleCreateMT5Account)
-	r.Patch("/settings/mt5-accounts/{id}", s.handleUpdateMT5Account)
-	r.Delete("/settings/mt5-accounts/{id}", s.handleDeleteMT5Account)
-	r.Get("/settings/mt5-accounts/{id}/switch", s.handleMT5Switch)
-	r.Post("/settings/mt5-accounts/{id}/activate", s.handleActivateMT5Account)
-	r.Post("/settings/mt5-accounts/{id}/deactivate", s.handleDeactivateMT5Account)
-	r.Post("/settings/mt5-accounts/{id}/test", s.handleTestMT5Account)
-	r.Get("/settings/mt5-accounts/{id}/events", s.handleMT5AccountEvents)
+	view, manage := need(ui.PermMT5AccountsView), need(ui.PermMT5AccountsManage)
+	r.With(need(ui.PermMT5AccountsView, ui.PermAgentsManage)).Get("/settings/mt5-accounts", s.handleMT5Accounts) // the account of an agent
+	r.With(manage).Post("/settings/mt5-accounts", s.handleCreateMT5Account)
+	r.With(manage).Patch("/settings/mt5-accounts/{id}", s.handleUpdateMT5Account)
+	r.With(manage).Delete("/settings/mt5-accounts/{id}", s.handleDeleteMT5Account)
+	r.With(view).Get("/settings/mt5-accounts/{id}/switch", s.handleMT5Switch)
+	r.With(manage).Post("/settings/mt5-accounts/{id}/activate", s.handleActivateMT5Account)
+	r.With(manage).Post("/settings/mt5-accounts/{id}/deactivate", s.handleDeactivateMT5Account)
+	r.With(manage).Post("/settings/mt5-accounts/{id}/test", s.handleTestMT5Account)
+	r.With(view).Get("/settings/mt5-accounts/{id}/events", s.handleMT5AccountEvents)
 }
 
 // handleMT5Accounts answers the accounts of MT5, see ui.MT5AccountsResponse.

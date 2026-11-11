@@ -141,7 +141,7 @@ func newDashboardServer(t *testing.T, agents []Agent, bundleErr error) *httptest
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("console.log('ok')"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.css"), []byte("body{}"), 0o644))
-	srv := httptest.NewServer(d.router(bundle{dir: dir, version: "v1.0.0"}, bundleErr))
+	srv := httptest.NewServer(asAdmin(d.router(bundle{dir: dir, version: "v1.0.0"}, bundleErr)))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -253,7 +253,7 @@ func TestDashboard_LocalBundleIsNotCached(t *testing.T) {
 	d := newTestDashboard(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("1"), 0o644))
-	srv := httptest.NewServer(d.router(bundle{dir: dir, version: versionLocal}, nil))
+	srv := httptest.NewServer(asAdmin(d.router(bundle{dir: dir, version: versionLocal}, nil)))
 	defer srv.Close()
 
 	resp, _ := get(t, srv.URL+"/ui/local/app.js")

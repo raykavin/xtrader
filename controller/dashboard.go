@@ -201,10 +201,15 @@ func (d *Dashboard) router(b bundle, bundleErr error) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Route("/api", func(r chi.Router) {
-		r.Get("/agents", d.handleAgents)
-		r.Post("/agents/{agent}/controls/stop", d.handleBotControl(true))   // recorded, see recordBotControl
-		r.Post("/agents/{agent}/controls/start", d.handleBotControl(false)) // and its start
-		r.HandleFunc("/agents/{agent}/*", d.handleAgent)
+		// each route needs the permissions it declares, see need
+		r.With(need(ui.PermDashboardView)).Get("/agents", d.handleAgents)
+		operate := need(ui.PermTradingOperate)
+		r.With(operate).Post("/agents/{agent}/controls/stop", d.handleBotControl(true))   // recorded, see recordBotControl
+		r.With(operate).Post("/agents/{agent}/controls/start", d.handleBotControl(false)) // and its start
+		// the API of the agent: its charts read from the panel and from the
+		// results of the agents, its controls operated
+		r.With(needByMethod([]string{ui.PermDashboardView, ui.PermAgentsView}, []string{ui.PermTradingOperate})).
+			HandleFunc("/agents/{agent}/*", d.handleAgent)
 		if d.settings != nil {
 			d.settings.routes(r)
 		}

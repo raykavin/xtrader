@@ -96,7 +96,7 @@ func TestDashboard_BundleWithoutListings(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "assets"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "font.woff2"), []byte("font"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, completeMarker), []byte("v1.0.0\n"), 0o644))
-	srv := httptest.NewServer(d.router(bundle{dir: dir, version: "v1.0.0"}, nil))
+	srv := httptest.NewServer(asAdmin(d.router(bundle{dir: dir, version: "v1.0.0"}, nil)))
 	t.Cleanup(srv.Close)
 
 	for _, path := range []string{"/ui/v1.0.0/", "/ui/v1.0.0/assets/", "/ui/v1.0.0/assets", "/ui/v1.0.0/.complete",

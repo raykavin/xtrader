@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,8 +74,10 @@ type Users interface {
 }
 
 // session is a session open: its user, the mark of its password (see
-// passwordMark), its CSRF token, when it expires and when its user was last
-// found enabled with the same password.
+// passwordMark), its CSRF token, when it expires, when its user was last found
+// enabled with the same password and a role, and what the role lets it do
+// (access), read again with its user; stale once the access changed on the
+// dashboard, read again at its next request.
 type session struct {
 	userID   int64
 	username string
@@ -82,6 +85,8 @@ type session struct {
 	csrf     string
 	expires  time.Time
 	checked  time.Time
+	stale    bool
+	access   atomic.Pointer[access]
 }
 
 // auth is the login of the dashboard: its users, the limits of the logins,
@@ -167,7 +172,7 @@ func (a *auth) protect(next http.Handler) http.Handler {
 			writeJSONError(w, http.StatusForbidden, "Sessão desatualizada: recarregue a página.")
 		case s != nil:
 			ctx := context.WithValue(context.WithValue(r.Context(), userKey{}, s.username), userIDKey{}, s.userID)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r.WithContext(withAccess(ctx, s.access.Load())))
 		case strings.HasPrefix(r.URL.Path, "/api/") && !a.configured(r.Context()):
 			writeJSONError(w, http.StatusServiceUnavailable, errNoUsers)
 		case strings.HasPrefix(r.URL.Path, "/api/") || !safeMethod(r.Method):
@@ -194,7 +199,8 @@ func validCSRF(r *http.Request, s *session) bool {
 // cookies, within the limits of the logins (see loginLimiter): beyond, 429
 // with Retry-After, the password unchecked. The answer to wrong credentials
 // doesn't tell which one is wrong, and comes after failDelay, or as soon as
-// the request ends.
+// the request ends. A user without a role is refused (403), its password
+// right: nothing is granted to it.
 func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !a.configured(r.Context()) {
 		writeJSONError(w, http.StatusServiceUnavailable, errNoUsers)
@@ -229,6 +235,11 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ticket.finish(loginSucceeded, a.now(), 0)
+	if user.RoleOf() == nil {
+		log.Warnf("ui: login of %s from %s refused: the user has no role", user.Username, client)
+		writeJSONError(w, http.StatusForbidden, errNoRole)
+		return
+	}
 
 	id, s, err := a.open(user)
 	if err != nil {
@@ -238,7 +249,17 @@ func (a *auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.setCookies(w, r, id, s)
 	log.Infof("ui: login of %s from %s", user.Username, client)
-	writeJSON(w, ui.SessionResponse{Authenticated: true, Username: user.Username})
+	writeJSON(w, sessionResponse(s))
+}
+
+// sessionResponse tells the session s: its user, its role and what it may do.
+func sessionResponse(s *session) ui.SessionResponse {
+	response := ui.SessionResponse{Authenticated: true, Username: s.username, Permissions: []string{}}
+	if a := s.access.Load(); a != nil {
+		response.Role = &ui.RoleRef{ID: a.roleID, Name: a.role}
+		response.Permissions = a.perms
+	}
+	return response
 }
 
 // pause waits for d, or less if ctx ends first.
@@ -295,7 +316,7 @@ func (a *auth) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, ui.SessionResponse{})
 		return
 	}
-	writeJSON(w, ui.SessionResponse{Authenticated: true, Username: s.username})
+	writeJSON(w, sessionResponse(s))
 }
 
 // open opens a session of user: its ID, random, and the session. The sessions
@@ -320,15 +341,18 @@ func (a *auth) open(user store.User) (string, *session, error) {
 	}
 	s := &session{userID: user.ID, username: user.Username, password: passwordMark(user), csrf: csrf,
 		expires: now.Add(sessionTTL), checked: now}
+	s.access.Store(newAccess(user.RoleOf()))
 	a.sessions[sessionKey(id)] = s
 	return id, s, nil
 }
 
 // session returns the session of the request, open and not expired, nil for
-// none: its user checked again every sessionCheck, the session closed once the
-// user is disabled, deleted or has another password. While the database can't
-// tell, the session goes on for sessionGrace since the last check, then is
-// refused, kept for when the database answers again.
+// none: its user checked again every sessionCheck, and at once when its access
+// changed on the dashboard (stale, see refreshUsers), the session closed once
+// the user is disabled, deleted, has another password or no role, its access
+// taken again from its role. While the database can't tell, the session goes
+// on for sessionGrace since the last check, then is refused, kept for when the
+// database answers again.
 func (a *auth) session(r *http.Request) *session {
 	if a.users == nil {
 		return nil
@@ -349,7 +373,7 @@ func (a *auth) session(r *http.Request) *session {
 		delete(a.sessions, key)
 		a.mu.Unlock()
 		return nil
-	case now.Sub(s.checked) < sessionCheck:
+	case now.Sub(s.checked) < sessionCheck && !s.stale:
 		a.mu.Unlock()
 		return s
 	}
@@ -373,11 +397,13 @@ func (a *auth) session(r *http.Request) *session {
 	if a.sessions[key] != s {
 		return nil // closed meanwhile, eg: a new password
 	}
-	if err != nil || !user.Enabled || subtle.ConstantTimeCompare([]byte(passwordMark(user)), []byte(s.password)) != 1 {
+	if err != nil || !user.Enabled || subtle.ConstantTimeCompare([]byte(passwordMark(user)), []byte(s.password)) != 1 ||
+		user.RoleOf() == nil {
 		delete(a.sessions, key)
 		return nil
 	}
-	s.checked = now
+	s.access.Store(newAccess(user.RoleOf()))
+	s.checked, s.stale = now, false
 	return s
 }
 
@@ -387,6 +413,19 @@ func (a *auth) session(r *http.Request) *session {
 func passwordMark(user store.User) string {
 	sum := sha256.Sum256([]byte(user.PasswordHash))
 	return hex.EncodeToString(sum[:8])
+}
+
+// refreshUsers has the sessions of the users of ids read their access again at
+// their next request, eg: their role changed; of every user without ids, eg:
+// the permissions of a role changed.
+func (a *auth) refreshUsers(ids ...int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range a.sessions {
+		if len(ids) == 0 || slices.Contains(ids, s.userID) {
+			s.stale = true
+		}
+	}
 }
 
 // closeUser closes the sessions of the user of id, eg: disabled, or with a new
