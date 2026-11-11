@@ -17,6 +17,8 @@ import type {
   AgentsParamRequest,
   AgentsParamResponse,
   AgentsResponse,
+  AssetAgentsRequest,
+  AssetAgentsResponse,
   BacktestBatchInfo,
   BacktestComparisonResponse,
   BacktestRequest,
@@ -858,6 +860,16 @@ export function fetchTradingHours(signal?: AbortSignal): Promise<TradingHoursRes
 }
 
 /** The exposure limit of all the agents: at most so many on an asset in the same direction. */
+/** The agents allowed on assets, of all the agents (the tab Limites). */
+export function fetchAssetAgents(signal?: AbortSignal): Promise<AssetAgentsResponse> {
+  return getJSON<AssetAgentsResponse>("/settings/asset-agents", signal);
+}
+
+/** Sets the agents allowed on assets: the agents take them at once. */
+export function updateAssetAgents(request: AssetAgentsRequest): Promise<AssetAgentsResponse> {
+  return sendJSON<AssetAgentsResponse>("PUT", "/settings/asset-agents", request);
+}
+
 export function fetchExposure(signal?: AbortSignal): Promise<ExposureResponse> {
   return getJSON<ExposureResponse>("/settings/exposure", signal);
 }

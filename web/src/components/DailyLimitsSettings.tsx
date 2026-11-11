@@ -11,6 +11,7 @@ import {
   scopeResults,
 } from "../lib/dailyLimits";
 import { formatProfit } from "../lib/format";
+import { AssetAgentsCard } from "./AssetAgentsCard";
 import { DailyLimitFields } from "./DailyLimitFields";
 import { ExposureCard } from "./ExposureCard";
 import { PageHeader } from "./PageHeader";
@@ -143,6 +144,8 @@ export function DailyLimitsSettings({ intro }: Props) {
       <TradingHoursCard />
 
       <ExposureCard />
+
+      <AssetAgentsCard />
 
       <section className="card card-flush" aria-labelledby="daily-agents-title">
         <header className="card-header">

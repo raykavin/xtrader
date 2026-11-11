@@ -293,17 +293,21 @@ function TimeField({
 }
 
 /**
- * Picks the agents of a window in a modal dialog: one checkbox by agent of
- * choices, then the ones chosen out of them (tagged, to uncheck); none checked
- * for all the agents. A change applies at once; Concluir closes it.
+ * Picks agents in a modal dialog, eg: the ones of a window: one checkbox by
+ * agent of choices, then the ones chosen out of them (tagged, to uncheck);
+ * none checked for all the agents when allowAll (its button then shown). A
+ * change applies at once; Concluir closes it.
  */
-function AgentsDialog({
+export function AgentsDialog({
   title,
   choices,
   selected,
   unavailable,
   onChange,
   onClose,
+  hint = "Sem nenhum marcado, todos os agentes operam nesta janela.",
+  legend = "Agentes que operam nesta janela",
+  allowAll = true,
 }: {
   title: string;
   choices: string[];
@@ -311,6 +315,12 @@ function AgentsDialog({
   unavailable: string;
   onChange: (agents: string[]) => void;
   onClose: () => void;
+  /** What the choice means, above it. */
+  hint?: string;
+  /** The name of the choice, to a screen reader. */
+  legend?: string;
+  /** Whether none checked stands for all the agents. */
+  allowAll?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -345,10 +355,10 @@ function AgentsDialog({
       <DialogHeader id={`${id}-title`} title={title} onClose={close} />
       <div className="dialog-body window-agents-body">
         <p className="field-hint" id={`${id}-hint`}>
-          Sem nenhum marcado, todos os agentes operam nesta janela.
+          {hint}
         </p>
         <fieldset className="window-agents" aria-describedby={`${id}-hint`}>
-          <legend className="sr-only">Agentes que operam nesta janela</legend>
+          <legend className="sr-only">{legend}</legend>
           {names.map((name) => (
             <label key={name} className="hours-check window-agent">
               <input
@@ -363,14 +373,16 @@ function AgentsDialog({
         </fieldset>
       </div>
       <div className="dialog-foot">
-        <button
-          type="button"
-          className="btn window-agents-all"
-          disabled={selected.length === 0}
-          onClick={() => onChange([])}
-        >
-          Todos os agentes
-        </button>
+        {allowAll && (
+          <button
+            type="button"
+            className="btn window-agents-all"
+            disabled={selected.length === 0}
+            onClick={() => onChange([])}
+          >
+            Todos os agentes
+          </button>
+        )}
         <button type="button" className="btn btn-primary" onClick={close}>
           Concluir
         </button>
