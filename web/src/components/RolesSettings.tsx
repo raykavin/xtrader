@@ -1,6 +1,7 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import { createRole, deleteRole, updateRole } from "../api/client";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { createRole, deleteRole, fetchRolesPage, updateRole } from "../api/client";
 import type { PermissionArea, RoleInfo, RoleRequest } from "../api/types";
+import { searchNote } from "../lib/pagination";
 import {
   type AreaChoice,
   choicesOf,
@@ -13,28 +14,44 @@ import {
 import { ConfirmButton } from "./ConfirmButton";
 import { DialogHeader } from "./Dialog";
 import { Icon } from "./Icon";
-import { Alert } from "./States";
+import { ListPages } from "./Paginator";
+import { SearchField } from "./SearchField";
+import { Alert, Loading, Skeleton } from "./States";
+import { usePagedList } from "./usePagedList";
 
 interface Props {
-  roles: RoleInfo[];
   /** The catalog of the permissions, by area. */
   areas: PermissionArea[];
   /** Whether the user may change the roles. */
   manage: boolean;
-  /** Loads the roles again, one changed. */
+  /** Tells the page a role changed, eg: the roles a user may be given. */
   onChange: () => void;
+  /** Changes of the users or of the roles, read again as it grows. */
+  version: number;
 }
 
+/** The roles, as a search counts them. */
+const noun = { one: "papel", many: "papéis" };
+
 /**
- * The roles of the users of the dashboard: what each grants, area by area, and
- * how many users hold it; created, changed and deleted by a user allowed to.
- * The fixed role of the administrators grants everything and never changes;
- * a role held isn't deleted.
+ * The roles of the users of the dashboard, a page at a time, searched by their
+ * names, descriptions and the areas of their permissions: what each grants,
+ * area by area, and how many users hold it; created, changed and deleted by a
+ * user allowed to. The fixed role of the administrators grants everything and
+ * never changes; a role held isn't deleted.
  */
-export function RolesSettings({ roles, areas, manage, onChange }: Props) {
+export function RolesSettings({ areas, manage, onChange, version }: Props) {
   const [editing, setEditing] = useState<RoleInfo | "new" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const list = usePagedList((params, signal) =>
+    fetchRolesPage(params, signal).then((r) => ({ rows: r.roles, page: r })),
+  );
+  const listID = useId();
+  const { reload } = list;
+  useEffect(() => {
+    if (version > 0) reload();
+  }, [version, reload]);
 
   const remove = async (role: RoleInfo) => {
     setBusy(true);
@@ -61,7 +78,9 @@ export function RolesSettings({ roles, areas, manage, onChange }: Props) {
           <span className="eyebrow">Permissões</span>
           <h3 id="roles-title" className="card-title">
             Papéis
-            <span className="card-count">{roles.length}</span>
+            {list.info && list.search === "" && (
+              <span className="card-count">{list.info.total}</span>
+            )}
           </h3>
         </div>
         {manage && (
@@ -83,84 +102,112 @@ export function RolesSettings({ roles, areas, manage, onChange }: Props) {
           {error}
         </Alert>
       )}
-      <div className="table-wrap">
-        <table className="table table-responsive">
-          <thead>
-            <tr>
-              <th scope="col">Papel</th>
-              <th scope="col">Permissões</th>
-              <th scope="col" className="num">
-                Usuários
-              </th>
-              {manage && (
-                <th scope="col" className="col-actions">
-                  <span className="sr-only">Ações</span>
-                </th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {roles.map((role) => (
-              <tr key={role.id}>
-                <td className="strong" data-label="Papel">
-                  <span className="role-cell">
-                    <span>
-                      {role.name}
-                      {role.fixed && (
-                        <span
-                          className="tag"
-                          title="Tem todas as permissões e não pode ser alterado"
-                        >
-                          Fixo
-                        </span>
-                      )}
-                    </span>
-                    {role.description && <span className="role-desc">{role.description}</span>}
-                  </span>
-                </td>
-                <td data-label="Permissões" className="role-summary">
-                  {role.fixed ? "Todas as permissões" : roleSummary(role.permissions, areas)}
-                </td>
-                <td className="num mono" data-label="Usuários">
-                  {role.users}
-                </td>
-                {manage && (
-                  <td className="cell-actions">
-                    {!role.fixed && (
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          className="btn btn-xs"
-                          aria-label={`Editar o papel ${role.name}`}
-                          disabled={busy}
-                          onClick={() => {
-                            setError(null);
-                            setEditing(role);
-                          }}
-                        >
-                          <Icon name="edit" size={13} />
-                          Editar
-                        </button>
-                        <ConfirmButton
-                          label="Excluir"
-                          ariaLabel={`Excluir o papel ${role.name}`}
-                          question={`Excluir ${role.name}?`}
-                          disabled={busy || role.users > 0}
-                          title={
-                            role.users > 0
-                              ? "Troque o papel dos usuários dele antes de excluí-lo"
-                              : undefined
-                          }
-                          onConfirm={() => remove(role)}
-                        />
-                      </div>
+      {list.error && (
+        <Alert tone="error" title="Não foi possível carregar os papéis">
+          {list.error}
+        </Alert>
+      )}
+      <div className="list-toolbar">
+        <SearchField
+          value={list.query}
+          onChange={list.setQuery}
+          label="Buscar papéis"
+          placeholder="Buscar por nome, descrição ou área"
+          controls={listID}
+          note={list.info && searchNote(list.info.total, list.search, noun)}
+        />
+      </div>
+      {list.rows === null
+        ? !list.error && (
+            <Loading label="Carregando…">
+              <Skeleton height={120} />
+            </Loading>
+          )
+        : list.rows.length > 0 && (
+            <div className="table-wrap" id={listID}>
+              <table className="table table-responsive">
+                <thead>
+                  <tr>
+                    <th scope="col">Papel</th>
+                    <th scope="col">Permissões</th>
+                    <th scope="col" className="num">
+                      Usuários
+                    </th>
+                    {manage && (
+                      <th scope="col" className="col-actions">
+                        <span className="sr-only">Ações</span>
+                      </th>
                     )}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.rows.map((role) => (
+                    <tr key={role.id}>
+                      <td className="strong" data-label="Papel">
+                        <span className="role-cell">
+                          <span>
+                            {role.name}
+                            {role.fixed && (
+                              <span
+                                className="tag"
+                                title="Tem todas as permissões e não pode ser alterado"
+                              >
+                                Fixo
+                              </span>
+                            )}
+                          </span>
+                          {role.description && (
+                            <span className="role-desc">{role.description}</span>
+                          )}
+                        </span>
+                      </td>
+                      <td data-label="Permissões" className="role-summary">
+                        {role.fixed ? "Todas as permissões" : roleSummary(role.permissions, areas)}
+                      </td>
+                      <td className="num mono" data-label="Usuários">
+                        {role.users}
+                      </td>
+                      {manage && (
+                        <td className="cell-actions">
+                          {!role.fixed && (
+                            <div className="row-actions">
+                              <button
+                                type="button"
+                                className="btn btn-xs"
+                                aria-label={`Editar o papel ${role.name}`}
+                                disabled={busy}
+                                onClick={() => {
+                                  setError(null);
+                                  setEditing(role);
+                                }}
+                              >
+                                <Icon name="edit" size={13} />
+                                Editar
+                              </button>
+                              <ConfirmButton
+                                label="Excluir"
+                                ariaLabel={`Excluir o papel ${role.name}`}
+                                question={`Excluir ${role.name}?`}
+                                disabled={busy || role.users > 0}
+                                title={
+                                  role.users > 0
+                                    ? "Troque o papel dos usuários dele antes de excluí-lo"
+                                    : undefined
+                                }
+                                onConfirm={() => remove(role)}
+                              />
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      <div className="list-foot">
+        <ListPages info={list.info} onPage={list.setPage} />
       </div>
       {editing && (
         <RoleDialog

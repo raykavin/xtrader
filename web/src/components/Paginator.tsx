@@ -1,3 +1,4 @@
+import type { PageInfo } from "../api/types";
 import { clampPage, PAGE_SIZE, pageCount, pageList } from "../lib/pagination";
 import { Icon } from "./Icon";
 
@@ -7,18 +8,21 @@ interface Props {
   /** The rows of the list. */
   total: number;
   onPage: (page: number) => void;
+  /** The rows of a page, PAGE_SIZE by default. */
+  size?: number;
 }
 
 /**
- * The pages of a list, PAGE_SIZE rows each: the rows shown, the previous and
- * next pages and the ones around the current one. None for a single page.
+ * The pages of a list, size rows each (PAGE_SIZE by default): the rows shown,
+ * the previous and next pages and the ones around the current one. None for a
+ * single page.
  */
-export function Paginator({ page, total, onPage }: Props) {
-  const count = pageCount(total);
+export function Paginator({ page, total, onPage, size = PAGE_SIZE }: Props) {
+  const count = pageCount(total, size);
   if (count <= 1) return null;
-  const current = clampPage(page, total);
-  const first = current * PAGE_SIZE + 1;
-  const last = Math.min(total, first + PAGE_SIZE - 1);
+  const current = clampPage(page, total, size);
+  const first = current * size + 1;
+  const last = Math.min(total, first + size - 1);
   const pages = pageList(current, count);
 
   return (
@@ -65,5 +69,27 @@ export function Paginator({ page, total, onPage }: Props) {
         </button>
       </div>
     </nav>
+  );
+}
+
+/**
+ * The pages of a list paged by the API, as it answered (see PageInfo): the
+ * page asked from 1; none for a single page.
+ */
+export function ListPages({
+  info,
+  onPage,
+}: {
+  info: PageInfo | null;
+  onPage: (page: number) => void;
+}) {
+  if (!info || info.total_pages <= 1) return null;
+  return (
+    <Paginator
+      page={info.page - 1}
+      total={info.total}
+      size={info.per_page}
+      onPage={(page) => onPage(page + 1)}
+    />
   );
 }

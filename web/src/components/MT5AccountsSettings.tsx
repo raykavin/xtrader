@@ -1,8 +1,8 @@
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { type FormEvent, useId, useState } from "react";
 import {
   createMT5Account,
   deleteMT5Account,
-  fetchMT5Accounts,
+  fetchMT5AccountsPage,
   fetchMT5Switch,
   switchMT5Account,
   switchRefusalOf,
@@ -28,14 +28,18 @@ import {
   sessionLabel,
   switchQuestion,
 } from "../lib/mt5Accounts";
+import { searchNote } from "../lib/pagination";
 import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
+import { ListPages } from "./Paginator";
+import { SearchField } from "./SearchField";
 import { SecretField } from "./SecretField";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, EmptyState, Loading, Skeleton } from "./States";
 import { Switch } from "./Switch";
+import { usePagedList } from "./usePagedList";
 
 /** How often the accounts and their terminals are read again, in ms. */
 const POLL = 10000;
@@ -43,6 +47,9 @@ const POLL = 10000;
 interface Props {
   intro: SectionIntro;
 }
+
+/** The accounts, as a search counts them. */
+const noun = { one: "conta", many: "contas", feminine: true };
 
 /** The class of a status chip of tone. */
 function chip(label: AccountLabel): string {
@@ -571,29 +578,14 @@ function AccountCard({ account, onChange }: { account: MT5AccountInfo; onChange:
  */
 export function MT5AccountsSettings({ intro }: Props) {
   const manage = useCan(PermMT5AccountsManage);
-  const [accounts, setAccounts] = useState<MT5AccountInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-
-  const load = useCallback((signal?: AbortSignal) => {
-    fetchMT5Accounts(signal)
-      .then((response) => {
-        setAccounts(response.accounts);
-        setError(null);
-      })
-      .catch((e) => {
-        if (!signal?.aborted) setError(e instanceof Error ? e.message : String(e));
-      });
-  }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    load(controller.signal);
-    const timer = window.setInterval(() => load(controller.signal), POLL);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-    };
-  }, [load]);
+  const list = usePagedList(
+    (params, signal) =>
+      fetchMT5AccountsPage(params, signal).then((r) => ({ rows: r.accounts, page: r })),
+    { poll: POLL },
+  );
+  const listID = useId();
+  const load = list.reload;
 
   return (
     <>
@@ -610,7 +602,7 @@ export function MT5AccountsSettings({ intro }: Props) {
           )
         }
       />
-      {error && <Alert tone="error">Não foi possível carregar as contas: {error}</Alert>}
+      {list.error && <Alert tone="error">Não foi possível carregar as contas: {list.error}</Alert>}
       {adding && (
         <section className="card" aria-label="Nova conta">
           <h2 className="card-title">Nova conta</h2>
@@ -623,58 +615,36 @@ export function MT5AccountsSettings({ intro }: Props) {
           />
         </section>
       )}
-      {!accounts ? (
-        error ? null : (
+      {!list.rows || !list.info ? (
+        list.error ? null : (
           <Loading label="Carregando…">
             <Skeleton height={180} />
           </Loading>
         )
-      ) : accounts.length === 0 ? (
+      ) : list.info.total === 0 && list.search === "" ? (
         <EmptyState icon="key" title="Nenhuma conta MT5 ainda">
           Adicione a conta do terminal e associe os agentes a ela.
         </EmptyState>
       ) : (
-        <div className="mt5-list">
-          {accounts.map((account) => (
-            <AccountCard key={account.id} account={account} onChange={() => load()} />
-          ))}
+        <div className="list-stack">
+          <SearchField
+            value={list.query}
+            onChange={list.setQuery}
+            label="Buscar contas MT5"
+            placeholder="Buscar por nome, login, servidor, moeda ou agente"
+            controls={listID}
+            note={searchNote(list.info.total, list.search, noun)}
+          />
+          {list.rows.length > 0 && (
+            <div className="mt5-list" id={listID}>
+              {list.rows.map((account) => (
+                <AccountCard key={account.id} account={account} onChange={load} />
+              ))}
+            </div>
+          )}
+          <ListPages info={list.info} onPage={list.setPage} />
         </div>
       )}
-      <section className="card" aria-label="Como funciona">
-        <h2 className="card-title">Como funciona</h2>
-        <ul className="daily-notes">
-          <li>
-            Cada terminal MT5 fica logado numa conta por vez, a ativa. O terminal é identificado
-            pelo host e pela porta da bridge e pela instância que ela informa: terminais diferentes,
-            mesmo num só host, operam contas ao mesmo tempo.
-          </li>
-          <li>
-            Ao ativar outra conta no terminal (ou desativar a atual), os agentes dele param. Com
-            posições abertas ou ordens pendentes dos agentes, a troca pede confirmação, fecha as
-            posições, cancela as ordens, confere na conta e só então loga o terminal na nova conta,
-            levando para ela os agentes da anterior (opção marcada na confirmação). Se algo
-            continuar aberto, a troca não é feita e o que ficou aberto é listado; se o terminal não
-            logar na nova conta, a anterior volta a ser a ativa. Depois, os agentes da conta ativa
-            são iniciados de novo.
-          </li>
-          <li>
-            A senha e o token ficam cifrados no banco, com a chave fora dele, e nunca são exibidos
-            nem registrados. A senha é enviada ao terminal para logar; o terminal guarda a dele.
-          </li>
-          <li>
-            Os agentes recebem a bridge e o token da conta associada a eles (em Configurações ›
-            Agentes). Trocar a conta de um agente exige o agente parado e sem posições na conta
-            atual.
-          </li>
-          <li>
-            O tipo (real ou demo), a moeda e a empresa vêm do terminal, no teste ou na importação.
-          </li>
-          <li>
-            Para um segundo terminal, adicione outro serviço mt5 no compose (veja o README do
-            deploy) e cadastre a conta com a bridge dele.
-          </li>
-        </ul>
-      </section>
     </>
   );
 }

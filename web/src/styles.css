@@ -8119,40 +8119,66 @@ h3.md-heading {
   accent-color: var(--accent);
 }
 
-/* the search of the agents, of every group: the magnifier in the field, the
-   button clearing it at its end */
-.agents-search {
+/* the search of a list (the agents, of every group; the accounts, the prompts,
+   the users...): the magnifier in the field, the button clearing it at its
+   end, what it found below it */
+.list-search {
   position: relative;
   display: flex;
   align-items: center;
   max-width: 440px;
 }
 
-.agents-search > svg {
+.list-search > svg {
   position: absolute;
   left: 12px;
   color: var(--text-3);
   pointer-events: none;
 }
 
-.agents-search-input {
+.list-search-input {
   padding-left: 36px;
   padding-right: 36px;
 }
 
-.agents-search-input::-webkit-search-cancel-button {
+.list-search-input::-webkit-search-cancel-button {
   display: none; /* the button of the page clears it */
 }
 
-.agents-search-clear {
+.list-search-clear {
   position: absolute;
   right: 4px;
 }
 
-.agents-search-note {
+.list-search-note {
   margin: 0;
   color: var(--text-2);
   font-size: var(--fs-sm);
+}
+
+/* a list in a card: its search above the rows, its pages below them */
+.list-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.list-foot {
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+
+.list-foot:empty {
+  display: none;
+}
+
+/* a list of cards or blocks: its search and its pages around them */
+.list-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
 }
 
 /* the actions of the page of the agents: the global parametrizer beside the
@@ -8485,15 +8511,6 @@ h3.md-heading {
 .daily-reason {
   flex-basis: 100%;
   margin: 0;
-}
-
-.daily-notes {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin: var(--sp-3) 0 0;
-  padding-left: var(--sp-5);
-  color: var(--text-2);
 }
 
 .table td.daily-cell {

@@ -6,7 +6,7 @@ import {
   fetchRoles,
   fetchSupervisorSettings,
   fetchTelegramSettings,
-  fetchUsers,
+  fetchUsersPage,
 } from "../api/client";
 import {
   type AgentSettings,
@@ -23,7 +23,6 @@ import {
   type RolesResponse,
   type SupervisorSettingsResponse,
   type TelegramSettingsResponse,
-  type UserInfo,
 } from "../api/types";
 import { allowedTabs, can, shownTab } from "../lib/access";
 import { terminalsOf } from "../lib/mt5Accounts";
@@ -128,8 +127,9 @@ export function SettingsPage() {
   const [prompts, setPrompts] = useState<PromptInfo[] | null>(null);
   const [telegram, setTelegram] = useState<TelegramSettingsResponse | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorSettingsResponse | null>(null);
-  const [users, setUsers] = useState<UserInfo[] | null>(null);
+  const [userCount, setUserCount] = useState<number | null>(null);
   const [roles, setRoles] = useState<RolesResponse | null>(null);
+  const [usersVersion, setUsersVersion] = useState(0); // the users and the roles read again
   const [accounts, setAccounts] = useState<MT5AccountInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,11 +152,19 @@ export function SettingsPage() {
   const loadPrompts = useCallback(() => {
     if (seesPrompts) fetchPrompts().then(setPrompts).catch(fail);
   }, [fail, seesPrompts]);
+  // the number of the users, and all the roles: the ones a user may be given
   const loadUsers = useCallback(() => {
     if (!seesUsers) return;
-    fetchUsers().then(setUsers).catch(fail);
-    fetchRoles().then(setRoles).catch(fail); // the users of each role
+    fetchUsersPage({ page: 1, perPage: 1 })
+      .then((r) => setUserCount(r.total))
+      .catch(fail);
+    fetchRoles().then(setRoles).catch(fail);
   }, [fail, seesUsers]);
+  /** A user or a role changed: both lists read again, the users of each role and the role of each user. */
+  const changedUsers = useCallback(() => {
+    loadUsers();
+    setUsersVersion((v) => v + 1);
+  }, [loadUsers]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -242,7 +250,7 @@ export function SettingsPage() {
         ? { text: "executando", tone: "on" }
         : { text: "parado", tone: "off" },
     }),
-    ...(users && { usuarios: { text: String(users.length) } }),
+    ...(userCount !== null && { usuarios: { text: String(userCount) } }),
   };
 
   return (
@@ -284,11 +292,7 @@ export function SettingsPage() {
         <NewsSettings intro={intros.noticias} />
       </Panel>
       <Panel tab="prompts" shown={tab} allowed={shown}>
-        {prompts === null ? (
-          <SectionLoading intro={intros.prompts} />
-        ) : (
-          <PromptsSettings intro={intros.prompts} prompts={prompts} onChange={loadPrompts} />
-        )}
+        <PromptsSettings intro={intros.prompts} onChange={loadPrompts} />
       </Panel>
       <Panel tab="supervisor" shown={tab} allowed={shown}>
         {supervisor === null ? (
@@ -309,21 +313,21 @@ export function SettingsPage() {
         )}
       </Panel>
       <Panel tab="usuarios" shown={tab} allowed={shown}>
-        {users === null || roles === null ? (
+        {roles === null ? (
           <SectionLoading intro={intros.usuarios} />
         ) : (
           <UsersSettings
             intro={intros.usuarios}
-            users={users}
             roles={roles.roles}
             current={current}
-            onChange={loadUsers}
+            onChange={changedUsers}
+            version={usersVersion}
           >
             <RolesSettings
-              roles={roles.roles}
               areas={roles.areas}
               manage={can(access, PermUsersManage)}
-              onChange={loadUsers}
+              onChange={changedUsers}
+              version={usersVersion}
             />
           </UsersSettings>
         )}

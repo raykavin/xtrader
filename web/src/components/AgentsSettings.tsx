@@ -32,6 +32,7 @@ import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
 import { ProtectionDialog } from "./ProtectionDialog";
 import { RenameAgentDialog } from "./RenameAgentDialog";
+import { SearchField } from "./SearchField";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
@@ -140,41 +141,20 @@ export function AgentsSettings({ intro, agents, prompts, onChange, onReload }: P
         </div>
       ) : (
         <>
-          <search className="agents-search">
-            <Icon name="search" size={16} />
-            <input
-              type="search"
-              className="input agents-search-input"
-              value={query}
-              placeholder="Buscar agente por nome, estratégia, ativo ou modelo"
-              aria-label="Buscar agentes em todos os grupos"
-              aria-controls={`${id}-agents`}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setQuery("");
-              }}
-            />
-            {query !== "" && (
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost btn-icon agents-search-clear"
-                aria-label="Limpar a busca"
-                title="Limpar"
-                onClick={() => setQuery("")}
-              >
-                <Icon name="close" size={14} />
-              </button>
-            )}
-          </search>
-          {found !== null && (
-            <p className="agents-search-note" aria-live="polite">
-              {found.length === 0
-                ? `Nenhum agente encontrado para “${query.trim()}”.`
-                : `${found.length === 1 ? "1 agente encontrado" : `${found.length} agentes encontrados`} em todos os grupos.`}
-            </p>
-          )}
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label="Buscar agentes em todos os grupos"
+            placeholder="Buscar agente por nome, estratégia, ativo ou modelo"
+            controls={`${id}-agents`}
+            note={
+              found === null
+                ? null
+                : found.length === 0
+                  ? `Nenhum agente encontrado para “${query.trim()}”.`
+                  : `${found.length === 1 ? "1 agente encontrado" : `${found.length} agentes encontrados`} em todos os grupos.`
+            }
+          />
           <fieldset className="filter-bar" aria-label="Grupos de agentes">
             {groups.filter((g) => g.kind === "llm").map(groupButton)}
             {strategies.length > 0 && (

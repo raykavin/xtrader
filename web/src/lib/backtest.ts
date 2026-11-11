@@ -5,7 +5,6 @@
 
 import type {
   BacktestAssumptions,
-  BacktestBatchInfo,
   BacktestCompatibility,
   BacktestHours,
   BacktestRequest,
@@ -252,55 +251,6 @@ export function robustnessFlags(
   return flags;
 }
 
-/**
- * Whether the validation degraded from the fit: a positive fit with a
- * negative validation, or the return per drawdown of the validation under
- * half of the fit's.
- */
-export function degradedValidation(fit: BacktestSummary, validation: BacktestSummary): boolean {
-  if (fit.net > 0 && validation.net <= 0) return true;
-  const a = fit.return_over_drawdown;
-  const b = validation.return_over_drawdown;
-  return a !== undefined && b !== undefined && a > 0 && b < a / 2;
-}
-
-/** A row of the comparison: an agent with its fit and, when asked, its validation. */
-export interface ComparisonRow {
-  agent: string;
-  kind: string;
-  strategy?: string;
-  pairs: string[];
-  llm: boolean;
-  fit?: BacktestRunInfo;
-  validation?: BacktestRunInfo;
-  degraded: boolean;
-}
-
-/** The rows of the comparison of batch, an agent each, in the order of its runs. */
-export function comparisonRows(batch: BacktestBatchInfo): ComparisonRow[] {
-  const rows = new Map<string, ComparisonRow>();
-  for (const run of batch.runs) {
-    const row = rows.get(run.agent) ?? {
-      agent: run.agent,
-      kind: run.kind,
-      strategy: run.strategy,
-      pairs: run.pairs,
-      llm: run.llm === true,
-      degraded: false,
-    };
-    if (run.segment === "validation") row.validation = run;
-    else row.fit = run;
-    rows.set(run.agent, row);
-  }
-  for (const row of rows.values()) {
-    const fit = row.fit?.summary;
-    const validation = row.validation?.summary;
-    row.degraded =
-      fit !== undefined && validation !== undefined && degradedValidation(fit, validation);
-  }
-  return [...rows.values()];
-}
-
 /** The columns the comparison sorts by. */
 export type SortKey =
   | "agent"
@@ -313,90 +263,6 @@ export type SortKey =
   | "trades"
   | "months"
   | "validation";
-
-/** The value of row a column sorts by: undefined last, whatever the order. */
-export function sortValue(row: ComparisonRow, key: SortKey): number | string | undefined {
-  const s = row.fit?.summary;
-  switch (key) {
-    case "agent":
-      return row.agent;
-    case "net":
-      return s?.net;
-    case "return":
-      return s?.return;
-    case "drawdown":
-      return s === undefined ? undefined : -s.max_drawdown_pct; // the shallowest first, descending
-    case "ratio":
-      return s?.return_over_drawdown;
-    case "factor":
-      return s?.profit_factor;
-    case "winrate":
-      return s === undefined || s.trades === 0 ? undefined : s.win_rate;
-    case "trades":
-      return s?.trades;
-    case "months":
-      return s === undefined || s.months === 0 ? undefined : s.positive_months / s.months;
-    case "validation":
-      return row.validation?.summary?.return_over_drawdown;
-  }
-}
-
-/** The rows sorted by key, descending (ascending for the agent), the unknown last. */
-export function sortRows(
-  rows: ComparisonRow[],
-  key: SortKey,
-  ascending = key === "agent",
-): ComparisonRow[] {
-  return [...rows].sort((a, b) => {
-    const x = sortValue(a, key);
-    const y = sortValue(b, key);
-    if (x === undefined && y === undefined) return a.agent.localeCompare(b.agent);
-    if (x === undefined) return 1;
-    if (y === undefined) return -1;
-    const order =
-      typeof x === "string" && typeof y === "string" ? x.localeCompare(y) : Number(x) - Number(y);
-    return ascending ? order : -order;
-  });
-}
-
-/** The filters of the comparison: the least trades, the LLMs shown, the runs ended only. */
-export interface ComparisonFilter {
-  minTrades: number;
-  showLLM: boolean;
-}
-
-/** The rows of filter: a row without its summary yet kept, to show its status. */
-export function filterRows(rows: ComparisonRow[], filter: ComparisonFilter): ComparisonRow[] {
-  return rows.filter((row) => {
-    if (!filter.showLLM && row.llm) return false;
-    const s = row.fit?.summary;
-    return s === undefined || s.trades >= filter.minTrades;
-  });
-}
-
-/**
- * What differs between the rows compared, eg: the assets: the batch fixes the
- * period, the capital and the costs, the agents may trade other pairs.
- */
-export function conditionDifferences(rows: ComparisonRow[]): string[] {
-  const differences: string[] = [];
-  const pairs = new Set(rows.map((row) => [...row.pairs].sort().join(";")));
-  if (pairs.size > 1) differences.push("ativos diferentes");
-  const timeframes = new Set(rows.map((row) => row.fit?.timeframe ?? ""));
-  if (timeframes.size > 1) differences.push("timeframes diferentes");
-  const executions = new Set(
-    rows.flatMap((row) =>
-      [row.fit, row.validation].flatMap((run) => run?.summary?.execution_timeframe ?? []),
-    ),
-  );
-  if (executions.size > 1) {
-    differences.push(`execução em resoluções diferentes (${[...executions].sort().join(", ")})`);
-  }
-  if (rows.some((row) => row.llm) && rows.some((row) => !row.llm)) {
-    differences.push("agentes LLM (não determinísticos) misturados aos demais");
-  }
-  return differences;
-}
 
 /** The candles a strategy analyzes in a period of seconds on a timeframe, eg: the calls of an LLM. */
 export function candlesIn(seconds: number, timeframe: string | undefined): number {
