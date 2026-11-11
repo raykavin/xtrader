@@ -1565,6 +1565,12 @@ export interface BacktestRequest {
   daily_loss?: number /* float64 */;
   daily_gain?: number /* float64 */;
   hours?: BacktestHours;
+  /**
+   * AssetAgents has each run follow the agents per asset of the tab Limites
+   * (see AssetAgentsSettings): its agent only on the assets they allow it,
+   * the others left out of the run; refused for an agent left with none.
+   */
+  asset_agents?: boolean;
   llm_max_calls?: number /* int */;
   llm_max_cost?: number /* float64 */;
   /**
@@ -1625,6 +1631,13 @@ export interface BacktestAssumptions {
    * BacktestRequest.
    */
   params?: { [key: string]: string};
+  /**
+   * AssetAgents tells whether the runs followed the agents per asset of the
+   * tab Limites (see BacktestRequest.AssetAgents), and AssetRules the rules
+   * they followed, as they were when the batch was queued.
+   */
+  asset_agents?: boolean;
+  asset_rules?: AssetAgentRule[];
 }
 /**
  * BacktestBatchInfo is a batch of backtests and its runs, see

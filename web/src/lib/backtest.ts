@@ -4,6 +4,7 @@
 // data), never ranked by the profit alone.
 
 import type {
+  AssetAgentRule,
   BacktestAssumptions,
   BacktestCompatibility,
   BacktestHours,
@@ -13,6 +14,7 @@ import type {
   ProtectionSettings,
   TradingHoursSettings,
 } from "../api/types";
+import { allowedPairs } from "./assetAgents";
 import { dayOf, dayStart } from "./closedPL";
 import type { SupervisorTone } from "./supervisor";
 import {
@@ -314,6 +316,8 @@ export interface BacktestForm {
   /** The trading hours of the runs: applied or not, and their windows with the actions of the end of each. */
   hours: boolean;
   hoursWindows: WindowForm[];
+  /** Whether the runs follow the agents per asset of the tab Limites: each agent only on the assets they allow it. */
+  assetAgents: boolean;
   llmMaxCalls: string;
   llmMaxCost: string;
   /** Params added to every agent of the batch, eg: the entry filter, "regime=trend; equity-curve=20". */
@@ -347,6 +351,7 @@ export function defaultForm(now: Date = new Date()): BacktestForm {
     dailyGain: "",
     hours: false,
     hoursWindows: [],
+    assetAgents: true,
     llmMaxCalls: "",
     llmMaxCost: "",
     params: "",
@@ -441,8 +446,9 @@ export type FormErrors = Partial<Record<keyof BacktestForm, string>>;
  */
 export function formRequest(
   form: BacktestForm,
-  limits: BacktestLimits,
+  limits: BacktestLimits & { agents?: BacktestCompatibility[] },
   now: Date = new Date(),
+  rules: AssetAgentRule[] = [],
 ): { request: BacktestRequest | null; errors: FormErrors } {
   const errors: FormErrors = {};
   const number = (field: keyof BacktestForm, check: (v: number) => boolean, message: string) => {
@@ -491,6 +497,8 @@ export function formRequest(
     const refused = windowsCheck(form.hoursWindows, true).first ?? outsideWindows(form)[0] ?? null;
     if (refused) errors.hoursWindows = refused;
   }
+  const ruledOut = assetRefusals(form, limits.agents ?? [], rules)[0];
+  if (ruledOut) errors.assetAgents = ruledOut;
   if (form.timeframe !== "" && !backtestTimeframes.includes(form.timeframe)) {
     errors.timeframe = "Escolha um timeframe da lista.";
   }
@@ -516,6 +524,7 @@ export function formRequest(
       daily_loss: dailyLoss || undefined,
       daily_gain: dailyGain || undefined,
       hours: form.hours ? batchHours(form.hoursWindows) : undefined,
+      asset_agents: form.assetAgents || undefined,
       llm_max_calls: llmMaxCalls || undefined,
       llm_max_cost: llmMaxCost || undefined,
       params: params.params ?? undefined,
@@ -549,8 +558,38 @@ export function batchHours(windows: WindowForm[]): BacktestHours {
 }
 
 /** The pairs agent tests in form: its own, the ones chosen among them when some are. */
-export function pairsTested(agent: BacktestCompatibility, form: BacktestForm): string[] {
-  return form.pairs.length === 0 ? agent.pairs : agent.pairs.filter((p) => form.pairs.includes(p));
+export function pairsTested(
+  agent: BacktestCompatibility,
+  form: Pick<BacktestForm, "pairs" | "assetAgents">,
+  rules: AssetAgentRule[] = [],
+): string[] {
+  const chosen =
+    form.pairs.length === 0 ? agent.pairs : agent.pairs.filter((p) => form.pairs.includes(p));
+  return form.assetAgents ? allowedPairs(rules, agent.agent, chosen).allowed : chosen;
+}
+
+/**
+ * Why the agents of the batch of form are refused by the agents per asset
+ * it follows, one by agent left without any of its assets chosen (as the
+ * controller refuses them); none while it doesn't follow them.
+ */
+export function assetRefusals(
+  form: Pick<BacktestForm, "agents" | "pairs" | "assetAgents">,
+  agents: BacktestCompatibility[],
+  rules: AssetAgentRule[],
+): string[] {
+  if (!form.assetAgents) return [];
+  return agents
+    .filter((a) => form.agents.includes(a.agent))
+    .filter(
+      (a) =>
+        pairsTested(a, { ...form, assetAgents: false }).length > 0 &&
+        pairsTested(a, form, rules).length === 0,
+    )
+    .map(
+      (a) =>
+        `O agente ${a.agent} não pode operar nenhum dos seus ativos pelos agentes por ativo de Configurações › Limites: tire-o do lote ou desmarque a opção.`,
+    );
 }
 
 /**
@@ -562,6 +601,7 @@ export function formCalls(
   form: BacktestForm,
   period: { from: number; to: number } | null,
   maxCalls: number,
+  rules: AssetAgentRule[] = [],
 ): number {
   if (!period) return 0;
   const seconds = period.to - period.from;
@@ -570,7 +610,7 @@ export function formCalls(
   return agents
     .filter((a) => a.llm && form.agents.includes(a.agent))
     .reduce((sum, a) => {
-      const tested = { ...a, pairs: pairsTested(a, form) };
+      const tested = { ...a, pairs: pairsTested(a, form, rules) };
       return (
         sum +
         segments.reduce(

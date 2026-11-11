@@ -513,6 +513,61 @@ func TestBacktests_PlanRefused(t *testing.T) {
 
 }
 
+// A batch following the agents per asset of the tab Limites: each run on the
+// assets they allow its agent, the others left out with a note, the rules kept
+// in the assumptions of the batch; an agent left with none refused; not
+// followed, every asset of the agent run.
+func TestBacktests_PlanAssetAgents(t *testing.T) {
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -40)
+	bridge := newHistoryBridge(t, start, 10)
+	c, b := newBacktested(t, bridge, 1)
+	c.agent(t, "duo", "trend", false, onBridge(bridge.URL, 204, "XAUUSDm"), func(a *store.Agent) {
+		a.Params = store.Params{"pair": "XAUUSDm;BTCUSDm", "strategy": "emapullback", "timeframe": "15m"}
+	})
+	ctx := context.Background()
+	_, err := c.store.SetAssetAgents(ctx, ui.AssetAgentsSettings{Rules: []ui.AssetAgentRule{
+		{Pairs: []string{"XAUUSDm"}, Agents: []string{"trend"}}}}, "admin")
+	require.NoError(t, err)
+	request := ui.BacktestRequest{Agents: []string{"duo", "trend"}, From: start.Unix(),
+		To: start.Add(10 * 24 * time.Hour).Unix(), Balance: 1000, AssetAgents: true}
+
+	batch, runs, err := b.plan(ctx, request, "admin", time.Now())
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	snaps := map[string]backtestSnapshot{}
+	for _, run := range runs {
+		var snap backtestSnapshot
+		require.NoError(t, json.Unmarshal(run.Config, &snap))
+		snaps[snap.Agent] = snap
+	}
+	assert.Equal(t, []string{"BTCUSDm"}, snaps["duo"].Pairs, "XAUUSDm only for trend")
+	assert.Contains(t, strings.Join(snaps["duo"].Notes, " "), "fora pelos agentes por ativo de Configurações › Limites: XAUUSDm")
+	assert.Equal(t, []string{"XAUUSDm"}, snaps["trend"].Pairs)
+	var kept ui.BacktestAssumptions
+	require.NoError(t, json.Unmarshal(batch.Assumptions, &kept))
+	assert.True(t, kept.AssetAgents)
+	assert.Equal(t, []ui.AssetAgentRule{{Pairs: []string{"XAUUSDm"}, Agents: []string{"trend"}}}, kept.AssetRules)
+
+	request.AssetAgents = false
+	_, runs, err = b.plan(ctx, request, "admin", time.Now())
+	require.NoError(t, err)
+	for _, run := range runs {
+		var snap backtestSnapshot
+		require.NoError(t, json.Unmarshal(run.Config, &snap))
+		if snap.Agent == "duo" {
+			assert.Equal(t, []string{"XAUUSDm", "BTCUSDm"}, snap.Pairs, "not followed: every asset")
+		}
+	}
+
+	_, err = c.store.SetAssetAgents(ctx, ui.AssetAgentsSettings{Rules: []ui.AssetAgentRule{
+		{Pairs: []string{"XAUUSDm"}, Agents: []string{"duo"}}}}, "admin")
+	require.NoError(t, err)
+	request.AssetAgents = true
+	_, _, err = b.plan(ctx, request, "admin", time.Now())
+	require.ErrorIs(t, err, store.ErrInvalid, "trend allowed on none of its assets")
+	assert.Contains(t, err.Error(), "o agente trend não pode operar nenhum dos seus ativos")
+}
+
 // The candles read before the period cover the warmup of the strategy, as the
 // agent tells it: mtfema, 8832 candles of 15m, over the calendar (half of it
 // more, and a day); the default for an LLM agent, and for an agent that can't

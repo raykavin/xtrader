@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BacktestRunInfo, BacktestSummary } from "../api/types";
 import {
+  assetRefusals,
   type BacktestForm,
   batchParams,
   callFor,
@@ -12,6 +13,7 @@ import {
   formRequest,
   hoursAssumption,
   outsideWindows,
+  pairsTested,
   progressOf,
   reasonLabels,
   robustnessFlags,
@@ -149,6 +151,10 @@ describe("the form of a batch", () => {
       llm_max_cost: 2.5,
     });
     expect(request?.pairs).toBeUndefined();
+    expect(request?.asset_agents, "the agents per asset followed by default").toBe(true);
+    expect(
+      formRequest(form({ assetAgents: false }), limits, now).request?.asset_agents,
+    ).toBeUndefined();
     expect(request?.daily_gain).toBeUndefined();
     expect(request?.llm_max_calls).toBeUndefined();
     expect(request?.timeframe).toBeUndefined();
@@ -406,6 +412,36 @@ describe("the form of a batch", () => {
     expect(formCalls(agents, { ...f, pairs: ["BTCUSDm"] }, period, 1000)).toBe(10 * 24);
     expect(formCalls(agents, f, period, 100)).toBe(100);
     expect(formCalls(agents, { ...f, validation: "50" }, period, 100)).toBe(200);
+    // the agents per asset followed: b only on BTCUSDm
+    const rules = [{ pairs: ["XAUUSDm"], agents: ["a"] }];
+    expect(formCalls(agents, f, period, 1000, rules)).toBe(10 * 24);
+    expect(formCalls(agents, { ...f, assetAgents: false }, period, 1000, rules)).toBe(10 * 24 * 2);
+  });
+
+  it("follows the agents per asset of the tab Limites, as the controller does", () => {
+    const a = {
+      agent: "a",
+      kind: "trend",
+      mode: "live",
+      enabled: true,
+      pairs: ["XAUUSDm"],
+      compatible: true,
+    };
+    const b = { ...a, agent: "b", pairs: ["XAUUSDm", "BTCUSDm"] };
+    const agents = [a, b];
+    const rules = [{ pairs: ["XAUUSDm"], agents: ["b"] }];
+    const f = form({});
+    expect(pairsTested(b, f, rules)).toEqual(["XAUUSDm", "BTCUSDm"]);
+    expect(pairsTested(a, f, rules), "a left without XAUUSDm").toEqual([]);
+    expect(pairsTested(a, { ...f, assetAgents: false }, rules)).toEqual(["XAUUSDm"]);
+    expect(assetRefusals(f, agents, rules)).toEqual([
+      "O agente a não pode operar nenhum dos seus ativos pelos agentes por ativo de Configurações › Limites: tire-o do lote ou desmarque a opção.",
+    ]);
+    expect(assetRefusals({ ...f, assetAgents: false }, agents, rules)).toEqual([]);
+    const refused = formRequest(f, { ...limits, agents }, now, rules);
+    expect(refused.request).toBeNull();
+    expect(refused.errors.assetAgents).toContain("O agente a não pode operar");
+    expect(formRequest(f, { ...limits, agents }, now, []).request?.asset_agents).toBe(true);
   });
 });
 
