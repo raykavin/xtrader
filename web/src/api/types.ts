@@ -3185,6 +3185,39 @@ export interface ExposureSettings {
   updated_at?: number /* int64 */;
 }
 /**
+ * AssetAgentRule is a rule of the agents per asset: on its Pairs (as MT5 names
+ * them, eg: XAUUSDm) only its Agents (by name) open positions.
+ */
+export interface AssetAgentRule {
+  pairs: string[];
+  agents: string[];
+}
+/**
+ * AssetAgentsSettings are the agents allowed on assets, of all the agents:
+ * each asset in one of the Rules at most, on which only the agents of its
+ * rule open positions, live and in paper; an asset without a rule free to
+ * every agent. The exits, the stops, the targets and the positions open are
+ * never touched; an agent allowed on none of its assets has its entries
+ * blocked.
+ */
+export interface AssetAgentsSettings {
+  rules: AssetAgentRule[];
+  updated_by?: string;
+  updated_at?: number /* int64 */;
+}
+/**
+ * AssetAgentsRequest is the body of PUT /api/settings/asset-agents.
+ */
+export interface AssetAgentsRequest {
+  settings: AssetAgentsSettings;
+}
+/**
+ * AssetAgentsResponse answers GET and PUT /api/settings/asset-agents.
+ */
+export interface AssetAgentsResponse {
+  settings: AssetAgentsSettings;
+}
+/**
  * ExposureRequest is the body of PUT /api/settings/exposure.
  */
 export interface ExposureRequest {

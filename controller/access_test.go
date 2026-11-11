@@ -95,6 +95,8 @@ var routePermissions = map[string][]string{
 	"POST /api/supervisor/close-all":             {ui.PermTradingOperate},
 	"GET /api/settings/daily-limits":             {ui.PermLimitsView},
 	"GET /api/settings/daily-limits/agents":      {ui.PermLimitsView},
+	"GET /api/settings/asset-agents":             {ui.PermLimitsView, ui.PermBacktestsManage},
+	"PUT /api/settings/asset-agents":             {ui.PermLimitsManage},
 	"PUT /api/settings/daily-limits":             {ui.PermLimitsManage},
 	"GET /api/daily-guard":                       {ui.PermDashboardView},
 	"GET /api/settings/trading-hours":            {ui.PermLimitsView, ui.PermBacktestsManage},

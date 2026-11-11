@@ -2590,6 +2590,35 @@ type ExposureSettings struct {
 	UpdatedAt int64          `json:"updated_at,omitempty"`
 }
 
+// AssetAgentRule is a rule of the agents per asset: on its Pairs (as MT5 names
+// them, eg: XAUUSDm) only its Agents (by name) open positions.
+type AssetAgentRule struct {
+	Pairs  []string `json:"pairs"`
+	Agents []string `json:"agents"`
+}
+
+// AssetAgentsSettings are the agents allowed on assets, of all the agents:
+// each asset in one of the Rules at most, on which only the agents of its
+// rule open positions, live and in paper; an asset without a rule free to
+// every agent. The exits, the stops, the targets and the positions open are
+// never touched; an agent allowed on none of its assets has its entries
+// blocked.
+type AssetAgentsSettings struct {
+	Rules     []AssetAgentRule `json:"rules"`
+	UpdatedBy string           `json:"updated_by,omitempty"`
+	UpdatedAt int64            `json:"updated_at,omitempty"`
+}
+
+// AssetAgentsRequest is the body of PUT /api/settings/asset-agents.
+type AssetAgentsRequest struct {
+	Settings AssetAgentsSettings `json:"settings"`
+}
+
+// AssetAgentsResponse answers GET and PUT /api/settings/asset-agents.
+type AssetAgentsResponse struct {
+	Settings AssetAgentsSettings `json:"settings"`
+}
+
 // ExposureRequest is the body of PUT /api/settings/exposure.
 type ExposureRequest struct {
 	Settings ExposureSettings `json:"settings"`

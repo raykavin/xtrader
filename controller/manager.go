@@ -794,25 +794,30 @@ func protectionOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.
 
 // entriesOf returns the entries of the agent a, see combinedEntries.
 func entriesOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Entries, error) {
-	return combinedEntries(ctx, s, a.ID, a.SupervisionOf())
+	return combinedEntries(ctx, s, a, a.SupervisionOf())
 }
 
-// combinedEntries returns the entries of the agent of id: blocked by its
+// combinedEntries returns the entries of the agent a: blocked by its
 // supervision (supervision), by a daily guard, its own or the one of all the
 // agents (see store.DailyEntries), or by the trading hours, outside their
 // windows or in a window for other agents (see store.TradingHoursEntries), and
-// the only assets it may open positions on in the window open, if any; the
-// reasons of the daily guard and
-// of the hours first; their revision the sum of the three, which only grow,
-// so that allowing the entries in its supervision (eg: a user, or the agent
-// enabled again) never lifts a daily guard nor the hours.
-func combinedEntries(ctx context.Context, s *store.Store, id int64,
+// the only assets it may open positions on: the ones of the window open, if
+// any, and the ones the rules of the agents per asset allow it (see
+// assetEntries); the reasons of the daily guard and of the hours first; their
+// revision the sum of the four, which only grow, so that allowing the entries
+// in its supervision (eg: a user, or the agent enabled again) never lifts a
+// daily guard, the hours nor a rule of the assets.
+func combinedEntries(ctx context.Context, s *store.Store, a store.Agent,
 	supervision store.AgentSupervision) (agentapi.Entries, error) {
-	daily, dailyReason, dailyRevision, err := s.DailyEntries(ctx, id)
+	daily, dailyReason, dailyRevision, err := s.DailyEntries(ctx, a.ID)
 	if err != nil {
 		return agentapi.Entries{}, err
 	}
-	hours, hoursReason, pairs, pairsReason, hoursRevision, err := s.TradingHoursEntries(ctx, id)
+	hours, hoursReason, pairs, pairsReason, hoursRevision, err := s.TradingHoursEntries(ctx, a.ID)
+	if err != nil {
+		return agentapi.Entries{}, err
+	}
+	rules, _, err := s.AssetAgents(ctx)
 	if err != nil {
 		return agentapi.Entries{}, err
 	}
@@ -821,7 +826,7 @@ func combinedEntries(ctx context.Context, s *store.Store, id int64,
 		EntriesReason:   supervision.EntriesReason, EntriesPairs: pairs, PairsReason: pairsReason,
 		Exposure: exposureOn(ctx, s)}
 	if !daily && !hours {
-		return entries, nil
+		return assetEntries(entries, rules, a), nil
 	}
 	var reasons []string
 	if daily {
@@ -834,5 +839,5 @@ func combinedEntries(ctx context.Context, s *store.Store, id int64,
 		reasons = append(reasons, supervision.EntriesReason)
 	}
 	entries.EntriesReason = strings.Join(reasons, "; ")
-	return entries, nil
+	return assetEntries(entries, rules, a), nil
 }

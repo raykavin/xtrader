@@ -58,6 +58,8 @@ func (s *settings) routes(r chi.Router) {
 	limits, setLimits := need(ui.PermLimitsView), need(ui.PermLimitsManage)
 	r.With(limits).Get("/settings/exposure", s.handleExposure)
 	r.With(setLimits).Put("/settings/exposure", s.handleSetExposure)
+	r.With(need(ui.PermLimitsView, ui.PermBacktestsManage)).Get("/settings/asset-agents", s.handleAssetAgents) // the rules of a backtest
+	r.With(setLimits).Put("/settings/asset-agents", s.handleSetAssetAgents)
 
 	agents := need(ui.PermAgentsManage)
 	r.With(need(ui.PermAgentsView, ui.PermLimitsView)).Get("/settings/agents", s.handleAgents) // the windows of the trading hours
