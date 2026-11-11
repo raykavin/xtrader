@@ -61,9 +61,22 @@ func (s *Store) SetTelegram(ctx context.Context, enabled *bool, token Secret) er
 
 // TelegramUsers returns the Telegram users the bot answers, by their ID.
 func (s *Store) TelegramUsers(ctx context.Context) ([]TelegramUser, error) {
-	var users []TelegramUser
-	err := s.conn(ctx).Order("telegram_id").Find(&users).Error
-	return users, err
+	listed, err := s.FindTelegramUsers(ctx, ListQuery{})
+	return listed.Rows, err
+}
+
+// telegramUserSearch is where a search of the Telegram users looks: their IDs
+// on Telegram and their names.
+var telegramUserSearch = []searchField{
+	textField("CAST(telegram_users.telegram_id AS TEXT)"),
+	textField("telegram_users.name"),
+}
+
+// FindTelegramUsers returns the Telegram users of q the bot answers, by their
+// ID.
+func (s *Store) FindTelegramUsers(ctx context.Context, q ListQuery) (Listed[TelegramUser], error) {
+	db := s.conn(ctx).Model(&TelegramUser{}).Scopes(searchScope(q.Search, telegramUserSearch...))
+	return list[TelegramUser](db, q, byFields("telegram_users.telegram_id", "telegram_users.id"))
 }
 
 // AddTelegramUser authorizes the Telegram user of telegramID, named name.

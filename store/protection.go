@@ -243,6 +243,17 @@ func (s *Store) ProtectionArms(ctx context.Context, limit int) ([]PositionProtec
 	return arms, err
 }
 
+// FindProtectionArms returns the arms of every agent of q, the newest first.
+func (s *Store) FindProtectionArms(ctx context.Context, q ListQuery) (Listed[PositionProtection], error) {
+	return list[PositionProtection](s.conn(ctx).Model(&PositionProtection{}), q, newestFirst("id"))
+}
+
+// ProtectionIDsOfRuns returns the arms the analyses of runIDs asked for, by
+// analysis, the oldest first.
+func (s *Store) ProtectionIDsOfRuns(ctx context.Context, runIDs []int64) (map[int64][]int64, error) {
+	return idsOfRuns(s.conn(ctx).Model(&PositionProtection{}), runIDs)
+}
+
 // ProtectionArmsOfRun returns the arms an analysis asked for.
 func (s *Store) ProtectionArmsOfRun(ctx context.Context, runID int64) ([]PositionProtection, error) {
 	var arms []PositionProtection

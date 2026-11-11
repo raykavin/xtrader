@@ -9,6 +9,30 @@ package ui
 
 //go:generate go run github.com/gzuidhof/tygo@v0.2.21 generate
 
+// PageInfo is the page of a list the dashboard asked for, with ?page= (from
+// 1), ?per_page= (DefPerPage by default, MaxPerPage at most) and ?q= (its
+// search, every word in a field of a row, the case and the accents ignored):
+// the rows of the list matching the search (Total), the page answered (the
+// last one for a page past it), its size, the pages and whether others come
+// before and after it, as the result of github.com/raykavin/gobox/pagination.
+// Without ?page= the whole list is one page, as before the pages.
+type PageInfo struct {
+	Total      int  `json:"total"`
+	Page       int  `json:"page"`
+	PerPage    int  `json:"per_page"`
+	TotalPages int  `json:"total_pages"`
+	HasNext    bool `json:"has_next"`
+	HasPrev    bool `json:"has_prev"`
+}
+
+// The size of a page of a list, by default and at most, and the longest
+// search, in characters, see PageInfo.
+const (
+	DefPerPage = 20
+	MaxPerPage = 100
+	MaxSearch  = 100
+)
+
 // Candle is an OHLCV bar.
 type Candle struct {
 	Time   int64   `json:"time"`
@@ -429,11 +453,13 @@ type RoleInfo struct {
 	UpdatedAt   int64    `json:"updated_at"`
 }
 
-// RolesResponse is the payload of GET /api/roles: the roles, by name, and the
-// catalog of the permissions, in the order of the dashboard.
+// RolesResponse is the payload of GET /api/roles: the roles, by name (the page
+// asked for, see PageInfo), and the catalog of the permissions, in the order of
+// the dashboard.
 type RolesResponse struct {
-	Roles []RoleInfo       `json:"roles"`
-	Areas []PermissionArea `json:"areas"`
+	PageInfo `tstype:",extends"`
+	Roles    []RoleInfo       `json:"roles"`
+	Areas    []PermissionArea `json:"areas"`
 }
 
 // RoleRequest is the payload of POST /api/roles (Name and Permissions) and of
@@ -1574,9 +1600,11 @@ type PromptInfo struct {
 	UsedBy      []string `json:"used_by"`
 }
 
-// PromptsResponse is the payload of GET /api/prompts, by name.
+// PromptsResponse is the payload of GET /api/prompts, by name: the page asked
+// for, see PageInfo.
 type PromptsResponse struct {
-	Prompts []PromptInfo `json:"prompts"`
+	PageInfo `tstype:",extends"`
+	Prompts  []PromptInfo `json:"prompts"`
 }
 
 // PromptDetail is a prompt with its content, the answer of GET, POST and PUT
@@ -1621,6 +1649,14 @@ type TelegramSettingsRequest struct {
 	Token   *string `json:"token,omitempty"`
 }
 
+// TelegramUsersResponse is the payload of GET /api/settings/telegram/users: the
+// Telegram users the bot answers, by their ID, the page asked for (see
+// PageInfo).
+type TelegramUsersResponse struct {
+	PageInfo `tstype:",extends"`
+	Users    []TelegramUser `json:"users"`
+}
+
 // TelegramUserRequest is the payload of POST /api/settings/telegram/users.
 type TelegramUserRequest struct {
 	TelegramID int64  `json:"telegram_id"`
@@ -1638,9 +1674,11 @@ type UserInfo struct {
 	CreatedAt   int64    `json:"created_at"`
 }
 
-// UsersResponse is the payload of GET /api/users, by username.
+// UsersResponse is the payload of GET /api/users, by username: the page asked
+// for, see PageInfo.
 type UsersResponse struct {
-	Users []UserInfo `json:"users"`
+	PageInfo `tstype:",extends"`
+	Users    []UserInfo `json:"users"`
 }
 
 // UserRequest is the payload of POST /api/users (Username, Password and
@@ -2008,9 +2046,10 @@ type SupervisorProtectionInfo struct {
 }
 
 // SupervisorProtectionsResponse is the payload of GET
-// /api/supervisor/protections: the last arms of the XTrader AI, the newest
-// first.
+// /api/supervisor/protections: the arms of the XTrader AI, the newest first,
+// the last ones or the page asked for (see PageInfo).
 type SupervisorProtectionsResponse struct {
+	PageInfo    `tstype:",extends"`
 	Protections []SupervisorProtectionInfo `json:"protections"`
 }
 
@@ -2114,9 +2153,10 @@ type SupervisorRunInfo struct {
 }
 
 // SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the
-// newest first.
+// newest first: the last ones or the page asked for (see PageInfo).
 type SupervisorRunsResponse struct {
-	Runs []SupervisorRunInfo `json:"runs"`
+	PageInfo `tstype:",extends"`
+	Runs     []SupervisorRunInfo `json:"runs"`
 }
 
 // SupervisorRunResponse is the payload of GET /api/supervisor/runs/{id}: the
@@ -2214,9 +2254,10 @@ type SupervisorActionInfo struct {
 }
 
 // SupervisorActionsResponse is the payload of GET /api/supervisor/actions,
-// the newest first.
+// the newest first: the last ones or the page asked for (see PageInfo).
 type SupervisorActionsResponse struct {
-	Actions []SupervisorActionInfo `json:"actions"`
+	PageInfo `tstype:",extends"`
+	Actions  []SupervisorActionInfo `json:"actions"`
 }
 
 // SupervisorMessageInfo is a message of the conversation of the user with the
@@ -2536,6 +2577,16 @@ type DailyLimitsResponse struct {
 	Effect string `json:"effect,omitempty"`
 }
 
+// DailyAgentsResponse is the payload of GET /api/settings/daily-limits/agents:
+// the agents with daily limits or guards of their own as they stand now, in
+// the order of DailyLimitsStatus.Agents, the page asked for (see PageInfo),
+// and the zone of their day.
+type DailyAgentsResponse struct {
+	PageInfo `tstype:",extends"`
+	Agents   []DailyScopeStatus `json:"agents"`
+	Zone     string             `json:"zone"`
+}
+
 // NewsSettingsResponse is the payload of GET and PUT /api/settings/news: the
 // news of all the agents, LLM or not: on or off (off, no agent reads the
 // economic calendar nor blocks anything); the MCP server of the calendar (its
@@ -2691,8 +2742,10 @@ type MT5SwitchRefusal struct {
 	Pending []string `json:"pending,omitempty"`
 }
 
-// MT5AccountsResponse answers GET /api/settings/mt5-accounts.
+// MT5AccountsResponse answers GET /api/settings/mt5-accounts, by name: the
+// page asked for, see PageInfo.
 type MT5AccountsResponse struct {
+	PageInfo `tstype:",extends"`
 	Accounts []MT5AccountInfo `json:"accounts"`
 }
 

@@ -23,19 +23,23 @@ func roleChange(r *http.Request, request ui.RoleRequest) store.RoleChange {
 		By: userOf(r.Context())}
 }
 
-// handleRoles lists the roles of the users of the dashboard and the catalog of
-// the permissions.
+// handleRoles lists the roles of the users of the dashboard (the page and the
+// search asked for, see listQuery) and the catalog of the permissions.
 func (s *settings) handleRoles(w http.ResponseWriter, r *http.Request) {
-	roles, err := s.store.Roles(r.Context())
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	roles, err := s.store.FindRoles(r.Context(), q)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	list := make([]ui.RoleInfo, 0, len(roles))
-	for _, role := range roles {
+	list := make([]ui.RoleInfo, 0, len(roles.Rows))
+	for _, role := range roles.Rows {
 		list = append(list, roleInfo(role))
 	}
-	writeJSON(w, ui.RolesResponse{Roles: list, Areas: ui.PermissionAreas()})
+	writeJSON(w, ui.RolesResponse{PageInfo: pageInfo(roles), Roles: list, Areas: ui.PermissionAreas()})
 }
 
 // handleCreateRole creates a role, of its name and its permissions.

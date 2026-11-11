@@ -52,6 +52,7 @@ func (s *Supervision) routes(r chi.Router) {
 
 	limits, setLimits := need(ui.PermLimitsView), need(ui.PermLimitsManage)
 	r.With(limits).Get("/settings/daily-limits", s.handleDailyLimits)
+	r.With(limits).Get("/settings/daily-limits/agents", s.handleDailyAgents)
 	r.With(setLimits).Put("/settings/daily-limits", s.handleSetDailyLimits)
 	r.With(setLimits).Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
 	r.With(need(ui.PermDashboardView)).Get("/daily-guard", s.handleDailyGuard)
@@ -82,6 +83,22 @@ func (s *Supervision) handleDailyLimits(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, response)
+}
+
+// handleDailyAgents answers the agents with daily limits or guards of their
+// own as they stand now, the page asked for (see listQuery), see
+// ui.DailyAgentsResponse.
+func (s *Supervision) handleDailyAgents(w http.ResponseWriter, r *http.Request) {
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	status := s.daily.Status()
+	agents, page := pageSlice(status.Agents, q)
+	if agents == nil {
+		agents = []ui.DailyScopeStatus{}
+	}
+	writeJSON(w, ui.DailyAgentsResponse{PageInfo: page, Agents: agents, Zone: status.Zone})
 }
 
 // handleDailyGuard answers how the daily limits stand, see
@@ -324,37 +341,46 @@ func runInfo(run store.SupervisorRun, actions []int64) ui.SupervisorRunInfo {
 	return info
 }
 
-// handleRuns lists the last analyses, the newest first, with the actions each
-// one asked for.
+// handleRuns lists the analyses, the newest first, the last ones or the page
+// asked for (see listQuery), with the actions and the protections each one
+// asked for.
 func (s *Supervision) handleRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.store.SupervisorRuns(r.Context(), maxRuns)
-	if err != nil {
-		s.fail(w, err)
+	q, ok := listQuery(w, r)
+	if !ok {
 		return
 	}
-	actions, err := s.store.SupervisorActions(r.Context(), maxActions)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	byRun := make(map[int64][]int64)
-	for _, action := range actions {
-		if action.RunID != nil {
-			byRun[*action.RunID] = append(byRun[*action.RunID], action.ID)
+	var runs []store.SupervisorRun
+	var page ui.PageInfo
+	if q.Paged() {
+		listed, err := s.store.FindSupervisorRuns(r.Context(), q)
+		if err != nil {
+			s.fail(w, err)
+			return
 		}
+		runs, page = listed.Rows, pageInfo(listed)
+	} else {
+		var err error
+		if runs, err = s.store.SupervisorRuns(r.Context(), maxRuns); err != nil {
+			s.fail(w, err)
+			return
+		}
+		page = wholePage(len(runs))
 	}
-	protections, err := s.store.ProtectionArms(r.Context(), maxActions)
+	ids := make([]int64, 0, len(runs))
+	for _, run := range runs {
+		ids = append(ids, run.ID)
+	}
+	byRun, err := s.store.ActionIDsOfRuns(r.Context(), ids)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	protectedBy := make(map[int64][]int64)
-	for _, arm := range protections {
-		if arm.RunID != nil {
-			protectedBy[*arm.RunID] = append(protectedBy[*arm.RunID], arm.ID)
-		}
+	protectedBy, err := s.store.ProtectionIDsOfRuns(r.Context(), ids)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
-	response := ui.SupervisorRunsResponse{Runs: make([]ui.SupervisorRunInfo, 0, len(runs))}
+	response := ui.SupervisorRunsResponse{PageInfo: page, Runs: make([]ui.SupervisorRunInfo, 0, len(runs))}
 	for _, run := range runs {
 		info := runInfo(run, byRun[run.ID])
 		info.ProtectionIDs = protectedBy[run.ID]
@@ -363,13 +389,30 @@ func (s *Supervision) handleRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-// handleProtections answers the last protections of positions the XTrader AI
-// armed, the newest first, see ui.SupervisorProtectionInfo.
+// handleProtections answers the protections of positions the XTrader AI
+// armed, the newest first, the last ones or the page asked for (see
+// listQuery), see ui.SupervisorProtectionInfo.
 func (s *Supervision) handleProtections(w http.ResponseWriter, r *http.Request) {
-	arms, err := s.store.ProtectionArms(r.Context(), maxActions)
-	if err != nil {
-		s.fail(w, err)
+	q, ok := listQuery(w, r)
+	if !ok {
 		return
+	}
+	var arms []store.PositionProtection
+	var page ui.PageInfo
+	if q.Paged() {
+		listed, err := s.store.FindProtectionArms(r.Context(), q)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		arms, page = listed.Rows, pageInfo(listed)
+	} else {
+		var err error
+		if arms, err = s.store.ProtectionArms(r.Context(), maxActions); err != nil {
+			s.fail(w, err)
+			return
+		}
+		page = wholePage(len(arms))
 	}
 	agents, err := s.store.Agents(r.Context())
 	if err != nil {
@@ -380,7 +423,8 @@ func (s *Supervision) handleProtections(w http.ResponseWriter, r *http.Request) 
 	for _, a := range agents {
 		names[a.ID] = a.Name
 	}
-	response := ui.SupervisorProtectionsResponse{Protections: make([]ui.SupervisorProtectionInfo, 0, len(arms))}
+	response := ui.SupervisorProtectionsResponse{PageInfo: page,
+		Protections: make([]ui.SupervisorProtectionInfo, 0, len(arms))}
 	for _, arm := range arms {
 		name := names[arm.AgentID]
 		if name == "" {
@@ -453,17 +497,35 @@ func actionInfo(a store.SupervisorAction) ui.SupervisorActionInfo {
 	return info
 }
 
-// handleActions lists the last actions of the supervision, the newest first.
+// handleActions lists the actions of the supervision, the newest first, the
+// last ones or the page asked for, see listQuery.
 func (s *Supervision) handleActions(w http.ResponseWriter, r *http.Request) {
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
 	if _, err := s.store.ExpireSupervisorActions(r.Context()); err != nil {
 		log.Warnf("supervisor: expiring the proposals: %v", err)
 	}
-	actions, err := s.store.SupervisorActions(r.Context(), maxActions)
-	if err != nil {
-		s.fail(w, err)
-		return
+	var actions []store.SupervisorAction
+	var page ui.PageInfo
+	if q.Paged() {
+		listed, err := s.store.FindSupervisorActions(r.Context(), q)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		actions, page = listed.Rows, pageInfo(listed)
+	} else {
+		var err error
+		if actions, err = s.store.SupervisorActions(r.Context(), maxActions); err != nil {
+			s.fail(w, err)
+			return
+		}
+		page = wholePage(len(actions))
 	}
-	response := ui.SupervisorActionsResponse{Actions: make([]ui.SupervisorActionInfo, 0, len(actions))}
+	response := ui.SupervisorActionsResponse{PageInfo: page,
+		Actions: make([]ui.SupervisorActionInfo, 0, len(actions))}
 	for _, action := range actions {
 		response.Actions = append(response.Actions, actionInfo(action))
 	}

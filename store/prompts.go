@@ -50,11 +50,33 @@ func checkPrompt(name, content string) error {
 // Prompts returns the prompts without their content, by name, with the agents
 // using each one.
 func (s *Store) Prompts(ctx context.Context) ([]PromptSummary, error) {
-	var prompts []PromptSummary
-	err := s.conn(ctx).Model(&Prompt{}).Select("id, name, description, version, created_at, updated_at").
-		Order("name").Find(&prompts).Error
-	if err != nil {
-		return nil, err
+	listed, err := s.FindPrompts(ctx, ListQuery{})
+	return listed.Rows, err
+}
+
+// promptSearch is where a search of the prompts looks: their names, their
+// descriptions and the agents using them.
+var promptSearch = []searchField{
+	textField("prompts.name"),
+	textField("prompts.description"),
+	relatedField(`EXISTS (SELECT 1 FROM agent_llm_settings l
+		JOIN agents a ON a.id = l.agent_id AND a.deleted_at IS NULL
+		WHERE l.prompt_id = prompts.id AND %s)`, "a.name"),
+}
+
+// FindPrompts returns the prompts of q, without their content, by name, with
+// the agents using each one.
+func (s *Store) FindPrompts(ctx context.Context, q ListQuery) (Listed[PromptSummary], error) {
+	db := s.conn(ctx).Model(&Prompt{}).
+		Select("prompts.id, prompts.name, prompts.description, prompts.version, prompts.created_at, prompts.updated_at").
+		Scopes(searchScope(q.Search, promptSearch...))
+	listed, err := list[PromptSummary](db, q, byFields("prompts.name", "prompts.id"))
+	if err != nil || len(listed.Rows) == 0 {
+		return listed, err
+	}
+	ids := make([]int64, 0, len(listed.Rows))
+	for _, p := range listed.Rows {
+		ids = append(ids, p.ID)
 	}
 	var uses []struct {
 		PromptID int64
@@ -62,18 +84,18 @@ func (s *Store) Prompts(ctx context.Context) ([]PromptSummary, error) {
 	}
 	err = s.conn(ctx).Table("agent_llm_settings AS l").Select("l.prompt_id, a.name").
 		Joins("JOIN agents a ON a.id = l.agent_id AND a.deleted_at IS NULL").
-		Where("l.prompt_id IS NOT NULL").Order("a.name").Scan(&uses).Error
+		Where("l.prompt_id IN ?", ids).Order("a.name").Scan(&uses).Error
 	if err != nil {
-		return nil, err
+		return Listed[PromptSummary]{}, err
 	}
 	byID := make(map[int64][]string)
 	for _, use := range uses {
 		byID[use.PromptID] = append(byID[use.PromptID], use.Name)
 	}
-	for i := range prompts {
-		prompts[i].UsedBy = append([]string{}, byID[prompts[i].ID]...)
+	for i := range listed.Rows {
+		listed.Rows[i].UsedBy = append([]string{}, byID[listed.Rows[i].ID]...)
 	}
-	return prompts, nil
+	return listed, nil
 }
 
 // Prompt returns the prompt of id.
