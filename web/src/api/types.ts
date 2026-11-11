@@ -5,6 +5,38 @@
 // source: dto.go
 
 /**
+ * PageInfo is the page of a list the dashboard asked for, with ?page= (from
+ * 1), ?per_page= (DefPerPage by default, MaxPerPage at most) and ?q= (its
+ * search, every word in a field of a row, the case and the accents ignored):
+ * the rows of the list matching the search (Total), the page answered (the
+ * last one for a page past it), its size, the pages and whether others come
+ * before and after it, as the result of github.com/raykavin/gobox/pagination.
+ * Without ?page= the whole list is one page, as before the pages.
+ */
+export interface PageInfo {
+  total: number /* int */;
+  page: number /* int */;
+  per_page: number /* int */;
+  total_pages: number /* int */;
+  has_next: boolean;
+  has_prev: boolean;
+}
+/**
+ * The size of a page of a list, by default and at most, and the longest
+ * search, in characters, see PageInfo.
+ */
+export const DefPerPage = 20;
+/**
+ * The size of a page of a list, by default and at most, and the longest
+ * search, in characters, see PageInfo.
+ */
+export const MaxPerPage = 100;
+/**
+ * The size of a page of a list, by default and at most, and the longest
+ * search, in characters, see PageInfo.
+ */
+export const MaxSearch = 100;
+/**
  * Candle is an OHLCV bar.
  */
 export interface Candle {
@@ -672,10 +704,11 @@ export interface RoleInfo {
   updated_at: number /* int64 */;
 }
 /**
- * RolesResponse is the payload of GET /api/roles: the roles, by name, and the
- * catalog of the permissions, in the order of the dashboard.
+ * RolesResponse is the payload of GET /api/roles: the roles, by name (the page
+ * asked for, see PageInfo), and the catalog of the permissions, in the order of
+ * the dashboard.
  */
-export interface RolesResponse {
+export interface RolesResponse extends PageInfo {
   roles: RoleInfo[];
   areas: PermissionArea[];
 }
@@ -1948,9 +1981,10 @@ export interface PromptInfo {
   used_by: string[];
 }
 /**
- * PromptsResponse is the payload of GET /api/prompts, by name.
+ * PromptsResponse is the payload of GET /api/prompts, by name: the page asked
+ * for, see PageInfo.
  */
-export interface PromptsResponse {
+export interface PromptsResponse extends PageInfo {
   prompts: PromptInfo[];
 }
 /**
@@ -2000,6 +2034,14 @@ export interface TelegramSettingsRequest {
   token?: string;
 }
 /**
+ * TelegramUsersResponse is the payload of GET /api/settings/telegram/users: the
+ * Telegram users the bot answers, by their ID, the page asked for (see
+ * PageInfo).
+ */
+export interface TelegramUsersResponse extends PageInfo {
+  users: TelegramUser[];
+}
+/**
  * TelegramUserRequest is the payload of POST /api/settings/telegram/users.
  */
 export interface TelegramUserRequest {
@@ -2019,9 +2061,10 @@ export interface UserInfo {
   created_at: number /* int64 */;
 }
 /**
- * UsersResponse is the payload of GET /api/users, by username.
+ * UsersResponse is the payload of GET /api/users, by username: the page asked
+ * for, see PageInfo.
  */
-export interface UsersResponse {
+export interface UsersResponse extends PageInfo {
   users: UserInfo[];
 }
 /**
@@ -2450,10 +2493,10 @@ export interface SupervisorProtectionInfo {
 }
 /**
  * SupervisorProtectionsResponse is the payload of GET
- * /api/supervisor/protections: the last arms of the XTrader AI, the newest
- * first.
+ * /api/supervisor/protections: the arms of the XTrader AI, the newest first,
+ * the last ones or the page asked for (see PageInfo).
  */
-export interface SupervisorProtectionsResponse {
+export interface SupervisorProtectionsResponse extends PageInfo {
   protections: SupervisorProtectionInfo[];
 }
 /**
@@ -2566,9 +2609,9 @@ export interface SupervisorRunInfo {
 }
 /**
  * SupervisorRunsResponse is the payload of GET /api/supervisor/runs, the
- * newest first.
+ * newest first: the last ones or the page asked for (see PageInfo).
  */
-export interface SupervisorRunsResponse {
+export interface SupervisorRunsResponse extends PageInfo {
   runs: SupervisorRunInfo[];
 }
 /**
@@ -2675,9 +2718,9 @@ export interface SupervisorActionInfo {
 }
 /**
  * SupervisorActionsResponse is the payload of GET /api/supervisor/actions,
- * the newest first.
+ * the newest first: the last ones or the page asked for (see PageInfo).
  */
-export interface SupervisorActionsResponse {
+export interface SupervisorActionsResponse extends PageInfo {
   actions: SupervisorActionInfo[];
 }
 /**
@@ -3080,6 +3123,16 @@ export interface DailyLimitsResponse {
   effect?: string;
 }
 /**
+ * DailyAgentsResponse is the payload of GET /api/settings/daily-limits/agents:
+ * the agents with daily limits or guards of their own as they stand now, in
+ * the order of DailyLimitsStatus.Agents, the page asked for (see PageInfo),
+ * and the zone of their day.
+ */
+export interface DailyAgentsResponse extends PageInfo {
+  agents: DailyScopeStatus[];
+  zone: string;
+}
+/**
  * NewsSettingsResponse is the payload of GET and PUT /api/settings/news: the
  * news of all the agents, LLM or not: on or off (off, no agent reads the
  * economic calendar nor blocks anything); the MCP server of the calendar (its
@@ -3247,9 +3300,10 @@ export interface MT5SwitchRefusal {
   pending?: string[];
 }
 /**
- * MT5AccountsResponse answers GET /api/settings/mt5-accounts.
+ * MT5AccountsResponse answers GET /api/settings/mt5-accounts, by name: the
+ * page asked for, see PageInfo.
  */
-export interface MT5AccountsResponse {
+export interface MT5AccountsResponse extends PageInfo {
   accounts: MT5AccountInfo[];
 }
 /**

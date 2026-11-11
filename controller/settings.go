@@ -79,6 +79,7 @@ func (s *settings) routes(r chi.Router) {
 
 	telegram := need(ui.PermTelegramManage)
 	r.With(need(ui.PermTelegramView)).Get("/settings/telegram", s.handleTelegram)
+	r.With(need(ui.PermTelegramView)).Get("/settings/telegram/users", s.handleTelegramUsers)
 	r.With(telegram).Patch("/settings/telegram", s.handleUpdateTelegram)
 	r.With(telegram).Post("/settings/telegram/users", s.handleAddTelegramUser)
 	r.With(telegram).Delete("/settings/telegram/users/{id}", s.handleDeleteTelegramUser)
@@ -437,18 +438,23 @@ func promptInfo(p store.Prompt, usedBy []string) ui.PromptInfo {
 		UpdatedAt: p.UpdatedAt.Unix(), UsedBy: usedBy}
 }
 
-// handlePrompts lists the prompts, by name.
+// handlePrompts lists the prompts, by name: the page and the search asked for,
+// see listQuery.
 func (s *settings) handlePrompts(w http.ResponseWriter, r *http.Request) {
-	prompts, err := s.store.Prompts(r.Context())
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	prompts, err := s.store.FindPrompts(r.Context(), q)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	list := make([]ui.PromptInfo, 0, len(prompts))
-	for _, p := range prompts {
+	list := make([]ui.PromptInfo, 0, len(prompts.Rows))
+	for _, p := range prompts.Rows {
 		list = append(list, promptInfo(p.Prompt, p.UsedBy))
 	}
-	writeJSON(w, ui.PromptsResponse{Prompts: list})
+	writeJSON(w, ui.PromptsResponse{PageInfo: pageInfo(prompts), Prompts: list})
 }
 
 // promptDetail answers the prompt of id with its content.
@@ -562,6 +568,25 @@ func (s *settings) handleTelegram(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+// handleTelegramUsers lists the Telegram users the bot answers, by their ID:
+// the page and the search asked for, see listQuery.
+func (s *settings) handleTelegramUsers(w http.ResponseWriter, r *http.Request) {
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	users, err := s.store.FindTelegramUsers(r.Context(), q)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	response := ui.TelegramUsersResponse{PageInfo: pageInfo(users), Users: make([]ui.TelegramUser, 0, len(users.Rows))}
+	for _, u := range users.Rows {
+		response.Users = append(response.Users, ui.TelegramUser{ID: u.ID, TelegramID: u.TelegramID, Name: u.Name})
+	}
+	writeJSON(w, response)
+}
+
 // handleUpdateTelegram changes the bot: enabled, and its token.
 func (s *settings) handleUpdateTelegram(w http.ResponseWriter, r *http.Request) {
 	var request ui.TelegramSettingsRequest
@@ -620,18 +645,23 @@ func userInfo(u store.User) ui.UserInfo {
 	return info
 }
 
-// handleUsers lists the users of the dashboard.
+// handleUsers lists the users of the dashboard: the page and the search asked
+// for, see listQuery.
 func (s *settings) handleUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.store.Users(r.Context())
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	users, err := s.store.FindUsers(r.Context(), q)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	list := make([]ui.UserInfo, 0, len(users))
-	for _, u := range users {
+	list := make([]ui.UserInfo, 0, len(users.Rows))
+	for _, u := range users.Rows {
 		list = append(list, userInfo(u))
 	}
-	writeJSON(w, ui.UsersResponse{Users: list})
+	writeJSON(w, ui.UsersResponse{PageInfo: pageInfo(users), Users: list})
 }
 
 // handleCreateUser creates a user of the dashboard, with its role.

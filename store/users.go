@@ -73,9 +73,22 @@ func (s *Store) CreateUser(ctx context.Context, username, password string) (User
 
 // Users returns the users, by username, with their roles.
 func (s *Store) Users(ctx context.Context) ([]User, error) {
-	var users []User
-	err := s.conn(ctx).Preload("RoleLink.Role").Order("lower(username)").Find(&users).Error
-	return users, err
+	listed, err := s.FindUsers(ctx, ListQuery{})
+	return listed.Rows, err
+}
+
+// userSearch is where a search of the users looks: their usernames and the
+// names of their roles.
+var userSearch = []searchField{
+	textField("users.username"),
+	relatedField(`EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+		WHERE ur.user_id = users.id AND %s)`, "r.name"),
+}
+
+// FindUsers returns the users of q, by username, with their roles.
+func (s *Store) FindUsers(ctx context.Context, q ListQuery) (Listed[User], error) {
+	db := s.conn(ctx).Model(&User{}).Preload("RoleLink.Role").Scopes(searchScope(q.Search, userSearch...))
+	return list[User](db, q, byFields("lower(users.username)", "users.id"))
 }
 
 // User returns the user of id, with its role and the permissions of it.

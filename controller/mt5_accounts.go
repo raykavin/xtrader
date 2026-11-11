@@ -612,9 +612,14 @@ func (s *settings) mt5Routes(r chi.Router) {
 	r.With(view).Get("/settings/mt5-accounts/{id}/events", s.handleMT5AccountEvents)
 }
 
-// handleMT5Accounts answers the accounts of MT5, see ui.MT5AccountsResponse.
+// handleMT5Accounts answers the accounts of MT5, see ui.MT5AccountsResponse:
+// the page and the search asked for, see listQuery.
 func (s *settings) handleMT5Accounts(w http.ResponseWriter, r *http.Request) {
-	accounts, err := s.store.MT5Accounts(r.Context())
+	q, ok := listQuery(w, r)
+	if !ok {
+		return
+	}
+	accounts, err := s.store.FindMT5Accounts(r.Context(), q)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -624,8 +629,9 @@ func (s *settings) handleMT5Accounts(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	response := ui.MT5AccountsResponse{Accounts: make([]ui.MT5AccountInfo, 0, len(accounts))}
-	for _, account := range accounts {
+	response := ui.MT5AccountsResponse{PageInfo: pageInfo(accounts),
+		Accounts: make([]ui.MT5AccountInfo, 0, len(accounts.Rows))}
+	for _, account := range accounts.Rows {
 		response.Accounts = append(response.Accounts, s.mt5.infoOf(account, agents[account.ID]))
 	}
 	w.Header().Set("Cache-Control", "no-store")

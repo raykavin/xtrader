@@ -343,6 +343,40 @@ func (s *Store) SupervisorRuns(ctx context.Context, limit int) ([]SupervisorRun,
 	return runs, nil
 }
 
+// FindSupervisorRuns returns the analyses of q, the newest first, without
+// their snapshot.
+func (s *Store) FindSupervisorRuns(ctx context.Context, q ListQuery) (Listed[SupervisorRun], error) {
+	db := s.conn(ctx).Model(&runRow{}).Omit("snapshot")
+	listed, err := list[runRow](db, q, newestFirst("started_at", "id"))
+	return listedAs(listed, runRow.run), err
+}
+
+// ActionIDsOfRuns returns the actions the analyses of runIDs asked for, by
+// analysis, the oldest first.
+func (s *Store) ActionIDsOfRuns(ctx context.Context, runIDs []int64) (map[int64][]int64, error) {
+	return idsOfRuns(s.conn(ctx).Model(&actionRow{}), runIDs)
+}
+
+// idsOfRuns returns the IDs of the rows of db of the analyses of runIDs, by
+// analysis, the oldest first.
+func idsOfRuns(db *gorm.DB, runIDs []int64) (map[int64][]int64, error) {
+	byRun := make(map[int64][]int64)
+	if len(runIDs) == 0 {
+		return byRun, nil
+	}
+	var rows []struct {
+		ID    int64
+		RunID int64
+	}
+	if err := db.Select("id, run_id").Where("run_id IN ?", runIDs).Order("id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		byRun[row.RunID] = append(byRun[row.RunID], row.ID)
+	}
+	return byRun, nil
+}
+
 // SupervisorRun returns the analysis of id, its snapshot included.
 func (s *Store) SupervisorRun(ctx context.Context, id int64) (SupervisorRun, error) {
 	var row runRow
@@ -508,6 +542,12 @@ func (s *Store) SupervisorActions(ctx context.Context, limit int) ([]SupervisorA
 		actions = append(actions, row.action())
 	}
 	return actions, nil
+}
+
+// FindSupervisorActions returns the actions of q, the newest first.
+func (s *Store) FindSupervisorActions(ctx context.Context, q ListQuery) (Listed[SupervisorAction], error) {
+	listed, err := list[actionRow](s.conn(ctx).Model(&actionRow{}), q, newestFirst("created_at", "id"))
+	return listedAs(listed, actionRow.action), err
 }
 
 // ErrDecided is the error of a proposal confirmed or rejected again, eg: two

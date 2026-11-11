@@ -188,9 +188,30 @@ func (s *Store) addMT5Event(ctx context.Context, e MT5AccountEvent) error {
 
 // MT5Accounts returns the accounts of MT5, by their names.
 func (s *Store) MT5Accounts(ctx context.Context) ([]MT5Account, error) {
-	var accounts []MT5Account
-	err := s.conn(ctx).Order("lower(name), id").Find(&accounts).Error
-	return accounts, err
+	listed, err := s.FindMT5Accounts(ctx, ListQuery{})
+	return listed.Rows, err
+}
+
+// mt5AccountSearch is where a search of the accounts of MT5 looks: their
+// names, logins, servers, bridges, kinds (demo, real, contest), currencies,
+// companies and the agents trading them.
+var mt5AccountSearch = []searchField{
+	textField("mt5_accounts.name"),
+	textField("CAST(mt5_accounts.login AS TEXT)"),
+	textField("mt5_accounts.server"),
+	textField("mt5_accounts.bridge_url"),
+	textField("mt5_accounts.kind"),
+	textField("mt5_accounts.currency"),
+	textField("mt5_accounts.company"),
+	relatedField(`EXISTS (SELECT 1 FROM agent_mt5_accounts l
+		JOIN agents a ON a.id = l.agent_id AND a.deleted_at IS NULL
+		WHERE l.account_id = mt5_accounts.id AND %s)`, "a.name"),
+}
+
+// FindMT5Accounts returns the accounts of MT5 of q, by their names.
+func (s *Store) FindMT5Accounts(ctx context.Context, q ListQuery) (Listed[MT5Account], error) {
+	db := s.conn(ctx).Model(&MT5Account{}).Scopes(searchScope(q.Search, mt5AccountSearch...))
+	return list[MT5Account](db, q, byFields("lower(mt5_accounts.name)", "mt5_accounts.id"))
 }
 
 // MT5Account returns the account of MT5 of id, ErrNotFound without one.

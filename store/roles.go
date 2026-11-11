@@ -192,9 +192,50 @@ func (s *Store) guardAdmins(ctx context.Context, fn func(ctx context.Context) er
 // Roles returns the roles, the fixed one first and then by name, each with its
 // number of users.
 func (s *Store) Roles(ctx context.Context) ([]Role, error) {
-	var roles []Role
-	if err := s.conn(ctx).Preload("Permissions").Order("system = '' , lower(name)").Find(&roles).Error; err != nil {
-		return nil, err
+	listed, err := s.FindRoles(ctx, ListQuery{})
+	return listed.Rows, err
+}
+
+// roleSearch is where a search of the roles looks: their names, their
+// descriptions and the areas of their permissions (see areaField).
+var roleSearch = []searchField{
+	textField("roles.name"),
+	textField("roles.description"),
+	areaField,
+}
+
+// areaField matches the word in the areas of the permissions of a role, by
+// their labels (eg: Backtesting) or keys (eg: mt5-accounts): a role granting a
+// permission of an area matching it, or the fixed role, granting them all.
+func areaField(word string) (string, []any) {
+	var permissions []string
+	for _, area := range ui.PermissionAreas() {
+		if strings.Contains(fold(area.Label), word) || strings.Contains(area.Key, word) {
+			for _, p := range []string{area.View, area.Manage} {
+				if p != "" {
+					permissions = append(permissions, p)
+				}
+			}
+		}
+	}
+	if len(permissions) == 0 {
+		return "1 = 0", nil
+	}
+	return `(roles.system = ? OR EXISTS (SELECT 1 FROM role_permissions rp
+		WHERE rp.role_id = roles.id AND rp.permission IN ?))`, []any{RoleAdmin, permissions}
+}
+
+// FindRoles returns the roles of q, the fixed one first and then by name, each
+// with its number of users.
+func (s *Store) FindRoles(ctx context.Context, q ListQuery) (Listed[Role], error) {
+	db := s.conn(ctx).Model(&Role{}).Preload("Permissions").Scopes(searchScope(q.Search, roleSearch...))
+	listed, err := list[Role](db, q, byFields("roles.system = ''", "lower(roles.name)", "roles.id"))
+	if err != nil || len(listed.Rows) == 0 {
+		return listed, err
+	}
+	ids := make([]int64, 0, len(listed.Rows))
+	for _, role := range listed.Rows {
+		ids = append(ids, role.ID)
 	}
 	var counts []struct {
 		RoleID int64
@@ -203,17 +244,18 @@ func (s *Store) Roles(ctx context.Context) ([]Role, error) {
 	if err := s.conn(ctx).Raw(`
 		SELECT ur.role_id, count(*) AS users FROM user_roles ur
 		JOIN users u ON u.id = ur.user_id AND u.deleted_at IS NULL
-		GROUP BY ur.role_id`).Scan(&counts).Error; err != nil {
-		return nil, err
+		WHERE ur.role_id IN ?
+		GROUP BY ur.role_id`, ids).Scan(&counts).Error; err != nil {
+		return Listed[Role]{}, err
 	}
-	for i := range roles {
+	for i := range listed.Rows {
 		for _, c := range counts {
-			if c.RoleID == roles[i].ID {
-				roles[i].Users = c.Users
+			if c.RoleID == listed.Rows[i].ID {
+				listed.Rows[i].Users = c.Users
 			}
 		}
 	}
-	return roles, nil
+	return listed, nil
 }
 
 // Role returns the role of id.
