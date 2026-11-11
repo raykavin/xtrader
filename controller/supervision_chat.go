@@ -149,7 +149,9 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 		return fail("Não consegui montar o retrato dos agentes.", err)
 	}
 
-	turn := &chatTurn{s: s, userID: userID, by: by, view: v, text: text}
+	allowed := accessOf(ctx) // the tools acting at once only to a user allowed to, see toolPermissions
+	turn := &chatTurn{s: s, userID: userID, by: by, view: v, text: text, access: allowed}
+	tools, system := chatToolsFor(allowed), chatSystem(settings)+restrictions(allowed)
 	messages := conversationOf(history)
 	messages = append(messages, llm.ChatMessage{Role: llm.ChatUser, Content: "Retrato atual dos agentes (JSON):\n" +
 		string(snapshot) + "\n\nMensagem do usuário:\n" + text})
@@ -162,7 +164,7 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 				errors.New("too many calls of tools"))
 		}
 		events.stage(stageThinking, "")
-		reply, err := complete(askCtx, chat, chatSystem(settings), messages, events)
+		reply, err := complete(askCtx, chat, system, messages, tools, events)
 		if err != nil {
 			return fail("O modelo do XTrader AI não respondeu ("+modelFailure(err)+"). Os agentes não foram "+
 				"afetados; tente de novo em instantes.", err)
@@ -206,14 +208,14 @@ func (s *Supervision) AskFollowed(ctx context.Context, userID int64, by, text st
 }
 
 // complete returns the answer of the model of chat to the conversation of
-// messages with the tools of the conversation: streamed, its pieces told to
-// events, when chat streams; else whole, its text told at once.
-func complete(ctx context.Context, chat llm.Chat, system string, messages []llm.ChatMessage,
+// messages with tools: streamed, its pieces told to events, when chat
+// streams; else whole, its text told at once.
+func complete(ctx context.Context, chat llm.Chat, system string, messages []llm.ChatMessage, tools []llm.ToolSpec,
 	events chatEvents) (llm.ChatAnswer, error) {
 	if streamer, ok := chat.(llm.ChatStreamer); ok {
-		return streamer.Stream(ctx, system, messages, chatTools(), events.text)
+		return streamer.Stream(ctx, system, messages, tools, events.text)
 	}
-	reply, err := chat.Complete(ctx, system, messages, chatTools())
+	reply, err := chat.Complete(ctx, system, messages, tools)
 	if err == nil && reply.Content != "" {
 		events.text(reply.Content)
 	}
@@ -308,19 +310,57 @@ func chatTools() []llm.ToolSpec {
 	}, dailyTools()...)
 }
 
-// chatTurn is a conversation answering a message: the proposals the model
-// made.
+// chatToolsFor returns the tools of the model in a conversation of a user of
+// the access a: the ones acting at once only when it may (see
+// toolPermissions).
+func chatToolsFor(a *access) []llm.ToolSpec {
+	var tools []llm.ToolSpec
+	for _, tool := range chatTools() {
+		if a.mayCall(tool.Name) {
+			tools = append(tools, tool)
+		}
+	}
+	return tools
+}
+
+// restrictions returns what the instructions of the chat add for a user of
+// the access a who may not act at once, "" for one who may.
+func restrictions(a *access) string {
+	var lines []string
+	if !a.can(ui.PermTradingOperate) {
+		lines = append(lines, "- Este usuário não tem permissão para operar: você não executa ações nem arma "+
+			"proteções para ele. Quando ele pedir uma, diga isso e, se fizer sentido, use propose_action: a "+
+			"proposta só é executada quando um usuário com permissão para operar a confirmar.")
+	}
+	if !a.can(ui.PermLimitsManage) {
+		lines = append(lines, "- Este usuário não pode alterar os limites diários: só consulte (get_daily_limits).")
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nPermissões deste usuário:\n" + strings.Join(lines, "\n")
+}
+
+// chatTurn is a conversation answering a message of a user of access: the
+// proposals the model made.
 type chatTurn struct {
 	s         *Supervision
 	userID    int64
 	by        string
 	view      *view
 	text      string // the message of the user, the evidence of an action executed
+	access    *access
 	proposals []store.SupervisorMessage
 }
 
-// call runs a call of a tool of the conversation and returns its result, JSON.
+// call runs a call of a tool of the conversation and returns its result, JSON:
+// a tool acting at once refused when the user may not (see toolPermissions),
+// whatever the tools the model was given.
 func (t *chatTurn) call(ctx context.Context, call llm.ToolCall) string {
+	if !t.access.mayCall(call.Name) {
+		log.Warnf("supervisor: the tool %s refused to %s: no permission", call.Name, t.by)
+		return toolError("refused: the user has no permission for " + call.Name)
+	}
 	switch call.Name {
 	case "get_agent":
 		var args struct {

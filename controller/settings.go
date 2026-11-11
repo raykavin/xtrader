@@ -52,35 +52,53 @@ func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState
 	}
 }
 
+// routes serves the settings, each route needing the permissions it declares
+// (see need): a list read by another area too takes the permission of it.
 func (s *settings) routes(r chi.Router) {
-	r.Get("/settings/exposure", s.handleExposure)
-	r.Put("/settings/exposure", s.handleSetExposure)
-	r.Get("/settings/agents", s.handleAgents)
-	r.Post("/settings/agents", s.handleCreateAgent)
-	r.Post("/settings/agents/params", s.handleAgentsParam)
-	r.Patch("/settings/agents/{name}", s.handleAgent)
-	r.Delete("/settings/agents/{name}", s.handleDeleteAgent)
-	r.Post("/settings/agents/{name}/restart", s.handleRestart)
-	r.Post("/settings/agents/{name}/rename", s.handleRename)
-	r.Get("/settings/agents/{name}/periods", s.handlePeriods)
-	r.Post("/settings/agents/{name}/periods", s.handleStartPeriod)
-	r.Get("/prompts", s.handlePrompts)
-	r.Post("/prompts", s.handleCreatePrompt)
-	r.Get("/prompts/{id}", s.handlePrompt)
-	r.Put("/prompts/{id}", s.handleUpdatePrompt)
-	r.Delete("/prompts/{id}", s.handleDeletePrompt)
-	r.Get("/settings/telegram", s.handleTelegram)
-	r.Patch("/settings/telegram", s.handleUpdateTelegram)
-	r.Post("/settings/telegram/users", s.handleAddTelegramUser)
-	r.Delete("/settings/telegram/users/{id}", s.handleDeleteTelegramUser)
-	r.Get("/positions/open", s.positions.handle)
-	r.Get("/positions/closed", s.closed.handle)
-	r.Get("/performance", s.trades.handle)
-	r.Get("/performance/excursions", s.paths.handle)
-	r.Get("/users", s.handleUsers)
-	r.Post("/users", s.handleCreateUser)
-	r.Patch("/users/{id}", s.handleUpdateUser)
-	r.Delete("/users/{id}", s.handleDeleteUser)
+	limits, setLimits := need(ui.PermLimitsView), need(ui.PermLimitsManage)
+	r.With(limits).Get("/settings/exposure", s.handleExposure)
+	r.With(setLimits).Put("/settings/exposure", s.handleSetExposure)
+
+	agents := need(ui.PermAgentsManage)
+	r.With(need(ui.PermAgentsView, ui.PermLimitsView)).Get("/settings/agents", s.handleAgents) // the windows of the trading hours
+	r.With(agents).Post("/settings/agents", s.handleCreateAgent)
+	r.With(agents).Post("/settings/agents/params", s.handleAgentsParam)
+	r.With(agents).Patch("/settings/agents/{name}", s.handleAgent)
+	r.With(agents).Delete("/settings/agents/{name}", s.handleDeleteAgent)
+	r.With(agents).Post("/settings/agents/{name}/restart", s.handleRestart)
+	r.With(agents).Post("/settings/agents/{name}/rename", s.handleRename)
+	r.With(need(ui.PermAgentsView)).Get("/settings/agents/{name}/periods", s.handlePeriods)
+	r.With(agents).Post("/settings/agents/{name}/periods", s.handleStartPeriod)
+
+	prompts := need(ui.PermPromptsManage)
+	r.With(need(ui.PermPromptsView, ui.PermAgentsManage)).Get("/prompts", s.handlePrompts) // the prompt of an agent
+	r.With(prompts).Post("/prompts", s.handleCreatePrompt)
+	r.With(need(ui.PermPromptsView)).Get("/prompts/{id}", s.handlePrompt)
+	r.With(prompts).Put("/prompts/{id}", s.handleUpdatePrompt)
+	r.With(prompts).Delete("/prompts/{id}", s.handleDeletePrompt)
+
+	telegram := need(ui.PermTelegramManage)
+	r.With(need(ui.PermTelegramView)).Get("/settings/telegram", s.handleTelegram)
+	r.With(telegram).Patch("/settings/telegram", s.handleUpdateTelegram)
+	r.With(telegram).Post("/settings/telegram/users", s.handleAddTelegramUser)
+	r.With(telegram).Delete("/settings/telegram/users/{id}", s.handleDeleteTelegramUser)
+
+	panel := need(ui.PermDashboardView)
+	r.With(panel).Get("/positions/open", s.positions.handle)
+	r.With(panel).Get("/positions/closed", s.closed.handle)
+	performance := need(ui.PermPerformanceView)
+	r.With(performance).Get("/performance", s.trades.handle)
+	r.With(performance).Get("/performance/excursions", s.paths.handle)
+
+	users, setUsers := need(ui.PermUsersView), need(ui.PermUsersManage)
+	r.With(users).Get("/users", s.handleUsers)
+	r.With(setUsers).Post("/users", s.handleCreateUser)
+	r.With(setUsers).Patch("/users/{id}", s.handleUpdateUser)
+	r.With(setUsers).Delete("/users/{id}", s.handleDeleteUser)
+	r.With(users).Get("/roles", s.handleRoles)
+	r.With(setUsers).Post("/roles", s.handleCreateRole)
+	r.With(setUsers).Patch("/roles/{id}", s.handleUpdateRole)
+	r.With(setUsers).Delete("/roles/{id}", s.handleDeleteRole)
 	s.mt5Routes(r)
 }
 
@@ -589,9 +607,12 @@ func (s *settings) handleDeleteTelegramUser(w http.ResponseWriter, r *http.Reque
 	s.handleTelegram(w, r)
 }
 
-// userInfo returns the user u without its password hash.
+// userInfo returns the user u without its password hash, with its role.
 func userInfo(u store.User) ui.UserInfo {
 	info := ui.UserInfo{ID: u.ID, Username: u.Username, Enabled: u.Enabled, CreatedAt: u.CreatedAt.Unix()}
+	if role := u.RoleOf(); role != nil {
+		info.Role = &ui.RoleRef{ID: role.ID, Name: role.Name}
+	}
 	if u.LastLoginAt != nil {
 		at := u.LastLoginAt.Unix()
 		info.LastLoginAt = &at
@@ -613,27 +634,44 @@ func (s *settings) handleUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ui.UsersResponse{Users: list})
 }
 
-// handleCreateUser creates a user of the dashboard.
+// handleCreateUser creates a user of the dashboard, with its role.
 func (s *settings) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var request ui.UserRequest
 	if !decode(w, r, &request) {
 		return
 	}
-	if request.Password == nil {
+	switch {
+	case request.Password == nil:
 		writeJSONError(w, http.StatusBadRequest, "Informe a senha.")
 		return
+	case request.RoleID == nil || *request.RoleID <= 0:
+		writeJSONError(w, http.StatusBadRequest, "Escolha o papel do usuário: sem um papel ele não entra.")
+		return
 	}
-	user, err := s.store.CreateUser(r.Context(), request.Username, *request.Password)
+	by := userOf(r.Context())
+	var user store.User
+	err := s.store.Transaction(r.Context(), func(ctx context.Context) error {
+		created, err := s.store.CreateUser(ctx, request.Username, *request.Password)
+		if err != nil {
+			return err
+		}
+		if err := s.store.SetUserRole(ctx, created.ID, *request.RoleID, by); err != nil {
+			return err
+		}
+		user, err = s.store.User(ctx, created.ID)
+		return err
+	})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	log.Infof("ui: the user %s created by %s", user.Username, userOf(r.Context()))
+	log.Infof("ui: the user %s created by %s, with the role %s", user.Username, by, user.RoleOf().Name)
 	writeCreated(w, userInfo(user))
 }
 
-// handleUpdateUser changes the password of a user, or enables or disables
-// it: its sessions are closed.
+// handleUpdateUser changes the password of a user, its role (0 takes it away,
+// the user then refused at the login), or enables or disables it: its
+// sessions are closed, or take its new role at their next request.
 func (s *settings) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r, "id")
 	if !ok {
@@ -649,6 +687,11 @@ func (s *settings) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if request.RoleID != nil {
+			if err := s.store.SetUserRole(ctx, id, max(*request.RoleID, 0), userOf(ctx)); err != nil {
+				return err
+			}
+		}
 		if request.Enabled != nil {
 			return s.store.SetUserEnabled(ctx, id, *request.Enabled)
 		}
@@ -658,8 +701,12 @@ func (s *settings) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if request.Password != nil || (request.Enabled != nil && !*request.Enabled) {
+	switch {
+	case request.Password != nil || (request.Enabled != nil && !*request.Enabled) ||
+		(request.RoleID != nil && *request.RoleID <= 0):
 		s.auth().closeUser(id)
+	case request.RoleID != nil:
+		s.auth().refreshUsers(id)
 	}
 	user, err := s.store.User(r.Context(), id)
 	if err != nil {

@@ -544,7 +544,7 @@ func TestSupervision_ChatSetsDailyLimits(t *testing.T) {
 			told = results(messages)
 			return llm.ChatAnswer{Content: "É o total de todos ou cada agente?"}, nil
 		})
-	_, err := s.sup.Ask(ctx, user, "admin", "limite de perda de 150 por dia")
+	_, err := s.sup.Ask(adminCtx(ctx), user, "admin", "limite de perda de 150 por dia")
 	require.NoError(t, err)
 	assert.Contains(t, told, "aggregate_all")
 	_, found, err := s.store.GlobalDailyLimit(ctx)
@@ -555,7 +555,7 @@ func TestSupervision_ChatSetsDailyLimits(t *testing.T) {
 		calling(tool("d1", "set_daily_limits", map[string]any{"scope": "aggregate_all", "max_loss": 150,
 			"max_gain": 300, "reason": "limite somado de todos os agentes"})),
 		saying("Pronto."))
-	added, err := s.sup.Ask(ctx, user, "admin", "perda máxima de 150 e ganho de 300 no total de todos os agentes")
+	added, err := s.sup.Ask(adminCtx(ctx), user, "admin", "perda máxima de 150 e ganho de 300 no total de todos os agentes")
 	require.NoError(t, err)
 	global, found, err := s.store.GlobalDailyLimit(ctx)
 	require.NoError(t, err)
@@ -578,7 +578,7 @@ func TestSupervision_ChatSetsDailyLimits(t *testing.T) {
 			told = results(messages)
 			return llm.ChatAnswer{Content: "Pronto."}, nil
 		})
-	_, err = s.sup.Ask(ctx, user, "admin", "e um limite de perda de 40 para cada agente")
+	_, err = s.sup.Ask(adminCtx(ctx), user, "admin", "e um limite de perda de 40 para cada agente")
 	require.NoError(t, err)
 	for _, name := range []string{"trend", "orb"} {
 		a, err := s.store.AgentByName(ctx, name)

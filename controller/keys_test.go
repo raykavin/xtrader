@@ -26,7 +26,7 @@ func TestDashboard_KeyOfTheAgent(t *testing.T) {
 	t.Cleanup(bot.Close)
 	d, err := NewDashboard([]Agent{{Name: "bot", Address: bot.URL}})
 	require.NoError(t, err)
-	srv := httptest.NewServer(d.router(bundle{dir: t.TempDir(), version: "v1.0.0"}, nil))
+	srv := httptest.NewServer(asAdmin(d.router(bundle{dir: t.TempDir(), version: "v1.0.0"}, nil)))
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
 	bots := func() *agent { return agentNamed(t, d, "bot") }

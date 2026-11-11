@@ -23,12 +23,15 @@ type backtestRunDetail struct {
 	Report json.RawMessage `json:"report,omitempty"`
 }
 
+// routes serves the backtests, each route needing the permissions it declares
+// (see need).
 func (b *Backtests) routes(r chi.Router) {
-	r.Get("/backtests", b.handleList)
-	r.Post("/backtests", b.handleCreate)
-	r.Delete("/backtests/{id}", b.handleDelete)
-	r.Get("/backtests/runs/{id}", b.handleRun)
-	r.Post("/backtests/runs/{id}/cancel", b.handleCancel)
+	view, manage := need(ui.PermBacktestsView), need(ui.PermBacktestsManage)
+	r.With(view).Get("/backtests", b.handleList)
+	r.With(manage).Post("/backtests", b.handleCreate)
+	r.With(manage).Delete("/backtests/{id}", b.handleDelete)
+	r.With(view).Get("/backtests/runs/{id}", b.handleRun)
+	r.With(manage).Post("/backtests/runs/{id}/cancel", b.handleCancel)
 }
 
 // backtestRunInfo returns run as the dashboard shows it.

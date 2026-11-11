@@ -54,7 +54,8 @@ func newFakeUsers(credentials ...string) *fakeUsers {
 	for i := 0; i+1 < len(credentials); i += 2 {
 		id := int64(len(f.users) + 1)
 		f.users = append(f.users, store.User{Model: store.Model{ID: id}, Username: credentials[i],
-			PasswordHash: "hash:" + credentials[i+1], Enabled: true})
+			PasswordHash: "hash:" + credentials[i+1], Enabled: true,
+			RoleLink: &store.UserRole{UserID: id, RoleID: 1, Role: adminRole()}})
 		f.passwords[id] = credentials[i+1]
 	}
 	return f
@@ -309,9 +310,13 @@ func TestAuth_BlocksWithoutSession(t *testing.T) {
 func TestAuth_LoginAndLogout(t *testing.T) {
 	d, srv := authServer(t, WithUsers(newFakeUsers(testUsername, testPassword)))
 
+	everything, err := json.Marshal(ui.AllPermissions())
+	require.NoError(t, err)
+	logged := `{"authenticated":true,"username":"` + testUsername + `","role":{"id":1,"name":"Administrador"},` +
+		`"permissions":` + string(everything) + `}`
 	resp, body := login(t, srv, strings.ToUpper(testUsername), testPassword)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.JSONEq(t, `{"authenticated":true,"username":"`+testUsername+`"}`, body)
+	assert.JSONEq(t, logged, body)
 	session := cookieOf(resp, sessionCookie)
 	require.NotNil(t, session)
 	assert.True(t, session.HttpOnly)
@@ -340,7 +345,7 @@ func TestAuth_LoginAndLogout(t *testing.T) {
 	resp, _ = do(t, http.MethodGet, srv.URL+"/settings", "", cookies)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the page of the settings")
 	_, body = do(t, http.MethodGet, srv.URL+"/api/auth/session", "", cookies)
-	assert.JSONEq(t, `{"authenticated":true,"username":"`+testUsername+`"}`, body)
+	assert.JSONEq(t, logged, body)
 	resp, _ = do(t, http.MethodGet, srv.URL+"/login?next=%2F%3Fagent%3Dbot", "", cookies)
 	assert.Equal(t, http.StatusFound, resp.StatusCode, "logged in already")
 	assert.Equal(t, "/?agent=bot", resp.Header.Get("Location"))
@@ -995,4 +1000,19 @@ func TestLoginLimiter_Keys(t *testing.T) {
 	assert.Equal(t, "pipe", clientKey("pipe"))
 	assert.Equal(t, "admin", usernameKey(" Admin "))
 	assert.Len(t, usernameKey(strings.Repeat("x", maxLoginBody)), maxUsernameKey)
+}
+
+// setRole gives role to the user of id (nil takes it away), as SQL would, the
+// dashboard not told.
+func (f *fakeUsers) setRole(id int64, role *store.Role) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.users {
+		if f.users[i].ID == id {
+			f.users[i].RoleLink = nil
+			if role != nil {
+				f.users[i].RoleLink = &store.UserRole{UserID: id, RoleID: role.ID, Role: role}
+			}
+		}
+	}
 }

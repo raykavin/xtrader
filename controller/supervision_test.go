@@ -812,7 +812,7 @@ func TestSupervision_ChatAmbiguity(t *testing.T) {
 			}
 			return llm.ChatAnswer{Content: "Qual agente: fibonacci?"}, nil
 		})
-	added, err := s.sup.Ask(context.Background(), userOfTests(t, s), "admin", "pare o agente do ouro")
+	added, err := s.sup.Ask(adminCtx(context.Background()), userOfTests(t, s), "admin", "pare o agente do ouro")
 	require.NoError(t, err)
 	require.Len(t, added, 2, "the question and the answer, no proposal")
 	assert.Equal(t, store.MessageAnswer, added[1].Kind)
@@ -822,7 +822,7 @@ func TestSupervision_ChatAmbiguity(t *testing.T) {
 
 	// the model unavailable: an error message, nothing done
 	s.chat.script(failing(llm.ErrTimeout))
-	added, err = s.sup.Ask(context.Background(), userOfTests(t, s), "admin", "como estão os agentes?")
+	added, err = s.sup.Ask(adminCtx(context.Background()), userOfTests(t, s), "admin", "como estão os agentes?")
 	require.NoError(t, err)
 	assert.Equal(t, store.MessageError, added[len(added)-1].Kind)
 	assert.Contains(t, added[len(added)-1].Content, "tempo esgotado")
@@ -1298,14 +1298,14 @@ func TestSupervision_CutAtMaxTokens(t *testing.T) {
 	assert.Contains(t, got.Error, "Máximo de tokens")
 
 	s.chat.script(cut(""))
-	added, err := s.sup.Ask(ctx, userOfTests(t, s), "admin", "como estão os agentes?")
+	added, err := s.sup.Ask(adminCtx(ctx), userOfTests(t, s), "admin", "como estão os agentes?")
 	require.NoError(t, err)
 	last := added[len(added)-1]
 	assert.Equal(t, store.MessageError, last.Kind)
 	assert.Contains(t, last.Content, "Aumente o Máximo de tokens")
 
 	s.chat.script(cut("Metade da"))
-	added, err = s.sup.Ask(ctx, userOfTests(t, s), "admin", "e agora?")
+	added, err = s.sup.Ask(adminCtx(ctx), userOfTests(t, s), "admin", "e agora?")
 	require.NoError(t, err)
 	last = added[len(added)-1]
 	assert.Equal(t, store.MessageAnswer, last.Kind)

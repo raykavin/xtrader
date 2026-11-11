@@ -138,7 +138,7 @@ func TestSupervision_ProtectPosition(t *testing.T) {
 	s.chat.script(calling(tool("c1", "protect_position", map[string]any{"agent": "trend", "pair": "BTCUSDm",
 		"position_ref": "mt5:2", "feature": "breakeven", "reason": "o usuário pediu para proteger o BTC",
 		"category": store.CategoryRisk, "evidence": "avanço 4 ATR"})), saying("Feito."))
-	added, err := s.sup.Ask(ctx, userOfTests(t, s), "admin", "proteja o BTC do trend no breakeven")
+	added, err := s.sup.Ask(adminCtx(ctx), userOfTests(t, s), "admin", "proteja o BTC do trend no breakeven")
 	require.NoError(t, err)
 	var result *store.SupervisorMessage
 	for i := range added {

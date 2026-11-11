@@ -26,33 +26,41 @@ const (
 )
 
 // routes serves the supervisor on the dashboard, to its users, as the
-// settings: a change needs the CSRF token of the session (see auth.protect).
+// settings: a change needs the CSRF token of the session (see auth.protect),
+// each route the permissions it declares (see need).
 func (s *Supervision) routes(r chi.Router) {
-	r.Get("/settings/supervisor", s.handleSettings)
-	r.Patch("/settings/supervisor", s.handleUpdateSettings)
-	r.Get("/supervisor/overview", s.handleOverview)
-	r.Post("/supervisor/run", s.handleRun)
-	r.Get("/supervisor/runs", s.handleRuns)
-	r.Get("/supervisor/runs/{id}", s.handleRunDetail)
-	r.Get("/supervisor/actions", s.handleActions)
-	r.Get("/supervisor/protections", s.handleProtections)
-	r.Post("/supervisor/actions/{id}/confirm", s.handleConfirm)
-	r.Post("/supervisor/actions/{id}/reject", s.handleReject)
-	r.Get("/supervisor/messages", s.handleMessages)
-	r.Post("/supervisor/messages", s.handleAsk)
-	r.Post("/supervisor/messages/stream", s.handleAskStream)
-	r.Post("/supervisor/agents/{name}/entries", s.handleEntries)
-	r.Post("/supervisor/agents/{name}/close", s.handleClose)
-	r.Post("/supervisor/close-all", s.handleCloseAll)
-	r.Get("/settings/daily-limits", s.handleDailyLimits)
-	r.Put("/settings/daily-limits", s.handleSetDailyLimits)
-	r.Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
-	r.Get("/daily-guard", s.handleDailyGuard)
-	r.Get("/settings/trading-hours", s.handleTradingHours)
-	r.Put("/settings/trading-hours", s.handleSetTradingHours)
-	r.Get("/settings/news", s.handleNews)
-	r.Put("/settings/news", s.handleSetNews)
-	r.Post("/settings/news/test", s.handleTestNews)
+	settings, chat := need(ui.PermSupervisorView), need(ui.PermSupervisorChat)
+	settingsOrChat := need(ui.PermSupervisorView, ui.PermSupervisorChat)
+	r.With(settingsOrChat).Get("/settings/supervisor", s.handleSettings) // whether the chat can answer
+	r.With(need(ui.PermSupervisorManage)).Patch("/settings/supervisor", s.handleUpdateSettings)
+	r.With(settings).Get("/supervisor/overview", s.handleOverview)
+	r.With(need(ui.PermSupervisorChat, ui.PermSupervisorManage)).Post("/supervisor/run", s.handleRun)
+	r.With(settingsOrChat).Get("/supervisor/runs", s.handleRuns)
+	r.With(settingsOrChat).Get("/supervisor/runs/{id}", s.handleRunDetail)
+	r.With(settings).Get("/supervisor/actions", s.handleActions)
+	r.With(settings).Get("/supervisor/protections", s.handleProtections)
+	r.With(chat).Get("/supervisor/messages", s.handleMessages)
+	r.With(chat).Post("/supervisor/messages", s.handleAsk)
+	r.With(chat).Post("/supervisor/messages/stream", s.handleAskStream)
+
+	operate := need(ui.PermTradingOperate)
+	r.With(operate).Post("/supervisor/actions/{id}/confirm", s.handleConfirm)
+	r.With(operate).Post("/supervisor/actions/{id}/reject", s.handleReject)
+	r.With(operate).Post("/supervisor/agents/{name}/entries", s.handleEntries)
+	r.With(operate).Post("/supervisor/agents/{name}/close", s.handleClose)
+	r.With(operate).Post("/supervisor/close-all", s.handleCloseAll)
+
+	limits, setLimits := need(ui.PermLimitsView), need(ui.PermLimitsManage)
+	r.With(limits).Get("/settings/daily-limits", s.handleDailyLimits)
+	r.With(setLimits).Put("/settings/daily-limits", s.handleSetDailyLimits)
+	r.With(setLimits).Put("/settings/agents/{name}/daily-limit", s.handleSetAgentDailyLimit)
+	r.With(need(ui.PermDashboardView)).Get("/daily-guard", s.handleDailyGuard)
+	r.With(need(ui.PermLimitsView, ui.PermBacktestsManage)).Get("/settings/trading-hours", s.handleTradingHours) // the windows of a backtest
+	r.With(setLimits).Put("/settings/trading-hours", s.handleSetTradingHours)
+
+	r.With(need(ui.PermNewsView)).Get("/settings/news", s.handleNews)
+	r.With(need(ui.PermNewsManage)).Put("/settings/news", s.handleSetNews)
+	r.With(need(ui.PermNewsManage)).Post("/settings/news/test", s.handleTestNews)
 }
 
 // dailyLimitsResponse returns the limits of all the agents together and how
