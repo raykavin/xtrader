@@ -950,7 +950,15 @@ func (s *Store) RenameAgent(ctx context.Context, id int64, name string) (Agent, 
 			return err
 		}
 		err = s.conn(ctx).Model(&Agent{}).Where("id = ?", id).Update("name", name).Error
-		return notFound(err, "o agente "+name)
+		if err != nil {
+			return notFound(err, "o agente "+name)
+		}
+		// the rules of the agents per asset follow it, one change of them at a time
+		// (the agent locked first, as UpdateAgent does)
+		if err := s.lockAgents(ctx); err != nil {
+			return err
+		}
+		return s.renameInAssetAgents(ctx, agent.Name, name)
 	})
 	if err != nil {
 		return Agent{}, err

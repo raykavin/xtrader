@@ -155,7 +155,7 @@ func (s *Supervision) setEntries(ctx context.Context, a store.Agent, blocked boo
 		return item
 	}
 	// what the agent applies: its supervision and its daily guards together
-	entries, err := combinedEntries(ctx, s.store, a.ID, supervision)
+	entries, err := combinedEntries(ctx, s.store, a, supervision)
 	if err != nil {
 		item.Status, item.Detail = itemFailed, "o limite diário não pôde ser lido: "+err.Error()
 		return item
