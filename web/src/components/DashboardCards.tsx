@@ -112,14 +112,13 @@ const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
   openpl: { min: 260, grow: 3 },
   chart: { min: CHART_MIN_WIDTH, grow: 8 },
   decision: { min: 260, grow: 4 },
-  ticket: { min: 300, grow: 0, max: 344 },
   activity: { min: 360, grow: 8 },
 };
 
 /**
  * The cards of about the same height, as tall as each other in a row of them
  * alone, one per column, as the overview row of the default layout; next to a
- * taller card (the chart, the ticket, the activity, or a column of several),
+ * taller card (the chart, the activity, or a column of several),
  * each keeps the height of its content.
  */
 const EVEN: ReadonlySet<CardId> = new Set(["quote", "sentiment", "results", "openpl", "decision"]);
@@ -191,7 +190,7 @@ function describeMove(card: CardId, target: Placement): string {
  * The element a card is drawn in, the same one wherever the card goes: the
  * card is rendered into it once (a portal), and the element moved into the
  * frame of its place, so that a card moved keeps its state, eg: the zoom of
- * the chart, or what is typed in the ticket.
+ * the chart, or the tab of the activity.
  */
 function CardSlot({ host }: { host: HTMLElement }) {
   const ref = useRef<HTMLDivElement>(null);

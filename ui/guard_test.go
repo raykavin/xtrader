@@ -55,18 +55,17 @@ func TestAPI_RefusesThePagesOfABrowser(t *testing.T) {
 		resp, body := request(t, http.MethodPost, srv.URL+"/api/controls/stop", "{}", tc.headers...)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode, tc.name)
 		assert.Contains(t, body, "controller", tc.name)
-		resp, _ = request(t, http.MethodPost, srv.URL+"/api/controls/order",
-			`{"pair":"ETHUSDT","side":"buy","amount":10}`, tc.headers...)
+		resp, _ = request(t, http.MethodPost, srv.URL+"/api/controls/orders/1/cancel", "{}", tc.headers...)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode, tc.name)
 	}
 	resp, _ := request(t, http.MethodGet, srv.URL+"/api/controls/balance", "", "Origin", "https://evil.example")
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "nor read")
-	resp, _ = request(t, http.MethodOptions, srv.URL+"/api/controls/order", "", "Origin", "https://evil.example",
+	resp, _ = request(t, http.MethodOptions, srv.URL+"/api/controls/stop", "", "Origin", "https://evil.example",
 		"Access-Control-Request-Method", "POST")
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "a preflight")
 	assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
 	assert.Equal(t, order.StatusRunning, controller.Status(), "the bot not stopped")
-	assert.Zero(t, controller.quoteCalls+controller.marketCalls, "no order")
+	assert.Empty(t, controller.canceled, "no order canceled")
 
 	// what the user opens himself, or a page of the API itself, is not a site
 	// of another origin
@@ -133,17 +132,16 @@ func TestAPI_ChangesAreJSON(t *testing.T) {
 		resp, body := request(t, http.MethodPost, srv.URL+"/api/controls/stop", "", headers...)
 		assert.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode, contentType)
 		assert.Contains(t, body, "application/json", contentType)
-		resp, _ = request(t, http.MethodPost, srv.URL+"/api/controls/order",
-			`{"pair":"ETHUSDT","side":"buy","amount":10}`, headers...)
+		resp, _ = request(t, http.MethodPost, srv.URL+"/api/controls/orders/1/cancel", "{}", headers...)
 		assert.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode, contentType)
 	}
 	assert.Equal(t, order.StatusRunning, controller.Status(), "the bot not stopped")
-	assert.Zero(t, controller.quoteCalls+controller.marketCalls, "no order")
+	assert.Empty(t, controller.canceled, "no order canceled")
 
-	resp, _ := request(t, http.MethodPost, srv.URL+"/api/controls/order",
-		`{"pair":"ETHUSDT","side":"buy","amount":10}`, "Content-Type", "Application/JSON; charset=utf-8")
+	resp, _ := request(t, http.MethodPost, srv.URL+"/api/controls/stop", "",
+		"Content-Type", "Application/JSON; charset=utf-8")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, 1, controller.quoteCalls)
+	assert.True(t, controller.stopped, "its type taken whatever its case and parameters")
 	resp, _ = request(t, http.MethodGet, srv.URL+"/api/controls", "")
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the reads take no payload")
 }

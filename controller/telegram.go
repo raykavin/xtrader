@@ -4,11 +4,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"math"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,13 +21,6 @@ import (
 	"github.com/raykavin/xtrader/order"
 	"github.com/raykavin/xtrader/ui"
 )
-
-// orderRegexp parses /buy and /sell as the Telegram of the bots does: an amount
-// in the currency of the account (the quote in a paper wallet), in % of the
-// balance, or a size in lots, eg: 0.1 lot, with nothing after it, so a typo in
-// the unit isn't taken for an amount.
-var orderRegexp = regexp.MustCompile(`^/(?P<side>buy|sell)(?:@\w+)?\s+(?P<pair>\w+)\s+` +
-	`(?P<amount>\d+(?:\.\d+)?)(?:(?P<percent>%)|\s*(?P<lot>(?i:lot(?:s|es?)?)))?\s*$`)
 
 var (
 	// telegramAPIURL overrides the Telegram endpoint. Empty means the default
@@ -117,8 +107,6 @@ func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...T
 		{Text: "/status", Description: "Check bot status"},
 		{Text: "/balance", Description: "Wallet balance"},
 		{Text: "/profit", Description: "Summary of last trade results"},
-		{Text: "/buy", Description: "open a buy order, eg: /buy BTCUSDT 100, 50% or 0.1 lot"},
-		{Text: "/sell", Description: "open a sell order, eg: /sell BTCUSDT 100, 50% or 0.1 lot"},
 		{Text: "/reanalyze", Description: "Ask the language model of the agent again now, eg: /reanalyze BTCUSDm, " +
 			"with a note for it after the pair if any: /reanalyze BTCUSDm in profit, close it? (the agents " +
 			"trading with an LLM)"},
@@ -142,7 +130,7 @@ func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...T
 	menu.Reply(
 		menu.Row(menu.Text("/agents"), menu.Text("/reanalyze")),
 		menu.Row(menu.Text("/status"), menu.Text("/balance"), menu.Text("/profit")),
-		menu.Row(menu.Text("/start"), menu.Text("/stop"), menu.Text("/buy"), menu.Text("/sell")),
+		menu.Row(menu.Text("/start"), menu.Text("/stop")),
 	)
 
 	t.client, t.menu = client, menu
@@ -154,8 +142,6 @@ func NewTelegram(dashboard *Dashboard, token string, users []int64, options ...T
 	client.Handle("/status", t.handleStatus)
 	client.Handle("/balance", t.handleBalance)
 	client.Handle("/profit", t.handleProfit)
-	client.Handle("/buy", t.handleOrder)
-	client.Handle("/sell", t.handleOrder)
 	client.Handle("/reanalyze", t.handleReanalyze)
 	client.Handle("/reanalyse", t.handleReanalyze)
 	if t.prompts != nil {
@@ -583,60 +569,6 @@ func profitSummary(snapshot ui.Snapshot, since time.Time) (string, bool) {
 		summary += "\nSince: " + since.UTC().Format("2006-01-02 15:04") + " UTC"
 	}
 	return summary, true
-}
-
-// handleOrder creates the market order of /buy or /sell with the control panel
-// of the agent. The order is notified by the relay of the agent.
-func (t *Telegram) handleOrder(m *tb.Message) {
-	a, ok := t.agentOf(m)
-	if !ok {
-		return
-	}
-
-	match := orderRegexp.FindStringSubmatch(strings.TrimSpace(m.Text))
-	if match == nil {
-		command := "/buy"
-		if strings.HasPrefix(m.Text, "/sell") {
-			command = "/sell"
-		}
-		t.reply(m, a, fmt.Sprintf("Invalid command.\nExamples of usage:\n%[1]s BTCUSDT 100\n\n%[1]s BTCUSDT 50%%\n\n"+
-			"%[1]s BTCUSDT 0.1 lot", command))
-		return
-	}
-	command := make(map[string]string)
-	for i, name := range orderRegexp.SubexpNames() {
-		if i != 0 && name != "" {
-			command[name] = match[i]
-		}
-	}
-
-	amount, err := strconv.ParseFloat(command["amount"], 64)
-	if err != nil || amount <= 0 || math.IsInf(amount, 0) {
-		t.reply(m, a, "Invalid amount")
-		return
-	}
-	request := ui.ControlOrderRequest{
-		Pair:    strings.ToUpper(command["pair"]),
-		Side:    command["side"],
-		Amount:  amount,
-		Percent: command["percent"] != "",
-		Lot:     command["lot"] != "",
-	}
-
-	var created ui.Order
-	err = t.dashboard.call(t.ctx, a, http.MethodPost, "controls/order", request, &created)
-	var apiErr *apiError
-	switch {
-	case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict &&
-		strings.HasPrefix(apiErr.Message, ui.EntriesBlocked):
-		t.reply(m, a, "Nenhuma ordem criada. "+apiErr.Message)
-	case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict:
-		t.reply(m, a, "Bot is stopped, no order was created. Send /start to resume.", t.menu)
-	case err != nil:
-		t.reply(m, a, err.Error())
-	default:
-		log.Infof("[TELEGRAM] %s: %s ORDER CREATED: %s", a.Name, strings.ToUpper(request.Side), orderLine(created))
-	}
 }
 
 // handleReanalyze asks the language model of the agent again about a pair,

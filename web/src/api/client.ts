@@ -27,8 +27,6 @@ import type {
   CandlesResponse,
   ClosedProfitResponse,
   ControlMoveRequest,
-  ControlOrderRequest,
-  ControlOrderResponse,
   ControlsResponse,
   DailyAgentsResponse,
   DailyLimitPreview,
@@ -344,14 +342,6 @@ export function startBot(agent: string): Promise<ControlsResponse> {
 
 export function stopBot(agent: string): Promise<ControlsResponse> {
   return postJSON<ControlsResponse>(agentPath(agent, "/controls/stop"));
-}
-
-/** Creates an order of the ticket: its warning tells of one created short of what was asked. */
-export function createOrder(
-  agent: string,
-  request: ControlOrderRequest,
-): Promise<ControlOrderResponse> {
-  return postJSON<ControlOrderResponse>(agentPath(agent, "/controls/order"), request);
 }
 
 /** Moves a pending order: the price of a limit order, or a stop loss or take profit. */

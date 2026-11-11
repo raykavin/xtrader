@@ -1,10 +1,8 @@
 package ui
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -27,24 +25,15 @@ type fakeController struct {
 	account      model.Account
 	asset, quote float64
 	positionErr  error
-	orderErr     error
 
 	started, stopped bool
-	lastSide         model.SideType
-	lastPair         string
-	lastAmount       float64
-	marketCalls      int
-	quoteCalls       int
 
-	// the orders with a price, the protected ones, the moves and the cancels
-	calls                []string
-	lastPrice            float64
-	lastStop, lastProfit float64
-	lastMoved            model.Order
-	lastLevel            float64
-	canceled             []int64
-	moveErr, cancelErr   error
-	legsErr              error // of a protected entry placed, its legs failing
+	// the moves and the cancels of the pending orders
+	calls              []string
+	lastMoved          model.Order
+	lastLevel          float64
+	canceled           []int64
+	moveErr, cancelErr error
 }
 
 // pointedController is a controller of an account valuing a move of 1 of the
@@ -64,54 +53,6 @@ func (f *fakeController) Account() (model.Account, error) { return f.account, f.
 
 func (f *fakeController) Position(string) (float64, float64, error) {
 	return f.asset, f.quote, f.positionErr
-}
-
-func (f *fakeController) CreateOrderMarket(side model.SideType, pair string, size float64) (model.Order, error) {
-	f.marketCalls++
-	f.lastSide, f.lastPair, f.lastAmount = side, pair, size
-	if f.orderErr != nil {
-		return model.Order{}, f.orderErr
-	}
-	return model.Order{ID: 1, Pair: pair, Side: side, Quantity: size}, nil
-}
-
-func (f *fakeController) CreateOrderMarketQuote(side model.SideType, pair string, amount float64) (model.Order, error) {
-	f.quoteCalls++
-	f.lastSide, f.lastPair, f.lastAmount = side, pair, amount
-	if f.orderErr != nil {
-		return model.Order{}, f.orderErr
-	}
-	return model.Order{ID: 2, Pair: pair, Side: side, Quantity: amount}, nil
-}
-
-func (f *fakeController) CreateOrderLimit(side model.SideType, pair string, size, limit float64) (model.Order,
-	error) {
-	f.calls = append(f.calls, "limit")
-	f.lastSide, f.lastPair, f.lastAmount, f.lastPrice = side, pair, size, limit
-	return model.Order{ID: 3, Pair: pair, Side: side, Type: model.OrderTypeLimit, Quantity: size, Price: limit},
-		f.orderErr
-}
-
-func (f *fakeController) CreateOrderMarketProtected(side model.SideType, pair string, size, stop,
-	profit float64) ([]model.Order, error) {
-	f.calls = append(f.calls, "market protected")
-	f.lastSide, f.lastPair, f.lastAmount, f.lastStop, f.lastProfit = side, pair, size, stop, profit
-	if f.orderErr != nil {
-		return nil, f.orderErr
-	}
-	return []model.Order{{ID: 4, Pair: pair, Side: side, Type: model.OrderTypeMarket, Quantity: size}}, f.legsErr
-}
-
-func (f *fakeController) CreateOrderLimitProtected(side model.SideType, pair string, size, limit, stop,
-	profit float64) ([]model.Order, error) {
-	f.calls = append(f.calls, "limit protected")
-	f.lastSide, f.lastPair, f.lastAmount, f.lastPrice = side, pair, size, limit
-	f.lastStop, f.lastProfit = stop, profit
-	if f.orderErr != nil {
-		return nil, f.orderErr
-	}
-	return []model.Order{{ID: 5, Pair: pair, Side: side, Type: model.OrderTypeLimit, Quantity: size, Price: limit}},
-		f.legsErr
 }
 
 func (f *fakeController) UpdateProtection(leg model.Order, level float64) (model.Order, error) {
@@ -158,7 +99,7 @@ func TestControls_Disabled(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, ControlsResponse{Enabled: false, Status: ""}, decodeControls(t, body))
 
-	for _, path := range []string{"/controls/start", "/controls/stop", "/controls/order"} {
+	for _, path := range []string{"/controls/start", "/controls/stop"} {
 		resp, body := postJSON(t, srv.URL+"/api"+path, "{}")
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
 		assert.Contains(t, body, "Controles do agente desligados")
@@ -186,103 +127,6 @@ func TestControls_StatusStartStop(t *testing.T) {
 	assert.Equal(t, ControlsResponse{Enabled: true, Status: "running", BotControl: true}, decodeControls(t, body))
 }
 
-func TestControls_OrderValidation(t *testing.T) {
-	c := newTestChart(t)
-	c.SetOrderController(&fakeController{})
-	c.OnCandle(candleAt("BTCUSDT", time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC), 40000))
-	srv := newTestServer(t, c)
-
-	testCases := []struct {
-		name, body, wantError string
-		wantStatus            int
-	}{
-		{"invalid json", "{", "Pedido inválido", http.StatusBadRequest},
-		{"unknown pair", `{"pair":"DOGEUSDT","side":"buy","amount":10}`, "Ativo desconhecido", http.StatusNotFound},
-		{"zero amount", `{"pair":"BTCUSDT","side":"buy","amount":0}`, "A quantidade deve ser maior que zero", http.StatusBadRequest},
-		{"percent above 100", `{"pair":"BTCUSDT","side":"buy","amount":150,"percent":true}`,
-			"não pode passar de 100", http.StatusBadRequest},
-		{"percent and lot", `{"pair":"BTCUSDT","side":"buy","amount":50,"percent":true,"lot":true}`,
-			"não nos dois", http.StatusBadRequest},
-		{"invalid side", `{"pair":"BTCUSDT","side":"hold","amount":10}`, "Lado da ordem inválido", http.StatusBadRequest},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			resp, body := postJSON(t, srv.URL+"/api/controls/order", tc.body)
-			assert.Equal(t, tc.wantStatus, resp.StatusCode)
-			assert.Contains(t, body, tc.wantError)
-		})
-	}
-}
-
-func TestControls_OrderSemantics(t *testing.T) {
-	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
-
-	testCases := []struct {
-		name            string
-		body            string
-		wantSide        model.SideType
-		wantAmount      float64
-		wantMarketCalls int
-		wantQuoteCalls  int
-	}{
-		{"buy quote amount", `{"pair":"btcusdt","side":"buy","amount":100}`,
-			model.SideTypeBuy, 100, 0, 1},
-		{"buy percent of quote balance", `{"pair":"BTCUSDT","side":"BUY","amount":50,"percent":true}`,
-			model.SideTypeBuy, 500, 0, 1},
-		{"sell quote amount", `{"pair":"BTCUSDT","side":"sell","amount":25}`,
-			model.SideTypeSell, 25, 0, 1},
-		{"sell percent of asset balance", `{"pair":"BTCUSDT","side":"sell","amount":50,"percent":true}`,
-			model.SideTypeSell, 1, 1, 0},
-		{"buy a size in lots", `{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true}`,
-			model.SideTypeBuy, 0.1, 1, 0},
-		{"sell a size in lots, more than a lot too", `{"pair":"BTCUSDT","side":"sell","amount":150,"lot":true}`,
-			model.SideTypeSell, 150, 1, 0},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newTestChart(t)
-			controller := &fakeController{asset: 2, quote: 1000}
-			c.SetOrderController(controller)
-			c.OnCandle(candleAt("BTCUSDT", base, 40000))
-			srv := newTestServer(t, c)
-
-			resp, body := postJSON(t, srv.URL+"/api/controls/order", tc.body)
-			require.Equal(t, http.StatusOK, resp.StatusCode, body)
-
-			assert.Equal(t, tc.wantSide, controller.lastSide)
-			assert.Equal(t, "BTCUSDT", controller.lastPair)
-			assert.InDelta(t, tc.wantAmount, controller.lastAmount, 1e-9)
-			assert.Equal(t, tc.wantMarketCalls, controller.marketCalls)
-			assert.Equal(t, tc.wantQuoteCalls, controller.quoteCalls)
-
-			var created Order
-			require.NoError(t, json.Unmarshal([]byte(body), &created))
-			assert.Equal(t, "BTCUSDT", created.Pair)
-		})
-	}
-}
-
-func TestControls_OrderErrors(t *testing.T) {
-	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
-
-	c := newTestChart(t)
-	controller := &fakeController{orderErr: order.ErrBotStopped}
-	c.SetOrderController(controller)
-	c.OnCandle(candleAt("BTCUSDT", base, 40000))
-	srv := newTestServer(t, c)
-
-	resp, body := postJSON(t, srv.URL+"/api/controls/order", `{"pair":"BTCUSDT","side":"buy","amount":10}`)
-	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Contains(t, body, "O bot está parado")
-
-	controller.orderErr = assert.AnError
-	resp, body = postJSON(t, srv.URL+"/api/controls/order", `{"pair":"BTCUSDT","side":"buy","amount":10}`)
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	assert.Contains(t, body, assert.AnError.Error())
-}
-
 // failingStorage fails every write, eg: a full disk.
 type failingStorage struct{}
 
@@ -290,174 +134,6 @@ func (failingStorage) CreateOrder(*model.Order) error { return errors.New("no sp
 func (failingStorage) UpdateOrder(*model.Order) error { return errors.New("no space left on device") }
 func (failingStorage) Orders(...storage.OrderFilter) ([]*model.Order, error) {
 	return nil, nil
-}
-
-// An order executed by the broker is never answered as an error, which would
-// have it sent again: the storage failing to write it, or the legs of a
-// protected entry failing, told by the notifications of the bot.
-func TestControls_OrderExecutedIsNoError(t *testing.T) {
-	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
-
-	t.Run("not stored", func(t *testing.T) {
-		ctx := context.Background()
-		wallet := exchange.NewPaperWallet(ctx, "USDT", exchange.WithPaperAsset("USDT", 100000))
-		wallet.OnCandle(candleAt("BTCUSDT", base, 40000))
-		controller := order.NewController(ctx, wallet, failingStorage{}, order.NewOrderFeed())
-		c := newTestChart(t)
-		controller.SetNotifier(c)
-		c.SetOrderController(controller)
-		c.OnCandle(candleAt("BTCUSDT", base, 40000))
-		srv := newTestServer(t, c)
-
-		for _, body := range []string{
-			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true}`,
-			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"stop_loss":39000,"take_profit":42000}`,
-			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"type":"limit","price":39500}`,
-		} {
-			resp, got := postJSON(t, srv.URL+"/api/controls/order", body)
-			require.Equal(t, http.StatusOK, resp.StatusCode, "%s: %s", body, got)
-			var created ControlOrderResponse
-			require.NoError(t, json.Unmarshal([]byte(got), &created))
-			assert.Equal(t, "BTCUSDT", created.Pair, body)
-			assert.Empty(t, created.Warning, body)
-			assert.NotContains(t, got, `"warning"`, body)
-		}
-		asset, _, err := wallet.Position("BTCUSDT")
-		require.NoError(t, err)
-		assert.InDelta(t, 0.2, asset, 1e-9, "the market orders executed, once each")
-	})
-
-	t.Run("its legs failing", func(t *testing.T) {
-		c := newTestChart(t)
-		controller := &fakeController{asset: 2, quote: 1000, legsErr: exchange.ErrInvalidProtection}
-		c.SetOrderController(controller)
-		c.OnCandle(candleAt("BTCUSDT", base, 40000))
-		srv := newTestServer(t, c)
-
-		resp, body := postJSON(t, srv.URL+"/api/controls/order",
-			`{"pair":"BTCUSDT","side":"buy","amount":0.1,"lot":true,"stop_loss":39000}`)
-		require.Equal(t, http.StatusOK, resp.StatusCode, body)
-		assert.Contains(t, body, `"id":4`)
-		assert.Equal(t, []string{"market protected"}, controller.calls)
-		// B5: told in the answer that the position may be left unprotected
-		var created ControlOrderResponse
-		require.NoError(t, json.Unmarshal([]byte(body), &created))
-		assert.Equal(t, int64(4), created.ID)
-		assert.Contains(t, created.Warning, "só 0 das 1 ordens de stop loss e take profit")
-		assert.Contains(t, created.Warning, exchange.ErrInvalidProtection.Error())
-	})
-}
-
-func TestControls_OrderTicket(t *testing.T) {
-	base := time.Date(2021, 9, 26, 20, 0, 0, 0, time.UTC)
-
-	testCases := []struct {
-		name                     string
-		body                     string
-		wantCall                 string
-		wantSize, wantPrice      float64
-		wantStop, wantTakeProfit float64
-	}{
-		{"a limit order, its amount in quote at the limit",
-			`{"pair":"BTCUSDT","side":"buy","amount":1000,"type":"limit","price":20000}`, "limit", 0.05, 20000, 0, 0},
-		{"a limit order of a lot", `{"pair":"BTCUSDT","side":"sell","amount":0.1,"lot":true,"type":"limit",` +
-			`"price":50000}`, "limit", 0.1, 50000, 0, 0},
-		{"a limit order of a share of the quote balance", `{"pair":"BTCUSDT","side":"buy","amount":50,"percent":true,` +
-			`"type":"LIMIT","price":25000}`, "limit", 0.02, 25000, 0, 0},
-		{"a market order with its stop loss and take profit, sized at the last close",
-			`{"pair":"BTCUSDT","side":"buy","amount":4000,"stop_loss":39000,"take_profit":42000}`,
-			"market protected", 0.1, 0, 39000, 42000},
-		{"a market order with its stop loss only, of a share of the asset held",
-			`{"pair":"BTCUSDT","side":"sell","amount":50,"percent":true,"type":"market","stop_loss":41000}`,
-			"market protected", 1, 0, 41000, 0},
-		{"a limit order with its take profit", `{"pair":"BTCUSDT","side":"buy","amount":0.2,"lot":true,` +
-			`"type":"limit","price":38000,"take_profit":45000}`, "limit protected", 0.2, 38000, 0, 45000},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newTestChart(t)
-			controller := &fakeController{asset: 2, quote: 1000}
-			c.SetOrderController(controller)
-			c.OnCandle(candleAt("BTCUSDT", base, 40000))
-			srv := newTestServer(t, c)
-
-			resp, body := postJSON(t, srv.URL+"/api/controls/order", tc.body)
-			require.Equal(t, http.StatusOK, resp.StatusCode, body)
-			require.Equal(t, []string{tc.wantCall}, controller.calls)
-			assert.InDelta(t, tc.wantSize, controller.lastAmount, 1e-9)
-			assert.InDelta(t, tc.wantPrice, controller.lastPrice, 1e-9)
-			assert.InDelta(t, tc.wantStop, controller.lastStop, 1e-9)
-			assert.InDelta(t, tc.wantTakeProfit, controller.lastProfit, 1e-9)
-			assert.Zero(t, controller.marketCalls+controller.quoteCalls)
-		})
-	}
-
-	t.Run("an amount of the account currency, sized by the point value", func(t *testing.T) {
-		// a BRL account: 5 BRL a unit for 1 of the price
-		c := newTestChart(t)
-		controller := &pointedController{fakeController: fakeController{asset: 2, quote: 100000}, point: 5}
-		c.SetOrderController(controller)
-		c.OnCandle(candleAt("BTCUSDT", base, 40000))
-		srv := newTestServer(t, c)
-		for body, size := range map[string]float64{
-			`{"pair":"BTCUSDT","side":"buy","amount":1000,"type":"limit","price":20000}`:              0.01,
-			`{"pair":"BTCUSDT","side":"buy","amount":50,"percent":true,"type":"limit","price":25000}`: 0.4,
-			`{"pair":"BTCUSDT","side":"buy","amount":4000,"stop_loss":39000}`:                         0.02,
-		} {
-			controller.calls = nil
-			resp, answer := postJSON(t, srv.URL+"/api/controls/order", body)
-			require.Equal(t, http.StatusOK, resp.StatusCode, answer)
-			assert.InDelta(t, size, controller.lastAmount, 1e-9, body)
-		}
-	})
-
-	t.Run("refused", func(t *testing.T) {
-		c := newTestChart(t)
-		controller := &fakeController{}
-		c.SetOrderController(controller)
-		c.OnCandle(candleAt("BTCUSDT", base, 40000))
-		srv := newTestServer(t, c)
-
-		for body, wantError := range map[string]string{
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"stop"}`:                             `Tipo da ordem inválido`,
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit"}`:                            "Informe o preço limite",
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"stop_loss":-1}`:                            "não podem ser negativos",
-			`{"pair":"BTCUSDT","side":"buy","amount":10,"type":"limit","price":1,"take_profit":-5}`: "não podem ser negativos",
-		} {
-			resp, got := postJSON(t, srv.URL+"/api/controls/order", body)
-			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
-			assert.Contains(t, got, wantError, body)
-		}
-		assert.Empty(t, controller.calls)
-	})
-
-	t.Run("the errors of the broker", func(t *testing.T) {
-		for _, tc := range []struct {
-			err        error
-			wantStatus int
-			wantError  string
-		}{
-			{exchange.ErrInvalidProtection, http.StatusBadRequest, "Stop loss ou take profit inválido."},
-			{fmt.Errorf("%w: min: 0.01 max: 100", exchange.ErrInvalidQuantity), http.StatusBadRequest,
-				"Tamanho da ordem inválido: min: 0.01 max: 100"},
-			{exchange.ErrNotSupported, http.StatusUnprocessableEntity, "A corretora não aceita esta operação."},
-			{order.ErrBotStopped, http.StatusConflict, "O bot está parado: inicie-o antes."},
-			{fmt.Errorf("%w: limite diário", order.ErrEntriesBlocked), http.StatusConflict,
-				EntriesBlocked + ": limite diário"}, // the lead the Telegram tells them by
-			{order.ErrEntriesBlocked, http.StatusConflict, EntriesBlocked + "."},
-		} {
-			c := newTestChart(t)
-			c.SetOrderController(&fakeController{orderErr: tc.err})
-			c.OnCandle(candleAt("BTCUSDT", base, 40000))
-			srv := newTestServer(t, c)
-
-			resp, body := postJSON(t, srv.URL+"/api/controls/order",
-				`{"pair":"BTCUSDT","side":"buy","amount":100,"stop_loss":39000}`)
-			assert.Equal(t, tc.wantStatus, resp.StatusCode, tc.err)
-			assert.Contains(t, body, tc.wantError, tc.err)
-		}
-	})
 }
 
 func TestControls_MoveAndCancel(t *testing.T) {

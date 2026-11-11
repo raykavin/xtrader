@@ -11,8 +11,8 @@ var permissionAreas = []PermissionArea{
 	{Key: "dashboard", Label: "Painel", Hint: "Agentes, gráficos, decisões, posições e o limite do dia.",
 		View: PermDashboardView, ViewLabel: "Ver"},
 	{Key: "trading", Label: "Operação",
-		Hint: "Iniciar e parar bots, ordens, reanálise, fechar posições, zerar tudo, bloquear entradas e " +
-			"confirmar as ações do XTrader AI.",
+		Hint: "Iniciar e parar bots, mover e cancelar ordens, reanálise, fechar posições, zerar tudo, bloquear " +
+			"entradas e confirmar as ações do XTrader AI.",
 		Manage: PermTradingOperate, ManageLabel: "Operar"},
 	{Key: "chat", Label: "Chat do XTrader AI", Hint: "Conversar com o XTrader AI e pedir uma análise.",
 		View: PermSupervisorChat, ViewLabel: "Usar"},

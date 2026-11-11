@@ -337,45 +337,6 @@ func TestTelegram_StartStop(t *testing.T) {
 	assert.Equal(t, order.StatusRunning, controller.Status())
 }
 
-func TestTelegram_Orders(t *testing.T) {
-	controller := &fakeController{status: order.StatusRunning, asset: 2}
-	chart, eth := newAgent(t, controller)
-	chart.OnCandle(candleAt("ETHUSDT", testBase, 3000))
-	telegram, server := newTestTelegram(t, Agent{Name: "eth", Address: eth.URL})
-
-	for _, text := range []string{"/buy ETHUSDT 0.1 lot", "/sell ethusdt 50%", "/buy ETHUSDT 100",
-		"/sell ETHUSDT 0.5 lots"} {
-		telegram.handleOrder(command(text))
-	}
-	assert.Equal(t, []string{"BUY ETHUSDT size 0.1", "SELL ETHUSDT size 1", "BUY ETHUSDT quote 100",
-		"SELL ETHUSDT size 0.5"}, controller.created(), "as the Telegram of the bots")
-	assert.Empty(t, server.sent(), "the orders are notified by the relay")
-
-	telegram.handleOrder(command("/buy ETHUSDT 1 lotz"))
-	assert.Contains(t, server.last(t).Text, "[eth] Invalid command.\nExamples of usage:\n/buy BTCUSDT 100")
-	telegram.handleOrder(command("/sell ETHUSDT"))
-	assert.Contains(t, server.last(t).Text, "/sell BTCUSDT 0.1 lot")
-	telegram.handleOrder(command("/buy ETHUSDT 0"))
-	assert.Equal(t, "[eth] Invalid amount", server.last(t).Text)
-
-	telegram.handleOrder(command("/buy GOLD 1 lot"))
-	assert.Equal(t, "[eth] Ativo desconhecido.", server.last(t).Text)
-
-	controller.orderErr = order.ErrBotStopped
-	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
-	assert.Equal(t, "[eth] Bot is stopped, no order was created. Send /start to resume.", server.last(t).Text)
-
-	controller.orderErr = fmt.Errorf("%w: perda diária de todos os agentes atingida", order.ErrEntriesBlocked)
-	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
-	assert.Contains(t, server.last(t).Text,
-		"[eth] Nenhuma ordem criada. Entradas bloqueadas: perda diária de todos os agentes atingida")
-	assert.Contains(t, server.last(t).Text, "perda diária de todos os agentes atingida")
-
-	controller.orderErr = errors.New("insufficient funds")
-	telegram.handleOrder(command("/buy ETHUSDT 1 lot"))
-	assert.Equal(t, "[eth] insufficient funds", server.last(t).Text)
-}
-
 func TestTelegram_Balance(t *testing.T) {
 	controller := &fakeController{status: order.StatusRunning, account: model.Account{Balances: []model.Balance{
 		{Asset: "ETH", Free: 1},
@@ -474,7 +435,9 @@ func TestTelegram_Help(t *testing.T) {
 	telegram.handleHelp(command("/help"))
 	help := server.last(t).Text
 	assert.Contains(t, help, "/agents - List the agents")
-	assert.Contains(t, help, "/buy - open a buy order")
+	assert.Contains(t, help, "/reanalyze - Ask the language model")
+	assert.NotContains(t, help, "/buy", "no order by hand")
+	assert.NotContains(t, help, "/sell")
 }
 
 // restartable serves a chart on an address it can stop and serve again.
@@ -676,7 +639,7 @@ func TestTelegram_RefusedUpdatesLogTheSenderOnly(t *testing.T) {
 	telegram, _ := newTestTelegram(t)
 	logs := captureLogs(t)
 
-	stranger := &tb.Message{Text: "/buy BTCUSDT 1 my-secret-text", Payload: "BTCUSDT 1 my-secret-text",
+	stranger := &tb.Message{Text: "/reanalyze BTCUSDT my-secret-text", Payload: "BTCUSDT my-secret-text",
 		Sender: &tb.User{ID: 666, Username: "eve-the-stranger", FirstName: "Eve"},
 		Chat:   &tb.Chat{ID: 666, Username: "eve-the-stranger"}}
 	require.False(t, telegram.authorized(&tb.Update{ID: 1, Message: stranger}))

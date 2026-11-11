@@ -6,7 +6,7 @@ interface Props {
   /** A short line over the title, the kind of the section, eg: Operar. */
   eyebrow: ReactNode;
   title: ReactNode;
-  /** Muted beside the title, eg: the pair of the ticket. */
+  /** Muted beside the title, eg: the pair shown. */
   tag?: ReactNode;
   /** Below the title, eg: when the decision was taken. */
   subtitle?: ReactNode;

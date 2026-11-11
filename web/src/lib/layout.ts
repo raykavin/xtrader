@@ -13,7 +13,6 @@ export type CardId =
   | "openpl"
   | "chart"
   | "decision"
-  | "ticket"
   | "activity";
 
 /** Every card, in the order of the default layout. */
@@ -24,7 +23,6 @@ export const CARDS: readonly CardId[] = [
   "results",
   "chart",
   "decision",
-  "ticket",
   "activity",
 ];
 
@@ -36,7 +34,6 @@ export const CARD_LABELS: Record<CardId, string> = {
   openpl: "P/L em aberto",
   chart: "Gráfico",
   decision: "Última decisão do LLM",
-  ticket: "Boleta",
   activity: "Atividade do agente",
 };
 
@@ -67,7 +64,7 @@ export function defaultLayout(): DashboardLayout {
     rows: [
       [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
-      [["chart", "decision"], ["ticket"]],
+      [["chart", "decision"]],
       [["activity"]],
     ],
     hidden: [],

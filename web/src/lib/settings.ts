@@ -38,7 +38,7 @@ export function agentKindLabel(kind: string): string {
 
 /** What the trade panel of an agent turns on in the dashboard: its bot starts and stops without it. */
 export const tradePanelHint =
-  "Ordens pela boleta e pelo gráfico; iniciar e parar o bot e pedir reanálise ao LLM não dependem dele";
+  "Mover e cancelar as ordens pelo gráfico e pela lista de ordens; iniciar e parar o bot e pedir reanálise ao LLM não dependem dele";
 
 /** What the reanalysis of an LLM agent allows, apart from its trade panel. */
 export const reanalysisHint =

@@ -22,7 +22,6 @@ import { PermTradingOperate } from "./api/types";
 import { useCan } from "./components/AccessContext";
 import { AgentBar } from "./components/AgentBar";
 import { AppShell } from "./components/AppShell";
-import { ControlPanel } from "./components/ControlPanel";
 import { DailyGuardBanner } from "./components/DailyGuardStrip";
 import { DashboardCards, useDashboardLayout } from "./components/DashboardCards";
 import { DecisionDialog } from "./components/DecisionDialog";
@@ -48,6 +47,7 @@ import {
 } from "./lib/decisions";
 import type { CardId } from "./lib/layout";
 import { rememberDashboard, sessionStore, settingsHref } from "./lib/nav";
+import { applyPendingOrder } from "./lib/pendingOrders";
 import { decisionsLoad, keepsDecisions, noResyncs, resynced } from "./lib/resync";
 import { latestSentiment } from "./lib/sentiment";
 import {
@@ -59,7 +59,6 @@ import {
   positionPnL,
 } from "./lib/stats";
 import { loadTheme, saveTheme, type Theme } from "./lib/theme";
-import { applyPendingOrder, noLevels, type TicketLevels } from "./lib/ticket";
 import {
   applyViewPrice,
   freshGap,
@@ -209,7 +208,6 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
   const [controls, setControls] = useState<ControlsResponse | null>(null);
-  const [levels, setLevels] = useState<TicketLevels>(noLevels);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [decisionsError, setDecisionsError] = useState<string | null>(null);
   // whether the decisions shown are the ones of the pair, read once
@@ -265,14 +263,6 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
     [agent, pairs, onAgentChange],
   );
 
-  // The order ticket belongs to a pair.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on pair change only
-  useEffect(() => setLevels(noLevels), [pair]);
-
-  const setLevel = useCallback(
-    (field: keyof TicketLevels, price: number) => setLevels((l) => ({ ...l, [field]: price })),
-    [],
-  );
   const handleMoveOrder = useCallback(
     async (order: Order, price: number) => {
       const moved = await moveOrder(agent, order.id, price);
@@ -527,10 +517,9 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
       : view?.key !== shownKey
         ? { text: `Carregando candles de ${timeframeLabel(shown)}…` }
         : null;
-  // the orders and the ticket to a user allowed to operate only
+  // the orders moved by a user allowed to operate only
   const operate = useCan(PermTradingOperate);
   const interactive = operate && controls?.enabled === true;
-  const ticket = useMemo(() => ({ levels, onLevel: setLevel }), [levels, setLevel]);
 
   // the query of the panel, kept for the way back from the settings
   // biome-ignore lint/correctness/useExhaustiveDependencies: kept as the agent, the pair or the timeframe change the URL
@@ -669,7 +658,6 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     snapshot={chartSnapshot}
                     theme={theme}
                     layoutKey={agent ?? ""}
-                    ticket={interactive ? ticket : undefined}
                     onMoveOrder={interactive ? handleMoveOrder : undefined}
                     position={pnl}
                     timeframe={shown}
@@ -695,21 +683,6 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     loaded={decisionsLoaded}
                     error={decisionsError}
                     onShow={setShownDecision}
-                  />
-                ) : undefined,
-                ticket: operate ? (
-                  <ControlPanel
-                    agent={agent}
-                    pair={snapshot.pair}
-                    asset={snapshot.asset}
-                    quote={snapshot.quote}
-                    accountCurrency={snapshot.account_currency}
-                    pointValue={snapshot.point_value}
-                    simulated={snapshot.simulated}
-                    lastPrice={snapshot.candles[snapshot.candles.length - 1]?.close ?? 0}
-                    controls={controls}
-                    levels={levels}
-                    onLevelsChange={setLevels}
                   />
                 ) : undefined,
                 activity: (
@@ -804,8 +777,8 @@ function saveDashboardTab(tab: DashboardTab) {
 
 /**
  * The blocks of the panel while its data loads: the open profit of the agents,
- * the quote, the sentiment of an LLM agent (meter), the results, the chart and
- * the ticket.
+ * the quote, the sentiment of an LLM agent (meter), the results and the
+ * chart.
  */
 function DashboardSkeleton({
   label,
@@ -831,7 +804,6 @@ function DashboardSkeleton({
       </div>
       <div className="workspace">
         <Skeleton className="skeleton-chart" />
-        <Skeleton className="skeleton-ticket" />
       </div>
     </Loading>
   );
