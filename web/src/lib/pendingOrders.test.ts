@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Order, Snapshot } from "../api/types";
-import {
-  applyPendingOrder,
-  defaultProfit,
-  defaultStop,
-  levelsError,
-  orderFeedback,
-  pendingLines,
-  priceStep,
-  roundPrice,
-} from "./ticket";
+import { applyPendingOrder, pendingLines, priceStep, roundPrice } from "./pendingOrders";
 
 function order(partial: Partial<Order>): Order {
   return {
@@ -32,7 +23,7 @@ function order(partial: Partial<Order>): Order {
   };
 }
 
-describe("ticket", () => {
+describe("the pending orders", () => {
   it("rounds the prices to 5 significant digits", () => {
     expect(priceStep(2400)).toBeCloseTo(0.1);
     expect(priceStep(84500)).toBeCloseTo(1);
@@ -41,31 +32,6 @@ describe("ticket", () => {
     expect(roundPrice(84512.7)).toBe(84513);
     expect(roundPrice(1.085432)).toBe(1.0854);
     expect(roundPrice(2399.96, 2400)).toBe(2400);
-  });
-
-  it("places the default levels on the side of the order", () => {
-    expect(defaultStop("buy", 2400)).toBe(2388);
-    expect(defaultProfit("buy", 2400)).toBe(2424);
-    expect(defaultStop("sell", 2400)).toBe(2412);
-    expect(defaultProfit("sell", 2400)).toBe(2376);
-  });
-
-  it("checks the levels as the brokers do", () => {
-    expect(levelsError("buy", 2400, 2388, 2424)).toBeNull();
-    expect(levelsError("buy", 2400, null, null)).toBeNull();
-    expect(levelsError("buy", 2400, 2400, null)).toContain(
-      "stop loss de uma compra deve ficar abaixo",
-    );
-    expect(levelsError("buy", 2400, null, 2390)).toContain(
-      "take profit de uma compra deve ficar acima",
-    );
-    expect(levelsError("sell", 2400, 2412, 2376)).toBeNull();
-    expect(levelsError("sell", 2400, 2390, null)).toContain(
-      "stop loss de uma venda deve ficar acima",
-    );
-    expect(levelsError("sell", 2400, null, 2410)).toContain(
-      "take profit de uma venda deve ficar abaixo",
-    );
   });
 
   it("draws the pending orders, movable when the brokers move them", () => {
@@ -85,7 +51,7 @@ describe("ticket", () => {
     ]);
   });
 
-  it("applies an order of the panel over a pending one only", () => {
+  it("applies an order of the controls over a pending one only", () => {
     const snapshot = {
       pair: "GOLD",
       orders: [order({ id: 1 }), order({ id: 2, status: "CANCELED" })],
@@ -95,22 +61,5 @@ describe("ticket", () => {
     expect(applyPendingOrder(snapshot, order({ id: 2, status: "PENDING_CANCEL" }))).toBe(snapshot);
     expect(applyPendingOrder(snapshot, order({ id: 3 }))).toBe(snapshot);
     expect(applyPendingOrder(snapshot, order({ id: 1, pair: "BTCUSD" }))).toBe(snapshot);
-  });
-});
-
-describe("orderFeedback", () => {
-  it("tells the order created", () => {
-    const feedback = orderFeedback(order({ id: 7, quantity: 0.5 }), "buy", "XAU");
-    expect(feedback.tone).toBe("ok");
-    expect(feedback.text).toBe("Ordem de compra #7 criada — 0,5 XAU");
-  });
-
-  it("warns of a position left without its stop loss or take profit", () => {
-    const warning = "the order was created, but 0 of its 2 stop loss and take profit orders only";
-    const feedback = orderFeedback({ ...order({ id: 8, quantity: 1 }), warning }, "sell", "XAU");
-    expect(feedback.tone).toBe("warn");
-    expect(feedback.text).toContain("Ordem de venda #8 criada");
-    expect(feedback.text).toContain("pode estar desprotegida");
-    expect(feedback.text).toContain(warning);
   });
 });

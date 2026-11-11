@@ -962,37 +962,6 @@ export interface ControlsResponse {
   reanalysis_disabled?: boolean;
 }
 /**
- * ControlOrderRequest is the payload of POST /api/controls/order. Amount is
- * in the currency of the cash, the account's (the quote in a paper wallet);
- * with Percent it is a percentage of the available balance (the cash for
- * buys, the asset for sells), and with Lot the size of the order, in the units
- * the broker trades the market in, mirroring the Telegram /buy and /sell
- * commands.
- * Type is "market", the default, or "limit" at Price. StopLoss and
- * TakeProfit, the ones above 0, are placed at the broker with the order.
- */
-export interface ControlOrderRequest {
-  pair: string;
-  side: string;
-  amount: number /* float64 */;
-  percent: boolean;
-  lot: boolean;
-  type: string;
-  price: number /* float64 */;
-  stop_loss: number /* float64 */;
-  take_profit: number /* float64 */;
-}
-/**
- * ControlOrderResponse is the answer of POST /api/controls/order: the order
- * created, the entry of a protected one. Warning tells of an order executed
- * short of what was asked, never answered as an error, which would have it sent
- * again: eg: the entry filled, but its stop loss or its take profit failing,
- * the position left without them.
- */
-export interface ControlOrderResponse extends Order {
-  warning?: string;
-}
-/**
  * ControlMoveRequest is the payload of POST /api/controls/orders/{id}/move: the
  * new price of a pending limit order, or the new level of a stop loss or take
  * profit.

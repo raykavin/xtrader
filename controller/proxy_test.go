@@ -115,7 +115,8 @@ func TestAgentProxy_TheAgentGetsNoCredentials(t *testing.T) {
 	}
 
 	// a payload keeps its type, the agent refusing what isn't JSON
-	resp, _ = do(t, http.MethodPost, srv.URL+"/api/agents/bot/controls/order", "", cookies, csrfHeader, csrf.Value,
+	resp, _ = do(t, http.MethodPost, srv.URL+"/api/agents/bot/controls/orders/1/move", "", cookies, csrfHeader,
+		csrf.Value,
 		"Content-Type", "text/plain")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "text/plain", agent.last().Get("Content-Type"))

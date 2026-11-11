@@ -28,8 +28,8 @@ const PAIR_SEGMENTS = 6;
 /**
  * The context of the panel, a bar atop it: the agent and the pair shown, then
  * the state of the agent at a glance: its bot, started and stopped there, and
- * what the strategy trades on (whether the ticket sends orders is on the
- * ticket). A row on a wide screen; wrapped on a narrow one.
+ * what the strategy trades on. A row on a wide screen; wrapped on a narrow
+ * one.
  */
 export function AgentBar({
   agents,

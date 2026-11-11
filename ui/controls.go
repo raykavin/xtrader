@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -18,20 +17,15 @@ import (
 )
 
 // OrderController is the subset of *order.Controller used by the dashboard
-// control panel: start/stop, the balance, manual orders, market or limit, with
-// a stop loss and take profit, and the moves and cancels of the pending ones.
+// control panel: start/stop, the balance, and the moves and cancels of the
+// pending orders (no order is created by hand: the strategies alone open
+// positions).
 type OrderController interface {
 	Status() order.Status
 	Start()
 	Stop()
 	Account() (model.Account, error)
 	Position(pair string) (asset, quote float64, err error)
-	CreateOrderMarket(side model.SideType, pair string, size float64) (model.Order, error)
-	CreateOrderMarketQuote(side model.SideType, pair string, amount float64) (model.Order, error)
-	CreateOrderLimit(side model.SideType, pair string, size, limit float64) (model.Order, error)
-	CreateOrderMarketProtected(side model.SideType, pair string, size, stop, profit float64) ([]model.Order, error)
-	CreateOrderLimitProtected(side model.SideType, pair string, size, limit, stop,
-		profit float64) ([]model.Order, error)
 	UpdateProtection(leg model.Order, level float64) (model.Order, error)
 	UpdateLimit(order model.Order, limit float64) (model.Order, error)
 	Cancel(order model.Order) error
@@ -224,80 +218,6 @@ func (c *Chart) publishControls() {
 	c.events.publish("controls", c.controlsResponse(ChannelWeb))
 }
 
-func (c *Chart) handleControlOrder(w http.ResponseWriter, r *http.Request) {
-	controller, ok := c.requireController(w, r)
-	if !ok {
-		return
-	}
-
-	var request ControlOrderRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Pedido inválido.")
-		return
-	}
-
-	c.mu.Lock()
-	pair, known := c.resolvePair(request.Pair)
-	candles := c.candles[pair]
-	c.mu.Unlock()
-	if !known {
-		writeJSONError(w, http.StatusNotFound, "Ativo desconhecido.")
-		return
-	}
-
-	if request.Amount <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "A quantidade deve ser maior que zero.")
-		return
-	}
-	if request.Percent && request.Amount > 100 {
-		writeJSONError(w, http.StatusBadRequest, "A quantidade em porcentagem não pode passar de 100.")
-		return
-	}
-	if request.Percent && request.Lot {
-		writeJSONError(w, http.StatusBadRequest, "Informe a quantidade em porcentagem ou em lotes, não nos dois.")
-		return
-	}
-	switch request.Type = strings.ToLower(request.Type); {
-	case request.Type != "" && request.Type != "market" && request.Type != "limit":
-		writeJSONError(w, http.StatusBadRequest, `Tipo da ordem inválido: use "market" ou "limit".`)
-		return
-	case request.Type == "limit" && request.Price <= 0:
-		writeJSONError(w, http.StatusBadRequest, "Informe o preço limite da ordem.")
-		return
-	case request.StopLoss < 0 || request.TakeProfit < 0:
-		writeJSONError(w, http.StatusBadRequest, "O stop loss e o take profit não podem ser negativos.")
-		return
-	}
-
-	// the price the amount is converted at: the limit, else the last close
-	reference := request.Price
-	if request.Type != "limit" && len(candles) > 0 {
-		reference = candles[len(candles)-1].Close
-	}
-
-	var side model.SideType
-	switch strings.ToLower(request.Side) {
-	case "buy":
-		side = model.SideTypeBuy
-	case "sell":
-		side = model.SideTypeSell
-	default:
-		writeJSONError(w, http.StatusBadRequest, `Lado da ordem inválido: use "buy" ou "sell".`)
-		return
-	}
-
-	created, warning, err := createControlOrder(controller, side, pair, request, reference)
-	if err != nil {
-		writeControlError(w, err)
-		return
-	}
-
-	c.mu.Lock()
-	dto := c.toOrder(created, c.candles[pair])
-	c.mu.Unlock()
-	writeJSON(w, ControlOrderResponse{Order: dto, Warning: warning})
-}
-
 // manualMover is implemented by the controllers that move a leg for a user
 // apart from the strategies, eg: order.Controller, whose stop guard never
 // refuses a user: the trade panel may loosen a stop loss.
@@ -367,117 +287,6 @@ func withDetail(message string, err, sentinel error) string {
 		}
 	}
 	return message + "."
-}
-
-// createControlOrder creates the order of the control panel and returns it, the
-// entry of a protected one, with a warning when it was executed short of what
-// was asked (see ControlOrderResponse). A market order without stop loss nor
-// take profit mirrors the Telegram /buy and /sell semantics, see
-// createMarketOrder; the others are sized at reference, see controlSize.
-func createControlOrder(controller OrderController, side model.SideType, pair string,
-	request ControlOrderRequest, reference float64) (model.Order, string, error) {
-
-	protected := request.StopLoss > 0 || request.TakeProfit > 0
-	if request.Type != "limit" && !protected {
-		created, err := createMarketOrder(controller, side, pair, request)
-		return created, "", err
-	}
-
-	size, err := controlSize(controller, side, pair, request, reference)
-	if err != nil {
-		return model.Order{}, "", err
-	}
-
-	var orders []model.Order
-	switch {
-	case request.Type == "limit" && !protected:
-		created, err := controller.CreateOrderLimit(side, pair, size, request.Price)
-		return created, "", err
-	case request.Type == "limit":
-		orders, err = controller.CreateOrderLimitProtected(side, pair, size, request.Price, request.StopLoss,
-			request.TakeProfit)
-	default:
-		orders, err = controller.CreateOrderMarketProtected(side, pair, size, request.StopLoss, request.TakeProfit)
-	}
-	if len(orders) == 0 {
-		if err == nil {
-			err = errors.New("A corretora não criou nenhuma ordem.")
-		}
-		return model.Order{}, "", err
-	}
-	if err != nil {
-		// the entry is on the exchange: an error would have it sent again
-		asked := 0
-		for _, level := range []float64{request.StopLoss, request.TakeProfit} {
-			if level > 0 {
-				asked++
-			}
-		}
-		return orders[0], fmt.Sprintf("A ordem foi criada, mas só %d das %d ordens de stop loss e take profit: "+
-			"a posição pode ter ficado sem elas. Confira: %v", len(orders)-1, asked, err), nil
-	}
-	return orders[0], "", nil
-}
-
-// controlSize returns the size of an order at price: its lots, its amount in
-// the currency of the cash (the account's at MT5, the quote in the paper
-// wallet), or its share of the balance, of the cash for a buy and of the asset
-// held for a sell; an amount turned into units by the point value of the pair
-// (see service.PointValuer).
-func controlSize(controller OrderController, side model.SideType, pair string, request ControlOrderRequest,
-	price float64) (float64, error) {
-
-	switch {
-	case request.Lot:
-		return request.Amount, nil
-	case price <= 0:
-		return 0, errors.New("Sem preço para calcular o tamanho da ordem.")
-	}
-	amount := request.Amount
-	if request.Percent {
-		asset, cash, err := controller.Position(pair)
-		if err != nil {
-			return 0, err
-		}
-		if side == model.SideTypeSell {
-			return request.Amount * asset / 100.0, nil
-		}
-		amount = request.Amount * cash / 100.0
-	}
-	point, err := service.PointValue(controller, pair)
-	if err != nil {
-		return 0, err
-	}
-	if point <= 0 {
-		return 0, fmt.Errorf("Sem o valor do ponto de %s para calcular o tamanho da ordem.", pair)
-	}
-	return amount / (price * point), nil
-}
-
-// createMarketOrder mirrors the Telegram /buy and /sell semantics: amounts are
-// in the currency of the cash (the account's at MT5), percentages consume the
-// available balance — the cash for buys, the asset for sells — and lots are
-// the size of the order.
-func createMarketOrder(controller OrderController, side model.SideType, pair string,
-	request ControlOrderRequest) (model.Order, error) {
-	amount := request.Amount
-	if request.Lot {
-		return controller.CreateOrderMarket(side, pair, amount)
-	}
-
-	if request.Percent {
-		asset, quote, err := controller.Position(pair)
-		if err != nil {
-			return model.Order{}, err
-		}
-
-		if side == model.SideTypeSell {
-			return controller.CreateOrderMarket(side, pair, amount*asset/100.0)
-		}
-		amount = amount * quote / 100.0
-	}
-
-	return controller.CreateOrderMarketQuote(side, pair, amount)
 }
 
 // controlledOrder returns the pending order of the {id} of the request, known

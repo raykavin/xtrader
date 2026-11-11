@@ -25,7 +25,6 @@ func (c *Chart) router() http.Handler {
 		r.Get("/controls/balance", c.handleControlBalance)
 		r.Post("/controls/start", c.handleControlStart)
 		r.Post("/controls/stop", c.handleControlStop)
-		r.Post("/controls/order", c.handleControlOrder)
 		r.Post("/controls/orders/{id}/move", c.handleControlMove)
 		r.Post("/controls/orders/{id}/cancel", c.handleControlCancel)
 		r.Post("/controls/reanalyze", c.handleReanalyze)

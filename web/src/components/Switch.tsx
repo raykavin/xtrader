@@ -7,7 +7,7 @@ interface Props {
   title?: string;
 }
 
-/** A switch turning something on: a stop loss of the ticket, an agent, the Telegram bot. */
+/** A switch turning something on: an agent, the Telegram bot, a setting. */
 export function Switch({ checked, onChange, label, disabled = false, title }: Props) {
   return (
     <label className="switch" title={title}>

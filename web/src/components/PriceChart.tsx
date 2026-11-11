@@ -57,10 +57,10 @@ import {
   LOCALE,
 } from "../lib/format";
 import { useValuesHidden } from "../lib/hiddenValues";
+import { pendingLines, roundPrice } from "../lib/pendingOrders";
 import { shownFeatures } from "../lib/protection";
 import { type PositionPnL, positionPnL } from "../lib/stats";
 import { type Palette, palettes, seriesColor, type Theme } from "../lib/theme";
-import { pendingLines, roundPrice, type TicketLevels } from "../lib/ticket";
 import { candleUpdates, timeframeLabel } from "../lib/timeframes";
 import { Icon } from "./Icon";
 import { PositionProtection } from "./PositionProtection";
@@ -70,12 +70,7 @@ interface Props {
   theme: Theme;
   /** Names the layout of the chart kept in the browser, eg: the agent. */
   layoutKey?: string;
-  /** With the control panel: the levels of the order ticket, set on the chart too. */
-  ticket?: {
-    levels: TicketLevels;
-    onLevel: (field: keyof TicketLevels, price: number) => void;
-  };
-  /** With the control panel: moves a pending order dropped at price. */
+  /** With the trading panel of the agent: moves a pending order dropped at price. */
   onMoveOrder?: (order: Order, price: number) => Promise<void>;
   /** The analysis of the language model drawn: the last one, or one of the list shown. */
   analysis?: Analysis | null;
@@ -99,7 +94,7 @@ interface Props {
   position?: PositionPnL | null;
 }
 
-/** A price line of the chart: a pending order, or a level of the order ticket. */
+/** A price line of the chart: a pending order, the position or a level of the analysis. */
 interface LineSpec {
   price: number;
   color: string;
@@ -107,7 +102,6 @@ interface LineSpec {
   dashed: boolean;
   dotted?: boolean; // a level of the analysis of the strategy, see Snapshot.levels
   largeDashed?: boolean; // a leg of a pending entry, waiting for its fill
-  onDrag?: (price: number) => void;
   onDrop?: (price: number) => Promise<void> | void;
 }
 
@@ -492,7 +486,6 @@ export function PriceChart({
   snapshot,
   theme,
   layoutKey = "",
-  ticket,
   onMoveOrder,
   analysis,
   onAnalysisReset,
@@ -601,10 +594,7 @@ export function PriceChart({
     };
   }, []);
 
-  // The pending orders and the levels of the order ticket, as price lines: the
-  // movable ones are dragged to move them.
-  const levels = ticket?.levels;
-  const onLevel = ticket?.onLevel;
+  // The pending orders, as price lines: the movable ones are dragged to move them.
   const hidden = useValuesHidden();
   // biome-ignore lint/correctness/useExhaustiveDependencies: drawn again as the amounts are hidden or shown, formatProfit masking the profit open
   useEffect(() => {
@@ -656,7 +646,7 @@ export function PriceChart({
     }
 
     // The supports and resistances of the last analysis of the strategy: what
-    // the model saw, dotted apart from the orders and the ticket.
+    // the model saw, dotted apart from the orders.
     for (const [index, level] of (snapshot.levels ?? []).entries()) {
       const support = level.kind === "support";
       specs.set(`level:${index}`, {
@@ -666,27 +656,6 @@ export function PriceChart({
         dashed: false,
         dotted: true,
       });
-    }
-
-    if (levels && onLevel) {
-      const fields = [
-        ["entry", "Entrada", palette.accent],
-        ["stop", "SL", palette.down],
-        ["profit", "TP", palette.up],
-      ] as const;
-      for (const [field, title, color] of fields) {
-        const price = levels[field];
-        if (price === null) continue;
-        const set = (to: number) => onLevel(field, to);
-        specs.set(`ticket:${field}`, {
-          price,
-          color,
-          title,
-          dashed: true,
-          onDrag: set,
-          onDrop: set,
-        });
-      }
     }
 
     for (const [key, line] of state.priceLines) {
@@ -718,11 +687,11 @@ export function PriceChart({
       if (existing) line.applyOptions(options);
       state.priceLines.set(key, line);
       if (spec.onDrop) {
-        draggable.push({ key, line, price, onDrag: spec.onDrag, onDrop: spec.onDrop });
+        draggable.push({ key, line, price, onDrop: spec.onDrop });
       }
     }
     state.dragger.setLines(draggable);
-  }, [snapshot.orders, snapshot.levels, pnl, theme, levels, onLevel, onMoveOrder, hidden]);
+  }, [snapshot.orders, snapshot.levels, pnl, theme, onMoveOrder, hidden]);
 
   // The analysis of the language model: its zones, levels and markers, and
   // the prices of its intent, drawn behind the candles, see AnalysisPrimitive.

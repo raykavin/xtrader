@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,12 +55,10 @@ func candleAt(pair string, ts time.Time, close float64) model.Candle {
 type fakeController struct {
 	ui.OrderController
 
-	mu       sync.Mutex
-	status   order.Status
-	account  model.Account
-	asset    float64
-	orderErr error
-	orders   []string // side, pair and size or amount of the market orders
+	mu      sync.Mutex
+	status  order.Status
+	account model.Account
+	asset   float64
 }
 
 func (f *fakeController) Status() order.Status {
@@ -82,33 +79,6 @@ func (f *fakeController) set(status order.Status) {
 func (f *fakeController) Account() (model.Account, error) { return f.account, nil }
 
 func (f *fakeController) Position(string) (float64, float64, error) { return f.asset, 1000, nil }
-
-func (f *fakeController) CreateOrderMarket(side model.SideType, pair string, size float64) (model.Order, error) {
-	return f.order(side, pair, "size", size)
-}
-
-func (f *fakeController) CreateOrderMarketQuote(side model.SideType, pair string, amount float64) (model.Order,
-	error) {
-	return f.order(side, pair, "quote", amount)
-}
-
-func (f *fakeController) order(side model.SideType, pair, unit string, amount float64) (model.Order, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.orderErr != nil {
-		return model.Order{}, f.orderErr
-	}
-	f.orders = append(f.orders, strings.Join([]string{string(side), pair, unit,
-		strconv.FormatFloat(amount, 'f', -1, 64)}, " "))
-	return model.Order{ID: int64(len(f.orders)), Pair: pair, Side: side, Type: model.OrderTypeMarket,
-		Status: model.OrderStatusTypeFilled, Quantity: amount}, nil
-}
-
-func (f *fakeController) created() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.orders...)
-}
 
 // newAgent serves the API of a chart, with its control panel when controller
 // is set.
