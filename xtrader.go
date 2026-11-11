@@ -13,7 +13,6 @@ import (
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/internal/recovery"
 	"github.com/raykavin/xtrader/model"
-	"github.com/raykavin/xtrader/notification"
 	"github.com/raykavin/xtrader/order"
 	"github.com/raykavin/xtrader/service"
 	"github.com/raykavin/xtrader/storage"
@@ -94,7 +93,6 @@ type XTrader struct {
 	exchange service.Exchange
 	strategy strategy.Strategy
 	notifier service.Notifier
-	telegram service.Telegram
 
 	orderController       *order.Controller
 	priorityQueueCandle   *model.PriorityQueue
@@ -154,17 +152,8 @@ func NewBot(
 
 	bot.orderController = order.NewController(ctx, exch, bot.storage, bot.orderFeed)
 
-	if settings.Telegram.Enabled {
-		bot.telegram, err = notification.NewTelegram(bot.orderController, settings)
-		if err != nil {
-			return nil, err
-		}
-		// register telegram as notifier
-		bot.notifier = bot.telegram
-	}
-
-	// the notifier, from WithNotifier or from telegram, can only be wired once
-	// the order controller exists
+	// the notifier of WithNotifier can only be wired once the order controller
+	// exists
 	if bot.notifier != nil {
 		bot.orderController.SetNotifier(bot.notifier)
 		bot.SubscribeOrder(bot.notifier)
@@ -546,9 +535,6 @@ func (n *XTrader) Run(ctx context.Context) error {
 	n.orderFeed.Start()
 	n.orderController.Start()
 	defer n.orderController.Stop()
-	if n.telegram != nil {
-		n.telegram.Start()
-	}
 
 	// the candles of the buffer taken as they come from the first one of the
 	// feed on, see processCandles

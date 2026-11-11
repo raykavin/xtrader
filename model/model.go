@@ -7,20 +7,10 @@ import (
 	"time"
 )
 
-// TelegramSettings turn on the Telegram bot of the engine, see
-// notification.NewTelegram.
-//
-// Deprecated: no agent turns it on, they relay to the Telegram of the
-// controller. Kept until the removal of notification.NewTelegram is decided.
-type TelegramSettings struct {
-	Enabled bool
-	Token   string
-	Users   []int
-}
-
+// Settings are the pairs the engine trades. The agents relay their notices to
+// the Telegram of the controller: the engine has none of its own.
 type Settings struct {
-	Pairs    []string
-	Telegram TelegramSettings
+	Pairs []string
 }
 
 type Balance struct {
