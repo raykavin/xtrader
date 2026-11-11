@@ -1,36 +1,43 @@
-import { useId, useMemo, useState } from "react";
-import type { BacktestBatchInfo, BacktestRunInfo, BacktestSummary } from "../api/types";
+import { useEffect, useId, useRef, useState } from "react";
+import { fetchBacktestComparison } from "../api/client";
+import type {
+  BacktestBatchChoice,
+  BacktestComparisonResponse,
+  BacktestComparisonRow,
+  BacktestRunInfo,
+  BacktestSummary,
+} from "../api/types";
 import {
-  type ComparisonRow,
-  comparisonRows,
-  conditionDifferences,
-  filterRows,
   hoursAssumption,
   MIN_SAMPLE,
   robustnessFlags,
   runStatusLabels,
   type SortKey,
-  sortRows,
 } from "../lib/backtest";
 import { formatMoney, formatNumber, formatPercent, formatProfit, signClass } from "../lib/format";
 import type { Theme } from "../lib/theme";
 import { timeframeLabel } from "../lib/timeframes";
 import { BacktestRunDetail } from "./BacktestRunDetail";
 import { periodLabel } from "./BacktestRuns";
+import { ListPages } from "./Paginator";
 import { RunDrawer } from "./RunDrawer";
 import { Select } from "./Select";
-import { Alert, EmptyState } from "./States";
+import { Alert, EmptyState, Loading, Skeleton } from "./States";
 import { toneClass } from "./SupervisorAction";
 import { Switch } from "./Switch";
+import { usePagedList } from "./usePagedList";
 
 interface Props {
-  batches: BacktestBatchInfo[];
+  /** Every batch, the newest first, to choose the one compared. */
+  choices: BacktestBatchChoice[];
   /** The batch shown; the newest when null. */
   batch: number | null;
   onBatch: (batch: number) => void;
   theme: Theme;
   /** Configures a new batch; none to a user who may not manage the backtests. */
   onNew?: () => void;
+  /** The last reading of the batches: a new one reads the comparison again, eg: a run ended. */
+  refreshed: object;
 }
 
 /** A share without its sign, eg: 42,5%. */
@@ -71,20 +78,38 @@ const columns: { key: SortKey; label: string; title: string }[] = [
  * the flags of its robustness and the conditions that differ between the
  * rows; a row opened shows the run.
  */
-export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props) {
-  const current = batches.find((b) => b.id === batch) ?? batches[0];
+export function BacktestResults({ choices, batch, onBatch, theme, onNew, refreshed }: Props) {
+  const current = choices.find((b) => b.id === batch) ?? choices[0];
   const [sort, setSort] = useState<{ key: SortKey; ascending?: boolean }>({ key: "ratio" });
   const [minTrades, setMinTrades] = useState("0");
   const [showLLM, setShowLLM] = useState(true);
   const [open, setOpen] = useState<{ agent: string; segment: string } | null>(null);
   const id = useId();
+  const ascending = sort.ascending ?? sort.key === "agent";
+  const least = Number(minTrades) || 0;
 
-  const rows = useMemo(() => (current ? comparisonRows(current) : []), [current]);
-  const shown = sortRows(
-    filterRows(rows, { minTrades: Number(minTrades) || 0, showLLM }),
-    sort.key,
-    sort.ascending,
+  // the rows of the batch, filtered and sorted by the controller before its pages
+  const list = usePagedList<BacktestComparisonRow, BacktestComparisonResponse>(
+    (params, signal) =>
+      fetchBacktestComparison(
+        current?.id ?? 0,
+        params,
+        { sort: sort.key, order: ascending ? "asc" : "desc", min_trades: least, llm: showLLM },
+        signal,
+      ).then((r) => ({ rows: r.rows, page: r, extra: r })),
+    {
+      filters: `${current?.id}:${sort.key}:${ascending}:${least}:${showLLM}`,
+      enabled: current !== undefined,
+    },
   );
+  // a new reading of the batches (not the first one): the comparison read again
+  const { reload } = list;
+  const seen = useRef(refreshed);
+  useEffect(() => {
+    if (seen.current === refreshed) return;
+    seen.current = refreshed;
+    reload();
+  }, [refreshed, reload]);
 
   if (!current) {
     return (
@@ -105,9 +130,12 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
     );
   }
 
-  const a = current.assumptions;
-  const differences = conditionDifferences(rows);
-  const hidden = rows.length - shown.length;
+  const compared = list.extra;
+  const shownBatch = compared?.batch;
+  const a = shownBatch?.assumptions;
+  const differences = compared?.differences ?? [];
+  const hidden = compared?.hidden ?? 0;
+  const rows = list.rows ?? [];
   const opened = open && rows.find((r) => r.agent === open.agent);
   const openedRun = opened && (open.segment === "validation" ? opened.validation : opened.fit);
   const toggle = (key: SortKey) =>
@@ -127,7 +155,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
               onBatch(Number(value));
               setOpen(null);
             }}
-            options={batches.map((b) => ({
+            options={choices.map((b) => ({
               value: String(b.id),
               label: b.name || `Lote #${b.id}`,
               hint: periodLabel(b.from, b.to),
@@ -151,27 +179,39 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
         </div>
       </div>
 
-      <p className="panel-summary">
-        {periodLabel(current.from, current.to)}
-        {current.validation_share > 0 &&
-          ` (os últimos ${share(current.validation_share, 0)} como validação)`}
-        {" · saldo "}
-        <strong>
-          {formatMoney(a.balance)} {a.currency}
-        </strong>
-        {` · taxa ${share(a.fee, 3)} · spread de reserva ${formatNumber(a.spread_points)} pts · slippage ${formatNumber(a.slippage_points)} pts`}
-        {` · execução em ${timeframeLabel(a.execution_timeframe)} (ou maior, com aviso, se faltarem candles), stop antes do take profit no mesmo candle`}
-        {a.daily_loss || a.daily_gain
-          ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
-          : " · sem limites diários"}
-        {a.hours ? ` · horário ${hoursAssumption(a.hours)}` : ""}
-        {a.params && Object.keys(a.params).length > 0
-          ? ` · parâmetros ${Object.entries(a.params)
-              .map(([name, value]) => `${name}=${value}`)
-              .join("; ")}`
-          : ""}
-        {" · posições abertas no fim: a mercado, à parte"}
-      </p>
+      {list.error && (
+        <Alert tone="error" title="Não foi possível carregar a comparação">
+          {list.error}
+        </Alert>
+      )}
+      {list.rows === null && !list.error && (
+        <Loading label="Carregando a comparação">
+          <Skeleton height={240} />
+        </Loading>
+      )}
+      {shownBatch && a && (
+        <p className="panel-summary">
+          {periodLabel(shownBatch.from, shownBatch.to)}
+          {shownBatch.validation_share > 0 &&
+            ` (os últimos ${share(shownBatch.validation_share, 0)} como validação)`}
+          {" · saldo "}
+          <strong>
+            {formatMoney(a.balance)} {a.currency}
+          </strong>
+          {` · taxa ${share(a.fee, 3)} · spread de reserva ${formatNumber(a.spread_points)} pts · slippage ${formatNumber(a.slippage_points)} pts`}
+          {` · execução em ${timeframeLabel(a.execution_timeframe)} (ou maior, com aviso, se faltarem candles), stop antes do take profit no mesmo candle`}
+          {a.daily_loss || a.daily_gain
+            ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
+            : " · sem limites diários"}
+          {a.hours ? ` · horário ${hoursAssumption(a.hours)}` : ""}
+          {a.params && Object.keys(a.params).length > 0
+            ? ` · parâmetros ${Object.entries(a.params)
+                .map(([name, value]) => `${name}=${value}`)
+                .join("; ")}`
+            : ""}
+          {" · posições abertas no fim: a mercado, à parte"}
+        </p>
+      )}
 
       {differences.length > 0 && (
         <Alert tone="warn" title="Condições diferentes entre os agentes">
@@ -220,7 +260,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
             </tr>
           </thead>
           <tbody>
-            {shown.map((row) => (
+            {rows.map((row) => (
               <CompareRow
                 key={row.agent}
                 row={row}
@@ -231,6 +271,7 @@ export function BacktestResults({ batches, batch, onBatch, theme, onNew }: Props
           </tbody>
         </table>
       </div>
+      <ListPages info={list.info} onPage={list.setPage} />
       <p className="field-hint">
         Compare o retorno pelo risco, a amostra ({MIN_SAMPLE}+ operações), a consistência e a
         validação, não só o lucro. "—" indica métrica indefinida; passe o mouse para ver o motivo.
@@ -297,7 +338,7 @@ function CompareRow({
   selected,
   onOpen,
 }: {
-  row: ComparisonRow;
+  row: BacktestComparisonRow;
   selected: boolean;
   onOpen: (segment: string) => void;
 }) {

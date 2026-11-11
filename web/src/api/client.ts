@@ -1,5 +1,6 @@
 import type { BacktestRunDetail } from "../lib/backtest";
 import { liveStream } from "../lib/events";
+import { type ListParams, listQuery } from "../lib/pagination";
 import { csrfToken } from "../lib/settings";
 import { createSSEParser } from "../lib/sse";
 import { APIError, fetchOrOffline, retryAfterSeconds } from "./errors";
@@ -17,6 +18,7 @@ import type {
   AgentsParamResponse,
   AgentsResponse,
   BacktestBatchInfo,
+  BacktestComparisonResponse,
   BacktestRequest,
   BacktestsResponse,
   CandleEvent,
@@ -26,6 +28,7 @@ import type {
   ControlOrderRequest,
   ControlOrderResponse,
   ControlsResponse,
+  DailyAgentsResponse,
   DailyLimitPreview,
   DailyLimitsRequest,
   DailyLimitsResponse,
@@ -84,6 +87,7 @@ import type {
   TelegramSettingsRequest,
   TelegramSettingsResponse,
   TelegramUserRequest,
+  TelegramUsersResponse,
   TradingHoursRequest,
   TradingHoursResponse,
   UserInfo,
@@ -236,6 +240,35 @@ export function fetchExcursions(
 /** The last batches of backtests with their runs, the agents that can run and the limits. */
 export function fetchBacktests(signal?: AbortSignal): Promise<BacktestsResponse> {
   return getJSON<BacktestsResponse>("/backtests", signal);
+}
+
+/** A page of the batches of backtests with their runs, the newest first, and every batch as a choice. */
+export function fetchBacktestsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<BacktestsResponse> {
+  return getJSON<BacktestsResponse>(`/backtests${listQuery(params)}`, signal);
+}
+
+/** How the results of a batch are compared: the column sorted by, its order and the filters. */
+export interface ComparisonQuery {
+  sort: string;
+  order: "asc" | "desc";
+  min_trades: number;
+  llm: boolean;
+}
+
+/** A page of the comparison of a batch: its agents filtered and sorted by the controller. */
+export function fetchBacktestComparison(
+  id: number,
+  params: ListParams,
+  query: ComparisonQuery,
+  signal?: AbortSignal,
+): Promise<BacktestComparisonResponse> {
+  return getJSON<BacktestComparisonResponse>(
+    `/backtests/${id}/comparison${listQuery(params, { ...query })}`,
+    signal,
+  );
 }
 
 /** Queues a batch of backtests: never an order, the agents untouched. */
@@ -430,6 +463,14 @@ export function fetchDailyLimits(signal?: AbortSignal): Promise<DailyLimitsRespo
   return getJSON<DailyLimitsResponse>("/settings/daily-limits", signal);
 }
 
+/** A page of the agents with daily limits or guards of their own, as they stand now. */
+export function fetchDailyAgentsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<DailyAgentsResponse> {
+  return getJSON<DailyAgentsResponse>(`/settings/daily-limits/agents${listQuery(params)}`, signal);
+}
+
 /** How the daily limits stand: the result of the day, the limits and the guards. */
 export function fetchDailyGuard(signal?: AbortSignal): Promise<DailyLimitsStatus> {
   return getJSON<DailyLimitsStatus>("/daily-guard", signal);
@@ -512,6 +553,14 @@ export function fetchPrompts(signal?: AbortSignal): Promise<PromptInfo[]> {
   return getJSON<PromptsResponse>("/prompts", signal).then((r) => r.prompts);
 }
 
+/** A page of the prompts, of a search, without their content, by name. */
+export function fetchPromptsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<PromptsResponse> {
+  return getJSON<PromptsResponse>(`/prompts${listQuery(params)}`, signal);
+}
+
 /** A prompt with its content. */
 export function fetchPrompt(id: number, signal?: AbortSignal): Promise<PromptDetail> {
   return getJSON<PromptDetail>(`/prompts/${id}`, signal);
@@ -533,6 +582,14 @@ export function deletePrompt(id: number): Promise<void> {
 
 export function fetchTelegramSettings(signal?: AbortSignal): Promise<TelegramSettingsResponse> {
   return getJSON<TelegramSettingsResponse>("/settings/telegram", signal);
+}
+
+/** A page of the Telegram users the bot answers, of a search, by their ID. */
+export function fetchTelegramUsersPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<TelegramUsersResponse> {
+  return getJSON<TelegramUsersResponse>(`/settings/telegram/users${listQuery(params)}`, signal);
 }
 
 /** Changes the Telegram bot: on or off, and its token (write only). */
@@ -557,6 +614,11 @@ export function fetchUsers(signal?: AbortSignal): Promise<UserInfo[]> {
   return getJSON<UsersResponse>("/users", signal).then((r) => r.users);
 }
 
+/** A page of the users of the dashboard, of a search, by username. */
+export function fetchUsersPage(params: ListParams, signal?: AbortSignal): Promise<UsersResponse> {
+  return getJSON<UsersResponse>(`/users${listQuery(params)}`, signal);
+}
+
 export function createUser(request: UserRequest): Promise<UserInfo> {
   return postJSON<UserInfo>("/users", request);
 }
@@ -574,6 +636,11 @@ export function deleteUser(id: number): Promise<void> {
 /** The roles of the users, the fixed one first, and the catalog of the permissions. */
 export function fetchRoles(signal?: AbortSignal): Promise<RolesResponse> {
   return getJSON<RolesResponse>("/roles", signal);
+}
+
+/** A page of the roles, of a search, the fixed one first, and the catalog of the permissions. */
+export function fetchRolesPage(params: ListParams, signal?: AbortSignal): Promise<RolesResponse> {
+  return getJSON<RolesResponse>(`/roles${listQuery(params)}`, signal);
 }
 
 /** Creates a role, of its name and its permissions. */
@@ -618,6 +685,14 @@ export function fetchSupervisorRuns(signal?: AbortSignal): Promise<SupervisorRun
   return getJSON<SupervisorRunsResponse>("/supervisor/runs", signal);
 }
 
+/** A page of the analyses of the supervisor, the newest first. */
+export function fetchSupervisorRunsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<SupervisorRunsResponse> {
+  return getJSON<SupervisorRunsResponse>(`/supervisor/runs${listQuery(params)}`, signal);
+}
+
 /** An analysis of the supervisor and the data sent to its model. */
 export function fetchSupervisorRun(
   id: number,
@@ -629,6 +704,25 @@ export function fetchSupervisorRun(
 /** The last actions of the supervision on the agents, the newest first. */
 export function fetchSupervisorActions(signal?: AbortSignal): Promise<SupervisorActionInfo[]> {
   return getJSON<SupervisorActionsResponse>("/supervisor/actions", signal).then((r) => r.actions);
+}
+
+/** A page of the actions of the supervision on the agents, the newest first. */
+export function fetchSupervisorActionsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<SupervisorActionsResponse> {
+  return getJSON<SupervisorActionsResponse>(`/supervisor/actions${listQuery(params)}`, signal);
+}
+
+/** A page of the protections of positions the XTrader AI armed, the newest first. */
+export function fetchSupervisorProtectionsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<SupervisorProtectionsResponse> {
+  return getJSON<SupervisorProtectionsResponse>(
+    `/supervisor/protections${listQuery(params)}`,
+    signal,
+  );
 }
 
 /** The protections of positions the XTrader AI armed, the newest first. */
@@ -771,6 +865,14 @@ export function fetchExposure(signal?: AbortSignal): Promise<ExposureResponse> {
 /** The accounts of MetaTrader 5, never their password nor their token. */
 export function fetchMT5Accounts(signal?: AbortSignal): Promise<MT5AccountsResponse> {
   return getJSON<MT5AccountsResponse>("/settings/mt5-accounts", signal);
+}
+
+/** A page of the accounts of MT5, of a search, by name. */
+export function fetchMT5AccountsPage(
+  params: ListParams,
+  signal?: AbortSignal,
+): Promise<MT5AccountsResponse> {
+  return getJSON<MT5AccountsResponse>(`/settings/mt5-accounts${listQuery(params)}`, signal);
 }
 
 /** Creates an account of MT5, inactive: 400 when refused. */

@@ -40,3 +40,55 @@ export function pageList(page: number, count: number): (number | null)[] {
   }
   return list;
 }
+
+// The lists paged by the API (see PageInfo): a page asked with its search,
+// the controller reading only its rows.
+
+/** A page of a list asked of the API: from 1, its size and its search. */
+export interface ListParams {
+  page: number;
+  perPage: number;
+  q?: string;
+}
+
+/** A value of a query string, left out when undefined or blank. */
+type QueryValue = string | number | boolean | undefined;
+
+/**
+ * The query string of the page of params and of more (eg: a filter, a sort),
+ * eg: ?page=2&per_page=10&q=ouro, the blank ones left out.
+ */
+export function listQuery(params: ListParams, more: Record<string, QueryValue> = {}): string {
+  const query = new URLSearchParams({
+    page: String(params.page),
+    per_page: String(params.perPage),
+  });
+  const q = params.q?.trim();
+  if (q) query.set("q", q);
+  for (const [key, value] of Object.entries(more)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  return `?${query.toString()}`;
+}
+
+/** What a list holds, in words: one, many, and whether the word is feminine. */
+export interface Noun {
+  one: string;
+  many: string;
+  feminine?: boolean;
+}
+
+/**
+ * The note of a search: the rows found of every page, or none for query, eg:
+ * "3 contas encontradas.", "Nenhum prompt encontrado para “ouro”."; null
+ * without a search.
+ */
+export function searchNote(total: number, query: string, noun: Noun): string | null {
+  const q = query.trim();
+  if (q === "") return null;
+  const found = noun.feminine ? "encontrada" : "encontrado";
+  if (total === 0)
+    return `${noun.feminine ? "Nenhuma" : "Nenhum"} ${noun.one} ${found} para “${q}”.`;
+  if (total === 1) return `1 ${noun.one} ${found}.`;
+  return `${total} ${noun.many} ${found}s.`;
+}

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cancelBacktestRun, deleteBacktest, fetchBacktests } from "../api/client";
+import { cancelBacktestRun, deleteBacktest, fetchBacktestsPage } from "../api/client";
 import type { BacktestBatchInfo, BacktestsResponse } from "../api/types";
 import { PermBacktestsManage } from "../api/types";
-import { active } from "../lib/backtest";
 import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { useCan } from "./AccessContext";
 import { AppShell } from "./AppShell";
@@ -10,12 +9,16 @@ import { BacktestConfigure } from "./BacktestConfigure";
 import { BacktestResults } from "./BacktestResults";
 import { BacktestRuns } from "./BacktestRuns";
 import { PageHeader } from "./PageHeader";
+import { ListPages } from "./Paginator";
 import { Alert, Loading, Skeleton } from "./States";
 import { Tabs, tabIds } from "./Tabs";
 
 /** How often the batches are read again while some run, and while none does, in ms. */
 const POLL_ACTIVE = 3_000;
 const POLL_IDLE = 30_000;
+
+/** The batches of a page of the runs: each one with the table of its runs. */
+const BATCHES_PAGE = 5;
 
 type View = "configure" | "runs" | "results";
 
@@ -26,11 +29,13 @@ const views: { id: View; label: string; icon: "settings" | "list" | "results" }[
 ];
 
 /**
- * The batches of backtests, read at once and again: every POLL_ACTIVE while
- * some run is queued or running, every POLL_IDLE otherwise, and on a refresh.
- * The runs go on in the controller: a reload of the page only reads them.
+ * The batches of backtests of a page (from 1), BATCHES_PAGE each, with every
+ * batch as a choice and the agents, read at once and again: every POLL_ACTIVE
+ * while some run of any batch is queued or running, every POLL_IDLE
+ * otherwise, and on a refresh or another page. The runs go on in the
+ * controller: a reload of the page only reads them.
  */
-function useBacktests() {
+function useBacktests(page: number) {
   const [read, setRead] = useState<BacktestsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -41,11 +46,11 @@ function useBacktests() {
     const controller = new AbortController();
     let timer = 0;
     const load = () =>
-      fetchBacktests(controller.signal)
+      fetchBacktestsPage({ page, perPage: BATCHES_PAGE }, controller.signal)
         .then((response) => {
           setRead(response);
           setError(null);
-          busy.current = response.batches.some((b) => b.runs.some(active));
+          busy.current = response.running > 0;
         })
         .catch((e) => {
           if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -60,7 +65,7 @@ function useBacktests() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [version]);
+  }, [version, page]);
 
   return { read, error, refresh: useCallback(() => setVersion((v) => v + 1), []) };
 }
@@ -80,15 +85,24 @@ export function BacktestingPage() {
   const configure = manage ? () => setView("configure") : undefined;
   const [batch, setBatch] = useState<number | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const { read, error, refresh } = useBacktests();
+  const [page, setPage] = useState(1);
+  const { read, error, refresh } = useBacktests(page);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     saveTheme(theme);
   }, [theme]);
 
+  // the page the controller answered, on a new reading only (the one of an older page is
+  // canceled): the last one for a page past it, eg: its batches deleted
+  const asked = useRef(page);
+  asked.current = page;
+  useEffect(() => {
+    if (read && read.total_pages > 0 && read.page !== asked.current) setPage(read.page);
+  }, [read]);
+
   const batches = read?.batches ?? [];
-  const running = batches.reduce((n, b) => n + b.runs.filter(active).length, 0);
+  const running = read?.running ?? 0;
   const ids = tabIds("bt", view);
 
   const act = (action: () => Promise<void>) => {
@@ -100,6 +114,7 @@ export function BacktestingPage() {
   const created = (info: BacktestBatchInfo) => {
     setBatch(info.id);
     setView("runs");
+    setPage(1); // the newest first
     refresh();
   };
   const open = (id: number) => {
@@ -159,21 +174,27 @@ export function BacktestingPage() {
             {view === "configure" && manage ? (
               <BacktestConfigure read={read} onCreated={created} />
             ) : view === "runs" ? (
-              <BacktestRuns
-                batches={batches}
-                highlight={batch}
-                onCancel={manage ? (id) => act(() => cancelBacktestRun(id)) : undefined}
-                onDelete={manage ? (id) => act(() => deleteBacktest(id)) : undefined}
-                onOpen={open}
-                onNew={configure}
-              />
+              <>
+                <BacktestRuns
+                  batches={batches}
+                  highlight={batch}
+                  onCancel={manage ? (id) => act(() => cancelBacktestRun(id)) : undefined}
+                  onDelete={manage ? (id) => act(() => deleteBacktest(id)) : undefined}
+                  onOpen={open}
+                  onNew={configure}
+                />
+                <div className="panel-body bt-pages">
+                  <ListPages info={read} onPage={setPage} />
+                </div>
+              </>
             ) : (
               <BacktestResults
-                batches={batches}
+                choices={read.choices}
                 batch={batch}
                 onBatch={setBatch}
                 theme={theme}
                 onNew={configure}
+                refreshed={read}
               />
             )}
           </div>

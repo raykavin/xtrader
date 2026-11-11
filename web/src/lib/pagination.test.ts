@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { clampPage, PAGE_SIZE, pageCount, pageList, pageRows } from "./pagination";
+import {
+  clampPage,
+  listQuery,
+  PAGE_SIZE,
+  pageCount,
+  pageList,
+  pageRows,
+  searchNote,
+} from "./pagination";
 
 describe("pagination", () => {
   it("pages 10 rows at a time", () => {
@@ -32,5 +40,36 @@ describe("pagination", () => {
     expect(pageList(5, 12)).toEqual([0, null, 4, 5, 6, null, 11]);
     expect(pageList(3, 12), "a gap of one page is the page").toEqual([0, 1, 2, 3, 4, null, 11]);
     expect(pageList(11, 12)).toEqual([0, null, 10, 11]);
+  });
+
+  it("asks the API for a page, its search and more", () => {
+    expect(listQuery({ page: 2, perPage: 10 })).toBe("?page=2&per_page=10");
+    expect(listQuery({ page: 1, perPage: 10, q: "  ouro xau " })).toBe(
+      "?page=1&per_page=10&q=ouro+xau",
+    );
+    expect(listQuery({ page: 1, perPage: 10, q: "   " }), "a blank search left out").toBe(
+      "?page=1&per_page=10",
+    );
+    expect(
+      listQuery(
+        { page: 3, perPage: 5 },
+        { sort: "ratio", llm: false, min_trades: 0, order: undefined },
+      ),
+    ).toBe("?page=3&per_page=5&sort=ratio&llm=false&min_trades=0");
+    expect(listQuery({ page: 1, perPage: 10, q: "a&b=%" })).toBe(
+      "?page=1&per_page=10&q=a%26b%3D%25",
+    );
+  });
+
+  it("tells what a search found", () => {
+    const prompt = { one: "prompt", many: "prompts" };
+    const account = { one: "conta", many: "contas", feminine: true };
+    expect(searchNote(3, "", prompt), "no search").toBeNull();
+    expect(searchNote(0, " ouro ", prompt)).toBe("Nenhum prompt encontrado para “ouro”.");
+    expect(searchNote(1, "ouro", prompt)).toBe("1 prompt encontrado.");
+    expect(searchNote(12, "ouro", prompt)).toBe("12 prompts encontrados.");
+    expect(searchNote(0, "demo", account)).toBe("Nenhuma conta encontrada para “demo”.");
+    expect(searchNote(1, "demo", account)).toBe("1 conta encontrada.");
+    expect(searchNote(2, "demo", account)).toBe("2 contas encontradas.");
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchDailyLimits } from "../api/client";
+import { fetchDailyAgentsPage, fetchDailyLimits } from "../api/client";
 import type { DailyLimitsResponse, DailyScopeStatus } from "../api/types";
 import {
   blockNote,
@@ -14,9 +14,11 @@ import { formatProfit } from "../lib/format";
 import { DailyLimitFields } from "./DailyLimitFields";
 import { ExposureCard } from "./ExposureCard";
 import { PageHeader } from "./PageHeader";
+import { ListPages } from "./Paginator";
 import type { SectionIntro } from "./SettingsPage";
 import { Alert, Loading, Skeleton } from "./States";
 import { TradingHoursCard } from "./TradingHoursCard";
+import { usePagedList } from "./usePagedList";
 
 /** How often the state of the daily limits is read again, in ms. */
 const POLL = 5000;
@@ -62,12 +64,17 @@ function ScopeState({ scope, zone }: { scope: DailyScopeStatus; zone: string }) 
  * The daily limits of the application: the loss and the gain of the day of
  * all the agents together (their result realized plus open, in the currency of
  * the accounts, the limits applying to each currency apart, none converted),
- * how they stand now, the agents
- * with limits of their own, and how the limits act: reached, the positions
- * zeroed, the pending entries canceled and the entries blocked until 00:00.
+ * how they stand now, and the agents with limits of their own, a page at a
+ * time; reached, the positions zeroed, the pending entries canceled and the
+ * entries blocked until 00:00.
  */
 export function DailyLimitsSettings({ intro }: Props) {
   const [data, setData] = useState<DailyLimitsResponse | null>(null);
+  const agents = usePagedList(
+    (params, signal) =>
+      fetchDailyAgentsPage(params, signal).then((r) => ({ rows: r.agents, page: r })),
+    { poll: POLL },
+  );
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0); // the form remounted with the limits saved
 
@@ -149,7 +156,16 @@ export function DailyLimitsSettings({ intro }: Props) {
             Configure em Configurações › Agentes, no botão Limite diário do agente.
           </span>
         </header>
-        {status.agents.length === 0 ? (
+        {agents.error && (
+          <Alert tone="error">Não foi possível carregar os agentes: {agents.error}</Alert>
+        )}
+        {agents.rows === null ? (
+          !agents.error && (
+            <Loading label="Carregando…">
+              <Skeleton height={120} />
+            </Loading>
+          )
+        ) : agents.rows.length === 0 ? (
           <p className="card-body field-hint">Nenhum agente com limite diário próprio.</p>
         ) : (
           <div className="table-wrap">
@@ -162,7 +178,7 @@ export function DailyLimitsSettings({ intro }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {status.agents.map((scope) => (
+                {agents.rows.map((scope) => (
                   <tr key={scope.agent}>
                     <td data-label="Agente">{scope.agent}</td>
                     <td data-label="Limites">
@@ -177,64 +193,9 @@ export function DailyLimitsSettings({ intro }: Props) {
             </table>
           </div>
         )}
-      </section>
-
-      <section className="card" aria-labelledby="daily-how-title">
-        <h2 id="daily-how-title" className="card-title">
-          Como funciona
-        </h2>
-        <ul className="daily-notes">
-          <li>
-            O resultado do dia é o realizado desde 00:00 ({status.zone}), com swap, comissão e
-            taxas, mais o P/L das posições abertas, lido das contas MT5 a cada 5 segundos. Cada
-            operação conta uma vez, mesmo com vários agentes na mesma conta; posições manuais não
-            contam.
-          </li>
-          <li>
-            Atingida a perda ou o ganho em duas leituras seguidas, as posições são zeradas, as
-            ordens pendentes de entrada canceladas e as entradas bloqueadas até 00:00: de todos os
-            agentes no limite global, só do agente no limite dele. Stop loss, trailing stop e
-            breakeven continuam valendo.
-          </li>
-          <li>
-            Reiniciar o XTrader, religar ou liberar um agente ou redefinir os resultados dele não
-            desfaz o bloqueio. Só a virada do dia ou uma mudança no limite o libera.
-          </li>
-          <li>
-            Tudo na moeda de cada conta, sem conversão de câmbio: com contas em moedas diferentes, o
-            limite global vale para o resultado de cada moeda separadamente e, atingido em qualquer
-            uma, zera e bloqueia todos os agentes.
-          </li>
-          <li>
-            Se uma conta não puder ser lida, as entradas ficam bloqueadas (sem zerar nada) até a
-            leitura voltar.
-          </li>
-          {(status.paper?.length ?? 0) > 0 && (
-            <li>
-              Os agentes em paper ({status.paper?.length}) não contam no resultado, mas são
-              bloqueados e zerados junto com todos.
-            </li>
-          )}
-          <li>
-            Horário de operação: fora das janelas, nenhum agente abre posição; numa janela com
-            agentes ou ativos definidos, só eles abrem (saídas, stops e alvos sempre passam; a
-            Boleta não segue os ativos da janela). No fim de cada janela, zera as posições e cancela
-            as ordens pendentes de todos os agentes e ativos, conforme marcado nela; sem zerar, as
-            posições abertas ficam como estão, com os stops. Se o XTrader estiver parado no fim de
-            uma janela, faz isso ao voltar.
-          </li>
-          <li>
-            Exposição por ativo: antes de cada entrada num ativo com regra, o agente pede a vaga ao
-            XTrader; passado o máximo de agentes da regra na mesma direção, a entrada não é enviada,
-            com o motivo. O limite não fecha nada que já está aberto, e sem ler uma conta as
-            entradas limitadas esperam.
-          </li>
-          <li>
-            Limitações: uma ordem já enviada antes do bloqueio pode ser executada (é zerada em
-            seguida); o histórico do MT5 atrasa alguns segundos; entre a leitura e o fechamento o
-            preço se move, então o resultado final pode passar um pouco do limite.
-          </li>
-        </ul>
+        <div className="list-foot">
+          <ListPages info={agents.info} onPage={agents.setPage} />
+        </div>
       </section>
     </>
   );

@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { BacktestBatchInfo, BacktestRunInfo, BacktestSummary } from "../api/types";
+import type { BacktestRunInfo, BacktestSummary } from "../api/types";
 import {
   type BacktestForm,
   batchParams,
   callFor,
   candlesIn,
-  comparisonRows,
-  conditionDifferences,
   defaultForm,
-  degradedValidation,
   estimatedCalls,
-  filterRows,
   formCalls,
   formPeriod,
   formRequest,
@@ -20,7 +16,6 @@ import {
   reasonLabels,
   robustnessFlags,
   runsOf,
-  sortRows,
   withHours,
 } from "./backtest";
 
@@ -82,105 +77,6 @@ describe("the robustness of a run", () => {
       "LLM: não determinístico",
       "Dados com lacunas",
     ]);
-  });
-
-  it("finds a validation much worse than the fit", () => {
-    expect(degradedValidation(summary({ net: 100 }), summary({ net: -1 }))).toBe(true);
-    expect(
-      degradedValidation(
-        summary({ net: 100, return_over_drawdown: 2 }),
-        summary({ net: 10, return_over_drawdown: 0.5 }),
-      ),
-    ).toBe(true);
-    expect(
-      degradedValidation(
-        summary({ net: 100, return_over_drawdown: 2 }),
-        summary({ net: 60, return_over_drawdown: 1.5 }),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("the comparison", () => {
-  const batch: BacktestBatchInfo = {
-    id: 1,
-    name: "lote",
-    from: 0,
-    to: 1,
-    validation_share: 0.3,
-    assumptions: {
-      balance: 10000,
-      currency: "USD",
-      fee: 0,
-      spread_points: 0,
-      slippage_points: 0,
-      execution_timeframe: "1m",
-      gap_fills: true,
-      conservative: true,
-      end_policy: "mark_to_market",
-      llm_max_calls: 300,
-      llm_max_cost: 5,
-    },
-    created_by: "admin",
-    created_at: 0,
-    runs: [
-      run({ id: 1, agent: "a", summary: summary({ net: 500, return_over_drawdown: 5 }) }),
-      run({
-        id: 2,
-        agent: "a",
-        segment: "validation",
-        summary: summary({ net: -10, return_over_drawdown: -0.1 }),
-      }),
-      run({
-        id: 3,
-        agent: "b",
-        summary: summary({ net: 100, return_over_drawdown: 1, trades: 10 }),
-      }),
-      run({ id: 4, agent: "c", kind: "llm", llm: true, pairs: ["BTCUSDm"], status: "running" }),
-    ],
-  };
-
-  it("pairs the fit and the validation of each agent, the degradation told", () => {
-    const rows = comparisonRows(batch);
-    expect(rows.map((r) => r.agent)).toEqual(["a", "b", "c"]);
-    expect(rows[0]?.validation?.id).toBe(2);
-    expect(rows[0]?.degraded).toBe(true);
-    expect(rows[1]?.degraded).toBe(false);
-  });
-
-  it("sorts by any column, the unknown last, and filters the sample and the LLMs", () => {
-    const rows = comparisonRows(batch);
-    expect(sortRows(rows, "net").map((r) => r.agent)).toEqual(["a", "b", "c"]);
-    expect(sortRows(rows, "net", true).map((r) => r.agent)).toEqual(["b", "a", "c"]);
-    expect(sortRows(rows, "agent").map((r) => r.agent)).toEqual(["a", "b", "c"]);
-    expect(filterRows(rows, { minTrades: 30, showLLM: true }).map((r) => r.agent)).toEqual([
-      "a",
-      "c",
-    ]);
-    expect(filterRows(rows, { minTrades: 0, showLLM: false }).map((r) => r.agent)).toEqual([
-      "a",
-      "b",
-    ]);
-  });
-
-  it("tells what differs between the rows", () => {
-    expect(conditionDifferences(comparisonRows(batch))).toEqual([
-      "ativos diferentes",
-      "agentes LLM (não determinísticos) misturados aos demais",
-    ]);
-    const coarser = {
-      ...batch,
-      runs: batch.runs.map((r) =>
-        r.id === 3 && r.summary
-          ? { ...r, summary: { ...r.summary, execution_timeframe: "5m" } }
-          : r.summary
-            ? { ...r, summary: { ...r.summary, execution_timeframe: "1m" } }
-            : r,
-      ),
-    };
-    expect(conditionDifferences(comparisonRows(coarser))).toContain(
-      "execução em resoluções diferentes (1m, 5m)",
-    );
   });
 });
 

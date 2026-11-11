@@ -1,18 +1,12 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import {
-  fetchSupervisorActions,
-  fetchSupervisorProtections,
-  fetchSupervisorRuns,
+  fetchSupervisorActionsPage,
+  fetchSupervisorProtectionsPage,
+  fetchSupervisorRunsPage,
   runSupervisor,
   updateSupervisorSettings,
 } from "../api/client";
-import type {
-  SupervisorActionInfo,
-  SupervisorProtectionInfo,
-  SupervisorRunInfo,
-  SupervisorSettingsRequest,
-  SupervisorSettingsResponse,
-} from "../api/types";
+import type { SupervisorSettingsRequest, SupervisorSettingsResponse } from "../api/types";
 import { PermSupervisorChat, PermSupervisorManage } from "../api/types";
 import { featureLabel } from "../lib/protection";
 import {
@@ -29,6 +23,7 @@ import {
 import { useCan } from "./AccessContext";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
+import { ListPages } from "./Paginator";
 import { SecretField } from "./SecretField";
 import { Select } from "./Select";
 import type { SectionIntro } from "./SettingsPage";
@@ -36,6 +31,10 @@ import { Alert, EmptyState } from "./States";
 import { clock, dayClock, ResultItems, toneClass } from "./SupervisorAction";
 import { SupervisorRuns } from "./SupervisorRuns";
 import { Switch } from "./Switch";
+import { usePagedList } from "./usePagedList";
+
+/** How often the lists are read again while an analysis runs, in ms. */
+const POLL_ANALYZING = 3000;
 
 interface Props {
   /** The title of the section and what it is for. */
@@ -88,28 +87,32 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [runs, setRuns] = useState<SupervisorRunInfo[] | null>(null);
-  const [actions, setActions] = useState<SupervisorActionInfo[] | null>(null);
-  const [protections, setProtections] = useState<SupervisorProtectionInfo[] | null>(null);
   const [open, setOpen] = useState<number | null>(null);
-
-  const load = useCallback(() => {
-    fetchSupervisorRuns()
-      .then((response) => setRuns(response.runs))
-      .catch(() => setRuns([]));
-    fetchSupervisorActions()
-      .then(setActions)
-      .catch(() => setActions([]));
-    fetchSupervisorProtections()
-      .then(setProtections)
-      .catch(() => setProtections([]));
-  }, []);
-  useEffect(() => load(), [load]);
-  useEffect(() => {
-    if (!settings.analyzing) return;
-    const timer = window.setInterval(load, 3000);
-    return () => window.clearInterval(timer);
-  }, [settings.analyzing, load]);
+  // the analyses, the actions and the protections, a page at a time, read again while one runs
+  const poll = settings.analyzing ? POLL_ANALYZING : undefined;
+  const runs = usePagedList(
+    (params, signal) =>
+      fetchSupervisorRunsPage(params, signal).then((r) => ({ rows: r.runs, page: r })),
+    { poll },
+  );
+  const actions = usePagedList(
+    (params, signal) =>
+      fetchSupervisorActionsPage(params, signal).then((r) => ({ rows: r.actions, page: r })),
+    { poll },
+  );
+  const protections = usePagedList(
+    (params, signal) =>
+      fetchSupervisorProtectionsPage(params, signal).then((r) => ({
+        rows: r.protections,
+        page: r,
+      })),
+    { poll },
+  );
+  const load = () => {
+    runs.reload();
+    actions.reload();
+    protections.reload();
+  };
 
   const run = async (request: SupervisorSettingsRequest) => {
     setBusy(true);
@@ -459,8 +462,14 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             </h3>
           </div>
         </header>
-        <div className="card-body">
-          {runs === null ? <p>Carregando…</p> : <SupervisorRuns runs={runs} />}
+        <div className="card-body stack">
+          {runs.error && <p className="msg msg-error">{runs.error}</p>}
+          {runs.rows === null ? (
+            !runs.error && <p>Carregando…</p>
+          ) : (
+            <SupervisorRuns runs={runs.rows} />
+          )}
+          <ListPages info={runs.info} onPage={runs.setPage} />
         </div>
       </section>
 
@@ -470,13 +479,14 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <span className="eyebrow">Registro</span>
             <h3 id="supervisor-actions-title" className="card-title">
               Ações nos agentes
-              {actions && <span className="card-count">{actions.length}</span>}
+              {actions.info && <span className="card-count">{actions.info.total}</span>}
             </h3>
           </div>
         </header>
-        {actions === null ? (
-          <p className="card-body">Carregando…</p>
-        ) : actions.length === 0 ? (
+        {actions.error && <p className="card-body msg msg-error">{actions.error}</p>}
+        {actions.rows === null ? (
+          !actions.error && <p className="card-body">Carregando…</p>
+        ) : actions.rows.length === 0 ? (
           <EmptyState compact icon="list" title="Nenhuma ação ainda" />
         ) : (
           <div className="table-wrap">
@@ -492,7 +502,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {actions.map((action) => {
+                {actions.rows.map((action) => {
                   const status = actionStatusLabel(action.status);
                   return (
                     <tr key={action.id}>
@@ -525,6 +535,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             </table>
           </div>
         )}
+        <div className="list-foot">
+          <ListPages info={actions.info} onPage={actions.setPage} />
+        </div>
       </section>
 
       <section className="card card-flush" aria-labelledby="supervisor-protections-title">
@@ -533,13 +546,14 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             <span className="eyebrow">Registro</span>
             <h3 id="supervisor-protections-title" className="card-title">
               Proteções armadas
-              {protections && <span className="card-count">{protections.length}</span>}
+              {protections.info && <span className="card-count">{protections.info.total}</span>}
             </h3>
           </div>
         </header>
-        {protections === null ? (
-          <p className="card-body">Carregando…</p>
-        ) : protections.length === 0 ? (
+        {protections.error && <p className="card-body msg msg-error">{protections.error}</p>}
+        {protections.rows === null ? (
+          !protections.error && <p className="card-body">Carregando…</p>
+        ) : protections.rows.length === 0 ? (
           <EmptyState compact icon="shield" title="Nenhuma proteção armada ainda">
             O XTrader AI só arma breakeven e trailing stop nos agentes que autorizam, em
             Configurações › Agentes › Proteção.
@@ -558,7 +572,7 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {protections.map((protection) => {
+                {protections.rows.map((protection) => {
                   const status = protectionStatusLabel(protection);
                   return (
                     <tr key={protection.id}>
@@ -603,6 +617,9 @@ export function SupervisorSettings({ intro, settings, onChange }: Props) {
             </table>
           </div>
         )}
+        <div className="list-foot">
+          <ListPages info={protections.info} onPage={protections.setPage} />
+        </div>
       </section>
     </div>
   );

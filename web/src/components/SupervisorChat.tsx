@@ -8,7 +8,7 @@ import {
 } from "react";
 import {
   fetchSupervisorMessages,
-  fetchSupervisorRuns,
+  fetchSupervisorRunsPage,
   fetchSupervisorSettings,
   runSupervisor,
   type SupervisorDecision,
@@ -16,7 +16,6 @@ import {
 } from "../api/client";
 import type {
   SupervisorMessageInfo,
-  SupervisorRunInfo,
   SupervisorSettingsResponse,
   SupervisorStreamStage,
 } from "../api/types";
@@ -24,9 +23,11 @@ import { settingsHref } from "../lib/nav";
 import { awaitingDecision, mergeMessages, stageLabel, withAction } from "../lib/supervisor";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
+import { ListPages } from "./Paginator";
 import { Alert } from "./States";
 import { clock, SupervisorActionCard, toneClass } from "./SupervisorAction";
 import { SupervisorRuns } from "./SupervisorRuns";
+import { usePagedList } from "./usePagedList";
 
 type PanelTab = "conversa" | "analises";
 
@@ -51,7 +52,6 @@ export function SupervisorChat() {
   const [settings, setSettings] = useState<SupervisorSettingsResponse | null>(null);
   const [messages, setMessages] = useState<SupervisorMessageInfo[] | null>(null);
   const [more, setMore] = useState(false);
-  const [runs, setRuns] = useState<SupervisorRunInfo[] | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState<string | null>(null);
   // the answer streaming: its question kept, its stage, the text of the stage
@@ -77,11 +77,13 @@ export function SupervisorChat() {
       })
       .catch(fail);
   }, [fail]);
-  const loadRuns = useCallback(() => {
-    fetchSupervisorRuns()
-      .then((response) => setRuns(response.runs))
-      .catch(fail);
-  }, [fail]);
+  // the analyses, a page at a time, read while their tab is open
+  const runs = usePagedList(
+    (params, signal) =>
+      fetchSupervisorRunsPage(params, signal).then((r) => ({ rows: r.runs, page: r })),
+    { enabled: open && tab === "analises" },
+  );
+  const loadRuns = runs.reload;
 
   // opened: the state of the supervisor and the conversation, the focus in it
   useEffect(() => {
@@ -92,11 +94,8 @@ export function SupervisorChat() {
     if (window.matchMedia?.("(pointer: fine)").matches)
       window.setTimeout(() => input.current?.focus(), 0);
   }, [open, fail, loadMessages]);
-  useEffect(() => {
-    if (open && tab === "analises") loadRuns();
-  }, [open, tab, loadRuns]);
   // an analysis running: read again until it ends
-  const running = runs?.some((run) => run.status === "running") || settings?.analyzing;
+  const running = runs.rows?.some((run) => run.status === "running") || settings?.analyzing;
   useEffect(() => {
     if (!open || tab !== "analises" || !running) return;
     const timer = window.setInterval(() => {
@@ -389,11 +388,13 @@ export function SupervisorChat() {
                   </span>
                 )}
               </div>
-              {runs === null ? (
-                <p className="supervisor-empty">Carregando…</p>
+              {runs.error && <p className="msg msg-error">{runs.error}</p>}
+              {runs.rows === null ? (
+                !runs.error && <p className="supervisor-empty">Carregando…</p>
               ) : (
-                <SupervisorRuns runs={runs} compact />
+                <SupervisorRuns runs={runs.rows} compact />
               )}
+              <ListPages info={runs.info} onPage={runs.setPage} />
             </div>
           )}
         </section>

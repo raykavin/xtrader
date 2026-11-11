@@ -1,17 +1,26 @@
-import { type FormEvent, useState } from "react";
-import { addTelegramUser, deleteTelegramUser, updateTelegramSettings } from "../api/client";
+import { type FormEvent, useId, useState } from "react";
+import {
+  addTelegramUser,
+  deleteTelegramUser,
+  fetchTelegramUsersPage,
+  updateTelegramSettings,
+} from "../api/client";
 import type { TelegramSettingsResponse } from "../api/types";
 import { PermTelegramManage } from "../api/types";
+import { searchNote } from "../lib/pagination";
 import { parseTelegramID } from "../lib/settings";
 import { useCan } from "./AccessContext";
 import { ConfirmButton } from "./ConfirmButton";
 import { Icon } from "./Icon";
 import { PageHeader } from "./PageHeader";
+import { ListPages } from "./Paginator";
+import { SearchField } from "./SearchField";
 import { SecretField } from "./SecretField";
 import type { SectionIntro } from "./SettingsPage";
-import { Alert, EmptyState } from "./States";
+import { Alert, EmptyState, Loading, Skeleton } from "./States";
 import { StatusIcon } from "./StatusIcon";
 import { Switch } from "./Switch";
+import { usePagedList } from "./usePagedList";
 
 interface Props {
   /** The title of the section and what it is for. */
@@ -20,10 +29,13 @@ interface Props {
   onChange: (telegram: TelegramSettingsResponse) => void;
 }
 
+/** The users of Telegram, as a search counts them. */
+const noun = { one: "usuário", many: "usuários" };
+
 /**
  * The Telegram bot of the controller: on or off, its token (written, never
  * read), and the users it answers, the only ones who reach the agents and the
- * prompts from Telegram.
+ * prompts from Telegram, a page at a time, searched by their IDs and names.
  */
 export function TelegramSettings({ intro, telegram, onChange }: Props) {
   const manage = useCan(PermTelegramManage); // changed by a user allowed to only, seen by the others
@@ -31,12 +43,17 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [userID, setUserID] = useState("");
   const [name, setName] = useState("");
+  const list = usePagedList((params, signal) =>
+    fetchTelegramUsersPage(params, signal).then((r) => ({ rows: r.users, page: r })),
+  );
+  const listID = useId();
 
   const run = async (action: () => Promise<TelegramSettingsResponse>) => {
     setBusy(true);
     setError(null);
     try {
       onChange(await action());
+      list.reload(); // the users authorized, of the page
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -107,51 +124,81 @@ export function TelegramSettings({ intro, telegram, onChange }: Props) {
               <span className="eyebrow">Acesso</span>
               <h3 id="telegram-users-title" className="card-title">
                 Usuários autorizados
-                <span className="card-count">{telegram.users.length}</span>
+                {list.info && list.search === "" && (
+                  <span className="card-count">{list.info.total}</span>
+                )}
               </h3>
             </div>
           </header>
-          {telegram.users.length === 0 ? (
+          {list.error && (
+            <Alert tone="error" title="Não foi possível carregar os usuários">
+              {list.error}
+            </Alert>
+          )}
+          {list.rows === null || list.info === null ? (
+            !list.error && (
+              <Loading label="Carregando…">
+                <Skeleton height={120} />
+              </Loading>
+            )
+          ) : list.info.total === 0 && list.search === "" ? (
             <EmptyState compact icon="users" title="Nenhum usuário autorizado ainda">
               O bot só responde aos IDs autorizados abaixo.
             </EmptyState>
           ) : (
-            <div className="table-wrap">
-              <table className="table table-responsive">
-                <thead>
-                  <tr>
-                    <th scope="col">ID no Telegram</th>
-                    <th scope="col">Nome</th>
-                    <th scope="col" className="col-actions">
-                      <span className="sr-only">Ações</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {telegram.users.map((user) => (
-                    <tr key={user.id}>
-                      <td className="mono" data-label="ID no Telegram">
-                        {user.telegram_id}
-                      </td>
-                      <td data-label="Nome">{user.name || "—"}</td>
-                      <td className="cell-actions">
-                        <div className="row-actions">
-                          {manage && (
-                            <ConfirmButton
-                              label="Remover"
-                              ariaLabel={`Remover ${user.name || user.telegram_id}`}
-                              question={`Remover ${user.name || user.telegram_id}?`}
-                              disabled={busy}
-                              onConfirm={() => run(() => deleteTelegramUser(user.id))}
-                            />
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="list-toolbar">
+                <SearchField
+                  value={list.query}
+                  onChange={list.setQuery}
+                  label="Buscar usuários autorizados"
+                  placeholder="Buscar por ID no Telegram ou nome"
+                  controls={listID}
+                  note={searchNote(list.info.total, list.search, noun)}
+                />
+              </div>
+              {list.rows.length > 0 && (
+                <div className="table-wrap" id={listID}>
+                  <table className="table table-responsive">
+                    <thead>
+                      <tr>
+                        <th scope="col">ID no Telegram</th>
+                        <th scope="col">Nome</th>
+                        <th scope="col" className="col-actions">
+                          <span className="sr-only">Ações</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.rows.map((user) => (
+                        <tr key={user.id}>
+                          <td className="mono" data-label="ID no Telegram">
+                            {user.telegram_id}
+                          </td>
+                          <td data-label="Nome">{user.name || "—"}</td>
+                          <td className="cell-actions">
+                            <div className="row-actions">
+                              {manage && (
+                                <ConfirmButton
+                                  label="Remover"
+                                  ariaLabel={`Remover ${user.name || user.telegram_id}`}
+                                  question={`Remover ${user.name || user.telegram_id}?`}
+                                  disabled={busy}
+                                  onConfirm={() => run(() => deleteTelegramUser(user.id))}
+                                />
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="list-foot">
+                <ListPages info={list.info} onPage={list.setPage} />
+              </div>
+            </>
           )}
           {manage && (
             <form className="card-footer inline-form" onSubmit={add} aria-label="Autorizar usuário">
