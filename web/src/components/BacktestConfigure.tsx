@@ -1,7 +1,13 @@
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { createBacktest, fetchTradingHours } from "../api/client";
-import type { BacktestBatchInfo, BacktestCompatibility, BacktestsResponse } from "../api/types";
+import { createBacktest, fetchAssetAgents, fetchTradingHours } from "../api/client";
+import type {
+  AssetAgentRule,
+  BacktestBatchInfo,
+  BacktestCompatibility,
+  BacktestsResponse,
+} from "../api/types";
 import {
+  assetRefusals,
   type BacktestForm,
   backtestTimeframes,
   batchHours,
@@ -58,6 +64,18 @@ export function BacktestConfigure({ read, onCreated }: Props) {
     setErrors((e) => ({ ...e, [field]: undefined, hoursWindows: undefined }));
   };
 
+  // the agents per asset (the tab Limites) the batch may follow
+  const [rules, setRules] = useState<AssetAgentRule[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchAssetAgents(controller.signal)
+      .then(({ settings }) => setRules(settings.rules ?? []))
+      .catch(() => {
+        // without them, the controller tells what they refuse on sending
+      });
+    return () => controller.abort();
+  }, []);
+
   // the trading hours of the agents (the tab Limites) as the hours of the
   // batch, unless changed meanwhile
   const touchedHours = useRef(false);
@@ -83,9 +101,22 @@ export function BacktestConfigure({ read, onCreated }: Props) {
   const period = formPeriod(form);
   const maxCalls = Number(form.llmMaxCalls) || read.llm_max_calls;
   const maxCost = Number(form.llmMaxCost.replace(",", ".")) || read.llm_max_cost;
-  const calls = formCalls(read.agents, form, period, maxCalls);
+  const calls = formCalls(read.agents, form, period, maxCalls, rules);
   const llmRuns = chosen.filter((a) => a.llm).length * (runsOf(form) / (form.agents.length || 1));
-  const idle = chosen.filter((a) => pairsTested(a, form).length === 0);
+  const idle = chosen.filter((a) => pairsTested(a, { ...form, assetAgents: false }).length === 0);
+  const ruledOut = assetRefusals(form, read.agents, rules);
+  // the assets each agent of the batch leaves out by the agents per asset
+  const leftOut = form.assetAgents
+    ? chosen
+        .map((a) => ({
+          agent: a.agent,
+          pairs: pairsTested(a, { ...form, assetAgents: false }).filter(
+            (p) => !pairsTested(a, form, rules).includes(p),
+          ),
+        }))
+        // the agents left with none told apart, refused
+        .filter((a) => a.pairs.length > 0 && !ruledOut.some((r) => r.includes(` ${a.agent} `)))
+    : [];
   // the agents a window may be limited to: the ones of the batch, else the
   // ones that can run
   const windowAgents =
@@ -96,7 +127,7 @@ export function BacktestConfigure({ read, onCreated }: Props) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const { request, errors: refused } = formRequest(form, read);
+    const { request, errors: refused } = formRequest(form, read, new Date(), rules);
     setErrors(refused);
     if (!request) return;
     setSending(true);
@@ -323,6 +354,39 @@ export function BacktestConfigure({ read, onCreated }: Props) {
       </fieldset>
 
       <fieldset className="form-section">
+        <legend>Agentes por ativo</legend>
+        <label className="hours-check">
+          <input
+            type="checkbox"
+            checked={form.assetAgents}
+            onChange={(e) => set("assetAgents", e.target.checked)}
+          />
+          Respeitar os agentes por ativo de Configurações › Limites
+        </label>
+        {ruledOut.map((problem) => (
+          <p key={problem} className="field-error">
+            {problem}
+          </p>
+        ))}
+        {leftOut.length > 0 && (
+          <ul className="field-hint bt-left-out">
+            {leftOut.map((a) => (
+              <li key={a.agent}>
+                {a.agent}: sem {a.pairs.join(", ")}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="field-hint">
+          {form.assetAgents
+            ? rules.length > 0
+              ? "Cada agente só testa os ativos que as regras permitem a ele; os outros ficam de fora da execução."
+              : "Nenhuma regra em Configurações › Limites: cada agente testa todos os seus ativos."
+            : "Desmarcado, cada agente testa todos os seus ativos, sem as regras."}
+        </p>
+      </fieldset>
+
+      <fieldset className="form-section">
         <legend>Parâmetros dos agentes</legend>
         <div className="field" data-invalid={errors.params ? "" : undefined}>
           <label className="field-label" htmlFor={`${id}-params`}>
@@ -397,6 +461,16 @@ export function BacktestConfigure({ read, onCreated }: Props) {
               {form.hours
                 ? hoursAssumption(batchHours(form.hoursWindows)) || "nenhuma janela"
                 : "o dia todo"}
+            </span>
+          </li>
+          <li>
+            <span>Agentes por ativo</span>
+            <span>
+              {form.assetAgents
+                ? rules.length > 0
+                  ? `respeitados (${rules.length === 1 ? "1 regra" : `${rules.length} regras`})`
+                  : "respeitados (nenhuma regra)"
+                : "ignorados"}
             </span>
           </li>
           <li>

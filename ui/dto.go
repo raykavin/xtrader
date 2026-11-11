@@ -1215,8 +1215,12 @@ type BacktestRequest struct {
 	DailyLoss       float64        `json:"daily_loss,omitempty"`
 	DailyGain       float64        `json:"daily_gain,omitempty"`
 	Hours           *BacktestHours `json:"hours,omitempty"`
-	LLMMaxCalls     int            `json:"llm_max_calls,omitempty"`
-	LLMMaxCost      float64        `json:"llm_max_cost,omitempty"`
+	// AssetAgents has each run follow the agents per asset of the tab Limites
+	// (see AssetAgentsSettings): its agent only on the assets they allow it,
+	// the others left out of the run; refused for an agent left with none.
+	AssetAgents bool    `json:"asset_agents,omitempty"`
+	LLMMaxCalls int     `json:"llm_max_calls,omitempty"`
+	LLMMaxCost  float64 `json:"llm_max_cost,omitempty"`
 	// Params are params added to every agent of the batch, by name, eg: the
 	// entry filter, regime=trend: a param of the agent of the same name is
 	// replaced; for the agents of a strategy only (not the LLM ones), never a
@@ -1267,6 +1271,11 @@ type BacktestAssumptions struct {
 	// Params are the params added to every agent of the batch, see
 	// BacktestRequest.
 	Params map[string]string `json:"params,omitempty"`
+	// AssetAgents tells whether the runs followed the agents per asset of the
+	// tab Limites (see BacktestRequest.AssetAgents), and AssetRules the rules
+	// they followed, as they were when the batch was queued.
+	AssetAgents bool             `json:"asset_agents,omitempty"`
+	AssetRules  []AssetAgentRule `json:"asset_rules,omitempty"`
 }
 
 // BacktestBatchInfo is a batch of backtests and its runs, see

@@ -948,6 +948,19 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		LLMMaxCalls: cmpOr(request.LLMMaxCalls, b.cfg.LLMMaxCalls),
 		LLMMaxCost:  cmpOr(request.LLMMaxCost, b.cfg.LLMMaxCost), Params: request.Params}
 
+	// the agents per asset the runs follow, as they are now
+	var rules store.AssetAgents
+	if request.AssetAgents {
+		var err error
+		if rules, _, err = b.store.AssetAgents(ctx); err != nil {
+			return store.BacktestBatch{}, nil, err
+		}
+		assumptions.AssetAgents = true
+		if settings := rules.Settings(); len(settings.Rules) > 0 {
+			assumptions.AssetRules = settings.Rules
+		}
+	}
+
 	var runs []store.BacktestRun
 	seen := make(map[string]bool)
 	for _, name := range request.Agents {
@@ -974,6 +987,15 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 			})
 			if len(pairs) == 0 {
 				return store.BacktestBatch{}, nil, invalid("%s não opera nenhum dos ativos escolhidos", name)
+			}
+		}
+		// the assets the agents per asset allow it, the others left out of its run
+		var excluded []string
+		if request.AssetAgents {
+			pairs, excluded = rules.Allowed(name, pairs)
+			if len(pairs) == 0 {
+				return store.BacktestBatch{}, nil, invalid("o agente %s não pode operar nenhum dos seus ativos pelos "+
+					"agentes por ativo de Configurações › Limites: tire-o do lote ou desmarque a opção", name)
 			}
 		}
 		cfg, err := configOf(ctx, b.store, a)
@@ -1010,6 +1032,10 @@ func (b *Backtests) plan(ctx context.Context, request ui.BacktestRequest, user s
 		}
 		if timeframe == "" {
 			snap.Notes = append(snap.Notes, "timeframe padrão da estratégia")
+		}
+		if len(excluded) > 0 {
+			snap.Notes = append(snap.Notes, fmt.Sprintf("fora pelos agentes por ativo de Configurações › Limites: %s",
+				strings.Join(excluded, ", ")))
 		}
 		if a.Kind == "llm" {
 			secrets, err := b.store.SecretsOf(a)

@@ -204,6 +204,15 @@ export function BacktestResults({ choices, batch, onBatch, theme, onNew, refresh
             ? ` · limites diários ${a.daily_loss ? `-${formatMoney(a.daily_loss)}` : "—"}/${a.daily_gain ? `+${formatMoney(a.daily_gain)}` : "—"} ${a.currency}`
             : " · sem limites diários"}
           {a.hours ? ` · horário ${hoursAssumption(a.hours)}` : ""}
+          {a.asset_agents
+            ? ` · agentes por ativo ${
+                a.asset_rules && a.asset_rules.length > 0
+                  ? a.asset_rules
+                      .map((rule) => `${rule.pairs.join(", ")}: ${rule.agents.join(", ")}`)
+                      .join("; ")
+                  : "respeitados (nenhuma regra)"
+              }`
+            : ""}
           {a.params && Object.keys(a.params).length > 0
             ? ` · parâmetros ${Object.entries(a.params)
                 .map(([name, value]) => `${name}=${value}`)
