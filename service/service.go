@@ -262,8 +262,3 @@ type Notifier interface {
 	OnOrder(order model.Order)
 	OnError(err error)
 }
-
-type Telegram interface {
-	Notifier
-	Start()
-}

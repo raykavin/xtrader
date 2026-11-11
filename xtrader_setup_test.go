@@ -99,21 +99,6 @@ func TestNewBot(t *testing.T) {
 		require.NotNil(t, bot.storage)
 		require.FileExists(t, filepath.Join(dir, "xtrader.db"))
 	})
-
-	t.Run("fails when the telegram token is invalid", func(t *testing.T) {
-		memory, err := storage.FromMemory()
-		require.NoError(t, err)
-
-		settings := model.Settings{
-			Pairs:    []string{"BTCUSDT"},
-			Telegram: model.TelegramSettings{Enabled: true, Token: "", Users: []int{1}},
-		}
-
-		_, err = NewBot(context.Background(), settings, &mocks.Exchange{}, &fakeStrategy{},
-			WithStorage(memory))
-
-		require.Error(t, err, "an unreachable Telegram API must abort the setup")
-	})
 }
 
 func TestBotOptions(t *testing.T) {
