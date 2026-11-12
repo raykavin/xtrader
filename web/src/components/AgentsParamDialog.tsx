@@ -42,8 +42,9 @@ const shownValues = 4;
  * The global parametrizer of the agents, in a modal dialog: params set by
  * their keys, a row each (added by +), on every agent of the filter holding
  * them (all of them, the LLM ones, the enabled ones, or both), on the ones
- * without them too when asked, all at once on each agent, then the agents of
- * the filter enabled restarted when asked. Before: the keys suggested among
+ * without them too when asked, all at once on each agent; or removed by their
+ * keys (Remover chaves), with any value or only with the one typed; then the
+ * agents of the filter enabled restarted when asked. Before: the keys suggested among
  * the ones of the agents of the filter, how many hold each and with which
  * values, and what would change; after: what was done on each agent of the
  * filter, with each param, its failures first, the others counted.
@@ -59,8 +60,9 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<AgentsParamResponse | null>(null);
-  // the restart as asked for the results shown
+  // the restart as asked, and whether the params were removed, for the results shown
   const [asked, setAsked] = useState(false);
+  const [removed, setRemoved] = useState(false);
   // the field to focus once the rows changed: the key of a row added, the
   // button to add after one removed
   const focus = useRef<string | null>(null);
@@ -103,7 +105,8 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   const scoped = agents.filter((a) => inFilter(a, form));
   const keys = paramKeys(scoped);
   const preview = paramPreview(agents, form);
-  const nothing = preview.update + preview.add === 0 && !form.restartActive;
+  const nothing =
+    (form.remove ? preview.remove : preview.update + preview.add) === 0 && !form.restartActive;
   const enabled = scoped.filter((a) => a.enabled && a.launched).length;
   const ofFilter = filtering(form) ? " do filtro" : "";
   const typed = typedParams(form);
@@ -118,6 +121,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
     try {
       const done = await setAgentsParam(agentsParamRequest(form));
       setAsked(form.restartActive);
+      setRemoved(form.remove);
       setResponse(done);
       onApplied();
     } catch (e) {
@@ -135,16 +139,25 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   };
   const valueHint = (key: string): string => {
     const usage = paramUsage(scoped, key);
-    if (usage.values.length === 0) return "O valor que os agentes passam a usar.";
+    const any = form.remove ? "Vazio: remove com qualquer valor. " : "";
+    if (usage.values.length === 0) {
+      return form.remove
+        ? "Vazio: remove com qualquer valor."
+        : "O valor que os agentes passam a usar.";
+    }
     const values = usage.values
       .slice(0, shownValues)
       .map((v) => `${v.value === "" ? "vazio" : v.value} (${v.count})`)
       .join(", ");
-    return `Valores atuais: ${values}${usage.values.length > shownValues ? ", …" : ""}.`;
+    return `${any}Valores atuais: ${values}${usage.values.length > shownValues ? ", …" : ""}.`;
   };
   const subtitle = (done: AgentsParamResponse): string => {
     const params = done.params ?? [{ key: done.key, value: done.value }];
     const [first] = params;
+    if (removed) {
+      const named = params.map((p) => (p.value ? `${p.key} = ${p.value}` : p.key)).join(", ");
+      return `Removidos: ${named}`;
+    }
     if (params.length === 1 && first) return `${first.key} = ${first.value || "vazio"}`;
     return params.map((p) => p.key).join(", ");
   };
@@ -172,9 +185,31 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
       ) : (
         <form className="dialog-form" onSubmit={submit} noValidate>
           <div className="dialog-body">
+            <fieldset className="seg seg-fill agents-param-mode">
+              <legend className="sr-only">O que fazer com os parâmetros</legend>
+              <button
+                type="button"
+                className="seg-item"
+                aria-pressed={!form.remove}
+                disabled={busy}
+                onClick={() => set("remove", false)}
+              >
+                Definir valores
+              </button>
+              <button
+                type="button"
+                className="seg-item"
+                aria-pressed={form.remove}
+                disabled={busy}
+                onClick={() => set("remove", true)}
+              >
+                Remover chaves
+              </button>
+            </fieldset>
             <p className="dialog-lead">
-              Altera parâmetros em todos os agentes, pela chave, todos de uma vez em cada agente. Os
-              outros parâmetros e as configurações de cada agente não mudam.
+              {form.remove
+                ? "Remove parâmetros de todos os agentes, pela chave: com um valor, só dos agentes que têm exatamente esse valor. Sem o parâmetro, o agente usa o padrão da estratégia. Os outros parâmetros e as configurações não mudam."
+                : "Altera parâmetros em todos os agentes, pela chave, todos de uma vez em cada agente. Os outros parâmetros e as configurações de cada agente não mudam."}
             </p>
             <datalist id={`${id}-keys`}>
               {keys.map((key) => (
@@ -223,13 +258,13 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                     </div>
                     <div className="field" data-invalid={valueError ? "" : undefined}>
                       <label className="field-label" htmlFor={valueField}>
-                        Novo valor
+                        {form.remove ? "Somente com o valor (opcional)" : "Novo valor"}
                       </label>
                       <input
                         id={valueField}
                         className="input mono"
                         value={row.value}
-                        placeholder="ex.: 0.02"
+                        placeholder={form.remove ? "qualquer valor" : "ex.: 0.02"}
                         autoCapitalize="none"
                         autoComplete="off"
                         spellCheck={false}
@@ -306,7 +341,7 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                   Os agentes desligados ficam de fora e não mudam.
                 </span>
               </div>
-              <div className="agents-param-option">
+              <div className="agents-param-option" hidden={form.remove}>
                 <label className="hours-check">
                   <input
                     type="checkbox"
@@ -333,13 +368,13 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
                   Reiniciar os agentes ativos
                 </label>
                 <span id={`${id}-restart-hint`} className="field-hint">
-                  {`Depois de salvar, reinicia ${enabled === 1 ? `o agente ligado${ofFilter}` : `os ${enabled} agentes ligados${ofFilter}`} para aplicar os valores; os desligados continuam desligados. Desmarcada, os ligados aplicam os valores no próximo reinício.`}
+                  {`Depois de salvar, reinicia ${enabled === 1 ? `o agente ligado${ofFilter}` : `os ${enabled} agentes ligados${ofFilter}`} para aplicar as mudanças; os desligados continuam desligados. Desmarcada, os ligados aplicam as mudanças no próximo reinício.`}
                 </span>
               </div>
             </fieldset>
             {typed.some((param) => param.key !== "") && !refused(errors) && (
               <p className="agents-param-preview" aria-live="polite">
-                {previewText(preview)}
+                {previewText(preview, form.remove)}
               </p>
             )}
             {error && (
@@ -351,7 +386,11 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
           <div className="dialog-foot">
             {busy && (
               <span className="dialog-foot-hint">
-                {form.restartActive ? "Aplicando e reiniciando os agentes…" : "Aplicando…"}
+                {form.restartActive
+                  ? `${form.remove ? "Removendo" : "Aplicando"} e reiniciando os agentes…`
+                  : form.remove
+                    ? "Removendo…"
+                    : "Aplicando…"}
               </span>
             )}
             <button type="button" className="btn" onClick={close} disabled={busy}>
@@ -359,12 +398,18 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
             </button>
             <button
               type="submit"
-              className="btn btn-primary"
+              className={form.remove ? "btn btn-danger" : "btn btn-primary"}
               disabled={busy || nothing}
               title={nothing ? "Nenhum agente seria alterado" : undefined}
             >
-              <Icon name="success" size={14} />
-              {busy ? "Aplicando…" : "Aplicar"}
+              <Icon name={form.remove ? "trash" : "success"} size={14} />
+              {busy
+                ? form.remove
+                  ? "Removendo…"
+                  : "Aplicando…"
+                : form.remove
+                  ? "Remover"
+                  : "Aplicar"}
             </button>
           </div>
         </form>
@@ -373,8 +418,33 @@ export function AgentsParamDialog({ agents, onApplied, onClose }: Props) {
   );
 }
 
-/** What the preview tells before applying, eg: "Altera 40 agentes e adiciona em 2; 3 já têm os valores." */
-function previewText(preview: ReturnType<typeof paramPreview>): string {
+/**
+ * What the preview tells before applying, eg: "Altera 40 agentes e adiciona
+ * em 2; 3 já têm os valores."; removing, eg: "Remove de 30 agentes; 2 têm
+ * outro valor."
+ */
+function previewText(preview: ReturnType<typeof paramPreview>, remove: boolean): string {
+  if (remove) {
+    const head =
+      preview.remove > 0
+        ? `Remove de ${agentsCount(preview.remove)}`
+        : "Não remove de nenhum agente";
+    const rest = [
+      preview.other > 0
+        ? `${agentsCount(preview.other)} ${preview.other === 1 ? "tem" : "têm"} outro valor`
+        : "",
+      preview.without > 0
+        ? `${agentsCount(preview.without)} não ${preview.without === 1 ? "tem" : "têm"} a chave`
+        : "",
+      preview.excluded > 0
+        ? `${agentsCount(preview.excluded)} ${preview.excluded === 1 ? "fica" : "ficam"} fora do filtro`
+        : "",
+      preview.restart > 0
+        ? `${preview.restart === 1 ? "1 agente ligado reinicia" : `${preview.restart} agentes ligados reiniciam`}`
+        : "",
+    ].filter(Boolean);
+    return rest.length > 0 ? `${head}; ${rest.join("; ")}.` : `${head}.`;
+  }
   const changes = [
     preview.update > 0 ? `altera ${agentsCount(preview.update)}` : "",
     preview.add > 0 ? `adiciona em ${agentsCount(preview.add)}` : "",
@@ -415,7 +485,7 @@ function Results({
       <div className="dialog-body">
         <Alert tone={failed ? "warn" : "success"} title={summary.params}>
           {summary.restarts ??
-            "Os agentes ligados que mudaram aplicam os valores no próximo reinício (Reinício pendente)."}
+            "Os agentes ligados que mudaram aplicam as mudanças no próximo reinício (Reinício pendente)."}
         </Alert>
         <ul className="agents-param-results" aria-label="Resultado por agente">
           {sortedResults(response.results.filter((r) => r.status !== "excluded")).map((result) => {

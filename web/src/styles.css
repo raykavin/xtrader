@@ -7869,6 +7869,16 @@ h3.md-heading {
   gap: 2px;
 }
 
+.agents-param-option[hidden] {
+  display: none; /* "Adicionar para agentes sem o parâmetro", of no use removing */
+}
+
+/* Definir valores or Remover chaves, atop the dialog */
+.agents-param-mode {
+  flex: none; /* never shrunk by the body of the dialog, a column that scrolls */
+  max-width: 360px;
+}
+
 .agents-param-option .field-hint {
   padding-left: 24px; /* under the label, past the checkbox */
 }

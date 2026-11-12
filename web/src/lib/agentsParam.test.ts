@@ -139,7 +139,41 @@ describe("the global parametrizer", () => {
       restart_active: false,
       llm_only: true,
       enabled_only: false,
+      remove: false,
     });
+  });
+
+  it("removes the params by their keys, a value only where the agents hold it, never adding them", () => {
+    expect(
+      agentsParamRequest(form({ key: " lot ", value: "", remove: true, addMissing: true })),
+    ).toEqual({
+      params: [{ key: "lot", value: "" }],
+      add_missing: false,
+      restart_active: false,
+      llm_only: false,
+      enabled_only: false,
+      remove: true,
+    });
+    // any value: the 3 agents holding lot; 0.01 only: gold and btc, silver holding another one
+    expect(
+      paramPreview(agents, form({ key: "lot", remove: true, restartActive: true })),
+    ).toMatchObject({
+      remove: 3,
+      other: 0,
+      without: 2,
+      restart: 3,
+    });
+    expect(paramPreview(agents, form({ key: "lot", value: "0.01", remove: true }))).toMatchObject({
+      remove: 2,
+      other: 1,
+      without: 2,
+      update: 0,
+      add: 0,
+    });
+    expect(
+      paramPreview(agents, form({ key: "lot", value: "0.01", remove: true, enabledOnly: true })),
+    ).toMatchObject({ remove: 2, other: 0, without: 2, excluded: 1 });
+    expect(agentsParamErrors(form({ key: "lot", value: "", remove: true })).rows).toEqual({});
   });
 
   it("filters the LLM agents, the enabled ones, or the LLM ones enabled", () => {
@@ -168,6 +202,8 @@ describe("the global parametrizer", () => {
     expect(paramPreview(agents, form({ key: "lot", value: "0.02" }))).toEqual({
       update: 2,
       add: 0,
+      remove: 0,
+      other: 0,
       unchanged: 1,
       without: 2,
       excluded: 0,
@@ -178,10 +214,28 @@ describe("the global parametrizer", () => {
         agents,
         form({ key: "lot", value: "0.02", addMissing: true, restartActive: true }),
       ),
-    ).toEqual({ update: 2, add: 2, unchanged: 1, without: 0, excluded: 0, restart: 3 });
+    ).toEqual({
+      update: 2,
+      add: 2,
+      remove: 0,
+      other: 0,
+      unchanged: 1,
+      without: 0,
+      excluded: 0,
+      restart: 3,
+    });
     expect(
       paramPreview(agents, form({ key: "llm-consult-interval", value: "15m", addMissing: true })),
-    ).toEqual({ update: 0, add: 1, unchanged: 0, without: 4, excluded: 0, restart: 0 });
+    ).toEqual({
+      update: 0,
+      add: 1,
+      remove: 0,
+      other: 0,
+      unchanged: 0,
+      without: 4,
+      excluded: 0,
+      restart: 0,
+    });
     // the agents out of the filter left out, never restarted
     expect(
       paramPreview(
@@ -194,10 +248,28 @@ describe("the global parametrizer", () => {
           enabledOnly: true,
         }),
       ),
-    ).toEqual({ update: 2, add: 2, unchanged: 0, without: 0, excluded: 1, restart: 3 });
+    ).toEqual({
+      update: 2,
+      add: 2,
+      remove: 0,
+      other: 0,
+      unchanged: 0,
+      without: 0,
+      excluded: 1,
+      restart: 3,
+    });
     expect(
       paramPreview(agents, form({ key: "lot", value: "0.03", restartActive: true, llmOnly: true })),
-    ).toEqual({ update: 0, add: 0, unchanged: 0, without: 1, excluded: 4, restart: 1 });
+    ).toEqual({
+      update: 0,
+      add: 0,
+      remove: 0,
+      other: 0,
+      unchanged: 0,
+      without: 1,
+      excluded: 4,
+      restart: 1,
+    });
   });
 
   it("previews each agent once across several params", () => {
@@ -213,7 +285,16 @@ describe("the global parametrizer", () => {
           addMissing: true,
         }),
       ),
-    ).toEqual({ update: 1, add: 4, unchanged: 0, without: 0, excluded: 0, restart: 0 });
+    ).toEqual({
+      update: 1,
+      add: 4,
+      remove: 0,
+      other: 0,
+      unchanged: 0,
+      without: 0,
+      excluded: 0,
+      restart: 0,
+    });
     expect(
       paramPreview(
         agents,
@@ -224,7 +305,16 @@ describe("the global parametrizer", () => {
           ],
         }),
       ),
-    ).toEqual({ update: 2, add: 0, unchanged: 3, without: 0, excluded: 0, restart: 0 });
+    ).toEqual({
+      update: 2,
+      add: 0,
+      remove: 0,
+      other: 0,
+      unchanged: 3,
+      without: 0,
+      excluded: 0,
+      restart: 0,
+    });
   });
 
   it("labels each param of an agent when there are several", () => {
@@ -306,6 +396,29 @@ describe("the global parametrizer", () => {
     });
     expect(restartLabel(result({ enabled: false }), false)).toBeNull();
     expect(restartLabel(result({}), false)).toBeNull();
+  });
+
+  it("labels the params removed", () => {
+    expect(paramResultLabel(result({ status: "removed", previous: "30m" }))).toEqual({
+      label: "Removido",
+      tone: "on",
+      detail: "Valor: 30m",
+    });
+    expect(paramKeyLabel({ key: "timeframe", status: "removed", previous: "30m" })).toBe(
+      "timeframe: removido (era 30m)",
+    );
+    expect(
+      paramSummary(
+        [result({ status: "removed" }), result({ agent: "btc", status: "skipped" })],
+        false,
+      ).params,
+    ).toBe("1 removido, 1 ignorado");
+    expect(
+      sortedResults([
+        result({ agent: "a", status: "skipped" }),
+        result({ agent: "b", status: "removed" }),
+      ]).map((r) => r.agent),
+    ).toEqual(["b", "a"]);
   });
 
   it("sums up the results and the restarts", () => {

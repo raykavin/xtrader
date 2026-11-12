@@ -1,9 +1,9 @@
 // The global parametrizer of the agents: params set by their key on every
 // agent of the filter holding them (all of them, the LLM ones, the enabled
 // ones, or the LLM ones enabled), on the ones without them when asked, all at
-// once on each agent, then the agents of the filter enabled restarted when
-// asked; checked as the params of an agent are, and what it did on each agent
-// told.
+// once on each agent, or removed by their key (with any value, or only with
+// the one asked), then the agents of the filter enabled restarted when asked;
+// checked as the params of an agent are, and what it did on each agent told.
 
 import {
   type AgentParamResult,
@@ -23,6 +23,8 @@ export interface ParamRowForm {
 
 /** The form of the global parametrizer, as typed. */
 export interface AgentsParamForm {
+  /** Remover the params (by their keys, a value only where the agent holds it) rather than set them. */
+  remove: boolean;
   /** The params, in the order typed. */
   rows: ParamRowForm[];
   /** Adicionar para agentes sem o parâmetro. */
@@ -46,6 +48,7 @@ export function paramRow(key = "", value = ""): ParamRowForm {
 /** An empty form: a param to type, the switches off. */
 export function emptyAgentsParamForm(): AgentsParamForm {
   return {
+    remove: false,
     rows: [paramRow()],
     addMissing: false,
     restartActive: false,
@@ -117,7 +120,8 @@ export function refused(errors: AgentsParamErrors): boolean {
 export function agentsParamRequest(form: AgentsParamForm): AgentsParamRequest {
   return {
     params: typedParams(form).map(({ key, value }) => ({ key, value })),
-    add_missing: form.addMissing,
+    add_missing: form.addMissing && !form.remove,
+    remove: form.remove,
     restart_active: form.restartActive,
     llm_only: form.llmOnly,
     enabled_only: form.enabledOnly,
@@ -158,13 +162,20 @@ export function paramUsage(
   return { holding: values.reduce((sum, v) => sum + v.count, 0), values };
 }
 
+/** Whether removing the param key, of value (any for ""), takes it off agent. */
+function removes(agent: AgentSettings, key: string, value: string): boolean {
+  return Object.hasOwn(agent.params, key) && (value === "" || agent.params[key] === value);
+}
+
 /**
  * What the parametrizer would do on agents as the page has them, each agent
  * counted once: how many would have a value changed, params added only, be
  * left with the values they have already, be left without them (not added, or
  * params of a language model on an agent of another kind), be out of the
  * filter; and how many agents of the filter enabled the controller launches
- * would restart. The controller decides on each agent as it is then.
+ * would restart. Removing, how many would lose a param, and how many hold
+ * them with another value (other) or not at all (without). The controller
+ * decides on each agent as it is then.
  */
 export function paramPreview(
   agents: AgentSettings[],
@@ -172,16 +183,34 @@ export function paramPreview(
 ): {
   update: number;
   add: number;
+  remove: number;
+  other: number;
   unchanged: number;
   without: number;
   excluded: number;
   restart: number;
 } {
   const params = typedParams(form).filter((param) => param.key !== "");
-  const preview = { update: 0, add: 0, unchanged: 0, without: 0, excluded: 0, restart: 0 };
+  const preview = {
+    update: 0,
+    add: 0,
+    remove: 0,
+    other: 0,
+    unchanged: 0,
+    without: 0,
+    excluded: 0,
+    restart: 0,
+  };
   for (const agent of agents) {
     if (!inFilter(agent, form)) {
       preview.excluded++;
+      continue;
+    }
+    if (form.restartActive && agent.enabled && agent.launched) preview.restart++;
+    if (form.remove) {
+      if (params.some(({ key, value }) => removes(agent, key, value))) preview.remove++;
+      else if (params.some(({ key }) => Object.hasOwn(agent.params, key))) preview.other++;
+      else preview.without++;
       continue;
     }
     let change = false;
@@ -199,7 +228,6 @@ export function paramPreview(
     else if (add) preview.add++;
     else if (same) preview.unchanged++;
     else preview.without++;
-    if (form.restartActive && agent.enabled && agent.launched) preview.restart++;
   }
   return preview;
 }
@@ -232,6 +260,10 @@ export function paramResultLabel(result: AgentsParamResult): ResultLabel {
         : { label: "Alterado", tone: "on", detail: `Antes: ${result.previous || "vazio"}` };
     case "added":
       return { label: "Adicionado", tone: "on" };
+    case "removed":
+      return several
+        ? { label: "Removido", tone: "on" }
+        : { label: "Removido", tone: "on", detail: `Valor: ${result.previous || "vazio"}` };
     case "unchanged":
       return { label: several ? "Já tinha os valores" : "Já tinha o valor", tone: "info" };
     case "excluded":
@@ -262,6 +294,8 @@ export function paramKeyLabel(param: AgentParamResult): string {
       return `${param.key}: alterado (antes ${param.previous || "vazio"})`;
     case "added":
       return `${param.key}: adicionado`;
+    case "removed":
+      return `${param.key}: removido (era ${param.previous || "vazio"})`;
     case "unchanged":
       return `${param.key}: já tinha o valor`;
     default:
@@ -311,6 +345,7 @@ export function paramSummary(
   const parts = [
     [count("updated"), "alterado", "alterados"],
     [count("added"), "adicionado", "adicionados"],
+    [count("removed"), "removido", "removidos"],
     [count("unchanged"), "já tinha o valor", "já tinham o valor"],
     [count("skipped"), "ignorado", "ignorados"],
     [count("failed"), "falha", "falhas"],
@@ -340,7 +375,7 @@ export function paramSummary(
 export function sortedResults(results: AgentsParamResult[]): AgentsParamResult[] {
   const rank = (r: AgentsParamResult) => {
     if (r.status === "failed" || r.restart === "failed") return 0;
-    if (r.status === "updated" || r.status === "added") return 1;
+    if (r.status === "updated" || r.status === "added" || r.status === "removed") return 1;
     return 2;
   };
   return results
