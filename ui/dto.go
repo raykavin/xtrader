@@ -1010,7 +1010,10 @@ const MaxAgentsParams = 20
 // disabled ones left stopped. The filter is every agent, the LLM ones only
 // when LLMOnly, the enabled ones only when EnabledOnly (both: the LLM ones
 // enabled). The params are checked as the params of an agent are, a key once,
-// MaxAgentsParams at most.
+// MaxAgentsParams at most. With Remove, the params are removed instead, by
+// their keys, from every agent of the filter holding them: each one with any
+// value, or only where the agent holds its Value when it is set; AddMissing
+// ignored. The agents then run with the defaults of their strategies for them.
 type AgentsParamRequest struct {
 	Key           string       `json:"key,omitempty"`
 	Value         string       `json:"value,omitempty"`
@@ -1019,6 +1022,7 @@ type AgentsParamRequest struct {
 	RestartActive bool         `json:"restart_active,omitempty"`
 	LLMOnly       bool         `json:"llm_only,omitempty"`
 	EnabledOnly   bool         `json:"enabled_only,omitempty"`
+	Remove        bool         `json:"remove,omitempty"`
 }
 
 // The outcomes of the global parametrizer on an agent, see AgentsParamResult.
@@ -1029,6 +1033,7 @@ const (
 	ParamSkipped   = "skipped"   // left as it was, Detail telling why
 	ParamFailed    = "failed"    // refused on this agent, Detail telling why
 	ParamExcluded  = "excluded"  // out of the filter: untouched, never restarted
+	ParamRemoved   = "removed"   // removed (Remove), Previous the value it had
 )
 
 // The restarts of the global parametrizer, see AgentsParamResult.
@@ -1039,8 +1044,8 @@ const (
 )
 
 // AgentParamResult is what the global parametrizer did with a param on an
-// agent: Status ParamUpdated (Previous the value it had), ParamAdded,
-// ParamUnchanged or ParamSkipped (Detail telling why).
+// agent: Status ParamUpdated or ParamRemoved (Previous the value it had),
+// ParamAdded, ParamUnchanged or ParamSkipped (Detail telling why).
 type AgentParamResult struct {
 	Key      string `json:"key"`
 	Status   string `json:"status"`
@@ -1052,7 +1057,8 @@ type AgentParamResult struct {
 // Params what it did with each param, in their order, and Status all of them
 // told at once: ParamFailed when they were refused on it (Detail telling why,
 // none set, Params empty), ParamExcluded out of the filter, else ParamUpdated
-// when a value changed, ParamAdded when a param was added only, ParamUnchanged
+// when a value changed (ParamRemoved when a param was removed, of a Remove),
+// ParamAdded when a param was added only, ParamUnchanged
 // when it had them all already, ParamSkipped (Detail telling why with a
 // single param). With a single param, Previous is the value it had. And, the
 // restart asked, Restart ParamRestarted, ParamRestartFailed or

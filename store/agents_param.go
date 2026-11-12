@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 )
 
 // The outcomes of SetAgentParam on an agent.
@@ -10,6 +11,7 @@ const (
 	ParamAdded     = "added"     // added, the agent without it
 	ParamUnchanged = "unchanged" // the value it had already, nothing written
 	ParamSkipped   = "skipped"   // left as it was, see ParamSet.Detail
+	ParamRemoved   = "removed"   // removed, see RemoveAgentParams
 )
 
 // ParamSet is what SetAgentParam did on an agent: its outcome (see
@@ -90,6 +92,57 @@ func (s *Store) SetAgentParams(ctx context.Context, id int64, changes []ParamCha
 			}
 			if set.Status == ParamUpdated || set.Status == ParamAdded {
 				params[name], changed = value, true
+			}
+			sets = append(sets, set)
+		}
+		if !changed {
+			return nil
+		}
+		return s.updateLocked(ctx, agent, AgentUpdate{Params: params})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sets, nil
+}
+
+// RemoveAgentParams removes the params of removals from the agent of id at
+// once, its row locked meanwhile, by their names: each one with any value, or
+// only with its Value when it is set; its other params and its settings kept,
+// checked as UpdateAgent checks a change of its params (see checkAgent): the
+// agent then runs with the default of its strategy for them. A param is
+// skipped on the agent without it, or holding another value than the one
+// asked; nothing is written when none is removed. It returns what was done
+// with each param, in their order (Had the value removed). Its error refuses
+// them all on this agent, nothing changed on it: the caller goes on with the
+// others.
+func (s *Store) RemoveAgentParams(ctx context.Context, id int64, removals []ParamChange) ([]ParamSet, error) {
+	for _, removal := range removals {
+		if err := CheckParam(removal.Name, removal.Value); err != nil {
+			return nil, err
+		}
+	}
+	var sets []ParamSet
+	err := s.Transaction(ctx, func(ctx context.Context) error {
+		agent, err := s.lockedAgent(ctx, id)
+		if err != nil {
+			return err
+		}
+		params := agent.AllParams()
+		sets = make([]ParamSet, 0, len(removals))
+		changed := false
+		for _, removal := range removals {
+			had, holds := params[removal.Name]
+			var set ParamSet
+			switch {
+			case !holds:
+				set = ParamSet{Status: ParamSkipped, Detail: "sem o parâmetro"}
+			case removal.Value != "" && had != removal.Value:
+				set = ParamSet{Status: ParamSkipped, Had: had, Detail: fmt.Sprintf("com outro valor (%s)", had)}
+			default:
+				set = ParamSet{Status: ParamRemoved, Had: had}
+				delete(params, removal.Name)
+				changed = true
 			}
 			sets = append(sets, set)
 		}

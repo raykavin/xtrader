@@ -1332,7 +1332,10 @@ export const MaxAgentsParams = 20;
  * disabled ones left stopped. The filter is every agent, the LLM ones only
  * when LLMOnly, the enabled ones only when EnabledOnly (both: the LLM ones
  * enabled). The params are checked as the params of an agent are, a key once,
- * MaxAgentsParams at most.
+ * MaxAgentsParams at most. With Remove, the params are removed instead, by
+ * their keys, from every agent of the filter holding them: each one with any
+ * value, or only where the agent holds its Value when it is set; AddMissing
+ * ignored. The agents then run with the defaults of their strategies for them.
  */
 export interface AgentsParamRequest {
   key?: string;
@@ -1342,6 +1345,7 @@ export interface AgentsParamRequest {
   restart_active?: boolean;
   llm_only?: boolean;
   enabled_only?: boolean;
+  remove?: boolean;
 }
 /**
  * The outcomes of the global parametrizer on an agent, see AgentsParamResult.
@@ -1368,6 +1372,10 @@ export const ParamFailed = "failed"; // refused on this agent, Detail telling wh
  */
 export const ParamExcluded = "excluded"; // out of the filter: untouched, never restarted
 /**
+ * The outcomes of the global parametrizer on an agent, see AgentsParamResult.
+ */
+export const ParamRemoved = "removed"; // removed (Remove), Previous the value it had
+/**
  * The restarts of the global parametrizer, see AgentsParamResult.
  */
 export const ParamRestarted = "restarted"; // stopped and launched again
@@ -1381,8 +1389,8 @@ export const ParamRestartFailed = "failed"; // RestartDetail telling why
 export const ParamRestartLeft = "skipped"; // not restarted, RestartDetail telling why
 /**
  * AgentParamResult is what the global parametrizer did with a param on an
- * agent: Status ParamUpdated (Previous the value it had), ParamAdded,
- * ParamUnchanged or ParamSkipped (Detail telling why).
+ * agent: Status ParamUpdated or ParamRemoved (Previous the value it had),
+ * ParamAdded, ParamUnchanged or ParamSkipped (Detail telling why).
  */
 export interface AgentParamResult {
   key: string;
@@ -1395,7 +1403,8 @@ export interface AgentParamResult {
  * Params what it did with each param, in their order, and Status all of them
  * told at once: ParamFailed when they were refused on it (Detail telling why,
  * none set, Params empty), ParamExcluded out of the filter, else ParamUpdated
- * when a value changed, ParamAdded when a param was added only, ParamUnchanged
+ * when a value changed (ParamRemoved when a param was removed, of a Remove),
+ * ParamAdded when a param was added only, ParamUnchanged
  * when it had them all already, ParamSkipped (Detail telling why with a
  * single param). With a single param, Previous is the value it had. And, the
  * restart asked, Restart ParamRestarted, ParamRestartFailed or
