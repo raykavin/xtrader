@@ -2873,3 +2873,245 @@ type MT5AccountEventInfo struct {
 type MT5AccountEventsResponse struct {
 	Events []MT5AccountEventInfo `json:"events"`
 }
+
+// ConfigFormat names a configuration file of the controller, of
+// ConfigVersion: the settings of the dashboard a user exported, to import
+// again here or in another installation, see ConfigFile.
+const (
+	ConfigFormat  = "xtrader-config"
+	ConfigVersion = 1
+)
+
+// The sections of a configuration file, see ConfigFile.
+const (
+	ConfigSectionPrompts     = "prompts"
+	ConfigSectionMT5Accounts = "mt5_accounts"
+	ConfigSectionAgents      = "agents"
+	ConfigSectionLimits      = "limits"
+	ConfigSectionNews        = "news"
+	ConfigSectionSupervisor  = "supervisor"
+	ConfigSectionTelegram    = "telegram"
+	ConfigSectionRoles       = "roles"
+	ConfigSectionDashboard   = "dashboard"
+)
+
+// The keys of the items of the sections of single settings: the limits, the
+// news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+const (
+	ConfigItemDailyLimit   = "daily_limit"
+	ConfigItemTradingHours = "trading_hours"
+	ConfigItemExposure     = "exposure"
+	ConfigItemAssetAgents  = "asset_agents"
+	ConfigItemSettings     = "settings"
+	ConfigItemTelegramBot  = "bot"
+)
+
+// ConfigFile is a configuration file of the controller (Format, Version):
+// the settings a user exported (ExportedBy, ExportedAt in Unix seconds, of
+// the schema AppSchema), by section, each item referring to the others by
+// name (the prompt and the account of MT5 of an agent, the agents of a window
+// of the trading hours), never by ID, to be imported in another installation
+// too. The users (their passwords), the fixed role, the account active on
+// each terminal, the state of the agents (stopped, blocked) and the history
+// are never in it; the secrets only in Secrets, encrypted with a password.
+// Dashboard holds the preferences of the browser, the web's as they are.
+type ConfigFile struct {
+	Format      string             `json:"format"`
+	Version     int                `json:"version"`
+	AppSchema   int                `json:"app_schema"`
+	ExportedAt  int64              `json:"exported_at"`
+	ExportedBy  string             `json:"exported_by"`
+	Prompts     []ConfigPrompt     `json:"prompts,omitempty"`
+	MT5Accounts []ConfigMT5Account `json:"mt5_accounts,omitempty"`
+	Agents      []ConfigAgent      `json:"agents,omitempty"`
+	Limits      *ConfigLimits      `json:"limits,omitempty"`
+	News        *ConfigNews        `json:"news,omitempty"`
+	Supervisor  *ConfigSupervisor  `json:"supervisor,omitempty"`
+	Telegram    *ConfigTelegram    `json:"telegram,omitempty"`
+	Roles       []ConfigRole       `json:"roles,omitempty"`
+	Dashboard   map[string]any     `json:"dashboard,omitempty"`
+	Secrets     *ConfigSecrets     `json:"secrets,omitempty"`
+}
+
+// ConfigPrompt is a prompt of the LLM agents in a configuration file, by name.
+type ConfigPrompt struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+}
+
+// ConfigMT5Account is an account of MT5 in a configuration file, by name,
+// never active once imported (see the switch of the terminal).
+type ConfigMT5Account struct {
+	Name      string `json:"name"`
+	Login     int64  `json:"login"`
+	Server    string `json:"server"`
+	BridgeURL string `json:"bridge_url"`
+	AllowReal bool   `json:"allow_real"`
+	ReadOnly  bool   `json:"read_only"`
+}
+
+// ConfigAgent is an agent in a configuration file, by name: its settings, its
+// params (of its language model too, merged), its account, its language
+// model, its prompt and its account of MT5 by name ("" for none: the prompt
+// embedded, no account), its protection and its daily limit; on (Enabled) or
+// off as it was.
+type ConfigAgent struct {
+	Name            string              `json:"name"`
+	Kind            string              `json:"kind"`
+	Mode            string              `json:"mode"`
+	APIAddress      string              `json:"api_address"`
+	Enabled         bool                `json:"enabled"`
+	Launched        bool                `json:"launched"`
+	Restart         bool                `json:"restart"`
+	TradePanel      bool                `json:"trade_panel"`
+	TelegramControl bool                `json:"telegram_control"`
+	Reanalysis      bool                `json:"reanalysis,omitempty"`
+	Params          map[string]string   `json:"params"`
+	Account         *ConfigAgentAccount `json:"account,omitempty"`
+	LLM             *ConfigAgentLLM     `json:"llm,omitempty"`
+	Prompt          string              `json:"prompt,omitempty"`
+	MT5Account      string              `json:"mt5_account,omitempty"`
+	Protection      ProtectionSettings  `json:"protection"`
+	DailyLimit      DailyLimitSettings  `json:"daily_limit"`
+}
+
+// ConfigAgentAccount is the trading account of an agent in a configuration
+// file: its bridge (the one of its account of MT5 when it has one), its
+// magic number and its comment (0 and "" for the defaults), and whether it
+// may trade a real account.
+type ConfigAgentAccount struct {
+	BridgeURL   string `json:"bridge_url"`
+	Magic       int64  `json:"magic,omitempty"`
+	Comment     string `json:"comment,omitempty"`
+	RealAllowed bool   `json:"real_allowed"`
+}
+
+// ConfigAgentLLM is the language model of an LLM agent in a configuration
+// file, its params with the ones of the agent ("" and 0 for the defaults).
+type ConfigAgentLLM struct {
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	BaseURL         string `json:"base_url,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	MaxTokens       int    `json:"max_tokens,omitempty"`
+}
+
+// ConfigLimits are the limits of all the agents in a configuration file,
+// each an item of its own: the daily limit, the trading hours, the exposure
+// by asset and the agents per asset.
+type ConfigLimits struct {
+	DailyLimit   *DailyLimitSettings  `json:"daily_limit,omitempty"`
+	TradingHours *ConfigTradingHours  `json:"trading_hours,omitempty"`
+	Exposure     *ExposureSettings    `json:"exposure,omitempty"`
+	AssetAgents  *AssetAgentsSettings `json:"asset_agents,omitempty"`
+}
+
+// ConfigTradingHours are the trading hours in a configuration file: on or
+// off, and their windows, their agents by name.
+type ConfigTradingHours struct {
+	Enabled bool            `json:"enabled"`
+	Windows []TradingWindow `json:"windows"`
+}
+
+// ConfigNews are the news of all the agents in a configuration file, its
+// token apart (a secret).
+type ConfigNews struct {
+	Enabled         bool   `json:"enabled"`
+	URL             string `json:"url,omitempty"`
+	BlockBefore     int    `json:"block_before"`
+	BlockAfter      int    `json:"block_after"`
+	BlockImportance string `json:"block_importance"`
+}
+
+// ConfigSupervisor are the settings of the XTrader AI in a configuration
+// file, its key apart (a secret).
+type ConfigSupervisor struct {
+	Enabled         bool               `json:"enabled"`
+	IntervalSeconds int                `json:"interval_seconds"`
+	TimeoutSeconds  int                `json:"timeout_seconds"`
+	Provider        string             `json:"provider,omitempty"`
+	Model           string             `json:"model,omitempty"`
+	BaseURL         string             `json:"base_url,omitempty"`
+	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+	MaxTokens       int                `json:"max_tokens,omitempty"`
+	Instructions    string             `json:"instructions"`
+	Autonomy        SupervisorAutonomy `json:"autonomy"`
+}
+
+// ConfigTelegram is the bot of Telegram in a configuration file (on or off,
+// its token apart, a secret) and the users it answers, by their ID on
+// Telegram.
+type ConfigTelegram struct {
+	Bot   *ConfigTelegramBot   `json:"bot,omitempty"`
+	Users []ConfigTelegramUser `json:"users,omitempty"`
+}
+
+// ConfigTelegramBot is the bot of Telegram in a configuration file.
+type ConfigTelegramBot struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ConfigTelegramUser is a user the bot answers in a configuration file.
+type ConfigTelegramUser struct {
+	TelegramID int64  `json:"telegram_id"`
+	Name       string `json:"name"`
+}
+
+// ConfigRole is a role of the users of the dashboard in a configuration file,
+// by name, never the fixed one.
+type ConfigRole struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Permissions []string `json:"permissions"`
+}
+
+// ConfigSecrets are the secrets of the items of a configuration file, Data
+// the JSON of their values sealed with AES-256-GCM (Nonce) by a key derived
+// from a password by KDF (argon2id, of Time passes over Memory KiB with
+// Threads, and Salt): never in clear in the file. Base64 encoded.
+type ConfigSecrets struct {
+	KDF     string `json:"kdf"`
+	Time    uint32 `json:"time"`
+	Memory  uint32 `json:"memory"`
+	Threads uint8  `json:"threads"`
+	Salt    string `json:"salt"`
+	Nonce   string `json:"nonce"`
+	Data    string `json:"data"`
+}
+
+// ConfigCatalog answers GET /api/config/catalog: the sections and the items
+// the user may export, the ones of the areas the user sees.
+type ConfigCatalog struct {
+	Sections []ConfigSection `json:"sections"`
+}
+
+// ConfigSection is a section of a configuration file in a catalog: its key,
+// its name, its items, and whether the user may export its secrets (managing
+// its area).
+type ConfigSection struct {
+	Key     string          `json:"key"`
+	Label   string          `json:"label"`
+	Items   []ConfigItemRef `json:"items"`
+	Secrets bool            `json:"secrets,omitempty"`
+}
+
+// ConfigItemRef is an item of a section: its key and its name.
+type ConfigItemRef struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+// MinConfigPassword is the shortest password of the secrets of a
+// configuration file, in characters.
+const MinConfigPassword = 8
+
+// ConfigExportRequest is the body of POST /api/config/export: the items of
+// each section to export (by key), and whether with their secrets, then
+// encrypted with Password (MinConfigPassword at least). The secrets of an
+// area only for a user managing it.
+type ConfigExportRequest struct {
+	Selection      map[string][]string `json:"selection"`
+	IncludeSecrets bool                `json:"include_secrets,omitempty"`
+	Password       string              `json:"password,omitempty"`
+}

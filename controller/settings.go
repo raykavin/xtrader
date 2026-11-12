@@ -99,6 +99,10 @@ func (s *settings) routes(r chi.Router) {
 	r.With(setUsers).Patch("/users/{id}", s.handleUpdateUser)
 	r.With(setUsers).Delete("/users/{id}", s.handleDeleteUser)
 	r.With(users).Get("/roles", s.handleRoles)
+
+	configs := need(configViewPermissions()...) // each section by its own permissions, see canSee
+	r.With(configs).Get("/config/catalog", s.handleConfigCatalog)
+	r.With(configs).Post("/config/export", s.handleConfigExport)
 	r.With(setUsers).Post("/roles", s.handleCreateRole)
 	r.With(setUsers).Patch("/roles/{id}", s.handleUpdateRole)
 	r.With(setUsers).Delete("/roles/{id}", s.handleDeleteRole)

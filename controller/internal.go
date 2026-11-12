@@ -488,10 +488,11 @@ func listLimit(r *http.Request) int {
 	return limit
 }
 
-// deref returns the value of a pointer, "" for nil.
-func deref(value *string) string {
+// deref returns the value of a pointer, the zero value ("", 0…) for nil.
+func deref[T any](value *T) T {
 	if value == nil {
-		return ""
+		var zero T
+		return zero
 	}
 	return *value
 }
