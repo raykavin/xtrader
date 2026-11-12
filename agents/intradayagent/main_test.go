@@ -279,13 +279,13 @@ func TestAgent_SeasonalityInputs(t *testing.T) {
 
 // The flags of volumeprofile, its own only: the ones of its defaults unless
 // set, each reaching the strategy (a value out of its bounds refused by it).
-// Its target is the other edge of the value area: -take-profit-atr is
-// refused with it.
+// Its target is the other edge of the value area, unless -take-profit-atr
+// replaces it.
 func TestAgent_VolumeProfileInputs(t *testing.T) {
 	a := testAgent()
 	requireOwnInputs(t, a, "volumeprofile", "orb", volumeProfileInputs,
-		[]string{"stop-atr", "max-bars", "min-atr-pct", "timeframe", "lot", "max-risk-pct"},
-		[]string{"take-profit-atr", "trailing-atr", "timezone", "anchor"})
+		[]string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct", "timeframe", "lot", "max-risk-pct"},
+		[]string{"trailing-atr", "timezone", "anchor"})
 	s := strategyOf(t, a, "volumeprofile")
 	trader, err := s.New(testInputs())
 	require.NoError(t, err, "the defaults")
@@ -307,12 +307,12 @@ func TestAgent_VolumeProfileInputs(t *testing.T) {
 
 // The flags of cmegap, its own only: the ones of its defaults unless set, each
 // reaching the strategy (a value out of its bounds refused by it). Its target
-// is the reference, the gap filled: -take-profit-atr is refused with it.
+// is the reference, the gap filled, unless -take-profit-atr replaces it.
 func TestAgent_CMEGapInputs(t *testing.T) {
 	a := testAgent()
 	requireOwnInputs(t, a, "cmegap", "orb", cmeGapInputs,
-		[]string{"stop-atr", "max-bars", "min-atr-pct", "timeframe", "lot", "max-risk-pct"},
-		[]string{"take-profit-atr", "trailing-atr", "timezone"})
+		[]string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct", "timeframe", "lot", "max-risk-pct"},
+		[]string{"trailing-atr", "timezone"})
 	s := strategyOf(t, a, "cmegap")
 	trader, err := s.New(testInputs())
 	require.NoError(t, err, "the defaults")
@@ -391,7 +391,7 @@ func TestAgent_PairsInputs(t *testing.T) {
 // (-stop-atr, -take-profit-atr), the ones placing levels of their own too,
 // which they then replace; but pairs, whose two legs hedge each other.
 func TestStrategies_TakeTheExitsInATR(t *testing.T) {
-	a := agent()
+	a := testAgent()
 	asked := map[string]bool{}
 	for _, input := range runner.ATRExitInputs {
 		asked[input] = true

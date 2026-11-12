@@ -150,7 +150,7 @@ func TestAgent_RSI2Levels(t *testing.T) {
 // (-stop-atr, -take-profit-atr), the ones placing levels of their own too,
 // which they then replace; but pairs, whose two legs hedge each other.
 func TestStrategies_TakeTheExitsInATR(t *testing.T) {
-	a := agent()
+	a := testAgent()
 	asked := map[string]bool{}
 	for _, input := range runner.ATRExitInputs {
 		asked[input] = true
