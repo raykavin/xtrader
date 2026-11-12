@@ -794,6 +794,7 @@ func (l *dailyLimiter) preview(ctx context.Context, a *store.Agent,
 // which closes and blocks as usual (now, woken).
 func (l *dailyLimiter) change(ctx context.Context, a *store.Agent, limits ui.DailyLimitSettings,
 	change store.DailyChange, confirm bool) (ui.DailyLimitPreview, bool, error) {
+	change.Day = l.dayOf(l.s.now()) // today, whoever made the change (the screens, the chat)
 	preview, guard, err := l.preview(ctx, a, limits)
 	if err != nil {
 		return preview, false, err
