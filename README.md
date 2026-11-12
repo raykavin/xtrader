@@ -50,6 +50,7 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Proteção de posições](#proteção-de-posições)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Agentes iniciais](#agentes-iniciais)
+  - [Importar e exportar a configuração](#importar-e-exportar-a-configuração)
 - [Desenvolvimento](#desenvolvimento)
 - [API](#api)
 - [Segurança](#segurança)
@@ -1076,6 +1077,38 @@ Os prompts vêm de `sql/seeds/0002_prompts.sql` (os 3 das estratégias que só u
 
 Cada agente é inserido uma única vez, quando nenhum agente teve o nome dele, nem mesmo um apagado ou renomeado. Os seeds rodam a cada `migrator up`, mas nunca sobrescrevem uma edição do painel nem recriam um agente apagado. Os segredos (a chave do LLM e os tokens da bridge e do calendário) nunca vão para o seed: defina-os em **Configurações > Agentes** e só então ligue o agente. Desligado, o controller nunca o inicia. Para mudar a configuração inicial de um banco novo, edite o seed; num banco existente, use o painel.
 
+### Importar e exportar a configuração
+
+Em **Configurações › Importar e exportar**, a configuração vai para um arquivo JSON (`xtrader-config-AAAA-MM-DD.json`) e volta dele, nesta instalação ou em outra (por exemplo, ao trocar de máquina), como no Profit da Nelogica.
+
+- **O que vai no arquivo:** escolhido item por item, numa árvore por seção:
+  - prompts: nome, descrição e conteúdo;
+  - contas MT5: login, servidor, bridge, **Permitir conta real** e **Somente leitura**;
+  - agentes: tipo, modo, endereço da API, ligado, os switches, os parâmetros, a conta (bridge, magic, comentário), o LLM, o prompt e a conta MT5 pelos nomes, a proteção e o limite diário;
+  - papéis, menos o Administrador, que é fixo;
+  - limites: limite diário global, horário de operação, exposição por ativo e agentes por ativo;
+  - notícias, XTrader AI e Telegram (o bot e os usuários autorizados);
+  - as preferências deste navegador: layout do painel, tema, tipo de gráfico, ocultar valores e os períodos do P/L fechado e do Desempenho. Elas ficam no navegador e só passam pela tela, nunca pelo controller.
+- **O que fica de fora:**
+  - os usuários do painel, porque a senha é um hash;
+  - a conta ativa de cada terminal, que se troca em Contas MT5;
+  - o estado de execução: bot parado, bloqueios e travas do dia;
+  - o histórico: ordens, decisões, backtests e eventos.
+- **Os itens se referem pelo nome, não pelo ID:** um agente aponta o prompt e a conta MT5 pelos nomes, e as janelas e as regras citam os agentes pelos nomes. Por isso o arquivo serve em outra instalação.
+- **Segredos** (chaves de LLM e do XTrader AI, senha e token das contas MT5, tokens de bridge, do Telegram e das notícias):
+  - só vão com **Incluir os segredos**, cifrados com uma senha de pelo menos 8 caracteres (Argon2id e AES-256-GCM). Sem a senha, ninguém os abre, nem o XTrader;
+  - na importação, sem a senha certa, os segredos ficam como estão e o resto é importado;
+  - os segredos de uma área só saem e só entram para quem pode gerenciá-la.
+- **Importar:** escolha o arquivo. Nada muda antes da confirmação.
+  - A prévia confere cada item como a tela dele faria e diz se ele é **Novo**, **Alterado** (com os campos que mudam), **Igual** ou **Inválido** (com o motivo).
+  - Ela também avisa o que a importação faz além dos campos: agente que entra ligado e passa a operar, agente que será desligado, agente rodando que precisa reiniciar, limite diário que dispararia ou liberaria a trava agora, horário que muda as janelas e conta nova, que entra inativa.
+  - Novos e alterados vêm marcados. Os iguais ficam ocultos (**Mostrar os iguais**) e os inválidos não podem ser marcados.
+  - **Importar N itens** aplica os marcados juntos, numa transação: se um for recusado, nada é aplicado, e a prévia mostra qual. Um item que não está no arquivo nunca é apagado.
+  - Os agentes ficam ligados ou desligados como no arquivo: quem estiver ligado volta a operar.
+  - Depois, valem os mesmos efeitos de salvar pela tela: agentes lançados ou parados, o runtime enviado aos agentes, a trava diária e o horário reavaliados, o XTrader AI e o bot do Telegram recarregados.
+  - As regras das telas também valem: o tipo de um agente não muda; a conta MT5 de um agente só troca com ele parado e sem posições; uma conta MT5 ativa não muda de login, servidor ou bridge pelo arquivo.
+- **Permissões:** exportar uma seção exige ver a área dela; importar exige gerenciá-la (os papéis, pela de usuários). A aba aparece para quem vê alguma área ou o painel, por causa das preferências do navegador.
+
 ### Recriar o banco do zero
 
 As migrações de `sql/migrations` criam o schema inteiro, uma tabela por arquivo, na ordem das dependências, sem `ALTER`. Os seeds de `sql/seeds` inserem as configurações: o Telegram desligado, os prompts e os agentes. Num banco vazio, o `migrator up` deixa tudo pronto, faltando só os dados sensíveis. As migrações não continuam as de antes de 14/10/2026: um banco antigo (versão 22) é recusado pelo `migrator up` e precisa ser recriado. As ordens, as decisões, o journal, os períodos de apuração e os descartes do banco antigo não são levados.
@@ -1141,6 +1174,13 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
   - **Agentes por ativo:** `GET`/`PUT /api/settings/asset-agents` (`{"settings": {"rules": [{"pairs": ["XAUUSDm"], "agents": ["orb", "trend"]}]}}`; ler com `limits:view` ou `backtests:manage`, mudar com `limits:manage`; `400` para um ativo inválido ou em duas regras, uma regra sem ativo ou sem agente, ou um agente que não existe ou repetido). A mudança vai na hora aos agentes, nas entradas do runtime (`entries_pairs`/`pairs_reason`, ou `entries_blocked` sem nenhum ativo permitido).
   - **Backtests:** `GET /api/backtests` (os últimos 30 lotes com as execuções e os resumos, os agentes com a compatibilidade e os limites), `POST /api/backtests` (cria um lote, `ui.BacktestRequest`, com `asset_agents: true` para respeitar os agentes por ativo: `201`; `400` fora das regras), `DELETE /api/backtests/{id}` (`409` com execuções na fila ou rodando), `GET /api/backtests/runs/{id}` (a execução com a configuração copiada e o relatório) e `POST /api/backtests/runs/{id}/cancel` (`204`; `409` se já terminou);
   - **Listas paginadas** (`ui.PageInfo`, com `github.com/raykavin/gobox/pagination`): `?page=` (a partir de 1), `?per_page=` (padrão 20, no máximo 100) e, nas que pesquisam, `?q=` (até 100 caracteres; cada palavra em algum campo, sem diferenciar maiúsculas nem acentos, com `%` e `_` como texto). A resposta mantém a chave da lista (`prompts`, `users`, …) e traz `total` (os itens da busca), `page` (a respondida: a última, para uma página além dela), `per_page`, `total_pages`, `has_next` e `has_prev`. Sem `page`, a resposta é a de antes: a lista inteira, ou as últimas no XTrader AI (50 análises, 100 ações e proteções) e nos backtests (30 lotes), com os mesmos campos de página. `400` para um parâmetro inválido. Aceitam `page`, `per_page` e `q`: `GET /api/settings/mt5-accounts`, `/api/prompts`, `/api/settings/telegram/users` (os usuários autorizados do bot; `/api/settings/telegram` continua trazendo todos), `/api/users` e `/api/roles` (o catálogo `areas` vem em toda página). Aceitam `page` e `per_page`: `GET /api/supervisor/runs` (com as `action_ids` e `protection_ids` de cada análise da página), `/api/supervisor/actions`, `/api/supervisor/protections`, `/api/settings/daily-limits/agents` (os agentes com limite ou trava próprios agora, na ordem de `/api/daily-guard`, com `zone`) e `/api/backtests` (com `running`, as execuções na fila ou rodando de todos os lotes, e `choices`, o id, o nome e o período de todos os lotes). `GET /api/backtests/{id}/comparison?page=&per_page=&sort=ratio&order=desc&min_trades=0&llm=true` responde a comparação do lote: `batch` (sem as execuções), `rows` (um agente por linha, com o ajuste, a validação e `degraded`), `hidden` (as linhas que os filtros escondem), `differences` (as condições que mudam entre os agentes) e `active` (as execuções do lote na fila ou rodando); `sort` é `agent`, `net`, `return`, `drawdown`, `ratio`, `factor`, `winrate`, `trades`, `months` ou `validation` (`order` `asc` por padrão no `agent`, `desc` nos demais; os sem valor por último), `min_trades` esconde quem fez menos operações (as execuções sem resumo ficam) e `llm=false` esconde os agentes LLM; `400` para uma ordem ou um filtro inválido, `404` para um lote que não existe;
+  - **Arquivo de configuração** (veja [Importar e exportar a configuração](#importar-e-exportar-a-configuração)):
+    - `GET /api/config/catalog`: as seções e os itens que o usuário pode exportar, e quais têm segredos;
+    - `POST /api/config/export` com `{"selection": {"agents": ["orb"]}, "include_secrets": true, "password": "…"}`: responde o arquivo (`ui.ConfigFile`); `400` para uma senha curta;
+    - `POST /api/config/import/preview` com `{"file": {…}, "password": "…"}`: o estado de cada item, sem aplicar nada, e `secrets` (`none`, `locked` ou `unlocked`);
+    - `POST /api/config/import`, com `selection`: aplica os itens marcados juntos, e `applied` diz se foram aplicados;
+    - `400` para um arquivo de outro formato ou de uma versão mais nova; o corpo da importação vai até 8 MB;
+    - ver e exportar exigem a permissão de ver de alguma área ou `dashboard:view`; importar, a de gerenciar de alguma área, e cada item é conferido pela permissão da área dele.
   - os tipos estão em `ui/dto.go`, gerados para `web/src/api/types.ts`.
 - **API interna dos agentes** (`agentapi`): só no loopback, com `Authorization: Bearer <token do start>`, e cada token só alcança o próprio agente. Rotas: `config`, `runtime` (long-poll), `prompt`, `order-ids`, `orders`, `decisions`, `decision-links`, `journal/memory`, `outbox` e `outbox/check` (responde como o `outbox`, sem gravar nada).
 - **API de cada agente** (`ui`, no `api_address` dele): só responde ao controller. Exige um host do loopback no `Host`, recusa com `403` requisições de navegador (com `Origin`, ou `Sec-Fetch-Site` `cross-site`/`same-site`) e, num agente lançado pelo controller, as que não trazem `X-Xtrader-Agent-Key` com a chave daquele start. `POST`, `PUT`, `PATCH` e `DELETE` exigem `Content-Type: application/json`, mesmo sem corpo (senão `415`).
