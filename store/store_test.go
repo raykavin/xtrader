@@ -121,6 +121,48 @@ func TestTransaction_RollsBackAndIsJoined(t *testing.T) {
 	require.Zero(t, count, "both rolled back")
 }
 
+// A savepoint failing undoes its writes only, the transaction going on even
+// after an error of the database, which aborts a transaction without one; the
+// ones that succeed kept; without a transaction, one of its own.
+func TestSavepoint_UndoesItsWritesOnly(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	err := s.Transaction(ctx, func(ctx context.Context) error {
+		if err := s.Savepoint(ctx, "first", func(ctx context.Context) error {
+			_, err := s.CreateUser(ctx, "first", "password-1")
+			return err
+		}); err != nil {
+			return err
+		}
+		err := s.Savepoint(ctx, "second", func(ctx context.Context) error {
+			if _, err := s.CreateUser(ctx, "second", "password-2"); err != nil {
+				return err
+			}
+			_, err := s.CreateUser(ctx, "first", "password-3") // a duplicate: the database refuses it
+			return err
+		})
+		require.ErrorIs(t, err, ErrConflict)
+		_, err = s.CreateUser(ctx, "third", "password-4")
+		return err // the transaction still usable
+	})
+	require.NoError(t, err)
+	users, err := s.Users(ctx)
+	require.NoError(t, err)
+	names := []string{}
+	for _, u := range users {
+		names = append(names, u.Username)
+	}
+	require.ElementsMatch(t, []string{"first", "third"}, names)
+
+	require.NoError(t, s.Savepoint(ctx, "alone", func(ctx context.Context) error {
+		_, err := s.CreateUser(ctx, "fourth", "password-5")
+		return err
+	}))
+	count, err := s.CountUsers(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, count)
+}
+
 func TestSeeds_ConcurrentPopulatesSerialized(t *testing.T) {
 	// two migrators at once (eg: two controllers starting): the second one
 	// waits for the seeds of the first, then inserts nothing, instead of

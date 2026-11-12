@@ -133,10 +133,11 @@ func (s *Supervision) setDailyLimit(w http.ResponseWriter, r *http.Request, a *s
 	if !decode(w, r, &request) {
 		return
 	}
-	change := store.DailyChange{Via: store.ViaSettings, By: userOf(r.Context()), Reason: strings.TrimSpace(request.Reason)}
+	var userID *int64
 	if id := userIDOf(r.Context()); id != 0 {
-		change.UserID = &id
+		userID = &id
 	}
+	change := s.daily.dailyChange(userOf(r.Context()), userID, strings.TrimSpace(request.Reason))
 	preview, applied, err := s.daily.change(r.Context(), a, request.Settings, change, request.Confirm)
 	if err != nil {
 		s.fail(w, err)
