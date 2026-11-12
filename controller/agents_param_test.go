@@ -222,3 +222,58 @@ func TestSettings_AgentsParams(t *testing.T) {
 	assert.Contains(t, body, "A chave lot está repetida")
 	assert.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.02", params("gold")["lot"], "nothing changed by a refusal")
 }
+
+// Params removed by the global parametrizer: only where the agent holds the
+// value asked, or with any value; skipped on the agents without them or with
+// another value, told why; the ones of a language model too; the agents
+// changed applied when restarted.
+func TestSettings_AgentsParamRemove(t *testing.T) {
+	c := newManaged(t)
+	ctx := context.Background()
+	c.agent(t, "gold", "trend", false, func(a *store.Agent) { a.Params["timeframe"] = "30m" })
+	c.agent(t, "silver", "trend", false, func(a *store.Agent) { a.Params["timeframe"] = "15m" })
+	c.agent(t, "llm", "llm", false)
+	call, _ := settingsSession(t, c)
+	remove := func(request ui.AgentsParamRequest) map[string]ui.AgentsParamResult {
+		t.Helper()
+		request.Remove = true
+		resp, body := call(http.MethodPost, "/api/settings/agents/params", request)
+		require.Equal(t, http.StatusOK, resp.StatusCode, body)
+		var response ui.AgentsParamResponse
+		require.NoError(t, json.Unmarshal([]byte(body), &response))
+		results := make(map[string]ui.AgentsParamResult)
+		for _, result := range response.Results {
+			results[result.Agent] = result
+		}
+		return results
+	}
+	params := func(name string) store.Params {
+		t.Helper()
+		a, err := c.store.AgentByName(ctx, name)
+		require.NoError(t, err)
+		return a.AllParams()
+	}
+
+	results := remove(ui.AgentsParamRequest{Key: " timeframe ", Value: " 30m ", AddMissing: true})
+	assert.Equal(t, ui.AgentsParamResult{Agent: "gold", Status: ui.ParamRemoved, Previous: "30m",
+		Params: []ui.AgentParamResult{{Key: "timeframe", Status: ui.ParamRemoved, Previous: "30m"}}}, results["gold"])
+	assert.Equal(t, ui.ParamSkipped, results["silver"].Status)
+	assert.Equal(t, "com outro valor (15m)", results["silver"].Detail)
+	assert.Equal(t, "sem o parâmetro", results["llm"].Detail, "never added: AddMissing ignored")
+	assert.NotContains(t, params("gold"), "timeframe")
+	assert.Equal(t, "XAUUSDm", params("gold")["pair"], "the others kept")
+	assert.Equal(t, "15m", params("silver")["timeframe"])
+	assert.NotContains(t, params("llm"), "timeframe")
+
+	results = remove(ui.AgentsParamRequest{Params: []ui.AgentParam{{Key: "timeframe"}, {Key: "llm-min-stop-atr"}}})
+	assert.Equal(t, ui.ParamRemoved, results["silver"].Status, "any value")
+	assert.Equal(t, ui.ParamRemoved, results["llm"].Status)
+	assert.Equal(t, []ui.AgentParamResult{{Key: "timeframe", Status: ui.ParamSkipped, Detail: "sem o parâmetro"},
+		{Key: "llm-min-stop-atr", Status: ui.ParamRemoved, Previous: "1"}}, results["llm"].Params)
+	assert.Equal(t, ui.ParamSkipped, results["gold"].Status, "removed already")
+	assert.NotContains(t, params("silver"), "timeframe")
+	assert.NotContains(t, params("llm"), "llm-min-stop-atr")
+
+	resp, body := call(http.MethodPost, "/api/settings/agents/params", ui.AgentsParamRequest{Key: "mode", Remove: true})
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+}

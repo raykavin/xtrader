@@ -128,3 +128,59 @@ func TestSetAgentParams(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalid)
 	assert.Equal(t, "XAUUSDm=0.01;BTCUSDm=0.02", params()["lot"], "one refused: none changed")
 }
+
+// Params removed from an agent at once, by their names: with any value, or
+// only where it holds the value asked; skipped on the agent without them or
+// holding another value; the ones of its language model too; its other params
+// and settings kept; nothing written when none is removed; a name the params
+// of an agent refuse refused before anything changes.
+func TestRemoveAgentParams(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	llm := llmAgent(t, s, "llm")
+	trend, err := s.CreateAgent(ctx, Agent{Name: "trend", Kind: "trend", Enabled: true, Mode: "paper",
+		APIAddress: "localhost:5590", Launched: true,
+		Params: Params{"pair": "XAUUSDm", "lot": "0.01", "timeframe": "30m", "stop-atr": "2"}}, AgentSecrets{})
+	require.NoError(t, err)
+	params := func(a Agent) Params {
+		t.Helper()
+		got, err := s.Agent(ctx, a.ID)
+		require.NoError(t, err)
+		return got.AllParams()
+	}
+
+	sets, err := s.RemoveAgentParams(ctx, trend.ID, []ParamChange{
+		{Name: "timeframe", Value: "15m"},
+		{Name: "stop-atr"},
+		{Name: "take-profit-atr"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []ParamSet{
+		{Status: ParamSkipped, Had: "30m", Detail: "com outro valor (30m)"},
+		{Status: ParamRemoved, Had: "2"},
+		{Status: ParamSkipped, Detail: "sem o parâmetro"},
+	}, sets)
+	assert.Equal(t, Params{"pair": "XAUUSDm", "lot": "0.01", "timeframe": "30m"}, params(trend), "the others kept")
+
+	set, err := s.RemoveAgentParams(ctx, trend.ID, []ParamChange{{Name: "timeframe", Value: "30m"}})
+	require.NoError(t, err)
+	assert.Equal(t, []ParamSet{{Status: ParamRemoved, Had: "30m"}}, set, "the value asked")
+	assert.Equal(t, Params{"pair": "XAUUSDm", "lot": "0.01"}, params(trend))
+
+	sets, err = s.RemoveAgentParams(ctx, llm.ID, []ParamChange{{Name: "llm-min-stop-atr"}, {Name: "timeframe"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{ParamRemoved, ParamRemoved}, []string{sets[0].Status, sets[1].Status})
+	got, err := s.Agent(ctx, llm.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.LLM.Params, "the param of its language model")
+	assert.Equal(t, Params{"pair": "BTCUSDm,XAUUSDm"}, got.Params)
+	assert.Equal(t, "gpt-5", got.LLM.Model, "its settings kept")
+
+	sets, err = s.RemoveAgentParams(ctx, trend.ID, []ParamChange{{Name: "timeframe"}})
+	require.NoError(t, err)
+	assert.Equal(t, ParamSkipped, sets[0].Status, "nothing to write")
+
+	_, err = s.RemoveAgentParams(ctx, trend.ID, []ParamChange{{Name: "lot"}, {Name: "mode"}})
+	assert.ErrorIs(t, err, ErrInvalid)
+	assert.Equal(t, "0.01", params(trend)["lot"], "one refused: none removed")
+}

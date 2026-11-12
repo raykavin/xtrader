@@ -22,11 +22,12 @@ const restartParallel = 8
 // paramStatus is the outcome of the global parametrizer of the outcome of
 // store.SetAgentParam.
 var paramStatus = map[string]string{store.ParamUpdated: ui.ParamUpdated, store.ParamAdded: ui.ParamAdded,
-	store.ParamUnchanged: ui.ParamUnchanged, store.ParamSkipped: ui.ParamSkipped}
+	store.ParamUnchanged: ui.ParamUnchanged, store.ParamSkipped: ui.ParamSkipped, store.ParamRemoved: ui.ParamRemoved}
 
 // handleAgentsParam is the global parametrizer of the agents, see
 // ui.AgentsParamRequest: the params set on each agent of the filter in turn,
-// all at once (see store.SetAgentParams), the ones refused on an agent told
+// all at once (see store.SetAgentParams; removed with Remove, see
+// store.RemoveAgentParams), the ones refused on an agent told
 // and the others done all the same, the agents out of the filter untouched;
 // the agents changed applied (their restart pending, see
 // AgentSettings.RestartPending); then, when asked, every agent of the filter
@@ -67,7 +68,12 @@ func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 			results[i] = result
 			continue
 		}
-		sets, err := s.store.SetAgentParams(ctx, a.ID, changes, request.AddMissing)
+		var sets []store.ParamSet
+		if request.Remove {
+			sets, err = s.store.RemoveAgentParams(ctx, a.ID, changes)
+		} else {
+			sets, err = s.store.SetAgentParams(ctx, a.ID, changes, request.AddMissing)
+		}
 		if err != nil {
 			result.Status, result.Detail = ui.ParamFailed, userMessage(err)
 			results[i] = result
@@ -75,24 +81,28 @@ func (s *settings) handleAgentsParam(w http.ResponseWriter, r *http.Request) {
 		}
 		for j, set := range sets {
 			outcome := ui.AgentParamResult{Key: params[j].Key, Status: paramStatus[set.Status], Detail: set.Detail}
-			if set.Status == store.ParamUpdated {
+			if set.Status == store.ParamUpdated || set.Status == store.ParamRemoved {
 				outcome.Previous = set.Had
 			}
 			result.Params = append(result.Params, outcome)
 		}
 		result.Status, result.Detail = paramsStatus(sets)
-		if len(sets) == 1 && sets[0].Status == store.ParamUpdated {
+		if len(sets) == 1 && (sets[0].Status == store.ParamUpdated || sets[0].Status == store.ParamRemoved) {
 			result.Previous = sets[0].Had
 		}
-		if result.Status == ui.ParamUpdated || result.Status == ui.ParamAdded {
+		if result.Status == ui.ParamUpdated || result.Status == ui.ParamAdded || result.Status == ui.ParamRemoved {
 			changed++
 		}
 		results[i] = result
 	}
 	by := userOf(ctx)
-	log.Infof("ui: the params %s set on %d of %d agents by %s (added where missing: %t, restart: %t, LLM only: %t, "+
-		"enabled only: %t)", strings.Join(keys, ", "), changed, len(agents), by, request.AddMissing,
-		request.RestartActive, request.LLMOnly, request.EnabledOnly)
+	done := "set on"
+	if request.Remove {
+		done = "removed from"
+	}
+	log.Infof("ui: the params %s %s %d of %d agents by %s (added where missing: %t, restart: %t, LLM only: %t, "+
+		"enabled only: %t)", strings.Join(keys, ", "), done, changed, len(agents), by,
+		request.AddMissing && !request.Remove, request.RestartActive, request.LLMOnly, request.EnabledOnly)
 	if changed > 0 {
 		if err := s.manager.Reconcile(ctx); err != nil {
 			log.Errorf("ui: %v", err)
@@ -133,8 +143,9 @@ func paramsOf(request ui.AgentsParamRequest) ([]ui.AgentParam, string) {
 }
 
 // paramsStatus returns the status of an agent of what was done with each of its
-// params, see ui.AgentsParamResult: a value changed, a param added only, the
-// values it had already, or none of them taken (why, with a single param).
+// params, see ui.AgentsParamResult: a param removed, a value changed, a param
+// added only, the values it had already, or none of them taken (why, with a
+// single param).
 func paramsStatus(sets []store.ParamSet) (status, detail string) {
 	has := func(status string) bool {
 		for _, set := range sets {
@@ -145,6 +156,8 @@ func paramsStatus(sets []store.ParamSet) (status, detail string) {
 		return false
 	}
 	switch {
+	case has(store.ParamRemoved):
+		return ui.ParamRemoved, ""
 	case has(store.ParamUpdated):
 		return ui.ParamUpdated, ""
 	case has(store.ParamAdded):
