@@ -190,3 +190,20 @@ func TestAgent_SqueezeBreakoutFilters(t *testing.T) {
 	require.NoError(t, flag.Set("squeezebreakout-min-rr", "2"))
 	require.NoError(t, flag.Set("squeezebreakout-max-atr-percentile", "30"))
 }
+
+// Every strategy of the agent takes the stop loss and the take profit in ATR
+// (-stop-atr, -take-profit-atr), the ones placing levels of their own too,
+// which they then replace; but pairs, whose two legs hedge each other.
+func TestStrategies_TakeTheExitsInATR(t *testing.T) {
+	a := agent()
+	asked := map[string]bool{}
+	for _, input := range runner.ATRExitInputs {
+		asked[input] = true
+	}
+	for _, s := range a.Strategies {
+		if s.Name == "pairs" {
+			continue
+		}
+		require.NoError(t, a.CheckInputs(s.Name, asked), s.Name)
+	}
+}

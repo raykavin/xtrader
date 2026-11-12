@@ -77,9 +77,9 @@ func agent() runner.Agent {
 		{Name: "atrbreakout", About: "the breakouts of the recent range on an expansion of the volatility",
 			New: f.atrBreakout, Inputs: append([]string{"buffer-atr", "expansion", "breakout-len"}, runner.BracketInputs...)},
 		{Name: "fimathe", About: "the first entry of the trend of the reference channel of the Fimathe technique",
-			New: f.fimathe, Inputs: append(slices.Clone(fimatheInputs), "max-bars")},
+			New: f.fimathe, Inputs: append(append(slices.Clone(fimatheInputs), "max-bars"), runner.ATRExitInputs...)},
 		{Name: "squeezebreakout", About: "the release of a compression with the volume", New: f.squeezeBreakout,
-			Inputs: append([]string{"min-atr-pct"}, squeezeInputs...)},
+			Inputs: append(append([]string{"min-atr-pct"}, squeezeInputs...), runner.ATRExitInputs...)},
 	}, runner.Signals("donchian", "channel", "adxdonchian", "donchianatr", "bbbreakout", "keltner",
 		"volumebreakout", "highlow", "momentumbreakout")...)}
 }

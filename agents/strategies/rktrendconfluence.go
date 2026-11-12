@@ -163,6 +163,13 @@ type RKTrendConfluenceConfig struct {
 	StopValue       float64
 	TakeProfitValue float64
 
+	// TakeProfitATR, above 0, places a take profit at the broker with the
+	// entry, TakeProfitATR ATR away from the entry close: the position closed
+	// there, before the opposite signal. TakeProfitValue still replaces it. 0
+	// for none. The broker must place it with the order, see
+	// service.ProtectionBroker.
+	TakeProfitATR float64
+
 	// MinPositionValue is the value, in the currency of the account (in the
 	// paper wallet, the quote), below which a balance is dust rather than a
 	// position: 10 by default, as in the other example strategies.
@@ -278,6 +285,8 @@ func (c RKTrendConfluenceConfig) validate() error {
 		return errors.New("cooldown bars can't be negative")
 	case c.StopATR < 0 || c.TrailingATR < 0 || c.BrokerStopATR < 0 || c.BrokerTrailingATR < 0:
 		return errors.New("stop and trailing stop ATR multiples can't be negative")
+	case c.TakeProfitATR < 0:
+		return errors.New("the take profit ATR multiple can't be negative")
 	case c.StopValue < 0 || c.TakeProfitValue < 0:
 		return errors.New("the fixed stop loss and take profit values can't be negative")
 	case c.MaxRiskPct < 0:
@@ -649,7 +658,8 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 		return
 	}
 
-	if s.cfg.BrokerStopATR > 0 || s.cfg.BrokerTrailingATR > 0 || fixed || s.cfg.TakeProfitValue > 0 {
+	if s.cfg.BrokerStopATR > 0 || s.cfg.BrokerTrailingATR > 0 || fixed || s.cfg.TakeProfitValue > 0 ||
+		s.cfg.TakeProfitATR > 0 {
 		err = s.openProtected(df, broker, side, size, cash.point)
 	} else {
 		err = s.sizing.open(broker, side, df.Pair, size, value)
@@ -671,7 +681,8 @@ func (s *RKTrendConfluence) OnCandle(df *model.Dataframe, broker service.Broker)
 // openProtected opens a position of side of size with its legs placed at the
 // broker: the stop at StopValue, else the tighter of BrokerStopATR and
 // BrokerTrailingATR from the close, if any, and the take profit at
-// TakeProfitValue, if any, point the point value of the pair.
+// TakeProfitValue, else TakeProfitATR from the close, if any, point the point
+// value of the pair.
 func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Broker, side model.SideType,
 	size, point float64) error {
 
@@ -691,8 +702,11 @@ func (s *RKTrendConfluence) openProtected(df *model.Dataframe, broker service.Br
 			}
 		}
 	}
-	if s.cfg.TakeProfitValue > 0 {
+	switch {
+	case s.cfg.TakeProfitValue > 0:
 		profit = rkProfitLevel(side, closePrice, size, point, s.cfg.TakeProfitValue)
+	case s.cfg.TakeProfitATR > 0 && !isNa(atr):
+		profit = closePrice + sign*s.cfg.TakeProfitATR*atr
 	}
 
 	orders, err := protected.CreateOrderMarketProtected(side, df.Pair, size, stop, profit)

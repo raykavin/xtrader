@@ -172,11 +172,14 @@ func TestInputsBracket(t *testing.T) {
 	require.Equal(t, 2.5, cfg.TakeProfitATR)
 	require.Equal(t, strategies.RKDirectionBuyOnly, cfg.Direction)
 	require.Equal(t, 20.0, cfg.Leverage)
+	require.False(t, cfg.ATRStop, "-stop-atr unset: the levels of a strategy placing its own kept")
+	require.True(t, cfg.ATRTakeProfit, "asked: in place of the take profit of a strategy placing its own")
 
 	in.Set["timeframe"], in.Set["stop-atr"] = true, true
 	in.Bracket(&cfg, &timeframe)
 	require.Equal(t, "1h", timeframe)
 	require.Equal(t, 3.0, cfg.StopATR)
+	require.True(t, cfg.ATRStop)
 
 	// -max-risk-pct unset: the strategy's, eg: the 3% of fimathe
 	cfg.MaxRiskPct, in.MaxRiskPct = 3, 1.5

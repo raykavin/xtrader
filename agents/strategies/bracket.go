@@ -37,6 +37,18 @@ type BracketConfig struct {
 	StopValue       float64
 	TakeProfitValue float64
 
+	// ATRStop and ATRTakeProfit place the stop loss StopATR and the take
+	// profit TakeProfitATR away from the entry, in ATR of ATRLen candles, in
+	// place of the levels of a strategy placing its own (eg: the levels of the
+	// impulse of fibonacci, the channel of fimathe, the box of
+	// squeezebreakout), its other exits kept, eg: its stop moved by R or by its
+	// channel: see bracket.openAt. Set by -stop-atr and -take-profit-atr (see
+	// runner.Inputs.Bracket). The strategies placing their exits in ATR always
+	// (see bracket.open) are unchanged by them. StopValue and TakeProfitValue
+	// still replace them.
+	ATRStop       bool
+	ATRTakeProfit bool
+
 	// MinATRPct skips the entries while the ATR is under that % of the close,
 	// as in ScalpConfig: a target that small is eaten by the costs of the
 	// trade, eg: the spread, which the candles don't hold. 0 disables it.
@@ -185,15 +197,24 @@ func (b *bracket) open(df *model.Dataframe, broker service.Broker, entry model.S
 	if b.cfg.TakeProfitATR > 0 {
 		profit = closePrice + sign*b.cfg.TakeProfitATR*atr
 	}
-	return b.openAt(df, broker, entry, closePrice-sign*b.cfg.StopATR*atr, profit)
+	return b.openWith(df, broker, entry, closePrice-sign*b.cfg.StopATR*atr, profit, false)
 }
 
 // openAt opens a position of entry on the last candle at the market, with its
-// stop loss at stop and its take profit at profit, 0 for none, unless their
-// fixed values replace them (StopValue and TakeProfitValue), and reports
-// whether it is held now.
+// stop loss at stop and its take profit at profit, 0 for none, unless the ones
+// in ATR replace them (ATRStop and ATRTakeProfit, see atrLevels), or their
+// fixed values (StopValue and TakeProfitValue), and reports whether it is
+// held now.
 func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model.SideType, stop,
 	profit float64) bool {
+	return b.openWith(df, broker, entry, stop, profit, true)
+}
+
+// openWith is openAt, its levels replaced by the ones in ATR when inATR (the
+// levels of a strategy placing its own), as they are else (the ones of open,
+// in ATR already).
+func (b *bracket) openWith(df *model.Dataframe, broker service.Broker, entry model.SideType, stop,
+	profit float64, inATR bool) bool {
 
 	closePrice := df.Close.Last(0)
 	if entry == "" || !rkOpens(b.cfg.Direction, entry) {
@@ -216,6 +237,9 @@ func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model
 		return false
 	}
 
+	if inATR {
+		stop, profit = b.atrLevels(df, entry, closePrice, stop, profit)
+	}
 	stop, profit = b.fixed(entry, closePrice, size, cash.point, stop, profit)
 	if b.sizing.risky(df.Pair, closePrice, stop, size, cash) {
 		return false
@@ -236,8 +260,8 @@ func (b *bracket) openAt(df *model.Dataframe, broker service.Broker, entry model
 }
 
 // place places a limit order of entry at limit on the pair of df, with its
-// stop loss at stop and its take profit at profit, 0 for none, unless their
-// fixed values replace them, see openAt. It returns the orders of the entry
+// stop loss at stop and its take profit at profit, 0 for none, unless the ones
+// in ATR (from limit) or their fixed values replace them, see openAt. It returns the orders of the entry
 // still pending, the entry then its legs, none when no entry is pending: not
 // placed, or filled at once, the position then followed, held reporting it.
 func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.SideType, limit, stop,
@@ -263,6 +287,7 @@ func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.
 		return nil, false
 	}
 
+	stop, profit = b.atrLevels(df, entry, limit, stop, profit)
 	stop, profit = b.fixed(entry, limit, size, cash.point, stop, profit)
 	if b.sizing.risky(df.Pair, limit, stop, size, cash) {
 		return nil, false
@@ -281,6 +306,34 @@ func (b *bracket) place(df *model.Dataframe, broker service.Broker, entry model.
 		return orders, false
 	}
 	return nil, false
+}
+
+// atrLevels returns the stop loss and the take profit of a position of entry
+// at price: stop and profit, unless ATRStop and ATRTakeProfit replace them by
+// StopATR and TakeProfitATR away from price, in the ATR of ATRLen candles of
+// df (the one the strategies compute, see pineATR); as they are without an
+// ATR yet.
+func (b *bracket) atrLevels(df *model.Dataframe, entry model.SideType, price, stop, profit float64) (float64,
+	float64) {
+	if !b.cfg.ATRStop && !b.cfg.ATRTakeProfit {
+		return stop, profit
+	}
+	series := pineATR(df.High, df.Low, df.Close, b.cfg.ATRLen)
+	if len(series) == 0 {
+		return stop, profit
+	}
+	atr := series[len(series)-1]
+	if isNa(atr) || atr <= 0 {
+		return stop, profit
+	}
+	sign := rkSign(entry)
+	if b.cfg.ATRStop {
+		stop = price - sign*b.cfg.StopATR*atr
+	}
+	if b.cfg.ATRTakeProfit {
+		profit = price + sign*b.cfg.TakeProfitATR*atr
+	}
+	return stop, profit
 }
 
 // fixed returns the stop loss and the take profit of a position of entry at

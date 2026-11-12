@@ -79,7 +79,9 @@ type VolumeProfileConfig struct {
 	// session then. The rule fills the value area within the session, the
 	// next one having a value area of its own. StopValue and TakeProfitValue
 	// replace the stop loss and the take profit, MaxBars closes the position
-	// earlier, and TakeProfitATR isn't used.
+	// earlier, and TakeProfitATR replaces the take profit when asked only
+	// (ATRTakeProfit), from the entry; StopATR stays the room beyond the
+	// session (ATRStop never set).
 	BracketConfig
 }
 
@@ -109,7 +111,7 @@ func DefaultVolumeProfileConfig() VolumeProfileConfig {
 
 func (c VolumeProfileConfig) validate() error {
 	exits := c.BracketConfig
-	exits.TakeProfitATR = 1 // unused: the take profit at the other edge of the value area
+	exits.TakeProfitATR = 1 // unused unless asked: the take profit at the other edge of the value area
 	if err := exits.validate(); err != nil {
 		return err
 	}

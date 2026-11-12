@@ -87,20 +87,21 @@ func agent() runner.Agent {
 		{Name: "zscore", About: "reversion of the Z-Score of the close", New: f.zscore,
 			Inputs: inputs("entry-z", "exit-z", "max-adx")},
 		{Name: "meanreversion", About: "the rejections of the Bollinger Bands of a range back to its mean",
-			New: f.meanReversion, Inputs: append([]string{"min-atr-pct"}, meanReversionInputs...)},
+			New: f.meanReversion, Inputs: append(append([]string{"min-atr-pct"}, meanReversionInputs...),
+				runner.ATRExitInputs...)},
 		{Name: "scalp1m", About: "scalping the micro pullbacks of the micro trend on 1 minute candles",
-			New: f.scalp1m, Inputs: []string{"min-atr-pct"}},
+			New: f.scalp1m, Inputs: append([]string{"min-atr-pct"}, runner.ATRExitInputs...)},
 		{Name: "scalp1mbtc", About: "scalping the strong bursts of momentum on 1 minute candles, for a wide spread",
-			New: f.scalp1mBTC, Inputs: []string{"min-atr-pct"}},
+			New: f.scalp1mBTC, Inputs: append([]string{"min-atr-pct"}, runner.ATRExitInputs...)},
 		{Name: "newsbreakout", About: "the breakout of the range after the economic releases", New: f.newsBreakout,
 			Inputs: inputs(newsBreakoutInputs...)},
 		{Name: "seasonality", About: "the intraday bias of fixed windows of the day, measured walk-forward",
 			New: f.seasonality, Inputs: inputs(seasonalityInputs...)},
 		{Name: "volumeprofile", About: "the 80% rule of the value area of the previous session",
-			New: f.volumeProfile, Inputs: append([]string{"stop-atr", "max-bars", "min-atr-pct"},
+			New: f.volumeProfile, Inputs: append([]string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct"},
 				volumeProfileInputs...)},
 		{Name: "cmegap", About: "the weekend gap of the CME faded back to its Friday close", New: f.cmeGap,
-			Inputs: append([]string{"stop-atr", "max-bars", "min-atr-pct"}, cmeGapInputs...)},
+			Inputs: append([]string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct"}, cmeGapInputs...)},
 		{Name: "pairs", About: "the spread of two cointegrated legs traded back to its mean", New: f.pairs,
 			Inputs: pairsInputs},
 	}}
@@ -452,6 +453,7 @@ func (f flags) seasonality(in runner.Inputs) (strategy.Strategy, error) {
 func (f flags) volumeProfile(in runner.Inputs) (strategy.Strategy, error) {
 	cfg := strategies.DefaultVolumeProfileConfig()
 	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	cfg.ATRStop = false // its -stop-atr: the room beyond the session, not from the entry
 	cfg.Timezone, cfg.Anchor = *f.vp.timezone, *f.vp.anchor
 	cfg.Bins, cfg.ValueArea, cfg.Confirm = *f.vp.bins, *f.vp.valueArea, *f.vp.confirm
 	trader, err := strategies.NewVolumeProfile(cfg)
@@ -461,6 +463,7 @@ func (f flags) volumeProfile(in runner.Inputs) (strategy.Strategy, error) {
 func (f flags) cmeGap(in runner.Inputs) (strategy.Strategy, error) {
 	cfg := strategies.DefaultCMEGapConfig()
 	in.Bracket(&cfg.BracketConfig, &cfg.Timeframe)
+	cfg.ATRStop = false // its -stop-atr: from the entry already, as it places it
 	cfg.Timezone, cfg.Close, cfg.Open = *f.cg.timezone, *f.cg.close, *f.cg.open
 	cfg.MinGapATR, cfg.ExpiryHours = *f.cg.minGapATR, *f.cg.expiry
 	trader, err := strategies.NewCMEGap(cfg)
