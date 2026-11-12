@@ -40,8 +40,13 @@ describe("access", () => {
   });
 
   it("shows the sections of the settings allowed, in their order", () => {
-    expect(allowedTabs(access(PermUsersView, PermAgentsView))).toEqual(["agentes", "usuarios"]);
-    expect(allowedTabs(access(PermDashboardView))).toEqual(["layout"]);
+    expect(allowedTabs(access(PermUsersView, PermAgentsView))).toEqual([
+      "agentes",
+      "usuarios",
+      "arquivo",
+    ]);
+    expect(allowedTabs(access(PermDashboardView))).toEqual(["layout", "arquivo"]);
+    expect(allowedTabs(access(PermPerformanceView)), "nothing of a file").toEqual([]);
     expect(allowedTabs(access())).toEqual([]);
     const agents = access(PermAgentsView, PermUsersView);
     expect(shownTab(agents, "usuarios")).toBe("usuarios");

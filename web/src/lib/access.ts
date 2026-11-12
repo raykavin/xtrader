@@ -18,6 +18,7 @@ import {
   type RoleRef,
   type SessionResponse,
 } from "../api/types";
+import { configViewPermissions } from "./configFile";
 import { type SettingsTab, settingsTabs } from "./settings";
 
 /** What the user of the session may see and do. */
@@ -47,22 +48,23 @@ export function can(access: Access, ...perms: string[]): boolean {
 /** The pages of the dashboard. */
 export type Page = "dashboard" | "performance" | "backtesting" | "settings";
 
-/** The permission each section of the settings needs to be shown. */
-export const tabPermissions: Record<SettingsTab, string> = {
-  agentes: PermAgentsView,
-  contas: PermMT5AccountsView,
-  limites: PermLimitsView,
-  noticias: PermNewsView,
-  prompts: PermPromptsView,
-  supervisor: PermSupervisorView,
-  telegram: PermTelegramView,
-  usuarios: PermUsersView,
-  layout: PermDashboardView, // the layout of the panel
+/** The permissions each section of the settings needs to be shown, any one of them enough. */
+export const tabPermissions: Record<SettingsTab, readonly string[]> = {
+  agentes: [PermAgentsView],
+  contas: [PermMT5AccountsView],
+  limites: [PermLimitsView],
+  noticias: [PermNewsView],
+  prompts: [PermPromptsView],
+  supervisor: [PermSupervisorView],
+  telegram: [PermTelegramView],
+  usuarios: [PermUsersView],
+  layout: [PermDashboardView], // the layout of the panel
+  arquivo: configViewPermissions, // each section of the file by its own permission
 };
 
 /** The sections of the settings access shows, in their order. */
 export function allowedTabs(access: Access): SettingsTab[] {
-  return settingsTabs.filter((tab) => can(access, tabPermissions[tab]));
+  return settingsTabs.filter((tab) => can(access, ...tabPermissions[tab]));
 }
 
 /** The section of the settings to show: tab when allowed, else the first allowed one, null for none. */

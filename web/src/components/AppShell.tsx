@@ -45,6 +45,7 @@ const sections: { tab: SettingsTab; label: string; icon: IconName }[] = [
   { tab: "telegram", label: "Telegram", icon: "send" },
   { tab: "usuarios", label: "Usuários", icon: "users" },
   { tab: "layout", label: "Layout", icon: "layout" },
+  { tab: "arquivo", label: "Importar e exportar", icon: "download" },
 ];
 
 /** The width the bar holds the navigation from: below it, the navigation is a drawer. */

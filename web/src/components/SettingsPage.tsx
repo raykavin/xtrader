@@ -31,6 +31,7 @@ import { loadTheme, saveTheme, type Theme } from "../lib/theme";
 import { useAccess } from "./AccessContext";
 import { AgentsSettings } from "./AgentsSettings";
 import { AppShell, type NavHint } from "./AppShell";
+import { ConfigFileSettings } from "./ConfigFileSettings";
 import { DailyLimitsSettings } from "./DailyLimitsSettings";
 import { LayoutSettings } from "./LayoutSettings";
 import { MT5AccountsSettings } from "./MT5AccountsSettings";
@@ -100,6 +101,11 @@ const intros: Record<SettingsTab, SectionIntro> = {
   layout: {
     title: "Layout",
     description: "A disposição dos cards do painel, salva neste navegador.",
+  },
+  arquivo: {
+    title: "Importar e exportar",
+    description:
+      "Guarde num arquivo o que escolher (agentes, contas MT5, prompts, limites, layout e mais) e importe aqui ou em outra instalação. A importação mostra antes o que muda em cada item e só aplica o que você marcar.",
   },
 };
 
@@ -218,6 +224,13 @@ export function SettingsPage() {
     loadPrompts(); // the agents using each prompt
   }, [fail, loadPrompts]);
 
+  /** A configuration imported: the agents, the prompts, the users and the roles read again. */
+  const imported = useCallback(() => {
+    if (seesAgents) loadAgents();
+    else loadPrompts();
+    changedUsers();
+  }, [seesAgents, loadAgents, loadPrompts, changedUsers]);
+
   /** Shows a section, in the hash of the URL without a new entry: Back leaves the settings. */
   const select = (next: SettingsTab) => {
     setTab(next);
@@ -334,6 +347,9 @@ export function SettingsPage() {
       </Panel>
       <Panel tab="layout" shown={tab} allowed={shown}>
         <LayoutSettings intro={intros.layout} />
+      </Panel>
+      <Panel tab="arquivo" shown={tab} allowed={shown}>
+        <ConfigFileSettings intro={intros.arquivo} onTheme={setTheme} onImported={imported} />
       </Panel>
     </AppShell>
   );

@@ -49,6 +49,7 @@ import {
   pendingEntryLegs,
   pendingEntryTitle,
 } from "../lib/analysis";
+import { type ChartType, loadChartType, saveChartType } from "../lib/chartType";
 import {
   formatChartPrice,
   formatCompact,
@@ -198,30 +199,6 @@ function savePaneFactors(key: string, factors: number[]) {
     window.localStorage.setItem(key, JSON.stringify(factors));
   } catch {
     // no storage (private mode, quota): the default heights next time
-  }
-}
-
-/**
- * How the price is drawn: as candles, or as a line of the closes over an area
- * fading downwards. Kept in the browser: the page reloaded shows it as left.
- */
-type ChartType = "candles" | "line";
-
-const CHART_TYPE_KEY = "xtrader.chart.type";
-
-function loadChartType(): ChartType {
-  try {
-    return window.localStorage.getItem(CHART_TYPE_KEY) === "line" ? "line" : "candles";
-  } catch {
-    return "candles";
-  }
-}
-
-function saveChartType(type: ChartType) {
-  try {
-    window.localStorage.setItem(CHART_TYPE_KEY, type);
-  } catch {
-    // no storage (private mode, quota): the candles next time
   }
 }
 
@@ -499,7 +476,7 @@ export function PriceChart({
   const cardRef = useRef<HTMLElement>(null);
   const stateRef = useRef<ChartState | null>(null);
   const [fullscreen, setFullscreen] = useState<Fullscreen>(null);
-  const [chartType, setChartType] = useState<ChartType>(loadChartType);
+  const [chartType, setChartType] = useState<ChartType>(() => loadChartType());
   const lastClose = useRef(0);
   lastClose.current = snapshot.candles[snapshot.candles.length - 1]?.close ?? 0;
   const ownPnL = useMemo(() => positionPnL(snapshot), [snapshot]);

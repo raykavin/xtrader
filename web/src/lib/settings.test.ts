@@ -286,6 +286,7 @@ describe("the tabs of the settings", () => {
       "telegram",
       "usuarios",
       "layout",
+      "arquivo",
     ]);
     for (const tab of settingsTabs) {
       expect(settingsTabFromHash(`#${tab}`)).toBe(tab);

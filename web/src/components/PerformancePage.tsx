@@ -7,6 +7,7 @@ import {
   closedRange,
   dayOf,
   loadClosedPeriod,
+  PERFORMANCE_PERIOD_KEY,
   saveClosedPeriod,
 } from "../lib/closedPL";
 import { formatMoney, formatPercent, signClass } from "../lib/format";
@@ -31,9 +32,6 @@ import { PerformanceTrades } from "./PerformanceTrades";
 import { Select } from "./Select";
 import { Alert, EmptyState, Loading, Skeleton } from "./States";
 import { Tabs, tabIds } from "./Tabs";
-
-/** The key of the period of the page in localStorage, apart from the one of the card of the accounts. */
-const PERIOD_KEY = "xtrader.performance.period";
 
 /** How often the trades are read again while the page is open, in ms. */
 const POLL = 60_000;
@@ -126,7 +124,9 @@ function useExcursions(read: PerformanceResponse | null) {
  */
 export function PerformancePage() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  const [period, setPeriod] = useState<ClosedPeriod>(() => loadClosedPeriod(undefined, PERIOD_KEY));
+  const [period, setPeriod] = useState<ClosedPeriod>(() =>
+    loadClosedPeriod(undefined, PERFORMANCE_PERIOD_KEY),
+  );
   const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState<PerformanceFilter>({});
   const [currency, setCurrency] = useState<string | null>(null);
@@ -169,7 +169,7 @@ export function PerformancePage() {
   };
 
   const apply = (next: ClosedPeriod) => {
-    saveClosedPeriod(next, undefined, PERIOD_KEY);
+    saveClosedPeriod(next, undefined, PERFORMANCE_PERIOD_KEY);
     setPeriod(next);
   };
   const ids = tabIds("perf", view);

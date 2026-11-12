@@ -25,6 +25,9 @@ export interface ClosedRange {
 /** The key of the period in localStorage. */
 export const CLOSED_PERIOD_KEY = "xtrader.closedPL.period";
 
+/** The key of the period of the page of the performance in localStorage, apart from the one of the card of the accounts. */
+export const PERFORMANCE_PERIOD_KEY = "xtrader.performance.period";
+
 /** The days of a custom period at most, as the controller takes them. */
 export const MAX_CLOSED_DAYS = 400;
 
