@@ -98,10 +98,12 @@ func TestAgent_FimatheInputs(t *testing.T) {
 		require.ErrorContains(t, a.CheckInputs("atrbreakout", map[string]bool{name: true}),
 			"-"+name+" is an input of -strategy fimathe")
 	}
-	for _, name := range []string{"max-bars", "timeframe", "lot", "direction"} {
+	// the stop loss and the take profit in ATR in place of the levels of the
+	// channel, when set
+	for _, name := range []string{"max-bars", "timeframe", "lot", "direction", "stop-atr", "take-profit-atr"} {
 		require.NoError(t, a.CheckInputs("fimathe", map[string]bool{name: true}), name)
 	}
-	for _, name := range []string{"stop-atr", "take-profit-atr", "trailing-atr", "min-atr-pct", "buffer-atr"} {
+	for _, name := range []string{"trailing-atr", "min-atr-pct", "buffer-atr"} {
 		require.ErrorContains(t, a.CheckInputs("fimathe", map[string]bool{name: true}), "-"+name+" is an input of",
 			name)
 	}
@@ -195,7 +197,7 @@ func TestAgent_SqueezeBreakoutFilters(t *testing.T) {
 // (-stop-atr, -take-profit-atr), the ones placing levels of their own too,
 // which they then replace; but pairs, whose two legs hedge each other.
 func TestStrategies_TakeTheExitsInATR(t *testing.T) {
-	a := agent()
+	a := testAgent()
 	asked := map[string]bool{}
 	for _, input := range runner.ATRExitInputs {
 		asked[input] = true

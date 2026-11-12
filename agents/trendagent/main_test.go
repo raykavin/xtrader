@@ -87,14 +87,14 @@ func TestAgent_TrailingATR(t *testing.T) {
 	a := testAgent()
 	requireTrailingATR(t, a, []string{"trendconfluence", "matrend", "fibonacci", "consensus"},
 		"-trailing-atr is an input of -strategy consensus and fibonacci and matrend and trendconfluence")
-	require.ErrorContains(t, a.CheckInputs("matrend", map[string]bool{"take-profit-atr": true}),
-		"-take-profit-atr is an input of -strategy")
+	require.NoError(t, a.CheckInputs("matrend", map[string]bool{"take-profit-atr": true}),
+		"a take profit in ATR, at the broker")
 	requireOwnFlags(t, a)
 }
 
 // fibonacci takes its own flags, refused with the other strategies, and the
-// flags of the exits it uses, but not the stop loss and take profit in ATR,
-// which the levels of the impulse replace.
+// flags of the exits it uses, the stop loss and take profit in ATR too, which
+// replace the levels of the impulse when set.
 func TestAgent_FibonacciInputs(t *testing.T) {
 	a := testAgent()
 	for _, name := range fibInputs {
@@ -102,10 +102,11 @@ func TestAgent_FibonacciInputs(t *testing.T) {
 		require.ErrorContains(t, a.CheckInputs("matrend", map[string]bool{name: true}),
 			"-"+name+" is an input of -strategy fibonacci")
 	}
-	for _, name := range []string{"max-bars", "min-atr-pct", "trailing-atr", "timeframe", "lot"} {
+	for _, name := range []string{"max-bars", "min-atr-pct", "trailing-atr", "timeframe", "lot", "stop-atr",
+		"take-profit-atr"} {
 		require.NoError(t, a.CheckInputs("fibonacci", map[string]bool{name: true}), name)
 	}
-	for _, name := range []string{"stop-atr", "take-profit-atr", "stop-buffer-atr", "fast-ema"} {
+	for _, name := range []string{"stop-buffer-atr", "fast-ema"} {
 		require.ErrorContains(t, a.CheckInputs("fibonacci", map[string]bool{name: true}), "-"+name+" is an input of",
 			name)
 	}
@@ -195,7 +196,7 @@ func TestAgent_ConsensusInputs(t *testing.T) {
 // (-stop-atr, -take-profit-atr), the ones placing levels of their own too,
 // which they then replace; but pairs, whose two legs hedge each other.
 func TestStrategies_TakeTheExitsInATR(t *testing.T) {
-	a := agent()
+	a := testAgent()
 	asked := map[string]bool{}
 	for _, input := range runner.ATRExitInputs {
 		asked[input] = true
