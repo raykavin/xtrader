@@ -219,8 +219,10 @@ func TestOutbox_ARecordFailingForeverIsHeldApart(t *testing.T) {
 	assert.Empty(t, setApartKeys(t, o), "never refused for good")
 
 	require.NoError(t, o.Add(agentapi.KindOrder, "d", "d"))
-	require.Eventually(t, func() bool { return len(f.written()) == 3 }, 5*time.Second, time.Millisecond,
-		"the next ones sent")
+	// written, and its answer read: off the outbox before it stops, or it is
+	// still there, not sent yet, when it opens again
+	require.Eventually(t, func() bool { return len(f.written()) == 3 && o.left() == 0 }, 5*time.Second,
+		time.Millisecond, "the next ones sent")
 	f.mu.Lock()
 	last := f.outboxes[len(f.outboxes)-1]
 	f.mu.Unlock()
