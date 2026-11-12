@@ -3506,3 +3506,311 @@ export interface MT5AccountEventInfo {
 export interface MT5AccountEventsResponse {
   events: MT5AccountEventInfo[];
 }
+/**
+ * ConfigFormat names a configuration file of the controller, of
+ * ConfigVersion: the settings of the dashboard a user exported, to import
+ * again here or in another installation, see ConfigFile.
+ */
+export const ConfigFormat = "xtrader-config";
+/**
+ * ConfigFormat names a configuration file of the controller, of
+ * ConfigVersion: the settings of the dashboard a user exported, to import
+ * again here or in another installation, see ConfigFile.
+ */
+export const ConfigVersion = 1;
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionPrompts = "prompts";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionMT5Accounts = "mt5_accounts";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionAgents = "agents";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionLimits = "limits";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionNews = "news";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionSupervisor = "supervisor";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionTelegram = "telegram";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionRoles = "roles";
+/**
+ * The sections of a configuration file, see ConfigFile.
+ */
+export const ConfigSectionDashboard = "dashboard";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemDailyLimit = "daily_limit";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemTradingHours = "trading_hours";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemExposure = "exposure";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemAssetAgents = "asset_agents";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemSettings = "settings";
+/**
+ * The keys of the items of the sections of single settings: the limits, the
+ * news and the XTrader AI (ConfigItemSettings), and the bot of Telegram.
+ */
+export const ConfigItemTelegramBot = "bot";
+/**
+ * ConfigFile is a configuration file of the controller (Format, Version):
+ * the settings a user exported (ExportedBy, ExportedAt in Unix seconds, of
+ * the schema AppSchema), by section, each item referring to the others by
+ * name (the prompt and the account of MT5 of an agent, the agents of a window
+ * of the trading hours), never by ID, to be imported in another installation
+ * too. The users (their passwords), the fixed role, the account active on
+ * each terminal, the state of the agents (stopped, blocked) and the history
+ * are never in it; the secrets only in Secrets, encrypted with a password.
+ * Dashboard holds the preferences of the browser, the web's as they are.
+ */
+export interface ConfigFile {
+  format: string;
+  version: number /* int */;
+  app_schema: number /* int */;
+  exported_at: number /* int64 */;
+  exported_by: string;
+  prompts?: ConfigPrompt[];
+  mt5_accounts?: ConfigMT5Account[];
+  agents?: ConfigAgent[];
+  limits?: ConfigLimits;
+  news?: ConfigNews;
+  supervisor?: ConfigSupervisor;
+  telegram?: ConfigTelegram;
+  roles?: ConfigRole[];
+  dashboard?: { [key: string]: any};
+  secrets?: ConfigSecrets;
+}
+/**
+ * ConfigPrompt is a prompt of the LLM agents in a configuration file, by name.
+ */
+export interface ConfigPrompt {
+  name: string;
+  description: string;
+  content: string;
+}
+/**
+ * ConfigMT5Account is an account of MT5 in a configuration file, by name,
+ * never active once imported (see the switch of the terminal).
+ */
+export interface ConfigMT5Account {
+  name: string;
+  login: number /* int64 */;
+  server: string;
+  bridge_url: string;
+  allow_real: boolean;
+  read_only: boolean;
+}
+/**
+ * ConfigAgent is an agent in a configuration file, by name: its settings, its
+ * params (of its language model too, merged), its account, its language
+ * model, its prompt and its account of MT5 by name ("" for none: the prompt
+ * embedded, no account), its protection and its daily limit; on (Enabled) or
+ * off as it was.
+ */
+export interface ConfigAgent {
+  name: string;
+  kind: string;
+  mode: string;
+  api_address: string;
+  enabled: boolean;
+  launched: boolean;
+  restart: boolean;
+  trade_panel: boolean;
+  telegram_control: boolean;
+  reanalysis?: boolean;
+  params: { [key: string]: string};
+  account?: ConfigAgentAccount;
+  llm?: ConfigAgentLLM;
+  prompt?: string;
+  mt5_account?: string;
+  protection: ProtectionSettings;
+  daily_limit: DailyLimitSettings;
+}
+/**
+ * ConfigAgentAccount is the trading account of an agent in a configuration
+ * file: its bridge (the one of its account of MT5 when it has one), its
+ * magic number and its comment (0 and "" for the defaults), and whether it
+ * may trade a real account.
+ */
+export interface ConfigAgentAccount {
+  bridge_url: string;
+  magic?: number /* int64 */;
+  comment?: string;
+  real_allowed: boolean;
+}
+/**
+ * ConfigAgentLLM is the language model of an LLM agent in a configuration
+ * file, its params with the ones of the agent ("" and 0 for the defaults).
+ */
+export interface ConfigAgentLLM {
+  provider: string;
+  model: string;
+  base_url?: string;
+  reasoning_effort?: string;
+  max_tokens?: number /* int */;
+}
+/**
+ * ConfigLimits are the limits of all the agents in a configuration file,
+ * each an item of its own: the daily limit, the trading hours, the exposure
+ * by asset and the agents per asset.
+ */
+export interface ConfigLimits {
+  daily_limit?: DailyLimitSettings;
+  trading_hours?: ConfigTradingHours;
+  exposure?: ExposureSettings;
+  asset_agents?: AssetAgentsSettings;
+}
+/**
+ * ConfigTradingHours are the trading hours in a configuration file: on or
+ * off, and their windows, their agents by name.
+ */
+export interface ConfigTradingHours {
+  enabled: boolean;
+  windows: TradingWindow[];
+}
+/**
+ * ConfigNews are the news of all the agents in a configuration file, its
+ * token apart (a secret).
+ */
+export interface ConfigNews {
+  enabled: boolean;
+  url?: string;
+  block_before: number /* int */;
+  block_after: number /* int */;
+  block_importance: string;
+}
+/**
+ * ConfigSupervisor are the settings of the XTrader AI in a configuration
+ * file, its key apart (a secret).
+ */
+export interface ConfigSupervisor {
+  enabled: boolean;
+  interval_seconds: number /* int */;
+  timeout_seconds: number /* int */;
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  reasoning_effort?: string;
+  max_tokens?: number /* int */;
+  instructions: string;
+  autonomy: SupervisorAutonomy;
+}
+/**
+ * ConfigTelegram is the bot of Telegram in a configuration file (on or off,
+ * its token apart, a secret) and the users it answers, by their ID on
+ * Telegram.
+ */
+export interface ConfigTelegram {
+  bot?: ConfigTelegramBot;
+  users?: ConfigTelegramUser[];
+}
+/**
+ * ConfigTelegramBot is the bot of Telegram in a configuration file.
+ */
+export interface ConfigTelegramBot {
+  enabled: boolean;
+}
+/**
+ * ConfigTelegramUser is a user the bot answers in a configuration file.
+ */
+export interface ConfigTelegramUser {
+  telegram_id: number /* int64 */;
+  name: string;
+}
+/**
+ * ConfigRole is a role of the users of the dashboard in a configuration file,
+ * by name, never the fixed one.
+ */
+export interface ConfigRole {
+  name: string;
+  description: string;
+  permissions: string[];
+}
+/**
+ * ConfigSecrets are the secrets of the items of a configuration file, Data
+ * the JSON of their values sealed with AES-256-GCM (Nonce) by a key derived
+ * from a password by KDF (argon2id, of Time passes over Memory KiB with
+ * Threads, and Salt): never in clear in the file. Base64 encoded.
+ */
+export interface ConfigSecrets {
+  kdf: string;
+  time: number /* uint32 */;
+  memory: number /* uint32 */;
+  threads: number /* uint8 */;
+  salt: string;
+  nonce: string;
+  data: string;
+}
+/**
+ * ConfigCatalog answers GET /api/config/catalog: the sections and the items
+ * the user may export, the ones of the areas the user sees.
+ */
+export interface ConfigCatalog {
+  sections: ConfigSection[];
+}
+/**
+ * ConfigSection is a section of a configuration file in a catalog: its key,
+ * its name, its items, and whether the user may export its secrets (managing
+ * its area).
+ */
+export interface ConfigSection {
+  key: string;
+  label: string;
+  items: ConfigItemRef[];
+  secrets?: boolean;
+}
+/**
+ * ConfigItemRef is an item of a section: its key and its name.
+ */
+export interface ConfigItemRef {
+  key: string;
+  label: string;
+}
+/**
+ * MinConfigPassword is the shortest password of the secrets of a
+ * configuration file, in characters.
+ */
+export const MinConfigPassword = 8;
+/**
+ * ConfigExportRequest is the body of POST /api/config/export: the items of
+ * each section to export (by key), and whether with their secrets, then
+ * encrypted with Password (MinConfigPassword at least). The secrets of an
+ * area only for a user managing it.
+ */
+export interface ConfigExportRequest {
+  selection: { [key: string]: string[]};
+  include_secrets?: boolean;
+  password?: string;
+}
