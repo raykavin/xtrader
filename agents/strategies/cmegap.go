@@ -50,8 +50,9 @@ type CMEGapConfig struct {
 	ExpiryHours int
 
 	// The stop loss, the sizing and the cost filter, see BracketConfig:
-	// TakeProfitATR isn't read, the take profit is the reference, unless
-	// TakeProfitValue replaces it, as StopValue the stop loss in ATR.
+	// the take profit is the reference, unless TakeProfitATR replaces it when
+	// asked (ATRTakeProfit), from the entry, or TakeProfitValue, as StopValue
+	// the stop loss in ATR.
 	BracketConfig
 }
 

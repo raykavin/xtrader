@@ -104,15 +104,17 @@ func agent() runner.Agent {
 	}
 	return runner.Agent{Name: "trendagent", Strategies: append([]runner.Strategy{
 		{Name: "trendconfluence", About: "RK Trend Confluence", New: f.trendConfluence,
-			Inputs: []string{"stop-atr", "trailing-atr", "broker-stop-atr", "broker-trailing-atr"}},
+			Inputs: []string{"stop-atr", "take-profit-atr", "trailing-atr", "broker-stop-atr", "broker-trailing-atr"}},
 		{Name: "matrend", About: "the break of the SMA 200 with the EMA 9/21 on its side", New: f.maTrend,
-			Inputs: []string{"trailing-atr", "max-distance", "stop-buffer-atr", "broker-stop"}},
+			Inputs: append([]string{"trailing-atr", "max-distance", "stop-buffer-atr", "broker-stop"},
+				runner.ATRExitInputs...)},
 		{Name: "emapullback", About: "the pullbacks to the fast EMA in a trend of two EMAs", New: f.emaPullback,
 			Inputs: append([]string{"fast-ema", "slow-ema"}, runner.BracketInputs...)},
 		{Name: "fibonacci", About: "the pullbacks of the impulses to their Fibonacci retracements", New: f.fibonacci,
-			Inputs: append(slices.Clone(fibInputs), "trailing-atr", "max-bars", "min-atr-pct")},
+			Inputs: append(append(slices.Clone(fibInputs), "trailing-atr", "max-bars", "min-atr-pct"),
+				runner.ATRExitInputs...)},
 		{Name: "trendpullback", About: "the end of the pullbacks of a trend, confirmed by the momentum",
-			New: f.trendPullback, Inputs: []string{"min-atr-pct"}},
+			New: f.trendPullback, Inputs: append([]string{"min-atr-pct"}, runner.ATRExitInputs...)},
 	}, append(runner.Signals("emacross", "ema200", "ribbon", "supertrend", "emasupertrend", "psarema",
 		"atrtrailing", "ichimoku", "ichimokuadx", "mtftrend", "mtfema"),
 		runner.Strategy{Name: "consensus", About: "the consensus of signal rules: a quorum of them firing the " +
@@ -162,10 +164,17 @@ func (f flags) trendConfluence(in runner.Inputs) (strategy.Strategy, error) {
 	cfg.Direction = in.Direction
 	cfg.StopATR = in.StopATR
 	cfg.TrailingATR = in.TrailingATR
+	cfg.TakeProfitATR = in.TakeProfitATR
 	cfg.BrokerStopATR = *f.brokerStop
 	cfg.BrokerTrailingATR = *f.brokerTrail
 	cfg.StopValue = in.StopValue
 	cfg.TakeProfitValue = in.TakeProfitValue
+	if in.Set["stop-atr"] {
+		cfg.StopATR = in.StopATR
+	}
+	if in.Set["take-profit-atr"] {
+		cfg.TakeProfitATR = in.TakeProfitATR
+	}
 	cfg.MinPositionValue = in.MinValue
 	cfg.PositionFraction = in.Fraction
 	cfg.Leverage = in.Leverage

@@ -60,6 +60,16 @@ type MATrendConfig struct {
 	StopValue       float64
 	TakeProfitValue float64
 
+	// StopATR and TakeProfitATR, above 0, place the stop loss and the take
+	// profit at the broker with the entry StopATR and TakeProfitATR ATR away
+	// from the entry close: StopATR in place of the stop beyond the trend MA,
+	// trailed as it (TrailingATR) and moved at the broker as BrokerStop does;
+	// TakeProfitATR a take profit the strategy has none of else (it exits on
+	// the opposite cross). StopValue and TakeProfitValue still replace them.
+	// 0 keeps the stop beyond the trend MA, and no take profit.
+	StopATR       float64
+	TakeProfitATR float64
+
 	// Direction, MinPositionValue, PositionFraction, Leverage and PositionSize
 	// work as in RKTrendConfluenceConfig. MaxRiskPct, above 0, skips an entry
 	// losing more than that % of the balance available at its initial stop,
@@ -119,6 +129,8 @@ func (c MATrendConfig) validate() error {
 		return errors.New("trailing stop ATR multiple must be positive: the ATR moves the stop")
 	case c.StopValue < 0 || c.TakeProfitValue < 0:
 		return errors.New("the fixed stop loss and take profit values can't be negative")
+	case c.StopATR < 0 || c.TakeProfitATR < 0:
+		return errors.New("the stop loss and take profit ATR multiples can't be negative")
 	case c.MaxRiskPct < 0:
 		return errors.New("the max risk can't be negative")
 	case c.MinPositionValue <= 0:
@@ -327,16 +339,20 @@ func (s *MATrend) OnCandle(df *model.Dataframe, broker service.Broker) {
 		return
 	}
 
-	// the initial stop, beyond the trend MA, or at its fixed value
+	// the initial stop, beyond the trend MA, in ATR from the close, or at its
+	// fixed value
 	trade := &rkTrade{side: entry, extreme: closePrice, stop: trendMA - rkSign(entry)*s.cfg.StopBufferATR*atr}
+	if s.cfg.StopATR > 0 {
+		trade.stop = closePrice - rkSign(entry)*s.cfg.StopATR*atr
+	}
 	if s.cfg.StopValue > 0 {
 		trade.stop = rkLossLevel(entry, closePrice, size, cash.point, s.cfg.StopValue)
 	}
 	if s.sizing.risky(df.Pair, closePrice, trade.stop, size, cash) {
 		return
 	}
-	if s.cfg.BrokerStop || s.cfg.StopValue > 0 || s.cfg.TakeProfitValue > 0 {
-		err = s.openProtected(df, broker, trade, size, cash.point)
+	if s.protects() {
+		err = s.openProtected(df, broker, trade, size, cash.point, atr)
 	} else {
 		err = s.sizing.open(broker, entry, df.Pair, size, value)
 	}
@@ -415,22 +431,34 @@ func (s *MATrend) stopped(df *model.Dataframe, broker service.Broker, held model
 	return false
 }
 
+// protects reports whether the entries place legs at the broker: a stop
+// (BrokerStop, StopATR, StopValue) or a take profit (TakeProfitATR,
+// TakeProfitValue).
+func (s *MATrend) protects() bool {
+	return s.cfg.BrokerStop || s.cfg.StopATR > 0 || s.cfg.StopValue > 0 || s.cfg.TakeProfitATR > 0 ||
+		s.cfg.TakeProfitValue > 0
+}
+
 // openProtected opens a position of size with its legs placed at the broker:
-// the stop of trade, with BrokerStop or at its fixed value, and the take profit
-// at TakeProfitValue, if any, point the point value of the pair.
+// the stop of trade, with BrokerStop, in ATR or at its fixed value, and the
+// take profit at TakeProfitValue, else TakeProfitATR ATR (atr) from the close,
+// if any, point the point value of the pair.
 func (s *MATrend) openProtected(df *model.Dataframe, broker service.Broker, trade *rkTrade,
-	size, point float64) error {
+	size, point, atr float64) error {
 	protected, ok := broker.(service.ProtectionBroker)
 	if !ok {
 		return errors.New("ma trend: the broker can't place the stop with the order")
 	}
 
 	var stop, profit float64 // 0 for none
-	if s.cfg.BrokerStop || s.cfg.StopValue > 0 {
+	if s.cfg.BrokerStop || s.cfg.StopATR > 0 || s.cfg.StopValue > 0 {
 		stop = trade.stop
 	}
-	if s.cfg.TakeProfitValue > 0 {
+	switch {
+	case s.cfg.TakeProfitValue > 0:
 		profit = rkProfitLevel(trade.side, df.Close.Last(0), size, point, s.cfg.TakeProfitValue)
+	case s.cfg.TakeProfitATR > 0:
+		profit = df.Close.Last(0) + rkSign(trade.side)*s.cfg.TakeProfitATR*atr
 	}
 
 	orders, err := protected.CreateOrderMarketProtected(trade.side, df.Pair, size, stop, profit)

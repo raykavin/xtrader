@@ -103,8 +103,10 @@ type FimatheConfig struct {
 
 	// The sizing, the direction, MaxBars and MaxRiskPct, see BracketConfig,
 	// MaxRiskPct 3 by default ("No máximo 3% por operação"). The stop loss
-	// and the take profit are the levels of the channel, technical: the ATR
-	// multiples and the fixed values of BracketConfig aren't used.
+	// and the take profit are the levels of the channel, technical: the fixed
+	// values of BracketConfig aren't used, and the ATR multiples only when
+	// asked (ATRStop and ATRTakeProfit), from the entry, its trailing by the
+	// channel kept.
 	BracketConfig
 }
 
@@ -140,7 +142,7 @@ func DefaultFimatheConfig() FimatheConfig {
 
 func (c FimatheConfig) validate() error {
 	exits := c.BracketConfig
-	exits.StopATR, exits.TakeProfitATR = 1, 1 // unused: the levels of the channel in their place
+	exits.StopATR, exits.TakeProfitATR = 1, 1 // unused unless asked: the levels of the channel in their place
 	if err := exits.validate(); err != nil {
 		return err
 	}

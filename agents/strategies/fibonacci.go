@@ -97,7 +97,8 @@ type FibonacciConfig struct {
 
 	// The sizing and the rest of the exits, see BracketConfig: MaxBars, the
 	// fixed values of StopValue and TakeProfitValue, which replace the levels
-	// of the impulse, and MinATRPct. StopATR and TakeProfitATR aren't used.
+	// of the impulse, and MinATRPct. StopATR and TakeProfitATR replace them
+	// when asked only (ATRStop and ATRTakeProfit), from the entry.
 	BracketConfig
 }
 
@@ -134,7 +135,7 @@ func DefaultFibonacciConfig() FibonacciConfig {
 
 func (c FibonacciConfig) validate() error {
 	exits := c.BracketConfig
-	exits.StopATR, exits.TakeProfitATR = 1, 1 // unused: the levels of the impulse in their place
+	exits.StopATR, exits.TakeProfitATR = 1, 1 // unused unless asked: the levels of the impulse in their place
 	if err := exits.validate(); err != nil {
 		return err
 	}
@@ -169,7 +170,7 @@ func (c FibonacciConfig) validate() error {
 		return errors.New("the target extension must be above 1")
 	case c.Target == FibTargetRR && c.RewardRisk <= 0:
 		return errors.New("the reward to risk must be positive")
-	case c.Target == FibTargetNone && c.TrailingATR <= 0 && c.TakeProfitValue <= 0:
+	case c.Target == FibTargetNone && c.TrailingATR <= 0 && c.TakeProfitValue <= 0 && !c.ATRTakeProfit:
 		return errors.New("a target of none needs a trailing stop")
 	}
 	return nil

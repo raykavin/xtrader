@@ -84,6 +84,11 @@ type Inputs struct {
 // placing each entry with its stop loss and take profit at the broker.
 var BracketInputs = []string{"stop-atr", "take-profit-atr", "max-bars", "min-atr-pct"}
 
+// ATRExitInputs are the flags of the stop loss and the take profit in ATR from
+// the entry, taken by the strategies placing levels of their own too (eg:
+// fimathe), which then replace them, see strategies.BracketConfig.ATRStop.
+var ATRExitInputs = []string{"stop-atr", "take-profit-atr"}
+
 // Bracket sets the exits and the sizing of a bracket strategy from the inputs,
 // its timeframe when -timeframe is set, and its max risk when -max-risk-pct is
 // set. Unset, each keeps its default.
@@ -97,6 +102,9 @@ func (in Inputs) Bracket(cfg *strategies.BracketConfig, timeframe *string) {
 	if in.Set["take-profit-atr"] {
 		cfg.TakeProfitATR = in.TakeProfitATR
 	}
+	// asked: in place of the levels of a strategy placing its own, eg: the
+	// channel of fimathe (the bracket strategies place them in ATR anyway)
+	cfg.ATRStop, cfg.ATRTakeProfit = in.Set["stop-atr"], in.Set["take-profit-atr"]
 	if in.Set["max-bars"] {
 		cfg.MaxBars = in.MaxBars
 	}
