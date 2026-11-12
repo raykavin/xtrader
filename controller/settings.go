@@ -36,6 +36,9 @@ type settings struct {
 	trades    *performance   // of the agents on their accounts, see GET /api/performance
 	paths     *excursions    // of their trades, see GET /api/performance/excursions
 	mt5       *mt5Accounts   // the accounts of MT5 and their terminals, see GET /api/settings/mt5-accounts
+	// supervision applies the limits, the news and the settings of the
+	// supervisor, nil until ServeSupervision
+	supervision *Supervision
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
@@ -103,6 +106,9 @@ func (s *settings) routes(r chi.Router) {
 	configs := need(configViewPermissions()...) // each section by its own permissions, see canSee
 	r.With(configs).Get("/config/catalog", s.handleConfigCatalog)
 	r.With(configs).Post("/config/export", s.handleConfigExport)
+	imports := need(configManagePermissions()...) // each item by the permission of its area, see canManage
+	r.With(imports).Post("/config/import/preview", s.handleConfigPreview)
+	r.With(imports).Post("/config/import", s.handleConfigImport)
 	r.With(setUsers).Post("/roles", s.handleCreateRole)
 	r.With(setUsers).Patch("/roles/{id}", s.handleUpdateRole)
 	r.With(setUsers).Delete("/roles/{id}", s.handleDeleteRole)

@@ -65,6 +65,8 @@ var routePermissions = map[string][]string{
 	"DELETE /api/users/{id}":                          {ui.PermUsersManage},
 	"GET /api/config/catalog":                         configViewPermissions(),
 	"POST /api/config/export":                         configViewPermissions(),
+	"POST /api/config/import/preview":                 configManagePermissions(),
+	"POST /api/config/import":                         configManagePermissions(),
 	"GET /api/roles":                                  {ui.PermUsersView},
 	"POST /api/roles":                                 {ui.PermUsersManage},
 	"PATCH /api/roles/{id}":                           {ui.PermUsersManage},

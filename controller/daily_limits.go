@@ -794,7 +794,6 @@ func (l *dailyLimiter) preview(ctx context.Context, a *store.Agent,
 // which closes and blocks as usual (now, woken).
 func (l *dailyLimiter) change(ctx context.Context, a *store.Agent, limits ui.DailyLimitSettings,
 	change store.DailyChange, confirm bool) (ui.DailyLimitPreview, bool, error) {
-	change.Day = l.dayOf(l.s.now())
 	preview, guard, err := l.preview(ctx, a, limits)
 	if err != nil {
 		return preview, false, err
@@ -810,6 +809,21 @@ func (l *dailyLimiter) change(ctx context.Context, a *store.Agent, limits ui.Dai
 	if err != nil {
 		return preview, false, err
 	}
+	return preview, true, l.settle(ctx, a, preview, guard, change)
+}
+
+// dailyChange returns the change of the daily limits by by (the user of
+// userID, if one) via the screens, for reason, today.
+func (l *dailyLimiter) dailyChange(by string, userID *int64, reason string) store.DailyChange {
+	return store.DailyChange{Day: l.dayOf(l.s.now()), Via: store.ViaSettings, By: by, UserID: userID, Reason: reason}
+}
+
+// settle applies the limits of the agent a (all the agents together when nil)
+// once saved for change, as preview told of them with the guard tripped then:
+// a release applied at once, its agents' entries published; a trip left to the
+// next evaluation, woken now.
+func (l *dailyLimiter) settle(ctx context.Context, a *store.Agent, preview ui.DailyLimitPreview,
+	guard *store.DailyGuard, change store.DailyChange) error {
 	key := ""
 	var names []string
 	if a != nil {
@@ -825,7 +839,7 @@ func (l *dailyLimiter) change(ctx context.Context, a *store.Agent, limits ui.Dai
 			release.Reason += ": " + change.Reason
 		}
 		if _, ok, err := l.s.store.ReleaseDailyGuard(ctx, guard.ID, release, preview.Result); err != nil {
-			return preview, true, err
+			return err
 		} else if ok {
 			l.publish(ctx, names, false)
 		}
@@ -833,5 +847,5 @@ func (l *dailyLimiter) change(ctx context.Context, a *store.Agent, limits ui.Dai
 	log.Infof("daily limits: the limits of %s changed by %s (%s): %s", scopeName(key), change.By, change.Via,
 		preview.Effect)
 	l.Reevaluate()
-	return preview, true, nil
+	return nil
 }

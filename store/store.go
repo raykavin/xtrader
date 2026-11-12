@@ -130,6 +130,27 @@ func (s *Store) Transaction(ctx context.Context, fn func(ctx context.Context) er
 	})
 }
 
+// Savepoint runs fn in a savepoint of the transaction of ctx, named name (an
+// SQL identifier): its writes undone when it fails, the transaction going on,
+// whereas a failure in a transaction joined (see Transaction) leaves it
+// aborted. Without a transaction, fn runs in one of its own.
+func (s *Store) Savepoint(ctx context.Context, name string, fn func(ctx context.Context) error) error {
+	tx, ok := ctx.Value(txKey{}).(*gorm.DB)
+	if !ok {
+		return s.Transaction(ctx, fn)
+	}
+	if err := tx.SavePoint(name).Error; err != nil {
+		return err
+	}
+	if err := fn(ctx); err != nil {
+		if undo := tx.RollbackTo(name).Error; undo != nil {
+			return errors.Join(err, undo)
+		}
+		return err
+	}
+	return nil
+}
+
 // conn returns the transaction of ctx, else the connection.
 func (s *Store) conn(ctx context.Context) *gorm.DB {
 	if tx, ok := ctx.Value(txKey{}).(*gorm.DB); ok {

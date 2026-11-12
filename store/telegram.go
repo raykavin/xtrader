@@ -89,6 +89,15 @@ func (s *Store) AddTelegramUser(ctx context.Context, telegramID int64, name stri
 	return user, notFound(err, fmt.Sprintf("o usuário %d do Telegram", telegramID))
 }
 
+// SetTelegramUserName renames the Telegram user of id.
+func (s *Store) SetTelegramUserName(ctx context.Context, id int64, name string) error {
+	result := s.conn(ctx).Model(&TelegramUser{}).Where("id = ?", id).Update("name", strings.TrimSpace(name))
+	if result.Error == nil && result.RowsAffected == 0 {
+		return fmt.Errorf("%w: o usuário %d do Telegram não existe", ErrNotFound, id)
+	}
+	return notFound(result.Error, fmt.Sprintf("o usuário %d do Telegram", id))
+}
+
 // DeleteTelegramUser stops answering the Telegram user of id, the record.
 func (s *Store) DeleteTelegramUser(ctx context.Context, id int64) error {
 	result := s.conn(ctx).Delete(&TelegramUser{}, id)

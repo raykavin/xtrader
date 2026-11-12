@@ -951,6 +951,27 @@ func (s *settings) handleMT5AccountEvents(w http.ResponseWriter, r *http.Request
 	writeJSON(w, response)
 }
 
+// unlinkable returns why the account of MT5 of the agent a can't change now:
+// it runs, or holds positions or pending orders on its current account (or
+// they can't be read), never switched under it; "" when it can.
+func (m *mt5Accounts) unlinkable(ctx context.Context, a store.Agent) string {
+	if m.isRunning(a.Name) {
+		return "Pare o agente antes de trocar a conta MT5 dele."
+	}
+	if a.Account == nil || a.Account.BridgeURL == "" {
+		return ""
+	}
+	open, err := m.exposure(ctx, a.Account.BridgeURL, []string{a.Name})
+	if err != nil {
+		return sentence(err.Error())
+	}
+	if len(open) > 0 {
+		return fmt.Sprintf("O agente tem %s na conta atual: feche-as antes de trocar a conta, ou ficariam sem "+
+			"acompanhamento.", strings.Join(open, ", "))
+	}
+	return ""
+}
+
 // linkAgent links the agent a to the account of MT5 of id (0 unlinks it), by
 // the user of r: refused while it runs, or holds positions or pending orders
 // on its current account, never switched under it. It reports whether it
@@ -963,21 +984,9 @@ func (s *settings) linkAgent(w http.ResponseWriter, r *http.Request, a store.Age
 	if id == current {
 		return false
 	}
-	if s.mt5.isRunning(a.Name) {
-		writeJSONError(w, http.StatusConflict, "Pare o agente antes de trocar a conta MT5 dele.")
+	if why := s.mt5.unlinkable(r.Context(), a); why != "" {
+		writeJSONError(w, http.StatusConflict, why)
 		return true
-	}
-	if a.Account != nil && a.Account.BridgeURL != "" {
-		open, err := s.mt5.exposure(r.Context(), a.Account.BridgeURL, []string{a.Name})
-		if err != nil {
-			writeJSONError(w, http.StatusConflict, sentence(err.Error()))
-			return true
-		}
-		if len(open) > 0 {
-			writeJSONError(w, http.StatusConflict, fmt.Sprintf("O agente tem %s na conta atual: feche-as antes "+
-				"de trocar a conta, ou ficariam sem acompanhamento.", strings.Join(open, ", ")))
-			return true
-		}
 	}
 	var target *int64
 	if id != 0 {

@@ -3814,3 +3814,91 @@ export interface ConfigExportRequest {
   include_secrets?: boolean;
   password?: string;
 }
+/**
+ * The states of an item of a configuration file to import, see
+ * ConfigPreviewItem.
+ */
+export const ConfigStatusNew = "new"; // none of its key yet: created
+/**
+ * The states of an item of a configuration file to import, see
+ * ConfigPreviewItem.
+ */
+export const ConfigStatusChanged = "changed"; // its fields differ: replaced
+/**
+ * The states of an item of a configuration file to import, see
+ * ConfigPreviewItem.
+ */
+export const ConfigStatusSame = "same"; // as it is: nothing to do
+/**
+ * The states of an item of a configuration file to import, see
+ * ConfigPreviewItem.
+ */
+export const ConfigStatusInvalid = "invalid"; // refused: its error tells why
+/**
+ * The states of the secrets of a configuration file to import, see
+ * ConfigPreview.
+ */
+export const ConfigSecretsNone = "none"; // the file has none
+/**
+ * The states of the secrets of a configuration file to import, see
+ * ConfigPreview.
+ */
+export const ConfigSecretsLocked = "locked"; // no password given, or a wrong one: the secrets kept as they are
+/**
+ * The states of the secrets of a configuration file to import, see
+ * ConfigPreview.
+ */
+export const ConfigSecretsUnlocked = "unlocked"; // opened: imported with their items
+/**
+ * MaxConfigFile is the size of a configuration file to import at most, in
+ * bytes.
+ */
+export const MaxConfigFile = 8 << 20;
+/**
+ * ConfigImportRequest is the body of POST /api/config/import/preview and of
+ * POST /api/config/import: the file, the password of its secrets, if any, and
+ * of an import the items of each section to apply (by key). The items of an
+ * area for a user managing it only; the preferences of the browser
+ * (ConfigSectionDashboard) are the web's, left out.
+ */
+export interface ConfigImportRequest {
+  file: ConfigFile;
+  password?: string;
+  selection?: { [key: string]: string[]};
+}
+/**
+ * ConfigPreview answers the preview of a configuration file to import (every
+ * item checked, nothing applied) and its import (the items picked, applied
+ * all together or none: Applied tells), by section in the order they are
+ * applied in.
+ */
+export interface ConfigPreview {
+  secrets: string; // see ConfigSecretsNone
+  secrets_error?: string; // why they stay locked, a password given
+  sections: ConfigPreviewSection[];
+  applied?: boolean;
+}
+/**
+ * ConfigPreviewSection is a section of a configuration file to import, its
+ * items.
+ */
+export interface ConfigPreviewSection {
+  key: string;
+  label: string;
+  items: ConfigPreviewItem[];
+}
+/**
+ * ConfigPreviewItem is an item of a configuration file to import: its state
+ * (see ConfigStatusNew), the fields that change (by name, in Portuguese), why
+ * it is refused, what importing it does beyond its fields (Warnings), and
+ * whether its secrets are written with it.
+ */
+export interface ConfigPreviewItem {
+  key: string;
+  label: string;
+  status: string;
+  changes?: string[];
+  error?: string;
+  warnings?: string[];
+  secrets?: boolean;
+}

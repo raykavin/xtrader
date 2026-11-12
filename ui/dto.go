@@ -3115,3 +3115,68 @@ type ConfigExportRequest struct {
 	IncludeSecrets bool                `json:"include_secrets,omitempty"`
 	Password       string              `json:"password,omitempty"`
 }
+
+// The states of an item of a configuration file to import, see
+// ConfigPreviewItem.
+const (
+	ConfigStatusNew     = "new"     // none of its key yet: created
+	ConfigStatusChanged = "changed" // its fields differ: replaced
+	ConfigStatusSame    = "same"    // as it is: nothing to do
+	ConfigStatusInvalid = "invalid" // refused: its error tells why
+)
+
+// The states of the secrets of a configuration file to import, see
+// ConfigPreview.
+const (
+	ConfigSecretsNone     = "none"     // the file has none
+	ConfigSecretsLocked   = "locked"   // no password given, or a wrong one: the secrets kept as they are
+	ConfigSecretsUnlocked = "unlocked" // opened: imported with their items
+)
+
+// MaxConfigFile is the size of a configuration file to import at most, in
+// bytes.
+const MaxConfigFile = 8 << 20
+
+// ConfigImportRequest is the body of POST /api/config/import/preview and of
+// POST /api/config/import: the file, the password of its secrets, if any, and
+// of an import the items of each section to apply (by key). The items of an
+// area for a user managing it only; the preferences of the browser
+// (ConfigSectionDashboard) are the web's, left out.
+type ConfigImportRequest struct {
+	File      ConfigFile          `json:"file"`
+	Password  string              `json:"password,omitempty"`
+	Selection map[string][]string `json:"selection,omitempty"`
+}
+
+// ConfigPreview answers the preview of a configuration file to import (every
+// item checked, nothing applied) and its import (the items picked, applied
+// all together or none: Applied tells), by section in the order they are
+// applied in.
+type ConfigPreview struct {
+	Secrets      string                 `json:"secrets"`                 // see ConfigSecretsNone
+	SecretsError string                 `json:"secrets_error,omitempty"` // why they stay locked, a password given
+	Sections     []ConfigPreviewSection `json:"sections"`
+	Applied      bool                   `json:"applied,omitempty"`
+}
+
+// ConfigPreviewSection is a section of a configuration file to import, its
+// items.
+type ConfigPreviewSection struct {
+	Key   string              `json:"key"`
+	Label string              `json:"label"`
+	Items []ConfigPreviewItem `json:"items"`
+}
+
+// ConfigPreviewItem is an item of a configuration file to import: its state
+// (see ConfigStatusNew), the fields that change (by name, in Portuguese), why
+// it is refused, what importing it does beyond its fields (Warnings), and
+// whether its secrets are written with it.
+type ConfigPreviewItem struct {
+	Key      string   `json:"key"`
+	Label    string   `json:"label"`
+	Status   string   `json:"status"`
+	Changes  []string `json:"changes,omitempty"`
+	Error    string   `json:"error,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	Secrets  bool     `json:"secrets,omitempty"`
+}
