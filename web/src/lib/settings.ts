@@ -257,6 +257,7 @@ export const settingsTabs = [
   "telegram",
   "usuarios",
   "layout",
+  "arquivo",
 ] as const;
 
 export type SettingsTab = (typeof settingsTabs)[number];

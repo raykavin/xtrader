@@ -9075,3 +9075,218 @@ circle.perf-down {
 .role-matrix td {
   width: 1%;
 }
+
+/* ------------------------------------------------------------------ */
+/* Configurações › Importar e exportar: the tree of the sections and    */
+/* their items, the secrets and their password, the preview of a file   */
+/* ------------------------------------------------------------------ */
+.config-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.config-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.config-section {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.config-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.config-section-title {
+  font-weight: 600;
+}
+
+.config-count {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.config-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: var(--sp-3);
+}
+
+.config-item {
+  min-width: 0;
+}
+
+.config-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-rows {
+  display: flex;
+  flex-direction: column;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.config-row:first-child {
+  border-top: 0;
+}
+
+.config-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* the check and the name together, the name wrapping beside it */
+.config-row-title {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.config-row-title .config-name {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.config-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.config-detail {
+  margin: 0;
+  padding-left: 24px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.config-rows.result .config-detail {
+  padding-left: 0;
+}
+
+.config-detail.warn {
+  color: var(--warn);
+}
+
+.config-detail.error {
+  color: var(--neg);
+}
+
+.badge.config-status.new {
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.badge.config-status.changed {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.badge.config-status.invalid {
+  border-color: color-mix(in srgb, var(--neg) 35%, transparent);
+  background: var(--neg-soft);
+  color: var(--neg);
+}
+
+.config-row[data-status="same"] .config-name,
+.config-row[data-status="invalid"] .config-name {
+  color: var(--text-2);
+}
+
+.config-secrets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.config-password {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: var(--sp-3);
+  max-width: 560px;
+}
+
+.config-password-hint {
+  grid-column: 1 / -1;
+}
+
+.config-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.config-file-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-unlock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+}
+
+.config-unlock .field {
+  flex: 1 1 240px;
+  max-width: 320px;
+}
+
+.config-unlock > span {
+  flex-basis: 100%;
+}
+
+.config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}

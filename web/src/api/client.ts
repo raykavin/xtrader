@@ -26,6 +26,11 @@ import type {
   CandleEvent,
   CandlesResponse,
   ClosedProfitResponse,
+  ConfigCatalog,
+  ConfigExportRequest,
+  ConfigFile,
+  ConfigImportRequest,
+  ConfigPreview,
   ControlMoveRequest,
   ControlsResponse,
   DailyAgentsResponse,
@@ -858,6 +863,26 @@ export function fetchAssetAgents(signal?: AbortSignal): Promise<AssetAgentsRespo
 /** Sets the agents allowed on assets: the agents take them at once. */
 export function updateAssetAgents(request: AssetAgentsRequest): Promise<AssetAgentsResponse> {
   return sendJSON<AssetAgentsResponse>("PUT", "/settings/asset-agents", request);
+}
+
+/** The sections and the items of a configuration file the user may export. */
+export function fetchConfigCatalog(signal?: AbortSignal): Promise<ConfigCatalog> {
+  return getJSON<ConfigCatalog>("/config/catalog", signal);
+}
+
+/** The configuration file of the items picked, their secrets sealed with a password when asked. */
+export function exportConfig(request: ConfigExportRequest): Promise<ConfigFile> {
+  return postJSON<ConfigFile>("/config/export", request);
+}
+
+/** The preview of the import of a configuration file: each item checked, nothing applied. */
+export function previewConfigImport(request: ConfigImportRequest): Promise<ConfigPreview> {
+  return postJSON<ConfigPreview>("/config/import/preview", request);
+}
+
+/** Imports the items picked of a configuration file, all of them or none: see ConfigPreview.applied. */
+export function importConfig(request: ConfigImportRequest): Promise<ConfigPreview> {
+  return postJSON<ConfigPreview>("/config/import", request);
 }
 
 export function fetchExposure(signal?: AbortSignal): Promise<ExposureResponse> {
