@@ -92,7 +92,7 @@ describe("normalizeLayout", () => {
     }
   });
 
-  it("leaves out the unknown and repeated cards and the empty columns and rows, the missing cards in rows at the end", () => {
+  it("leaves out the unknown and repeated cards and the empty columns and rows, the missing cards beside their card or in rows at the end", () => {
     const layout = normalizeLayout({
       version: 2,
       rows: [
@@ -105,13 +105,12 @@ describe("normalizeLayout", () => {
       chartHeight: 500,
     });
     expect(layout.rows).toEqual([
-      [["chart"], ["quote"]],
+      [["chart"], ["news"], ["quote"]],
       [["decision"]],
       [["openpl"]],
       [["sentiment"]],
       [["results"]],
       [["activity"]],
-      [["news"]],
     ]);
     expect(layout.hidden).toEqual(["quote"]);
     expect(layout.chartHeight).toBe(500);
@@ -135,10 +134,9 @@ describe("normalizeLayout", () => {
       ...defaultLayout(),
       rows: [
         [["quote"], ["sentiment"], ["results"]],
-        [["chart", "decision"]],
+        [["chart", "decision"], ["news"]],
         [["activity"]],
         [["openpl"]],
-        [["news"]],
       ],
     });
     // the ticket in the overview, the side column empty, the activity at the top
@@ -157,10 +155,9 @@ describe("normalizeLayout", () => {
     expect(layout).toEqual({
       rows: [
         [["activity"]],
-        [["chart"]],
+        [["chart"], ["news"]],
         [["quote", "sentiment", "results", "decision"]],
         [["openpl"]],
-        [["news"]],
       ],
       hidden: ["sentiment"],
       chartHeight: 640,
@@ -177,7 +174,13 @@ describe("normalizeLayout", () => {
       chartWidth: null,
     };
     const layout = normalizeLayout(saved);
-    expect(layout.rows).toEqual([...saved.rows, [["openpl"]], [["news"]]]);
+    // the news beside the chart, where the ticket of the orders was; the open profit in a row of its own
+    expect(layout.rows).toEqual([
+      [["chart", "decision"], ["news"]],
+      [["results"], ["quote"], ["sentiment"]],
+      [["activity"]],
+      [["openpl"]],
+    ]);
     expect(layout.hidden, "the cards hidden kept").toEqual(["sentiment"]);
     expect(layout.chartHeight).toBe(520);
     expect(isDefaultArrangement(layout)).toBe(false);
@@ -483,10 +486,9 @@ describe("the layout in storage", () => {
     const layout = loadLayout(storage);
     expect(layout.rows).toEqual([
       [["quote"], ["sentiment"], ["results"]],
-      [["chart", "decision"]],
+      [["chart", "decision"], ["news"]],
       [["activity"]],
       [["openpl"]],
-      [["news"]],
     ]);
     expect(layout.hidden, "the ticket hidden left out").toEqual([]);
     expect(layout.chartWidth).toBe(1000);

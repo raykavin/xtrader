@@ -311,7 +311,7 @@ describe("the import", () => {
       to: "2026-11-10",
     });
     const layout = JSON.parse(storage.getItem(LAYOUT_KEY) ?? "null");
-    expect(layout.rows[0]).toEqual([["chart"]]);
+    expect(layout.rows[0], "the news added beside the chart").toEqual([["chart"], ["news"]]);
     expect(layout.rows.length, "the cards missing added").toBeGreaterThan(1);
 
     const none = memoryStorage();
