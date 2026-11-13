@@ -52,6 +52,7 @@ import type {
   MT5SwitchPreview,
   MT5SwitchRefusal,
   MT5SwitchRequest,
+  NewsCalendarResponse,
   NewsSettingsRequest,
   NewsSettingsResponse,
   NewsTestResponse,
@@ -863,6 +864,21 @@ export function fetchAssetAgents(signal?: AbortSignal): Promise<AssetAgentsRespo
 /** Sets the agents allowed on assets: the agents take them at once. */
 export function updateAssetAgents(request: AssetAgentsRequest): Promise<AssetAgentsResponse> {
   return sendJSON<AssetAgentsResponse>("PUT", "/settings/asset-agents", request);
+}
+
+/** The releases of the economic calendar of currencies from from until before to (Unix seconds), see NewsCalendarResponse. */
+export function fetchNewsCalendar(
+  from: number,
+  to: number,
+  currencies: readonly string[],
+  signal?: AbortSignal,
+): Promise<NewsCalendarResponse> {
+  const query = new URLSearchParams({
+    from: String(from),
+    to: String(to),
+    currencies: currencies.join(","),
+  });
+  return getJSON<NewsCalendarResponse>(`/news/calendar?${query}`, signal);
 }
 
 /** The sections and the items of a configuration file the user may export. */
