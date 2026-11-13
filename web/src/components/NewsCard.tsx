@@ -86,7 +86,7 @@ export function NewsCard() {
     };
   }, [period]);
 
-  const events = read ? filterNews(read.events, impacts) : [];
+  const events = read ? filterNews(read.events, impacts, read) : [];
   const next = nextNews(events, now);
   const nextEvent = next >= 0 ? events[next] : undefined;
   const days = newsDays(events, now);
