@@ -9300,3 +9300,213 @@ circle.perf-down {
   color: var(--text-2);
   font-size: var(--fs-sm);
 }
+
+/* ------------------------------------------------------------------ */
+/* The card of the news: the economic calendar of the main currencies, */
+/* its period and its filter of impact, the releases by day            */
+/* ------------------------------------------------------------------ */
+.news-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.news-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.news-period {
+  flex: 0 1 200px;
+  min-width: 160px;
+}
+
+.news-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.news-custom-day {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 140px;
+}
+
+.news-custom-error {
+  flex-basis: 100%;
+}
+
+.news-impacts {
+  flex: none;
+  align-self: flex-start;
+}
+
+.news-impacts .seg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* the impact in 3 bars, of the colour of its level */
+.news-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.news-bars i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.news-bars i:nth-child(1) {
+  height: 5px;
+}
+
+.news-bars i:nth-child(2) {
+  height: 8px;
+}
+
+.news-bars i:nth-child(3) {
+  height: 12px;
+}
+
+.news-bars[data-level="1"] i:nth-child(-n + 1) {
+  background: var(--text-3);
+}
+
+.news-bars[data-level="2"] i:nth-child(-n + 2) {
+  background: var(--warn);
+}
+
+.news-bars[data-level="3"] i {
+  background: var(--neg);
+}
+
+.news-list {
+  max-height: 440px;
+  margin: 0 calc(var(--sp-2) * -1);
+  padding: 0 var(--sp-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.news-day + .news-day {
+  margin-top: var(--sp-3);
+}
+
+.news-day-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: var(--sp-1) 0;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.news-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-row {
+  display: grid;
+  grid-template-columns: 3.4rem 2.6rem 1.2rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+.news-row[data-past] {
+  color: var(--text-3);
+}
+
+.news-row[data-next] {
+  margin: 0 calc(var(--sp-2) * -1);
+  padding-right: var(--sp-2);
+  padding-left: var(--sp-2);
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+}
+
+.news-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.news-currency {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.news-importance {
+  align-self: center;
+}
+
+.news-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--sp-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.news-next-tag {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent-text);
+}
+
+.news-block-tag {
+  border-color: color-mix(in srgb, var(--neg) 35%, transparent);
+  color: var(--neg);
+}
+
+.news-block-tag.is-now {
+  background: var(--neg-soft);
+}
+
+.news-values {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 4;
+  gap: 2px var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.news-value-label {
+  color: var(--text-3);
+}
+
+.news-empty {
+  padding: var(--sp-3) 0;
+}
+
+.news-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}

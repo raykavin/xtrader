@@ -113,6 +113,7 @@ const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
   chart: { min: CHART_MIN_WIDTH, grow: 8 },
   decision: { min: 260, grow: 4 },
   activity: { min: 360, grow: 8 },
+  news: { min: 320, grow: 4 },
 };
 
 /**

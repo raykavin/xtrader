@@ -29,6 +29,7 @@ import { DecisionsPanel } from "./components/DecisionsPanel";
 import { EquityChart } from "./components/EquityChart";
 import { Icon } from "./components/Icon";
 import { LastDecision } from "./components/LastDecision";
+import { NewsCard } from "./components/NewsCard";
 import { OpenProfitCard } from "./components/OpenProfit";
 import { OrdersTable } from "./components/OrdersTable";
 import { PriceChart } from "./components/PriceChart";
@@ -685,6 +686,8 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                     onShow={setShownDecision}
                   />
                 ) : undefined,
+                // of the main currencies, whichever agent is shown
+                news: <NewsCard />,
                 activity: (
                   <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
                     <div className="lists-head">
