@@ -3186,3 +3186,58 @@ type ConfigPreviewItem struct {
 	Warnings []string `json:"warnings,omitempty"`
 	Secrets  bool     `json:"secrets,omitempty"`
 }
+
+// MaxNewsCalendarDays bounds the period of GET /api/news/calendar, in days.
+const MaxNewsCalendarDays = 31
+
+// MaxNewsCalendarCurrencies bounds the currencies of GET /api/news/calendar.
+const MaxNewsCalendarCurrencies = 20
+
+// NewsEvent is a release of the economic calendar of MetaTrader 5 on the
+// dashboard: when (At, Unix seconds; the start of its day when it isn't
+// Timed, eg: a holiday), its currency, its name and its code, its importance
+// (none, low, medium or high), and its values in Unit, absent when the
+// calendar has none (Actual until it is published). Blocks tells that it
+// blocks the entries of the agents around it, see NewsCalendarResponse.Window.
+type NewsEvent struct {
+	At         int64    `json:"at"`
+	Timed      bool     `json:"timed"`
+	Currency   string   `json:"currency"`
+	Name       string   `json:"name"`
+	Code       string   `json:"code,omitempty"`
+	Importance string   `json:"importance"`
+	Unit       string   `json:"unit,omitempty"`
+	Actual     *float64 `json:"actual,omitempty"`
+	Forecast   *float64 `json:"forecast,omitempty"`
+	Previous   *float64 `json:"previous,omitempty"`
+	Blocks     bool     `json:"blocks,omitempty"`
+}
+
+// NewsWindow is the window of the news block of the agents: no entry from
+// Before minutes before a release of Importance at least to After minutes
+// after it, see Configurações › Notícias.
+type NewsWindow struct {
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
+	Importance string `json:"importance"`
+}
+
+// NewsCalendarResponse answers GET /api/news/calendar?from=&to=&currencies=:
+// the releases of the currencies (ISO codes, eg: USD,EUR) from From until
+// before To (Unix seconds, MaxNewsCalendarDays at most), oldest first, read
+// from the MCP server of the news (the one of Configurações › Notícias, with
+// its token). Status is ok, or why the calendar wasn't read (disabled,
+// missing_server, missing_token, unauthorized, unavailable), Detail its error;
+// Window the news block of the agents, none while the news are off or without
+// a window; At when the calendar was read (a read serves every tab for a
+// minute).
+type NewsCalendarResponse struct {
+	From       int64       `json:"from"`
+	To         int64       `json:"to"`
+	Currencies []string    `json:"currencies"`
+	Status     string      `json:"status"`
+	Detail     string      `json:"detail,omitempty"`
+	Window     *NewsWindow `json:"window,omitempty"`
+	Events     []NewsEvent `json:"events"`
+	At         int64       `json:"at"`
+}

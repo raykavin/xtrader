@@ -3911,3 +3911,63 @@ export interface ConfigPreviewItem {
   warnings?: string[];
   secrets?: boolean;
 }
+/**
+ * MaxNewsCalendarDays bounds the period of GET /api/news/calendar, in days.
+ */
+export const MaxNewsCalendarDays = 31;
+/**
+ * MaxNewsCalendarCurrencies bounds the currencies of GET /api/news/calendar.
+ */
+export const MaxNewsCalendarCurrencies = 20;
+/**
+ * NewsEvent is a release of the economic calendar of MetaTrader 5 on the
+ * dashboard: when (At, Unix seconds; the start of its day when it isn't
+ * Timed, eg: a holiday), its currency, its name and its code, its importance
+ * (none, low, medium or high), and its values in Unit, absent when the
+ * calendar has none (Actual until it is published). Blocks tells that it
+ * blocks the entries of the agents around it, see NewsCalendarResponse.Window.
+ */
+export interface NewsEvent {
+  at: number /* int64 */;
+  timed: boolean;
+  currency: string;
+  name: string;
+  code?: string;
+  importance: string;
+  unit?: string;
+  actual?: number /* float64 */;
+  forecast?: number /* float64 */;
+  previous?: number /* float64 */;
+  blocks?: boolean;
+}
+/**
+ * NewsWindow is the window of the news block of the agents: no entry from
+ * Before minutes before a release of Importance at least to After minutes
+ * after it, see Configurações › Notícias.
+ */
+export interface NewsWindow {
+  before: number /* int */;
+  after: number /* int */;
+  importance: string;
+}
+/**
+ * NewsCalendarResponse answers GET /api/news/calendar?from=&to=&currencies=:
+ * the releases of the currencies (ISO codes, eg: USD,EUR) from From until
+ * before To (Unix seconds, MaxNewsCalendarDays at most), oldest first, read
+ * from the MCP server of the news (the one of Configurações › Notícias, with
+ * its token). Status is ok, or why the calendar wasn't read (disabled,
+ * missing_server, missing_token, unauthorized, unavailable), Detail its error;
+ * Window the news block of the agents, none while the news are off or without
+ * a window; At when the calendar was read (a read serves every tab for a
+ * minute).
+ */
+export interface NewsCalendarResponse {
+  from: number /* int64 */;
+  to: number /* int64 */;
+  currencies: string[];
+  status: string;
+  detail?: string;
+  window?: NewsWindow;
+  events: NewsEvent[];
+  at: number /* int64 */;
+}
