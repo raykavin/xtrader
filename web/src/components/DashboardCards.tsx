@@ -124,6 +124,13 @@ const TRACKS: Record<CardId, { min: number; grow: number; max?: number }> = {
  */
 const EVEN: ReadonlySet<CardId> = new Set(["quote", "sentiment", "results", "openpl", "decision"]);
 
+/**
+ * The cards filling the height of their column alone in it, whatever their
+ * content: the news beside the chart, as tall as its column, its list
+ * scrolling, never shrunk by a filter leaving few releases.
+ */
+const FILL: ReadonlySet<CardId> = new Set(["news"]);
+
 /** The column of the chart of the width the user set, see DashboardLayout.chartWidth. */
 const CHART_WIDTH_TRACK = "minmax(0, var(--chart-width))";
 
@@ -583,7 +590,7 @@ export function DashboardCards({
                         card,
                         column.cards.includes("chart")
                           ? card === "chart" && layout.chartHeight === null
-                          : even,
+                          : even || (column.cards.length === 1 && FILL.has(card)),
                       ),
                     )}
                   </div>
