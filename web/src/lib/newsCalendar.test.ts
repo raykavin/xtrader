@@ -184,8 +184,40 @@ describe("the releases of the card", () => {
     ];
     expect(newsPast(events[0] as NewsEvent, now)).toBe(true);
     expect(newsPast(events[1] as NewsEvent, now), "its day not over").toBe(false);
-    expect(nextNews(events, now)).toBe(1);
+    expect(nextNews(events, now), "the release of the hours ahead, before the day-long one").toBe(
+      2,
+    );
     expect(nextNews([event({ at: at(13, 8) })], now)).toBe(-1);
+  });
+
+  it("takes a release of a day by its date in the calendar, never the evening before in Belém", () => {
+    // 14/11 at 00:00 UTC: 21:00 of 13/11 in Belém, a holiday of 14/11
+    const holiday = event({ at: Date.UTC(2026, 10, 14) / 1000, timed: false, name: "Holiday" });
+    const days = newsDays([event({ at: at(13, 22) }), holiday, event({ at: at(14, 9) })], now);
+    expect(days.map((d) => [d.day, d.events.map((e) => e.name)])).toEqual([
+      ["2026-11-13", ["CPI"]],
+      ["2026-11-14", ["Holiday", "CPI"]],
+    ]);
+    expect(newsPast(holiday, now)).toBe(false);
+    expect(newsPast(holiday, new Date(2026, 10, 15, 0, 1)), "over at the end of its day").toBe(
+      true,
+    );
+    const today = newsRange({ kind: "today" }, now) as { from: number; to: number };
+    const tomorrow = newsRange({ kind: "tomorrow" }, now) as { from: number; to: number };
+    expect(filterNews([holiday], ["low", "medium", "high"], today), "not of today").toEqual([]);
+    expect(filterNews([holiday], ["low", "medium", "high"], tomorrow)).toEqual([holiday]);
+    const next24 = newsRange({ kind: "next24" }, now) as { from: number; to: number };
+    expect(
+      filterNews([holiday], ["low", "medium", "high"], next24),
+      "its day starts within",
+    ).toEqual([holiday]);
+    // the next one: the next release of the hours of the day before a holiday of today
+    const todayOff = event({ at: Date.UTC(2026, 10, 13) / 1000, timed: false, name: "Today off" });
+    expect(nextNews([todayOff, event({ at: at(13, 11), name: "PPI" })], now)).toBe(1);
+    expect(
+      nextNews([todayOff, event({ at: at(13, 9) })], now),
+      "the holiday when nothing is ahead",
+    ).toBe(0);
   });
 
   it("tells the releases blocking the entries now, in the window around them", () => {

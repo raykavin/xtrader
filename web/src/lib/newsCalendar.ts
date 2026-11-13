@@ -239,9 +239,34 @@ export function toggleImpact(impacts: NewsImpact[], impact: NewsImpact): NewsImp
   return NEWS_IMPACTS.map((i) => i.impact).filter((i) => i === impact || impacts.includes(i));
 }
 
-/** The releases of events of the impacts of the filter, in their order. */
-export function filterNews(events: NewsEvent[], impacts: NewsImpact[]): NewsEvent[] {
-  return events.filter((e) => impacts.includes(impactOf(e.importance)));
+/**
+ * The day of a release by the clock of the browser: its time, or for one of a
+ * day (eg: a holiday), whose time is the start of its day on the trade server
+ * (UTC), the start of that date: 13/11 at 00:00 UTC is 13/11, not the evening
+ * of 12/11 in Belém.
+ */
+export function newsDate(event: NewsEvent): Date {
+  const at = new Date(event.at * 1000);
+  return event.timed ? at : new Date(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate());
+}
+
+/**
+ * The releases of events of the impacts of the filter, in their order, within
+ * the range read (from, until before to, in Unix seconds): the ones of a day
+ * by their date, a day out of the period left out even when its hours in UTC
+ * overlap it.
+ */
+export function filterNews(
+  events: NewsEvent[],
+  impacts: NewsImpact[],
+  range?: { from: number; to: number },
+): NewsEvent[] {
+  return events.filter((e) => {
+    if (!impacts.includes(impactOf(e.importance))) return false;
+    if (!range || e.timed) return true;
+    const day = newsDate(e).getTime() / 1000;
+    return day >= range.from - 86_399 && day < range.to; // a day starting within the period, or the one it starts in
+  });
 }
 
 /** The releases of a day of the card, and its label, eg: Hoje, sex. 13/11. */
@@ -263,12 +288,19 @@ export function newsDayLabel(date: Date, now: Date): string {
   return near ? `${near}, ${day}` : day;
 }
 
-/** The releases of events by their day, by the clock of the browser, in their order. */
+/** The releases of events by their day, by the clock of the browser: the ones of a day first in it, then by time. */
 export function newsDays(events: NewsEvent[], now: Date): NewsDay[] {
   const days: NewsDay[] = [];
-  for (const event of events) {
-    const date = new Date(event.at * 1000);
-    const day = dayOf(date);
+  const sorted = events
+    .map((event) => ({ event, day: dayOf(newsDate(event)) }))
+    .sort(
+      (a, b) =>
+        a.day.localeCompare(b.day) ||
+        Number(a.event.timed) - Number(b.event.timed) ||
+        a.event.at - b.event.at,
+    );
+  for (const { event, day } of sorted) {
+    const date = newsDate(event);
     let last = days[days.length - 1];
     if (!last || last.day !== day) {
       last = { day, label: newsDayLabel(date, now), events: [] };
@@ -297,13 +329,18 @@ export function newsValue(value: number | undefined, unit: string | undefined): 
 
 /** Whether event is over at now: its time passed, or its day for one of a day. */
 export function newsPast(event: NewsEvent, now: Date): boolean {
-  const end = event.timed ? event.at * 1000 : event.at * 1000 + 86_400_000;
+  const end = event.timed ? event.at * 1000 : shifted(newsDate(event), 1).getTime();
   return end <= now.getTime();
 }
 
-/** The index of the next release of events at now (the first not over), -1 for none. */
+/**
+ * The index of the next release of events at now: the first timed one not
+ * over, else the first one of a day not over (a holiday of today lasts until
+ * midnight, the releases of the hours of today next before it); -1 for none.
+ */
 export function nextNews(events: NewsEvent[], now: Date): number {
-  return events.findIndex((e) => !newsPast(e, now));
+  const timed = events.findIndex((e) => e.timed && !newsPast(e, now));
+  return timed >= 0 ? timed : events.findIndex((e) => !newsPast(e, now));
 }
 
 /** Whether event blocks the entries now, in the window of the news around it. */
