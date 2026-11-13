@@ -39,6 +39,7 @@ type settings struct {
 	// supervision applies the limits, the news and the settings of the
 	// supervisor, nil until ServeSupervision
 	supervision *Supervision
+	calendar    *newsCalendar // the economic calendar of the card of the news, see GET /api/news/calendar
 }
 
 // ServeSettings serves the settings of s on the dashboard, applied by
@@ -46,7 +47,7 @@ type settings struct {
 func (d *Dashboard) ServeSettings(s *store.Store, manager *Manager, bot BotState) {
 	positions := newOpenPositions(s, manager)
 	d.settings = &settings{store: s, manager: manager, bot: bot, auth: func() *auth { return d.auth },
-		positions: positions, closed: newClosedProfits(positions)}
+		positions: positions, closed: newClosedProfits(positions), calendar: newNewsCalendar()}
 	d.settings.trades = newPerformance(positions)
 	d.settings.mt5 = newMT5Accounts(s, manager, positions)
 	d.settings.paths = newExcursions(d.settings.trades)
@@ -92,6 +93,7 @@ func (s *settings) routes(r chi.Router) {
 	panel := need(ui.PermDashboardView)
 	r.With(panel).Get("/positions/open", s.positions.handle)
 	r.With(panel).Get("/positions/closed", s.closed.handle)
+	r.With(panel).Get("/news/calendar", s.handleNewsCalendar)
 	performance := need(ui.PermPerformanceView)
 	r.With(performance).Get("/performance", s.trades.handle)
 	r.With(performance).Get("/performance/excursions", s.paths.handle)
