@@ -67,8 +67,8 @@ export function defaultLayout(): DashboardLayout {
     rows: [
       [["openpl"]],
       [["quote"], ["sentiment"], ["results"]],
-      [["chart", "decision"]],
-      [["activity"], ["news"]],
+      [["chart", "decision"], ["news"]],
+      [["activity"]],
     ],
     hidden: [],
     chartHeight: null,
@@ -123,11 +123,18 @@ function rowsOfZones(zones: Record<string, unknown>): unknown[] {
 }
 
 /**
+ * The card a card added to the page since goes beside, in a column of its own
+ * after the column of that card, in a layout saved before it: the news beside
+ * the chart, where the ticket of the orders was.
+ */
+const ADDED_BESIDE: Partial<Record<CardId, CardId>> = { news: "chart" };
+
+/**
  * The layout read from what was saved, whatever it holds: the cards unknown or
  * repeated left out, the columns and rows left empty gone, the cards missing
- * (eg: a card added to the page since) in rows of their own at the end; a
- * layout of version 1 read into rows; the default layout for anything else
- * than a layout.
+ * (eg: a card added to the page since) beside their card (see ADDED_BESIDE)
+ * or in rows of their own at the end; a layout of version 1 read into rows;
+ * the default layout for anything else than a layout.
  */
 export function normalizeLayout(raw: unknown): DashboardLayout {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return defaultLayout();
@@ -176,7 +183,14 @@ export function normalizeLayout(raw: unknown): DashboardLayout {
   }
   if (rows.length === 0) return defaultLayout();
   for (const card of CARDS) {
-    if (!seen.has(card)) rows.push([[card]]);
+    if (seen.has(card)) continue;
+    const anchor = ADDED_BESIDE[card];
+    const row = anchor ? rows.find((r) => r.some((column) => column.includes(anchor))) : undefined;
+    if (row && anchor) {
+      row.splice(row.findIndex((column) => column.includes(anchor)) + 1, 0, [card]);
+    } else {
+      rows.push([[card]]);
+    }
   }
   const hidden = Array.isArray(saved.hidden)
     ? CARDS.filter((card) => (saved.hidden as unknown[]).includes(card))
