@@ -29,7 +29,7 @@ func TestExcursions_ThePathOfEachTrade(t *testing.T) {
 	t.Cleanup(func() { performanceTTL = previous })
 	c := newManaged(t)
 	ctx := context.Background()
-	brl := newFakeBridge(t, "bridge-token", 198974329, "BRL")
+	brl := newFakeBridge(t, "bridge-token", 10203040, "BRL")
 	c.agent(t, "llm", "llm", true, onBridge(brl.URL, 101, "XAUUSDm"))
 	a, err := c.store.AgentByName(ctx, "llm")
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestExcursions_ThePathOfEachTrade(t *testing.T) {
 	for _, x := range got.Excursions {
 		byPosition[x.Position] = x
 	}
-	assert.Equal(t, ui.PerformanceExcursion{Account: "198974329", Position: 10, Timeframe: "M1", High: 4030, Low: 3990,
+	assert.Equal(t, ui.PerformanceExcursion{Account: "10203040", Position: 10, Timeframe: "M1", High: 4030, Low: 3990,
 		MFE: 150, MAE: 50}, byPosition[10], "30 up and 10 down at 5 a unit of the price")
 	short := byPosition[20]
 	assert.InDelta(t, 4105.2, short.High, 1e-9, "the ask: the bid plus 200 points of 0.001")

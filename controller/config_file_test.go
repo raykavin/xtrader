@@ -307,7 +307,7 @@ func TestConfigFile_ImportRoundTrip(t *testing.T) {
 	source := newManaged(t)
 	ctx := context.Background()
 	account, err := source.store.CreateMT5Account(ctx, store.MT5AccountInput{Name: ptrTo("demo"),
-		Login: ptrTo[int64](480511856), Server: ptrTo("Exness-MT5Trial"), BridgeURL: ptrTo("http://127.0.0.1:18813"),
+		Login: ptrTo[int64](90807060), Server: ptrTo("Exness-MT5Trial"), BridgeURL: ptrTo("http://127.0.0.1:18813"),
 		Password: secret("mt5-password"), BridgeToken: secret("mt5-token")}, false, "",
 		store.MT5Change{By: "tests"})
 	require.NoError(t, err)

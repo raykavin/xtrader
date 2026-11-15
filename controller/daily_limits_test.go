@@ -264,7 +264,7 @@ func TestDailyLimiter_ByCurrency(t *testing.T) {
 	s, clock, _ := newDailySupervised(t)
 	ctx := context.Background()
 	l := s.sup.daily
-	usd := newFakeBridge(t, "bridge-token", 198974330, "USD")
+	usd := newFakeBridge(t, "bridge-token", 10203041, "USD")
 	a := s.agent(t, "usd", "trend", true, onBridge(usd.URL, 303, "XAUUSDm"))
 	require.NoError(t, s.store.SetAgentSecrets(ctx, a.ID, store.AgentSecrets{BridgeToken: secret("bridge-token")}))
 	setGlobal(t, s, 50, 0)

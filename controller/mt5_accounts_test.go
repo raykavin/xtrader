@@ -102,8 +102,8 @@ func TestMT5Accounts_ImportAndSettings(t *testing.T) {
 	got := listMT5Accounts(t, call)
 	require.Len(t, got.Accounts, 1)
 	account := got.Accounts[0]
-	assert.Equal(t, "Conta 198974329", account.Name)
-	assert.Equal(t, int64(198974329), account.Login)
+	assert.Equal(t, "Conta 10203040", account.Name)
+	assert.Equal(t, int64(10203040), account.Login)
 	assert.Equal(t, s.bridge.URL, account.BridgeURL)
 	assert.True(t, account.Active)
 	assert.True(t, account.AllowReal, "served real already")

@@ -689,7 +689,7 @@ func TestManager_AgentHeldByItsMT5Account(t *testing.T) {
 	ctx := context.Background()
 	trend := c.agent(t, "matrend", "trend", true)
 	account, err := c.store.CreateMT5Account(ctx, store.MT5AccountInput{Name: ptrTo("Real"),
-		Login: ptrTo(int64(478378599)), Server: ptrTo("Exness-MT5Real11"),
+		Login: ptrTo(int64(50607080)), Server: ptrTo("Exness-MT5Real11"),
 		BridgeURL: ptrTo("http://127.0.0.1:18812")}, true, "", store.MT5Change{By: "test"})
 	require.NoError(t, err)
 	require.NoError(t, c.store.SetAgentMT5Account(ctx, trend.ID, &account.ID, store.MT5Change{By: "test"}))

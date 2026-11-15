@@ -16,7 +16,7 @@ import (
 )
 
 // testKey is the API key of the tests, which must never leave in an error.
-const testKey = "sk-test-0123456789abcdef"
+const testKey = "test-key"
 
 // longDecision is a valid ENTER_LONG for testInput, at the price 100.
 const longDecision = `{"reason": "Breakout above the range with volume.", "action": "ENTER_LONG",

@@ -278,7 +278,7 @@ func TestOpenPositions_TheAgentsOnTheirAccounts(t *testing.T) {
 	t.Cleanup(func() { openPositionsTTL = previous })
 	c := newManaged(t)
 	ctx := context.Background()
-	demo := newFakeBridge(t, "bridge-token", 198974329, "BRL")
+	demo := newFakeBridge(t, "bridge-token", 10203040, "BRL")
 	port := demo.URL[strings.LastIndex(demo.URL, ":")+1:]
 
 	// two agents on the account, the second through another name of the
@@ -350,7 +350,7 @@ func TestOpenPositions_TheAgentsOnTheirAccounts(t *testing.T) {
 	demo.mu.Unlock()
 
 	// a second URL of the same account: its positions counted once
-	twin := newFakeBridge(t, "twin-token", 198974329, "BRL")
+	twin := newFakeBridge(t, "twin-token", 10203040, "BRL")
 	twin.set(position(1, 101, "XAUUSDm", true, 1, 81.63, -1.2))
 	other, err := c.store.CreateAgent(ctx, store.Agent{Name: "twin", Kind: "trend", Mode: "live", APIAddress: "localhost:15620",
 		Launched: true, Params: store.Params{"pair": "XAUUSDm", "lot": "0.01"},

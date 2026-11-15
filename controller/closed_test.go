@@ -59,7 +59,7 @@ func TestClosedProfit_TheAgentsOnTheirAccounts(t *testing.T) {
 	noClosedCache(t)
 	c := newManaged(t)
 	ctx := context.Background()
-	demo := newFakeBridge(t, "bridge-token", 198974329, "BRL")
+	demo := newFakeBridge(t, "bridge-token", 10203040, "BRL")
 	port := demo.URL[strings.LastIndex(demo.URL, ":")+1:]
 	c.agent(t, "llm", "llm", true, onBridge(demo.URL, 101, "XAUUSDm"))
 	c.agent(t, "fibonacci", "trend", false, onBridge("http://localhost:"+port, 303, "XAUUSDm"))
