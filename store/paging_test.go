@@ -217,7 +217,7 @@ func TestFindMT5Accounts_Search(t *testing.T) {
 		require.NoError(t, err)
 		return a
 	}
-	create("Conta Demo", 480511856, "Exness-MT5Trial9", "http://mt5:18812")
+	create("Conta Demo", 90807060, "Exness-MT5Trial9", "http://mt5:18812")
 	real := create("Principal", 12345678, "Exness-MT5Real", "http://mt5-real:18812")
 	trend, err := s.CreateAgent(ctx, Agent{Name: "matrend-xau", Kind: "trend", Mode: "live",
 		APIAddress: "localhost:5570", Launched: true, Params: Params{"strategy": "matrend"},
@@ -236,7 +236,7 @@ func TestFindMT5Accounts_Search(t *testing.T) {
 		return list
 	}
 	assert.Equal(t, []string{"Conta Demo", "Principal"}, accounts(""), "by name")
-	assert.Equal(t, []string{"Conta Demo"}, accounts("4805"), "by the login")
+	assert.Equal(t, []string{"Conta Demo"}, accounts("9080"), "by the login")
 	assert.Equal(t, []string{"Principal"}, accounts("mt5real"), "by the server")
 	assert.Equal(t, []string{"Principal"}, accounts("mt5-real:"), "by the bridge")
 	assert.Equal(t, []string{"Principal"}, accounts("MATREND"), "by an agent trading it")

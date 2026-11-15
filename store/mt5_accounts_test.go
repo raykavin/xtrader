@@ -16,7 +16,7 @@ func TestMT5Accounts_Secrets(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	by := MT5Change{By: "admin", Reason: "a conta real"}
-	login, name, server, bridge := int64(478378599), "Real", "Exness-MT5Real11", "http://mt5:18812"
+	login, name, server, bridge := int64(50607080), "Real", "Exness-MT5Real11", "http://mt5:18812"
 	account, err := s.CreateMT5Account(ctx, MT5AccountInput{Name: &name, Login: &login, Server: &server,
 		BridgeURL: &bridge, AllowReal: ptrBool(true), Password: secret("s3cret!"), BridgeToken: secret("tok")},
 		true, MT5KindReal, by)

@@ -340,7 +340,7 @@ func newSupervised(t *testing.T) *supervised {
 	t.Helper()
 	c := newManaged(t)
 	s := &supervised{managed: c, chat: &fakeChat{}, running: map[string]bool{},
-		bridge: newFakeBridge(t, "bridge-token", 198974329, "BRL")}
+		bridge: newFakeBridge(t, "bridge-token", 10203040, "BRL")}
 	s.sup = c.dashboard.ServeSupervision(c.store, c.manager)
 	s.sup.newChat = func(store.SupervisorSettings, string) (llm.Chat, error) { return s.chat, nil }
 	s.sup.stateOf = func(name string) AgentState {
@@ -472,7 +472,7 @@ func TestSupervision_Analysis(t *testing.T) {
 	assert.Equal(t, "0.01", agent.Risk["lot"])
 	require.Len(t, snapshot.Exposure, 1)
 	assert.Equal(t, 1, snapshot.Exposure[0].BuyPositions)
-	for _, secret := range []string{"sk-supervisor", "bridge-token", s.bridge.URL, "198974329", "87654"} {
+	for _, secret := range []string{"sk-supervisor", "bridge-token", s.bridge.URL, "10203040", "87654"} {
 		assert.NotContains(t, string(got.Snapshot), secret, "never sent to the model: %s", secret)
 	}
 	requests := s.chat.requests()
@@ -1187,7 +1187,7 @@ func (s *supervised) sqlExec(query string, args ...any) error {
 // answer, maybe done (unknown), never sent again; a real account the agent may
 // not trade refused before anything is sent.
 func TestBridgeTrader(t *testing.T) {
-	bridge := newFakeBridge(t, "bridge-token", 198974329, "BRL")
+	bridge := newFakeBridge(t, "bridge-token", 10203040, "BRL")
 	trader := newBridgeTrader()
 	ctx := context.Background()
 	agent := bridgeAgent{magic: 101, comment: "nb:fibonacci"}

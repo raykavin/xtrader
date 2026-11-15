@@ -642,7 +642,7 @@ func TestMCPPayload(t *testing.T) {
 // body only, without the token of the client, a bearer token or an API key,
 // eg: the page of a proxy echoing the request.
 func TestMCPClient_HTTPErrorKeepsTheStartOfItsBody(t *testing.T) {
-	const secretKey = "sk-proj-abcdef0123456789"
+	const secretKey = "sk-test-key"
 	body := "upstream failed: Authorization: Bearer " + fakeMCPToken + ", Bearer other.jwt-token, key " +
 		secretKey + ", token " + fakeMCPToken + " " + strings.Repeat("x", 1<<20) + " the end"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -184,7 +184,7 @@ type bridgeAccount struct {
 // currency returns the currency of the account, as the totals key it.
 func (a bridgeAccount) currency() string { return strings.ToUpper(strings.TrimSpace(a.Currency)) }
 
-// key returns what tells the account apart, eg: 198974329: its login, else the
+// key returns what tells the account apart, eg: 10203040: its login, else the
 // bridge read, for a bridge without one.
 func (a bridgeAccount) key(bridge string) string {
 	if a.Login == 0 {

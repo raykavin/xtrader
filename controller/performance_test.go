@@ -55,8 +55,8 @@ func TestPerformance_TheTradesOfTheAgents(t *testing.T) {
 	t.Cleanup(func() { performanceTTL = previous })
 	c := newManaged(t)
 	ctx := context.Background()
-	brl := newFakeBridge(t, "bridge-token", 198974329, "BRL")
-	usd := newFakeBridge(t, "bridge-token", 198974330, "USD")
+	brl := newFakeBridge(t, "bridge-token", 10203040, "BRL")
+	usd := newFakeBridge(t, "bridge-token", 10203041, "USD")
 	c.agent(t, "llm", "llm", true, onBridge(brl.URL, 101, "XAUUSDm"))
 	c.agent(t, "orbit", "trend", true, onBridge(usd.URL, 202, "XAUUSDm"))
 	for _, name := range []string{"llm", "orbit"} {
@@ -103,7 +103,7 @@ func TestPerformance_TheTradesOfTheAgents(t *testing.T) {
 
 	first := got.Trades[0]
 	assert.Equal(t, "orbit", first.Agent, "by its close")
-	assert.Equal(t, ui.PerformanceTrade{Position: 10, Account: "198974330", Agent: "orbit", Symbol: "XAUUSDm",
+	assert.Equal(t, ui.PerformanceTrade{Position: 10, Account: "10203041", Agent: "orbit", Symbol: "XAUUSDm",
 		Side: "SELL", Volume: 0.05, OpenedAt: day.Add(time.Hour).Unix(), ClosedAt: day.Add(90 * time.Minute).Unix(),
 		Entry: 4100, Exit: 4090, Gross: 50, Costs: -1, Net: 49, Currency: "USD"}, first)
 
@@ -126,7 +126,7 @@ func TestPerformance_TheTradesOfTheAgents(t *testing.T) {
 	assert.Equal(t, -30.0, unknown.Net)
 
 	require.Len(t, got.Accounts, 2)
-	assert.Equal(t, ui.PerformanceAccount{Account: "198974329", Currency: "BRL", Agents: []string{"llm"},
+	assert.Equal(t, ui.PerformanceAccount{Account: "10203040", Currency: "BRL", Agents: []string{"llm"},
 		Balance: 1500, StartBalance: 1500 - 49.5 - 100 + 30 - 25 - 250 - 5 - 1000}, got.Accounts[0],
 		"its balance less every deal since the start: the trades, the manual one and the deposit")
 	assert.Equal(t, "USD", got.Accounts[1].Currency)

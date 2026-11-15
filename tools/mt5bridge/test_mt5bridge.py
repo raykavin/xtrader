@@ -24,7 +24,7 @@ try:
 except ImportError:
     numpy = None
 
-LOGIN = 198974329
+LOGIN = 10203040
 TOKEN = "secret"
 
 Account = collections.namedtuple("Account", "login trade_mode server currency")
@@ -761,18 +761,18 @@ class SessionTest(unittest.TestCase):
         self.assertIn("Contas MT5", answer["error"])
 
         PACKAGE.login = 0
-        status, session = self.request("POST", "/session", {"login": 478378599, "server": "Exness-MT5Real11",
+        status, session = self.request("POST", "/session", {"login": 50607080, "server": "Exness-MT5Real11",
                                                             "password": "s3cret!", "allow_real": True})
         self.assertEqual(200, status, session)
-        self.assertEqual(478378599, session["login"])
-        self.assertEqual(478378599, session["logged_login"])
+        self.assertEqual(50607080, session["login"])
+        self.assertEqual(50607080, session["logged_login"])
         self.assertTrue(session["connected"])
         self.assertEqual("", session["waiting"])
         self.assertNotIn("s3cret!", json.dumps(session), "never the password")
         with open(os.path.join(self.dir, "session.json"), encoding="utf-8") as f:
             kept = f.read()
         self.assertNotIn("s3cret!", kept, "never on the disk")
-        self.assertEqual({"login": 478378599, "server": "Exness-MT5Real11", "allow_real": True,
+        self.assertEqual({"login": 50607080, "server": "Exness-MT5Real11", "allow_real": True,
                           "read_only": False}, json.loads(kept))
         self.assertEqual(0o600, os.stat(os.path.join(self.dir, "session.json")).st_mode & 0o777)
         status, health = self.request("GET", "/health")
@@ -782,15 +782,15 @@ class SessionTest(unittest.TestCase):
 
     def test_the_kept_session_over_the_legacy_login(self):
         mt5bridge.save_session(os.path.join(self.dir, "session.json"),
-                               {"login": 478378599, "server": "Exness-MT5Real11", "allow_real": True,
+                               {"login": 50607080, "server": "Exness-MT5Real11", "allow_real": True,
                                 "read_only": False})
-        PACKAGE.login = 478378599
+        PACKAGE.login = 50607080
         terminal = self.serve(self.args(login=LOGIN, server="Exness-MT5Trial11"))
-        self.assertEqual(478378599, terminal.session["login"], "the controller's, not the legacy one")
+        self.assertEqual(50607080, terminal.session["login"], "the controller's, not the legacy one")
         self.assertFalse(terminal.session.get("legacy"))
         status, session = self.request("GET", "/session")
         self.assertEqual(200, status)
-        self.assertEqual((478378599, True), (session["login"], session["connected"]))
+        self.assertEqual((50607080, True), (session["login"], session["connected"]))
 
     def test_the_instance_kept_apart_from_other_terminals(self):
         terminal = self.serve(self.args())
@@ -823,7 +823,7 @@ class SessionTest(unittest.TestCase):
 
         # a real account without allow_real: refused, the session not kept
         PACKAGE.trade_mode = 2
-        status, answer = self.request("POST", "/session", {"login": 478378599, "server": "Exness-MT5Real11"})
+        status, answer = self.request("POST", "/session", {"login": 50607080, "server": "Exness-MT5Real11"})
         self.assertEqual(409, status, answer)
         self.assertIn("real", answer["error"])
         self.assertFalse(os.path.exists(os.path.join(self.dir, "session.json")))
