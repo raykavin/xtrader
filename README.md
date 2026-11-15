@@ -8,27 +8,38 @@
 [![MetaTrader 5](https://img.shields.io/badge/MetaTrader-5-1E88E5)](tools/mt5bridge)
 [![LLM](https://img.shields.io/badge/LLM-OpenAI%20%7C%20Anthropic-412991)](agents/llm)
 [![Telegram](https://img.shields.io/badge/Telegram-bot-26A5E4?logo=telegram&logoColor=white)](controller/telegram.go)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green)](LICENSE)
 
 Plataforma de trading automatizado em Go para símbolos do **MetaTrader 5** (Exness). Um **controller** lança e supervisiona **agentes**:
 
-- um agente que opera as decisões de um **modelo de linguagem** (OpenAI ou Anthropic);
-- agentes de **estratégias clássicas**, divididos em quatro famílias.
+- agentes que operam as decisões de um **modelo de linguagem** (OpenAI ou Anthropic), cada um com o seu prompt;
+- agentes de **estratégias clássicas**, sem LLM, em quatro famílias: tendência, momentum, rompimento e intraday.
 
-O controller também serve o **painel web** e o **bot do Telegram**. Toda a configuração operacional e os registros ficam no **PostgreSQL**.
+O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader AI**, um modelo de linguagem que acompanha todos os agentes e só age para reduzir risco. Toda a configuração operacional e os registros ficam no **PostgreSQL**.
+
+![Painel de um agente LLM: limite do dia, P/L das contas, sentimento do mercado, gráfico com a análise desenhada, calendário econômico e a última decisão do modelo](docs/images/painel-agente-llm.webp)
 
 > [!WARNING]
-> Trading automatizado envolve risco real de perda. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente.
+> Trading automatizado envolve risco real de perda. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente e na conta MT5.
 
 ## Sumário
 
+- [Telas](#telas)
 - [Recursos](#recursos)
+  - [Agente LLM](#agente-llm)
   - [SMC/ICT, ordens pendentes e marcações](#smcict-ordens-pendentes-e-marcações)
+  - [Controller](#controller)
   - [XTrader AI, o supervisor dos agentes](#xtrader-ai-o-supervisor-dos-agentes)
   - [Proteção de posições: breakeven e trailing stop](#proteção-de-posições-breakeven-e-trailing-stop)
   - [Moeda da conta](#moeda-da-conta)
   - [Trava diária: limites de perda e ganho](#trava-diária-limites-de-perda-e-ganho)
   - [Horário de operação](#horário-de-operação)
   - [Exposição por ativo](#exposição-por-ativo)
+  - [Agentes por ativo](#agentes-por-ativo)
+  - [Painel web](#painel-web)
+  - [Performance](#performance)
+  - [Backtesting](#backtesting)
+  - [Persistência](#persistência)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Requisitos](#requisitos)
@@ -37,13 +48,12 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
 - [Configuração](#configuração)
   - [Parada do controller](#parada-do-controller)
 - [Uso](#uso)
-  - [Painel web](#painel-web)
-  - [Performance](#performance)
-  - [Backtesting](#backtesting)
+  - [Painel web](#painel-web-1)
+  - [Contas MT5](#contas-mt5)
   - [Agentes e parâmetros](#agentes-e-parâmetros)
   - [Redefinir os resultados](#redefinir-os-resultados)
   - [Prompts](#prompts)
-  - [Limites diários](#limites-diários)
+    - [Limites diários](#limites-diários)
   - [Notícias](#notícias)
   - [Telegram](#telegram)
   - [XTrader AI](#xtrader-ai)
@@ -51,9 +61,117 @@ O controller também serve o **painel web** e o **bot do Telegram**. Toda a conf
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Agentes iniciais](#agentes-iniciais)
   - [Importar e exportar a configuração](#importar-e-exportar-a-configuração)
+  - [Recriar o banco do zero](#recriar-o-banco-do-zero)
 - [Desenvolvimento](#desenvolvimento)
 - [API](#api)
 - [Segurança](#segurança)
+- [Licença](#licença)
+
+## Telas
+
+As capturas abaixo vêm do painel real rodando sobre uma API simulada: as contas, os agentes, as operações e os valores são fictícios.
+
+### Agentes LLM
+
+O painel de um agente LLM mostra, além do gráfico e das ordens, o sentimento do mercado lido pelo modelo, a análise desenhada no gráfico (zonas de oferta e demanda, liquidez, marcadores) e a última decisão. Cada decisão abre com o contexto, a justificativa e as marcações; a aba **Decisões do LLM** lista todas, com as que o modelo nem consultou e o motivo.
+
+![Diálogo de uma decisão do modelo: ação, confiança, sentimento, justificativa e as marcações desenhadas no gráfico](docs/images/decisao-llm.webp)
+
+![Lista das decisões do modelo, com a origem de cada consulta, a ação, a confiança, o resultado e a justificativa, e o botão Reanalisar agora](docs/images/decisoes-llm.webp)
+
+### Agentes de estratégia
+
+Os agentes sem LLM usam o mesmo painel, com os indicadores da estratégia no gráfico (aqui, os níveis de Fibonacci do impulso atual).
+
+![Painel de um agente de estratégia Fibonacci: gráfico com os níveis do impulso, resultados, P/L das contas e o calendário econômico](docs/images/painel-agente-estrategia.webp)
+
+### Configurações dos agentes
+
+Os agentes ficam em **Configurações › Agentes**, os LLM separados das estratégias, estas agrupadas por família. Cada card liga e desliga o agente, troca o prompt na hora e abre os segredos, os resultados, a proteção e o limite diário.
+
+![Configurações › Agentes, grupo LLM: dois agentes com prompt, modelo, segredos e ações](docs/images/agentes-llm.webp)
+
+![Configurações › Agentes, grupo Tendência: agentes de estratégia, um deles parado pelo XTrader AI](docs/images/agentes-estrategias.webp)
+
+<table>
+  <tr>
+    <td><img src="docs/images/agente-llm-editar.webp" alt="Edição de um agente LLM: provedor, modelo e parâmetros"></td>
+    <td><img src="docs/images/agente-estrategia-editar.webp" alt="Edição de um agente de estratégia: conta MT5, comentário e parâmetros da estratégia, com stop e alvo em ATR"></td>
+  </tr>
+  <tr>
+    <td align="center">Edição de um agente LLM</td>
+    <td align="center">Edição de um agente de estratégia</td>
+  </tr>
+</table>
+
+O **Parametrizador global** muda ou remove um parâmetro em todos os agentes de uma vez:
+
+![Parametrizador global: chave e valor, filtros dos agentes e reinício dos ativos](docs/images/parametrizador-global.webp)
+
+### XTrader AI
+
+O XTrader AI conversa pelo botão flutuante do painel: responde com os dados de agora e transforma pedidos de ação em propostas que só valem com a confirmação do usuário. As análises periódicas, as ações e as proteções armadas ficam em **Configurações › XTrader AI**.
+
+![Conversa com o XTrader AI: resposta analítica e uma proposta de fechar posições aguardando confirmação](docs/images/xtrader-ai-conversa.webp)
+
+![Configurações › XTrader AI: análises periódicas, autonomia, modelo, instruções e o histórico das análises com os achados](docs/images/xtrader-ai-configuracao.webp)
+
+### Performance
+
+O resumo das operações em live, como as contas MT5 registraram, no estilo do "Resumo de Performance" do Profit, e os gráficos de patrimônio, resultado por operação, por período, por ativo, por agente e de eficiência (MFE/MAE).
+
+![Performance › Resumo: resultado líquido, lucro e prejuízo bruto, custos, sequências, drawdown e eficiência](docs/images/performance-resumo.webp)
+
+![Performance › Gráficos: a curva de patrimônio do período](docs/images/performance-graficos.webp)
+
+### Backtesting
+
+Os backtests rodam vários agentes de uma vez sobre o histórico da corretora, com custos, horário de operação, agentes por ativo e validação fora da amostra, e comparam os resultados nas mesmas condições.
+
+![Backtesting › Configurar: agentes, período, validação, custos, limites, horário de operação e as premissas](docs/images/backtesting-configurar.webp)
+
+![Backtesting › Resultados: a comparação de um lote, ordenada por retorno sobre drawdown, com os selos de robustez](docs/images/backtesting-resultados.webp)
+
+![Detalhe de uma execução: a curva de capital, as operações, as posições abertas no fim, os avisos e a configuração copiada](docs/images/backtesting-execucao.webp)
+
+### Contas, limites e notícias
+
+![Configurações › Contas MT5: as contas de cada terminal, a ativa, as opções e os segredos](docs/images/contas-mt5.webp)
+
+![Configurações › Limites: limite diário global, horário de operação em janelas, exposição por ativo, agentes por ativo e os limites por agente](docs/images/limites.webp)
+
+![Configurações › Notícias: o calendário econômico do MT5 para todos os agentes e a janela de bloqueio](docs/images/noticias.webp)
+
+### Prompts
+
+<table>
+  <tr>
+    <td><img src="docs/images/prompts.webp" alt="Configurações › Prompts: a lista dos prompts com versão e agentes que usam"></td>
+    <td><img src="docs/images/prompt-editor.webp" alt="Edição do prompt smc_ict, com as linhas do cabeçalho que configuram o agente"></td>
+  </tr>
+  <tr>
+    <td align="center">Lista dos prompts</td>
+    <td align="center">Edição de um prompt</td>
+  </tr>
+</table>
+
+### Telegram, usuários, layout e arquivo de configuração
+
+![Configurações › Telegram: o bot e os usuários autorizados](docs/images/telegram.webp)
+
+![Configurações › Usuários e papéis: os usuários do painel e os papéis com as permissões por área](docs/images/usuarios-e-papeis.webp)
+
+![Configurações › Layout: o que foi personalizado no painel deste navegador](docs/images/layout.webp)
+
+![Configurações › Importar e exportar: a árvore do que vai no arquivo e os segredos cifrados com senha](docs/images/importar-exportar.webp)
+
+### Login, tema claro e celular
+
+![Tela de login](docs/images/login.webp)
+
+![Painel no tema claro](docs/images/painel-tema-claro.webp)
+
+![O painel, os agentes e a performance no celular](docs/images/celular.webp)
 
 ## Recursos
 
@@ -552,11 +670,15 @@ Quais agentes podem abrir posição em cada ativo, para todos os agentes, defini
   - **Agentes:** os LLM separados das estratégias, estas agrupadas por família; criar, editar, renomear, excluir, ligar e desligar, reiniciar e definir os segredos.
   - **Renomear** (botão no card do agente): só com o agente desativado e parado. Muda apenas o nome: o agente mantém o ID, a conta (comentário e número mágico na corretora, então as posições continuam dele), o modelo, os segredos, as ordens, as decisões, os resultados e a fila de registros ainda não enviados (o arquivo `data/outbox/<nome>-<id>.db` é renomeado junto; se a troca falhar, nada muda). O nome antigo fica em `agent_former_names`, para os seeds não recriarem o agente com ele, e fica livre para outro agente. No Telegram, o agente é selecionado de novo pelo nome novo (`/agent`).
   - **Resultados** (botão no card do agente): os resultados por período e a redefinição deles. Veja [Redefinir os resultados](#redefinir-os-resultados).
-  - **Layout:** a disposição dos cards do painel neste navegador e o botão **Restaurar layout padrão**.
+  - **Contas MT5:** as contas de cada terminal e a troca coordenada da conta ativa. Veja [Contas MT5](#contas-mt5).
+  - **Limites:** o limite diário global, o horário de operação, a exposição por ativo, os agentes por ativo e os limites de cada agente.
+  - **Notícias:** o calendário econômico e a janela de bloqueio de todos os agentes. Veja [Notícias](#notícias).
   - **Prompts:** editor com histórico de versões.
-  - **Telegram:** liga e desliga o bot, token e IDs autorizados.
   - **XTrader AI:** veja [XTrader AI](#xtrader-ai).
-  - **Usuários.**
+  - **Telegram:** liga e desliga o bot, token e IDs autorizados.
+  - **Usuários e papéis:** os usuários do painel e as permissões por área (veja [Segurança](#segurança)).
+  - **Layout:** a disposição dos cards do painel neste navegador e o botão **Restaurar layout padrão**.
+  - **Importar e exportar:** a configuração num arquivo JSON. Veja [Importar e exportar a configuração](#importar-e-exportar-a-configuração).
 - **Navegação e layout:** a barra do topo leva ao Painel e às seções das Configurações num controle segmentado (ao lado da marca no desktop, numa segunda linha abaixo de 1200 px, gaveta pelo botão ☰ no celular), com a contagem de cada seção; o link do Painel volta ao agente, ao par e ao timeframe deixados. Os cards seguem um mesmo padrão (rótulo curto em destaque sobre o título, valores em fonte monoespaçada) e o laranja marca o que está escolhido e a ação principal. Tema escuro e claro. No celular, as tabelas viram cartões e os diálogos abrem como painéis vindos de baixo; numa tabela larga demais para a tela, a coluna de ações fica fixa à direita.
 
 ### Performance
@@ -707,7 +829,7 @@ agents/
 cmd/
   controller/        painel, Telegram e supervisão dos agentes
   migrator/          migrações e seeds
-  xtrader/           utilitários (download de candles)
+  xtrader/           utilitários (download de candles, seasonality, metalabel)
 config/ configs/     leitura do config.yml e o exemplo do host
 controller/          implementação do controller (supervision*.go: o supervisor com IA)
 deploy/docker/       imagens, compose e scripts de instalação
@@ -775,7 +897,7 @@ O `config.yml` tem só o necessário para subir e acessar o banco. O resto fica 
 
 | No `config.yml`                                                                                                                                                                                                                            | No banco (Configurações)                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo, tempo de parada), `backtest` (concorrência, diretório, período e execuções máximos, tetos e preços do LLM), `services` (bridge do host), `shutdown_timeout` (parada inteira), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt), prompts, Telegram, usuários e papéis |
+| `listen`, `database`, `secrets_key`, `migrations`, `bootstrap` (primeiro usuário), `ui`, `agents` (API interna, diretório, comando de cada tipo, tempo de parada), `backtest` (concorrência, diretório, período e execuções máximos, tetos e preços do LLM), `services` (bridge do host), `shutdown_timeout` (parada inteira), `log` | agentes (modo, endereço, conta MT5, modelo, parâmetros, segredos, prompt, proteção), contas MT5, prompts, limites e horário de operação, notícias, XTrader AI, Telegram, usuários e papéis |
 
 | Variável                                                    | Uso                                                                                                     |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -812,7 +934,7 @@ Os processos lançados pelo controller não herdam o ambiente dele (e, com isso,
   - As ordens pendentes podem ser arrastadas no gráfico e canceladas na lista de ordens, com o switch **Painel de trading** do agente ligado. Iniciar e parar o bot não depende dele.
   - A reanálise de um agente LLM (**Reanalisar agora**) depende só do switch **Permitir reanálise** dele, com o painel de trading ligado ou não.
   - O seletor de timeframe do gráfico troca só a visualização (veja [Timeframe do gráfico](#painel-web)); a estratégia e o LLM seguem no timeframe de execução do agente.
-- **Configurações (`/settings`):** seções Agentes, Prompts, Telegram e Usuários, no menu lateral, que também abrem por link (`/settings#prompts`).
+- **Configurações (`/settings`):** seções Agentes, Contas MT5, Limites, Notícias, Prompts, XTrader AI, Telegram, Usuários e papéis, Layout e Importar e exportar, na navegação do topo, que também abrem por link (`/settings#prompts`). Cada usuário vê só as seções que o papel dele permite.
 - **Listas: pesquisa e páginas.** As listas carregam do servidor só a página mostrada, 10 itens por vez (5 lotes em Backtesting › Execuções), com o paginador abaixo delas: Contas MT5, Prompts, Telegram › Usuários autorizados, Usuários do painel, Papéis, Limites › Limites por agente, as análises, ações e proteções do XTrader AI (em Configurações e na aba Análises do chat) e, em Backtesting, as execuções e a comparação dos resultados.
   - **Pesquisa:** Contas MT5 (nome, login, servidor, bridge, tipo, moeda, empresa e agentes), Prompts (nome, descrição e agentes que usam), Usuários autorizados (ID no Telegram e nome), Usuários do painel (usuário e papel) e Papéis (nome, descrição e as áreas das permissões; o Administrador entra em todas) têm uma busca no topo da lista, como a de Agentes: ignora maiúsculas e acentos, cada palavra precisa aparecer em algum campo, Esc ou × limpam, e a nota abaixo diz quantos itens foram encontrados (ou "Nenhum … encontrado para “…”"). A busca vai ao servidor e considera todos os registros, não só os da página; ao buscar, a lista volta para a primeira página.
   - **Filtros e ordenação:** a comparação dos resultados de um lote ordena por qualquer coluna e filtra (mínimo de operações, agentes LLM) no servidor, antes de paginar; trocar o filtro ou a ordem volta para a primeira página. As demais listas mantêm a ordem de antes (por nome, por ID ou as mais novas primeiro).
@@ -991,7 +1113,7 @@ Em **Configurações > Notícias**, o calendário econômico do servidor MCP do 
   - O período e o filtro ficam salvos no navegador.
   - **Cada divulgação:** a hora (ou "Dia todo"), a moeda, o impacto em três barras, o nome e os valores atual (quando publicado), previsto e anterior, na unidade do calendário. As já passadas ficam apagadas, a próxima vem destacada e a lista rola até ela. As de impacto que bloqueia entradas aparecem com **bloqueia entradas**, e com **entradas bloqueadas agora** dentro da janela; o rodapé diz qual é a janela.
   - O card lê o calendário a cada minuto. Com as notícias desligadas, sem o servidor ou o token, ou com o servidor fora do ar, ele diz o motivo, com o atalho para esta aba para quem pode vê-la.
-  - No layout padrão, ele fica ao lado da Atividade do agente. Num layout salvo antes dele, entra numa linha própria no fim, e pode ser movido ou ocultado como os outros cards.
+  - No layout padrão, ele fica ao lado do gráfico, com a altura da coluna dele, seja qual for o número de divulgações que o filtro deixa. Num layout salvo antes dele, entra ao lado do gráfico também, e pode ser movido ou ocultado como os outros cards.
 - **Token do servidor MCP** (MetaTrader 5: Ferramentas > Opções > Servidor MCP): um só, compartilhado pelos agentes. Fica cifrado no banco (`news_settings`), vinculado ao seu lugar, e nunca é mostrado, devolvido pela API nem registrado no log: a aba mostra só se está definido, com **Trocar** e **Remover**. Ligar ou desligar sem preencher o token mantém o que está salvo. Ligado e sem token (ou sem servidor), as consultas não são feitas, nada é bloqueado e o modelo é avisado da credencial ausente.
 - **Aplicação:** as mudanças valem na hora para todos os agentes em execução, pelo runtime que eles acompanham: o calendário é ligado ou desligado, o servidor, o token e a janela são trocados (o cliente MCP abre uma sessão nova). Um agente que inicia já recebe as notícias atuais. Nenhum reinício é preciso.
 - **Testar conexão:** no card do servidor e da janela, consulta uma vez o servidor salvo com o token salvo (mesmo com as notícias desativadas, para conferir a credencial) e mostra **Respondeu**, **Sem servidor**, **Token ausente**, **Token recusado** (HTTP 401/403) ou **Indisponível**, logo abaixo do campo do servidor.
@@ -1244,3 +1366,7 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 - **Conta real:** exige **Permitir conta real** no agente e na conta MT5 (Configurações > Contas MT5), que a bridge aplica junto com **Somente leitura**.
 - **Portas publicadas no Docker:** só no loopback do host, `127.0.0.1:8082` (painel, para onde o ngrok do host tunela), `127.0.0.1:5900` (VNC, que só sobe com senha) e `127.0.0.1:5432` (PostgreSQL). O Docker publica as portas por fora do firewall do host (ufw), então uma porta em `0.0.0.0` ficaria aberta para a rede mesmo "fechada" no firewall. De outra máquina, use um túnel SSH, ex.: `ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` para o VNC e `ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>` para o `psql -h 127.0.0.1 -p 5433` (detalhes em [deploy/docker/README.md](deploy/docker/README.md#acesso-de-outra-máquina)).
 - **Dependências:** o `go.mod` fixa o toolchain (`toolchain go1.25.14`), com as correções de segurança da biblioteca padrão, e a imagem compila com o Go 1.26.8. Para conferir as vulnerabilidades conhecidas: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`.
+
+## Licença
+
+Distribuído sob a licença MIT: veja [LICENSE](LICENSE). O software é fornecido "como está", sem garantia de nenhum tipo, e o risco das operações feitas com ele é de quem o usa.
