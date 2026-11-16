@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityFollowsNews,
   type CardId,
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -403,6 +404,32 @@ describe("shownRows", () => {
       { index: 2, columns: [{ index: 0, cards: ["chart", "decision"] }] },
       { index: 3, columns: [{ index: 0, cards: ["activity"] }] },
     ]);
+  });
+});
+
+describe("activityFollowsNews", () => {
+  const all = () => true;
+  it("takes the height of the news for the activity in rows of their own", () => {
+    expect(activityFollowsNews(shownRows(defaultLayout(), all))).toBe(true);
+    const stacked = moveCard(defaultLayout(), "activity", {
+      kind: "stack",
+      card: "news",
+      side: "after",
+    });
+    expect(activityFollowsNews(shownRows(stacked, all)), "under the news, in its row").toBe(false);
+    const beside = moveCard(defaultLayout(), "activity", {
+      kind: "beside",
+      card: "news",
+      side: "after",
+    });
+    expect(activityFollowsNews(shownRows(beside, all)), "beside the news").toBe(false);
+  });
+
+  it("keeps the height of the activity with the news or the activity left out", () => {
+    expect(activityFollowsNews(shownRows(defaultLayout(), (card) => card !== "news"))).toBe(false);
+    expect(activityFollowsNews(shownRows(defaultLayout(), (card) => card !== "activity"))).toBe(
+      false,
+    );
   });
 });
 

@@ -456,6 +456,21 @@ export function shownRows(layout: DashboardLayout, shown: (card: CardId) => bool
   return rows;
 }
 
+/**
+ * Whether the activity takes the height of the news card (see
+ * DashboardCards): both shown, in rows of their own. In the row of the news,
+ * the news filling its column as tall as the row, the activity would hold the
+ * news at its own height, never letting it shrink: it keeps a fixed height of
+ * its own there.
+ */
+export function activityFollowsNews(rows: ShownRow[]): boolean {
+  const rowOf = (card: CardId) =>
+    rows.findIndex((row) => row.columns.some((column) => column.cards.includes(card)));
+  const news = rowOf("news");
+  const activity = rowOf("activity");
+  return news >= 0 && activity >= 0 && news !== activity;
+}
+
 /** The layout with card hidden, or shown again in its place. */
 export function setHidden(layout: DashboardLayout, card: CardId, hidden: boolean): DashboardLayout {
   const rest = layout.hidden.filter((c) => c !== card);
