@@ -8207,6 +8207,36 @@ h3.md-heading {
   white-space: normal;
 }
 
+/* the switch of the stops at the broker of a loss limit, with its hint */
+.daily-stops-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.daily-stops-switch .field-hint {
+  margin: 0;
+}
+
+/* the stops the daily loss limits ask now, under the form of all the agents */
+.daily-stops {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.daily-stops-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.daily-stop-detail {
+  display: block;
+  margin-top: 4px;
+}
+
 /* ---- Performance: the trades of the agents in a period, see PerformancePage ---- */
 
 .perf-filters {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchDailyAgentsPage, fetchDailyLimits } from "../api/client";
-import type { DailyLimitsResponse, DailyScopeStatus } from "../api/types";
+import type { DailyLimitsResponse, DailyScopeStatus, DailyStopInfo } from "../api/types";
 import {
   blockNote,
   dailyStateLabel,
@@ -9,8 +9,11 @@ import {
   limitsLabel,
   resultAmount,
   scopeResults,
+  stopMoveLabel,
+  stopScope,
+  stopSide,
 } from "../lib/dailyLimits";
-import { formatProfit } from "../lib/format";
+import { formatMoney, formatPrice, formatProfit } from "../lib/format";
 import { AssetAgentsCard } from "./AssetAgentsCard";
 import { DailyLimitFields } from "./DailyLimitFields";
 import { ExposureCard } from "./ExposureCard";
@@ -58,6 +61,67 @@ function ScopeState({ scope, zone }: { scope: DailyScopeStatus; zone: string }) 
       {note && <p className="field-hint daily-reason">{note}</p>}
       {missing && <p className="field-hint">Falta: {missing.join("; ")}</p>}
     </div>
+  );
+}
+
+/**
+ * The stops the daily loss limits ask of the open positions now: each one's
+ * agent, asset and side, the level asked, the limit it comes from with the
+ * share of the loss left of the position, and its last move at the broker.
+ */
+function DailyStops({ stops }: { stops: DailyStopInfo[] }) {
+  return (
+    <section className="daily-stops" aria-labelledby="daily-stops-title">
+      <h3 id="daily-stops-title" className="daily-stops-title">
+        Stops na corretora agora
+      </h3>
+      <div className="table-wrap">
+        <table className="table table-responsive">
+          <thead>
+            <tr>
+              <th scope="col">Agente</th>
+              <th scope="col">Ativo</th>
+              <th scope="col">Lado</th>
+              <th scope="col" className="num">
+                Stop pedido
+              </th>
+              <th scope="col">Limite</th>
+              <th scope="col">Situação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stops.map((stop) => {
+              const move = stopMoveLabel(stop);
+              return (
+                <tr key={`${stop.agent}-${stop.pair}-${stop.tickets.join(",")}`}>
+                  <td data-label="Agente">{stop.agent}</td>
+                  <td data-label="Ativo" className="mono">
+                    {stop.pair}
+                  </td>
+                  <td data-label="Lado">{stopSide(stop)}</td>
+                  <td data-label="Stop pedido" className="num mono">
+                    {formatPrice(stop.level)}
+                  </td>
+                  <td data-label="Limite">
+                    {stopScope(stop)}
+                    <span className="field-hint daily-stop-share">
+                      {" "}
+                      · {formatMoney(stop.share)} de {formatMoney(stop.headroom)} {stop.currency}
+                    </span>
+                  </td>
+                  <td data-label="Situação" className="daily-cell">
+                    <span className={`status-chip ${move.tone}`}>{move.text}</span>
+                    {move.detail && (
+                      <span className="field-hint daily-stop-detail">{move.detail}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -138,6 +202,7 @@ export function DailyLimitsSettings({ intro }: Props) {
               setVersion((v) => v + 1);
             }}
           />
+          {(status.stops?.length ?? 0) > 0 && <DailyStops stops={status.stops ?? []} />}
         </div>
       </section>
 
