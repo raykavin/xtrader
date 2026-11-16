@@ -212,9 +212,14 @@ func selectConfig(file ui.ConfigFile, selection map[string][]string, allowed fun
 }
 
 // limitOnly returns settings without who changed them and when: what a
-// configuration file keeps of a daily limit.
+// configuration file keeps of a daily limit, the stops at the broker on when
+// it doesn't tell them (a file of before them: on, the default).
 func limitOnly(settings ui.DailyLimitSettings) ui.DailyLimitSettings {
 	settings.UpdatedBy, settings.UpdatedAt, settings.Currency = "", 0, ""
+	if settings.BrokerStops == nil {
+		on := true
+		settings.BrokerStops = &on
+	}
 	return settings
 }
 

@@ -70,6 +70,7 @@ type Agent struct {
 	Supervision     *AgentSupervision `gorm:"foreignKey:AgentID" json:"supervision,omitempty"` // see SupervisionOf
 	Protection      *AgentProtection  `gorm:"foreignKey:AgentID" json:"protection,omitempty"`  // see ProtectionOf
 	DailyLimit      *AgentDailyLimit  `gorm:"foreignKey:AgentID" json:"daily_limit,omitempty"` // see DailyLimitOf
+	DailyStops      *DailyLimitStop   `gorm:"foreignKey:AgentID" json:"daily_stops,omitempty"` // see DailyLimitOf
 	BotControl      *AgentBotControl  `gorm:"foreignKey:AgentID" json:"bot_control,omitempty"` // see BotStopped
 }
 

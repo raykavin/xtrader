@@ -144,9 +144,14 @@ type Runtime struct {
 // trailing stop), applied live, without a restart: its settings, nil when
 // off, and the arms of the XTrader AI on its open positions, see
 // ui.ProtectionArm.
+//
+// DailyStops are the stop losses the daily loss limits ask of its open
+// positions, see ui.DailyStop: kept across a restart of the agent, its stop
+// guard on while it has one.
 type Protection struct {
 	ProtectionSettings *ui.ProtectionSettings `json:"protection_settings,omitempty"`
 	ProtectionArms     []ui.ProtectionArm     `json:"protection_arms,omitempty"`
+	DailyStops         []ui.DailyStop         `json:"daily_stops,omitempty"`
 }
 
 // Entries tells whether the entries of an agent are blocked, by the
