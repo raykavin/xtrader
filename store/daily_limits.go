@@ -73,6 +73,9 @@ type DailyLimit struct {
 	MaxGain   *float64  `json:"max_gain,omitempty"`
 	UpdatedBy string    `json:"updated_by"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Stops is whether its loss limit moves the stop losses at the broker, of
+	// daily_limit_stops (see DailyLimitStop): nil while never set, on
+	Stops *bool `gorm:"-" json:"broker_stops,omitempty"`
 }
 
 func (DailyLimit) TableName() string { return "daily_limit_settings" }
@@ -85,7 +88,7 @@ const NoCurrency = "XXX"
 // they apply in the one of each account.
 func (l DailyLimit) Settings() ui.DailyLimitSettings {
 	settings := ui.DailyLimitSettings{Enabled: l.Enabled, MaxLoss: l.MaxLoss, MaxGain: l.MaxGain,
-		UpdatedBy: l.UpdatedBy}
+		BrokerStops: stopsOn(l.Stops), UpdatedBy: l.UpdatedBy}
 	if !l.UpdatedAt.IsZero() {
 		settings.UpdatedAt = l.UpdatedAt.Unix()
 	}
@@ -115,12 +118,72 @@ func (l AgentDailyLimit) Settings() ui.DailyLimitSettings {
 	return settings
 }
 
-// DailyLimitOf returns the daily limits of a, off without its row.
+// DailyLimitOf returns the daily limits of a, off without its row, with the
+// switch of its stops at the broker (see DailyLimitStop).
 func (a Agent) DailyLimitOf() ui.DailyLimitSettings {
-	if a.DailyLimit == nil {
-		return ui.DailyLimitSettings{}
+	var settings ui.DailyLimitSettings
+	if a.DailyLimit != nil {
+		settings = a.DailyLimit.Settings()
 	}
-	return a.DailyLimit.Settings()
+	var stops *bool
+	if a.DailyStops != nil {
+		stops = &a.DailyStops.Enabled
+	}
+	settings.BrokerStops = stopsOn(stops)
+	return settings
+}
+
+// DailyLimitStop is the switch of the stops at the broker of the loss limit of
+// all the agents (AgentID nil) or of an agent (daily_limit_stops), see
+// ui.DailyLimitSettings.BrokerStops: a row once changed, on without one.
+type DailyLimitStop struct {
+	ID        int64     `gorm:"primaryKey" json:"-"`
+	AgentID   *int64    `json:"agent_id,omitempty"`
+	Enabled   bool      `json:"enabled"`
+	UpdatedBy string    `json:"updated_by"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (DailyLimitStop) TableName() string { return "daily_limit_stops" }
+
+// stopsOn returns the switch of the stops at the broker as the dashboard
+// takes it: on (true) while never set.
+func stopsOn(enabled *bool) *bool {
+	on := enabled == nil || *enabled
+	return &on
+}
+
+// setDailyStops sets the switch of the stops at the broker of the agent of id
+// (all the agents for nil) to enabled, by by, within the transaction of ctx.
+func (s *Store) setDailyStops(ctx context.Context, id *int64, enabled bool, by string) error {
+	query := s.conn(ctx).Model(&DailyLimitStop{})
+	if id == nil {
+		query = query.Where("agent_id IS NULL")
+	} else {
+		query = query.Where("agent_id = ?", *id)
+	}
+	result := query.Updates(map[string]any{"enabled": enabled, "updated_by": by, "updated_at": time.Now()})
+	if result.Error != nil || result.RowsAffected > 0 {
+		return result.Error
+	}
+	return s.conn(ctx).Create(&DailyLimitStop{AgentID: id, Enabled: enabled, UpdatedBy: by,
+		UpdatedAt: time.Now()}).Error
+}
+
+// dailyStopsOf returns the switch of the stops at the broker of the agent of
+// id (all the agents for nil), nil while never set.
+func (s *Store) dailyStopsOf(ctx context.Context, id *int64) (*bool, error) {
+	var rows []DailyLimitStop
+	query := s.conn(ctx)
+	if id == nil {
+		query = query.Where("agent_id IS NULL")
+	} else {
+		query = query.Where("agent_id = ?", *id)
+	}
+	if err := query.Find(&rows).Error; err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return &rows[0].Enabled, nil
 }
 
 // DailyChange is who changes the daily limits and why, for their record: the
@@ -255,10 +318,12 @@ func (s *Store) addDailyEvent(ctx context.Context, e *DailyLimitEvent) error {
 func (s *Store) GlobalDailyLimit(ctx context.Context) (DailyLimit, bool, error) {
 	var limit DailyLimit
 	err := s.conn(ctx).Where("id = 1").Take(&limit).Error
-	if err == gorm.ErrRecordNotFound {
-		return DailyLimit{}, false, nil
+	found := err == nil
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return limit, false, err
 	}
-	return limit, err == nil, err
+	limit.Stops, err = s.dailyStopsOf(ctx, nil)
+	return limit, found, err
 }
 
 // SetGlobalDailyLimit sets the daily limits of all the agents together,
@@ -275,9 +340,14 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Where("id = 1").Find(&rows).Error; err != nil {
 			return err
 		}
+		stops, err := s.dailyStopsOf(ctx, nil)
+		if err != nil {
+			return err
+		}
 		var before any
 		if len(rows) > 0 {
 			previous = rows[0]
+			previous.Stops = stops
 			before = previous.Settings()
 		}
 		next = DailyLimit{ID: 1, Enabled: settings.Enabled, Currency: NoCurrency, MaxLoss: settings.MaxLoss,
@@ -285,6 +355,13 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 		if err := s.conn(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
 			Create(&next).Error; err != nil {
 			return notFound(err, "o limite diário")
+		}
+		next.Stops = stops
+		if settings.BrokerStops != nil {
+			if err := s.setDailyStops(ctx, nil, *settings.BrokerStops, change.By); err != nil {
+				return err
+			}
+			next.Stops = settings.BrokerStops
 		}
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, Kind: EventLimitChanged, Via: change.Via,
 			RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason, Previous: jsonOf(before),
@@ -305,10 +382,16 @@ func (s *Store) SetAgentDailyLimit(ctx context.Context, id int64, settings ui.Da
 		if err := s.conn(ctx).Clauses(lockForUpdate()).Where("agent_id = ?", id).Find(&rows).Error; err != nil {
 			return err
 		}
+		stops, err := s.dailyStopsOf(ctx, &id)
+		if err != nil {
+			return err
+		}
 		var before any
 		if len(rows) > 0 {
 			previous = rows[0]
-			before = previous.Settings()
+			settings := previous.Settings()
+			settings.BrokerStops = stopsOn(stops)
+			before = settings
 		}
 		next = AgentDailyLimit{AgentID: id, Enabled: settings.Enabled, MaxLoss: settings.MaxLoss,
 			MaxGain: settings.MaxGain, UpdatedBy: change.By, UpdatedAt: time.Now()}
@@ -316,9 +399,17 @@ func (s *Store) SetAgentDailyLimit(ctx context.Context, id int64, settings ui.Da
 			Create(&next).Error; err != nil {
 			return notFound(err, fmt.Sprintf("o limite diário do agente %d", id))
 		}
+		if settings.BrokerStops != nil {
+			if err := s.setDailyStops(ctx, &id, *settings.BrokerStops, change.By); err != nil {
+				return err
+			}
+			stops = settings.BrokerStops
+		}
+		after := next.Settings()
+		after.BrokerStops = stopsOn(stops)
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, AgentID: &id, Kind: EventLimitChanged,
 			Via: change.Via, RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason,
-			Previous: jsonOf(before), Next: jsonOf(next.Settings())})
+			Previous: jsonOf(before), Next: jsonOf(after)})
 	})
 	return previous, next, err
 }

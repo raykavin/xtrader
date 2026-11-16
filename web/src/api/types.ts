@@ -862,7 +862,8 @@ export const MoveUnknown = "unknown"; // the answer lost: the stop loss read aga
  * price it would exit at now (the bid of a long, the ask of a short), its
  * stop loss at the broker (0 for none), the ATR in price, the spread, the
  * best move in its favour since its entry in ATR, the costs known as a
- * distance of the price, and its two features.
+ * distance of the price, its two features, and the stop loss the daily loss
+ * limits ask of it (Daily, nil for none, see DailyStop).
  */
 export interface PositionProtection {
   pair: string;
@@ -878,6 +879,7 @@ export interface PositionProtection {
   costs_known: boolean;
   breakeven: ProtectionFeature;
   trailing: ProtectionFeature;
+  daily?: ProtectionFeature;
 }
 /**
  * ProtectionFeature is a feature of the protection of a position: its State
@@ -2364,6 +2366,39 @@ export const ProtectFailed = "failed"; // armed, the move refused by the broker:
  */
 export const ProtectUnknown = "unknown"; // armed, the answer of the broker lost: the stop loss read again
 /**
+ * DailyStop is the stop loss the daily loss limits of the controller ask of
+ * the open position of an agent on Pair, on Side, within the loss left of
+ * the day (see controller/daily_stops.go): the agent only tightens its stop
+ * loss to Level, never loosening one tighter, and holds its stop guard on
+ * while it has one (see order.Controller.SetStopGuard); Reason tells it.
+ */
+export interface DailyStop {
+  pair: string;
+  side: string;
+  level: number /* float64 */;
+  reason?: string;
+}
+/**
+ * SupervisionDailyStopsRequest is the payload of POST
+ * /api/supervision/daily-stops of an agent, from the supervisor only: the
+ * stops of the daily loss limits of its positions, all of them, in place of
+ * the ones before (none: no stop of the limits), each applied at once.
+ */
+export interface SupervisionDailyStopsRequest {
+  stops: DailyStop[];
+}
+/**
+ * SupervisionDailyStopsResponse answers POST /api/supervision/daily-stops:
+ * how each stop went, in their order (see ProtectApplied): applied, the stop
+ * loss confirmed by the broker (or as tight already, Confirmed the one it
+ * is at); failed (refused by the broker) or unknown (its answer lost), the
+ * stop loss kept; refused, not moved, see Detail: eg: no position on its
+ * pair, another side.
+ */
+export interface SupervisionDailyStopsResponse {
+  results: SupervisionProtectResponse[];
+}
+/**
  * SupervisionProtectResponse is how the arm went: its status (see
  * ProtectApplied), the stop loss before, the one asked, the one the broker
  * confirmed, why (Detail), and the protection of the position after.
@@ -2970,12 +3005,17 @@ export interface SupervisorCloseRequest {
  * result of the day (realized plus open, see DailyResult) the application
  * closes their positions, cancels their pending entries and blocks their
  * entries until the next day; absent, no limit of that side.
+ * BrokerStops, on unless false, makes a loss limit enabled move the stop
+ * losses of the open positions of its agents at the broker within the loss
+ * left of the day (see DailyStop), only tightening them; nil when sent, kept
+ * as it is (on, never set).
  */
 export interface DailyLimitSettings {
   enabled: boolean;
   currency?: string;
   max_loss?: number /* float64 */;
   max_gain?: number /* float64 */;
+  broker_stops?: boolean;
   updated_by?: string;
   updated_at?: number /* int64 */;
 }
@@ -3071,7 +3111,55 @@ export interface DailyLimitsStatus {
   agents: DailyScopeStatus[];
   paper?: string[];
   hours: TradingHoursStatus;
+  stops?: DailyStopInfo[];
 }
+/**
+ * DailyStopInfo is a stop loss the daily loss limits ask of an open position
+ * (the tickets of an agent on Pair of an account, moving together): the level
+ * within the loss left of the limit of Scope (empty for all the agents), the
+ * loss left then and the share of the position of it (in Currency), the
+ * stop loss before and its last move at the broker (Move, see
+ * DailyStopRequested): the one asked, the one the broker confirmed, why it
+ * wasn't moved; through the agent running or the bridge of a stopped one.
+ */
+export interface DailyStopInfo {
+  agent: string;
+  pair: string;
+  side: string;
+  tickets: number /* int64 */[];
+  scope: string;
+  currency: string;
+  level: number /* float64 */;
+  headroom: number /* float64 */;
+  share: number /* float64 */;
+  via?: string;
+  move?: string;
+  previous?: number /* float64 */;
+  requested?: number /* float64 */;
+  confirmed?: number /* float64 */;
+  detail?: string;
+  updated_at: number /* int64 */;
+}
+/**
+ * The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+ */
+export const DailyStopRequested = "requested"; // sent, not answered yet
+/**
+ * The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+ */
+export const DailyStopConfirmed = "confirmed"; // the broker took it (or the stop was as tight already)
+/**
+ * The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+ */
+export const DailyStopRejected = "rejected"; // refused (the broker, the agent): the stop loss kept
+/**
+ * The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+ */
+export const DailyStopUnknown = "unknown"; // the answer lost: read again, never sent again blindly
+/**
+ * The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+ */
+export const DailyStopSkipped = "skipped"; // not sent, see Detail: eg: within the freeze level, an agent run apart
 /**
  * TradingWindow is a window of the trading hours of a day: from Start to End
  * (HH:MM, of the zone of the controller, America/Belem; Start before End, a

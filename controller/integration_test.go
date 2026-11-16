@@ -565,7 +565,8 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		LLM:   &ui.AgentLLMSettings{Provider: "openai", Model: "gpt-5", ReasoningEffort: secret("low")},
 		Model: "openai gpt-5", PromptID: &prompt.ID,
 		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true},
-		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR}},
+		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR},
+		DailyLimit: ui.DailyLimitSettings{BrokerStops: ptrTo(true)}}, // the stops at the broker on, never set
 		agentSettingsOf(t, body))
 	stored, err := c.store.AgentByName(ctx, "gold")
 	require.NoError(t, err)

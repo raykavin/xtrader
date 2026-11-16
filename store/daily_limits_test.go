@@ -24,7 +24,8 @@ func TestDailyLimits(t *testing.T) {
 	_, found, err := s.GlobalDailyLimit(ctx)
 	require.NoError(t, err)
 	require.False(t, found, "no limit while never set")
-	require.Equal(t, ui.DailyLimitSettings{}, a.DailyLimitOf())
+	on := true
+	require.Equal(t, ui.DailyLimitSettings{BrokerStops: &on}, a.DailyLimitOf(), "the stops at the broker on")
 
 	global := ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(150), MaxGain: amount(300)}
 	previous, next, err := s.SetGlobalDailyLimit(ctx, global, change)
@@ -183,4 +184,71 @@ func TestDailyGuards(t *testing.T) {
 	}
 	require.Equal(t, map[string]int{EventTripped: 3, EventReleased: 1, EventFlatten: 1, EventIncomplete: 1,
 		EventDayRollover: 3}, kinds)
+}
+
+// The switch of the stops at the broker of a loss limit, of all the agents
+// and of an agent: on while never set, kept as it is when a change doesn't
+// send it, set apart for each scope, recorded with the limits.
+func TestDailyLimits_BrokerStops(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := llmAgent(t, s, "llm")
+	b := llmAgent(t, s, "other")
+	change := DailyChange{Day: "2026-11-16", Via: ViaSettings, By: "admin"}
+	on, off := true, false
+
+	global, _, err := s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.True(t, *global.Settings().BrokerStops, "on while never set")
+
+	_, next, err := s.SetGlobalDailyLimit(ctx, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(100),
+		BrokerStops: &off}, change)
+	require.NoError(t, err)
+	require.False(t, *next.Settings().BrokerStops)
+	global, _, err = s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.False(t, *global.Settings().BrokerStops)
+	require.False(t, global.Settings().StopsOn())
+
+	// a change without it: kept
+	_, _, err = s.SetGlobalDailyLimit(ctx, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(90)}, change)
+	require.NoError(t, err)
+	global, _, err = s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.False(t, *global.Settings().BrokerStops, "kept")
+
+	// of an agent, apart from all the agents and from the other agents
+	_, _, err = s.SetAgentDailyLimit(ctx, a.ID, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(40),
+		BrokerStops: &off}, change)
+	require.NoError(t, err)
+	_, _, err = s.SetAgentDailyLimit(ctx, b.ID, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(30)}, change)
+	require.NoError(t, err)
+	agent, err := s.AgentByName(ctx, "llm")
+	require.NoError(t, err)
+	require.False(t, *agent.DailyLimitOf().BrokerStops)
+	other, err := s.AgentByName(ctx, "other")
+	require.NoError(t, err)
+	require.True(t, other.DailyLimitOf().StopsOn(), "on, never set")
+	_, _, err = s.SetAgentDailyLimit(ctx, a.ID, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(40),
+		BrokerStops: &on}, change)
+	require.NoError(t, err)
+	agent, err = s.AgentByName(ctx, "llm")
+	require.NoError(t, err)
+	require.True(t, agent.DailyLimitOf().StopsOn())
+	global, _, err = s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.False(t, *global.Settings().BrokerStops, "all the agents untouched")
+
+	// recorded with the limits
+	events, err := s.DailyLimitEvents(ctx, 1)
+	require.NoError(t, err)
+	var before, after ui.DailyLimitSettings
+	require.NoError(t, json.Unmarshal(events[0].Previous, &before))
+	require.NoError(t, json.Unmarshal(events[0].Next, &after))
+	require.False(t, *before.BrokerStops)
+	require.True(t, *after.BrokerStops)
+
+	// a loss limit only: the stops on with a loss limit enabled
+	require.False(t, ui.DailyLimitSettings{Enabled: true, MaxGain: amount(10)}.StopsOn(), "no loss limit")
+	require.False(t, ui.DailyLimitSettings{MaxLoss: amount(10)}.StopsOn(), "off")
 }

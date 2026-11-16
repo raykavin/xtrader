@@ -495,7 +495,7 @@ func (imp *configImporter) createAgent(ctx context.Context, a ui.ConfigAgent, se
 			return err
 		}
 	}
-	if !sameFields(a.DailyLimit, ui.DailyLimitSettings{}) {
+	if !sameFields(limitOnly(a.DailyLimit), limitOnly(ui.DailyLimitSettings{})) {
 		change := imp.dailyChange()
 		if _, _, err := imp.s.store.SetAgentDailyLimit(ctx, created.ID, a.DailyLimit, change); err != nil {
 			return err
@@ -992,7 +992,8 @@ var configFieldLabels = map[string]string{
 	"reanalysis": "reanálise", "params": "parâmetros", "account": "conta", "llm": "LLM", "prompt": "prompt",
 	"mt5_account": "conta MT5", "protection": "proteção", "daily_limit": "limite diário",
 	"permissions": "permissões", "max_loss": "perda máxima", "max_gain": "ganho máximo", "windows": "janelas",
-	"pairs": "ativos", "rules": "regras", "url": "servidor de notícias", "block_before": "bloqueio antes",
+	"broker_stops": "stops na corretora",
+	"pairs":        "ativos", "rules": "regras", "url": "servidor de notícias", "block_before": "bloqueio antes",
 	"block_after": "bloqueio depois", "block_importance": "importância", "interval_seconds": "intervalo",
 	"timeout_seconds": "prazo", "provider": "provedor", "model": "modelo", "base_url": "URL do provedor",
 	"reasoning_effort": "raciocínio", "max_tokens": "máximo de tokens", "instructions": "instruções",

@@ -585,21 +585,23 @@ const (
 // price it would exit at now (the bid of a long, the ask of a short), its
 // stop loss at the broker (0 for none), the ATR in price, the spread, the
 // best move in its favour since its entry in ATR, the costs known as a
-// distance of the price, and its two features.
+// distance of the price, its two features, and the stop loss the daily loss
+// limits ask of it (Daily, nil for none, see DailyStop).
 type PositionProtection struct {
-	Pair        string            `json:"pair"`
-	PositionRef string            `json:"position_ref"`
-	Side        string            `json:"side"`
-	Entry       float64           `json:"entry"`
-	Price       float64           `json:"price"`
-	StopLoss    float64           `json:"stop_loss"`
-	ATR         float64           `json:"atr"`
-	Spread      float64           `json:"spread,omitempty"`
-	Favorable   float64           `json:"favorable"`
-	Costs       float64           `json:"costs"`
-	CostsKnown  bool              `json:"costs_known"`
-	Breakeven   ProtectionFeature `json:"breakeven"`
-	Trailing    ProtectionFeature `json:"trailing"`
+	Pair        string             `json:"pair"`
+	PositionRef string             `json:"position_ref"`
+	Side        string             `json:"side"`
+	Entry       float64            `json:"entry"`
+	Price       float64            `json:"price"`
+	StopLoss    float64            `json:"stop_loss"`
+	ATR         float64            `json:"atr"`
+	Spread      float64            `json:"spread,omitempty"`
+	Favorable   float64            `json:"favorable"`
+	Costs       float64            `json:"costs"`
+	CostsKnown  bool               `json:"costs_known"`
+	Breakeven   ProtectionFeature  `json:"breakeven"`
+	Trailing    ProtectionFeature  `json:"trailing"`
+	Daily       *ProtectionFeature `json:"daily,omitempty"`
 }
 
 // ProtectionFeature is a feature of the protection of a position: its State
@@ -1867,6 +1869,36 @@ const (
 	ProtectUnknown = "unknown" // armed, the answer of the broker lost: the stop loss read again
 )
 
+// DailyStop is the stop loss the daily loss limits of the controller ask of
+// the open position of an agent on Pair, on Side, within the loss left of
+// the day (see controller/daily_stops.go): the agent only tightens its stop
+// loss to Level, never loosening one tighter, and holds its stop guard on
+// while it has one (see order.Controller.SetStopGuard); Reason tells it.
+type DailyStop struct {
+	Pair   string  `json:"pair"`
+	Side   string  `json:"side"`
+	Level  float64 `json:"level"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+// SupervisionDailyStopsRequest is the payload of POST
+// /api/supervision/daily-stops of an agent, from the supervisor only: the
+// stops of the daily loss limits of its positions, all of them, in place of
+// the ones before (none: no stop of the limits), each applied at once.
+type SupervisionDailyStopsRequest struct {
+	Stops []DailyStop `json:"stops"`
+}
+
+// SupervisionDailyStopsResponse answers POST /api/supervision/daily-stops:
+// how each stop went, in their order (see ProtectApplied): applied, the stop
+// loss confirmed by the broker (or as tight already, Confirmed the one it
+// is at); failed (refused by the broker) or unknown (its answer lost), the
+// stop loss kept; refused, not moved, see Detail: eg: no position on its
+// pair, another side.
+type SupervisionDailyStopsResponse struct {
+	Results []SupervisionProtectResponse `json:"results"`
+}
+
 // SupervisionProtectResponse is how the arm went: its status (see
 // ProtectApplied), the stop loss before, the one asked, the one the broker
 // confirmed, why (Detail), and the protection of the position after.
@@ -2397,13 +2429,25 @@ type SupervisorCloseRequest struct {
 // result of the day (realized plus open, see DailyResult) the application
 // closes their positions, cancels their pending entries and blocks their
 // entries until the next day; absent, no limit of that side.
+//
+// BrokerStops, on unless false, makes a loss limit enabled move the stop
+// losses of the open positions of its agents at the broker within the loss
+// left of the day (see DailyStop), only tightening them; nil when sent, kept
+// as it is (on, never set).
 type DailyLimitSettings struct {
-	Enabled   bool     `json:"enabled"`
-	Currency  string   `json:"currency,omitempty"`
-	MaxLoss   *float64 `json:"max_loss,omitempty"`
-	MaxGain   *float64 `json:"max_gain,omitempty"`
-	UpdatedBy string   `json:"updated_by,omitempty"`
-	UpdatedAt int64    `json:"updated_at,omitempty"`
+	Enabled     bool     `json:"enabled"`
+	Currency    string   `json:"currency,omitempty"`
+	MaxLoss     *float64 `json:"max_loss,omitempty"`
+	MaxGain     *float64 `json:"max_gain,omitempty"`
+	BrokerStops *bool    `json:"broker_stops,omitempty"`
+	UpdatedBy   string   `json:"updated_by,omitempty"`
+	UpdatedAt   int64    `json:"updated_at,omitempty"`
+}
+
+// StopsOn reports whether the loss limit of s, enabled, moves the stop losses
+// at the broker, see BrokerStops.
+func (s DailyLimitSettings) StopsOn() bool {
+	return s.Enabled && s.MaxLoss != nil && (s.BrokerStops == nil || *s.BrokerStops)
 }
 
 // DailyResult is the result of the day of agents in Currency: Realized, the
@@ -2476,7 +2520,43 @@ type DailyLimitsStatus struct {
 	Agents      []DailyScopeStatus `json:"agents"`
 	Paper       []string           `json:"paper,omitempty"`
 	Hours       TradingHoursStatus `json:"hours"`
+	Stops       []DailyStopInfo    `json:"stops,omitempty"`
 }
+
+// DailyStopInfo is a stop loss the daily loss limits ask of an open position
+// (the tickets of an agent on Pair of an account, moving together): the level
+// within the loss left of the limit of Scope (empty for all the agents), the
+// loss left then and the share of the position of it (in Currency), the
+// stop loss before and its last move at the broker (Move, see
+// DailyStopRequested): the one asked, the one the broker confirmed, why it
+// wasn't moved; through the agent running or the bridge of a stopped one.
+type DailyStopInfo struct {
+	Agent     string  `json:"agent"`
+	Pair      string  `json:"pair"`
+	Side      string  `json:"side"`
+	Tickets   []int64 `json:"tickets"`
+	Scope     string  `json:"scope"`
+	Currency  string  `json:"currency"`
+	Level     float64 `json:"level"`
+	Headroom  float64 `json:"headroom"`
+	Share     float64 `json:"share"`
+	Via       string  `json:"via,omitempty"`
+	Move      string  `json:"move,omitempty"`
+	Previous  float64 `json:"previous,omitempty"`
+	Requested float64 `json:"requested,omitempty"`
+	Confirmed float64 `json:"confirmed,omitempty"`
+	Detail    string  `json:"detail,omitempty"`
+	UpdatedAt int64   `json:"updated_at"`
+}
+
+// The moves of a stop loss of the daily loss limits, see DailyStopInfo.
+const (
+	DailyStopRequested = "requested" // sent, not answered yet
+	DailyStopConfirmed = "confirmed" // the broker took it (or the stop was as tight already)
+	DailyStopRejected  = "rejected"  // refused (the broker, the agent): the stop loss kept
+	DailyStopUnknown   = "unknown"   // the answer lost: read again, never sent again blindly
+	DailyStopSkipped   = "skipped"   // not sent, see Detail: eg: within the freeze level, an agent run apart
+)
 
 // TradingWindow is a window of the trading hours of a day: from Start to End
 // (HH:MM, of the zone of the controller, America/Belem; Start before End, a
