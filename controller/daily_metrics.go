@@ -17,10 +17,13 @@ type dailyRead struct {
 
 // dailyOwner is the magic number and the symbol of the entry of a position,
 // telling its agent once it is closed, its exit carrying no magic (eg:
-// closed by hand); keyed by the account and the position.
+// closed by hand), and the commission and fee of its entry (0 while its
+// entry wasn't read), the ones its exit will cost about, see dailyHolding;
+// keyed by the account and the position.
 type dailyOwner struct {
-	magic  int64
-	symbol string
+	magic      int64
+	symbol     string
+	entryCosts float64
 }
 
 // dailyCarry is the profit open of a position as last read, kept while its
@@ -112,7 +115,8 @@ func dailyMetrics(window closedRange, accounts []liveAccount, reads []dailyRead,
 		positionKey := func(id int64) string { return key + "/" + strconv.FormatInt(id, 10) }
 		for _, deal := range read.deals {
 			if deal.Entry == dealEntryIn && deal.PositionID != 0 {
-				owners[positionKey(deal.PositionID)] = dailyOwner{magic: deal.Magic, symbol: deal.Symbol}
+				owners[positionKey(deal.PositionID)] = dailyOwner{magic: deal.Magic, symbol: deal.Symbol,
+					entryCosts: deal.Commission + deal.Fee}
 			}
 		}
 		for _, position := range read.positions {

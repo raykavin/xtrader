@@ -53,6 +53,9 @@ type DailyStop struct {
 
 func (DailyStop) TableName() string { return "daily_stops" }
 
+// DayOf returns the day of the stop, eg: 2026-11-16.
+func (d DailyStop) DayOf() string { return d.Day.Format(time.DateOnly) }
+
 // DailyStopBudget is the loss left of the limit of a stop and the share of its
 // position, in the currency of the stop: the limit, the result of the day of
 // its scope (realized and open), the exit costs set aside, the loss left

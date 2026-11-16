@@ -69,6 +69,17 @@ type dailyLimiter struct {
 	status    ui.DailyLimitsStatus  // as last evaluated
 	hours     ui.TradingHoursStatus // as last evaluated, see evaluateHours
 
+	// the stops at the broker, see daily_stops.go: the minute of the last
+	// round, one due now, a round going on, run before stopsStep returns (the
+	// tests), stops in force, how they stand, the symbols read
+	stopsMinute  time.Time
+	stopsDue     bool
+	stopsBusy    bool
+	stopsSync    bool
+	stopsInForce bool
+	stopInfos    []ui.DailyStopInfo
+	symbols      map[string]cachedSymbol
+
 	hoursMu     sync.Mutex  // an evaluation of the trading hours at a time
 	hoursEnding atomic.Bool // the actions at the end of a window running, see endHours
 }
@@ -77,7 +88,8 @@ func newDailyLimiter(s *Supervision) *dailyLimiter {
 	return &dailyLimiter{s: s, every: dailyLimitEvery, zone: llm.LocalZone(),
 		wake: make(chan struct{}, 1), owners: make(map[string]dailyOwner), carry: make(map[string]dailyCarry),
 		breaches: make(map[string]int), failures: make(map[string]int), held: make(map[int64]int),
-		flattenAt: make(map[int64]time.Time), triedAt: make(map[int64]time.Time)}
+		flattenAt: make(map[int64]time.Time), triedAt: make(map[int64]time.Time), stopsInForce: true,
+		symbols: make(map[string]cachedSymbol)}
 }
 
 // Run evaluates the daily limits until ctx is done, see dailyLimiter.
@@ -404,6 +416,7 @@ func (l *dailyLimiter) evaluate(ctx context.Context) error {
 		return a.DailyLimitOf().Enabled && a.Mode == "live"
 	})
 	if !active {
+		l.endStops(ctx)
 		l.setStatus(&dailyMeasure{at: now, day: day, agents: agents, global: global.Settings(),
 			results: map[string]*ui.DailyResult{}}, nil)
 		return nil
@@ -441,6 +454,7 @@ func (l *dailyLimiter) evaluate(ctx context.Context) error {
 			l.watchFlat(ctx, m, g)
 		}
 	}
+	l.stopsStep(ctx, m, tripped)
 	l.setStatus(m, tripped)
 	return nil
 }
@@ -720,6 +734,7 @@ func (l *dailyLimiter) setStatus(m *dailyMeasure, tripped []store.DailyGuard) {
 		}
 	}
 	l.mu.Lock()
+	status.Stops = slices.Clone(l.stopInfos)
 	l.status = status
 	l.mu.Unlock()
 }
@@ -832,6 +847,7 @@ func (l *dailyLimiter) settle(ctx context.Context, a *store.Agent, preview ui.Da
 	}
 	l.mu.Lock()
 	l.breaches[key] = 0
+	l.stopsDue = true // the stops at the broker computed again at once
 	l.mu.Unlock()
 	if preview.Effect == ui.DailyEffectRelease && guard != nil {
 		release := change

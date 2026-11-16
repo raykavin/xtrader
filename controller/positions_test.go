@@ -189,6 +189,14 @@ func (b *fakeBridge) trade(request map[string]any) map[string]any {
 				return map[string]any{"retcode": 10009, "deal": 9000 + p.Ticket, "order": 8000 + p.Ticket}
 			}
 		}
+	case 6:
+		for i, p := range b.positions {
+			if p.Ticket == number("position") {
+				b.positions[i].SL, _ = request["sl"].(float64)
+				b.positions[i].TP, _ = request["tp"].(float64)
+				return map[string]any{"retcode": 10009}
+			}
+		}
 	case 8:
 		for i, o := range b.orders {
 			if o.Ticket == number("order") {
