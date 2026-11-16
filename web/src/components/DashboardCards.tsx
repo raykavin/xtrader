@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  activityFollowsNews,
   CARD_LABELS,
   CARDS,
   type CardId,
@@ -254,6 +255,34 @@ export function DashboardCards({
     }
     return host;
   };
+
+  /**
+   * The activity as tall as the news card (see activityFollowsNews): the
+   * height of the news, measured as it changes (the chart sized, the last
+   * decision of an LLM agent shown or not), in --news-height of the cards, the
+   * fixed height of the activity else (see .activity-card).
+   */
+  const followsNews = activityFollowsNews(rows);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const news = hosts.current.get("news")?.firstElementChild;
+    if (!root) return;
+    if (!followsNews || !(news instanceof HTMLElement) || typeof ResizeObserver === "undefined") {
+      root.style.removeProperty("--news-height");
+      return;
+    }
+    const measure = () => {
+      const height = Math.round(news.getBoundingClientRect().height);
+      if (height > 0) root.style.setProperty("--news-height", `${height}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(news);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--news-height");
+    };
+  }, [followsNews]);
 
   // the handle of the card moved by the keyboard keeps the focus, wherever it went
   useEffect(() => {

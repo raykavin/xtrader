@@ -689,7 +689,10 @@ function Dashboard({ agent, agents, onAgentChange, theme, onThemeToggle }: Dashb
                 // of the main currencies, whichever agent is shown
                 news: <NewsCard />,
                 activity: (
-                  <section className="card panel lists" aria-label="Ordens, decisões e patrimônio">
+                  <section
+                    className="card panel lists activity-card"
+                    aria-label="Ordens, decisões e patrimônio"
+                  >
                     <div className="lists-head">
                       <span className="eyebrow">Atividade do agente</span>
                       <Tabs

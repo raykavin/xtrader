@@ -4719,6 +4719,67 @@ fieldset.seg {
   padding: 18px var(--sp-5) 2px;
 }
 
+/* the activity of the agent of a fixed height, whatever its lists hold: the
+   one of the news card (--news-height, measured by DashboardCards), or 640 px
+   in the row of the news or without it. Its head, the summary and the pages
+   stay put; only the table (or the equity chart) takes the rest, the table
+   scrolling with its head kept in view */
+.activity-card {
+  display: flex;
+  flex-direction: column;
+  height: var(--news-height, 640px);
+  min-height: 0;
+}
+
+.activity-card > .tab-panel:not([hidden]) {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.activity-card > .tab-panel > .panel-body {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.activity-card .panel-toolbar,
+.activity-card .paginator,
+.activity-card .alert {
+  flex: none;
+}
+
+/* above the lists as cards of the small screens too (overflow: visible
+   there), their cards scrolling within it */
+.activity-card .tab-panel .table-wrap {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.activity-card .table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+}
+
+.activity-card .table thead th:is(.cell-actions, .col-actions) {
+  z-index: 3;
+}
+
+.activity-card .empty-state {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.activity-card .equity-chart {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 180px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Settings: the agents, the prompts, Telegram and the users            */
 /* ------------------------------------------------------------------ */
