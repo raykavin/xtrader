@@ -18,12 +18,14 @@ import (
 
 	"github.com/raykavin/xtrader/exchange"
 	"github.com/raykavin/xtrader/store"
+	"github.com/raykavin/xtrader/ui"
 )
 
 // The values of the trade requests of MT5 the supervisor sends to a bridge,
 // the ones of the adapter (see exchange.MT5).
 const (
 	mt5ActionDeal     = 1  // TRADE_ACTION_DEAL: a deal at the market, closing a position by its ticket
+	mt5ActionSLTP     = 6  // TRADE_ACTION_SLTP: the stop loss and the take profit of a position
 	mt5ActionRemove   = 8  // TRADE_ACTION_REMOVE: a pending order removed
 	mt5FillFOK        = 0  // ORDER_FILLING_FOK
 	mt5FillIOC        = 1  // ORDER_FILLING_IOC
@@ -118,6 +120,68 @@ func (b *bridgeTrader) remove(ctx context.Context, base, token string, o bridgeO
 		return itemFailed, err.Error()
 	}
 	return b.trade(ctx, base, token, map[string]any{"action": mt5ActionRemove, "order": o.Ticket})
+}
+
+// setStop moves the stop loss of the position p (a short when sell) of agent
+// to level on the bridge at base with token, its take profit kept, for the
+// daily loss limits: skipped before sending when the broker wouldn't take it
+// (within its least distance from the price, or the stop now within its
+// freeze distance); refused on a real account the agent may not trade; sent
+// once, then the stop read on the account: confirmed at level (half a tick),
+// else unknown, never sent again blindly. It returns the move (see
+// ui.DailyStopConfirmed), why, and the stop confirmed.
+func (b *bridgeTrader) setStop(ctx context.Context, base, token string, p bridgePosition, level float64, sell bool,
+	agent bridgeAgent) (string, string, float64) {
+	if err := b.checkAccount(ctx, base, token, agent); err != nil {
+		return ui.DailyStopRejected, err.Error(), 0
+	}
+	var symbol dailySymbol
+	if err := b.get(ctx, base, "/symbol?"+url.Values{"symbol": {p.Symbol}}.Encode(), token, &symbol); err != nil {
+		return ui.DailyStopRejected, "o símbolo não pôde ser lido: " + err.Error(), 0
+	}
+	var tick struct {
+		Bid float64 `json:"bid"`
+		Ask float64 `json:"ask"`
+	}
+	if err := b.get(ctx, base, "/tick?"+url.Values{"symbol": {p.Symbol}}.Encode(), token, &tick); err != nil {
+		return ui.DailyStopRejected, "o preço não pôde ser lido: " + err.Error(), 0
+	}
+	price, dir := tick.Bid, 1.0 // a long exits at the bid
+	if sell {
+		price, dir = tick.Ask, -1
+	}
+	if price <= 0 || dir*(price-level) <= symbol.stops() {
+		return ui.DailyStopSkipped, fmt.Sprintf("o stop em %g fica a menos da distância mínima da corretora "+
+			"do preço %g: vai na próxima rodada", level, price), 0
+	}
+	if p.SL > 0 && symbol.FreezeLevel > 0 && math.Abs(price-p.SL) <= float64(symbol.FreezeLevel)*symbol.Point {
+		return ui.DailyStopSkipped, "o stop atual está dentro do nível de congelamento da corretora: não pode " +
+			"ser alterado agora", 0
+	}
+	scale := math.Pow10(max(symbol.Digits, 0))
+	level = math.Round(level*scale) / scale
+	status, detail := b.trade(ctx, base, token, map[string]any{"action": mt5ActionSLTP, "symbol": p.Symbol,
+		"position": p.Ticket, "sl": level, "tp": p.TP, "magic": agent.magic})
+	if status == itemFailed {
+		return ui.DailyStopRejected, detail, 0
+	}
+	var positions []bridgePosition
+	if err := b.get(ctx, base, "/positions", token, &positions); err != nil {
+		return ui.DailyStopUnknown, "o stop não pôde ser conferido na conta: " + err.Error(), 0
+	}
+	for _, q := range positions {
+		if q.Ticket != p.Ticket {
+			continue
+		}
+		if math.Abs(q.SL-level) <= symbol.tick()/2+1e-12 {
+			return ui.DailyStopConfirmed, "", q.SL
+		}
+		if status == itemUnknown {
+			return ui.DailyStopUnknown, detail, 0
+		}
+		return ui.DailyStopUnknown, fmt.Sprintf("a corretora respondeu, mas o stop lido na conta é %g", q.SL), 0
+	}
+	return ui.DailyStopUnknown, "a posição não está mais aberta na conta", 0
 }
 
 // checkAccount refuses a real account an agent may not trade.

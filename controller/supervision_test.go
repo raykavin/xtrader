@@ -136,6 +136,9 @@ type fakeAgent struct {
 	protect     ui.SupervisionProtectResponse // the answer to an arm
 	armed       []ui.SupervisionProtectRequest
 	drains      int // the blocks asking to wait for the orders being sent
+	// dailyStops are the requests of the stops of the daily loss limits, each
+	// applied on the positions of its pair on the bridge as the agent would
+	dailyStops []ui.SupervisionDailyStopsRequest
 	// fills are the positions the pending entries of their IDs open as they
 	// are canceled; closes the close requests it got
 	fills  map[int64]bridgePosition
@@ -277,6 +280,33 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(response)
 	case "/api/supervision/cancel":
 		_ = json.NewEncoder(w).Encode(ui.SupervisionCancelResponse{Results: a.cancel()})
+	case "/api/supervision/daily-stops":
+		var request ui.SupervisionDailyStopsRequest
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		a.dailyStops = append(a.dailyStops, request)
+		response := ui.SupervisionDailyStopsResponse{Results: []ui.SupervisionProtectResponse{}}
+		a.bridge.mu.Lock()
+		for _, stop := range request.Stops {
+			result := ui.SupervisionProtectResponse{Status: ui.ProtectRefused, Requested: stop.Level,
+				Detail: "nenhuma posição aberta em " + stop.Pair}
+			for i, p := range a.bridge.positions {
+				if p.Magic != a.magic || p.Symbol != stop.Pair {
+					continue
+				}
+				dir := 1.0
+				if p.Type == 1 {
+					dir = -1
+				}
+				result.Status, result.Previous = ui.ProtectApplied, p.SL
+				if p.SL <= 0 || dir*(stop.Level-p.SL) > 0 { // only tightened
+					a.bridge.positions[i].SL = stop.Level
+				}
+				result.Confirmed = a.bridge.positions[i].SL
+			}
+			response.Results = append(response.Results, result)
+		}
+		a.bridge.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(response)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

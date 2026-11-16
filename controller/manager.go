@@ -776,7 +776,8 @@ func launchHash(a store.Agent) [32]byte {
 // entriesOf returns the entries of the agent a, as its supervision tells them.
 // protectionOf returns the protection of the positions of the agent a: its
 // settings when it runs or may be armed (see ui.ProtectionSettings.Active),
-// and the arms of the XTrader AI in force on its positions.
+// the arms of the XTrader AI in force on its positions, and the stops the
+// daily loss limits ask of them (see daily_stops.go).
 func protectionOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.Protection, error) {
 	var protection agentapi.Protection
 	if settings := a.ProtectionOf(); settings.Active() {
@@ -788,6 +789,13 @@ func protectionOf(ctx context.Context, s *store.Store, a store.Agent) (agentapi.
 	}
 	for _, arm := range arms {
 		protection.ProtectionArms = append(protection.ProtectionArms, arm.Arm())
+	}
+	stops, err := s.DailyStopsInForce(ctx, a.ID)
+	if err != nil {
+		return protection, err
+	}
+	for _, stop := range stops {
+		protection.DailyStops = append(protection.DailyStops, stop.Request())
 	}
 	return protection, nil
 }
