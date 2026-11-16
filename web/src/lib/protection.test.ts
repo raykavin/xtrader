@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PositionProtection, ProtectionFeature } from "../api/types";
 import {
+  featureLabel,
   featureState,
   moveLabel,
   parseDistance,
@@ -52,6 +53,16 @@ describe("the protection of the positions", () => {
     expect(
       shownFeatures({ ...protection, breakeven: { state: "off", armed: true } }).map((f) => f.name),
     ).toEqual(["breakeven", "trailing"]);
+    const daily = {
+      state: "active",
+      level: 4153,
+      detail: "limite de perda diária de todos os agentes",
+    };
+    expect(
+      shownFeatures({ ...protection, daily }).map((f) => f.name),
+      "the stop of the limits",
+    ).toEqual(["trailing", "daily"]);
+    expect(featureLabel("daily")).toBe("Limite diário");
   });
 });
 

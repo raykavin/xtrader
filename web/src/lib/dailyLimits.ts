@@ -8,8 +8,9 @@ import type {
   DailyLimitsStatus,
   DailyResult,
   DailyScopeStatus,
+  DailyStopInfo,
 } from "../api/types";
-import { formatMoney, formatProfit } from "./format";
+import { formatMoney, formatPrice, formatProfit } from "./format";
 
 /** The highest limit the controller takes. */
 export const maxDailyLimit = 1e9;
@@ -179,19 +180,25 @@ export function guardedAgents(status: DailyLimitsStatus | null): Record<string, 
   return guarded;
 }
 
-/** The fields of the form of the daily limits, as typed: in the currency of each account. */
+/**
+ * The fields of the form of the daily limits, as typed: in the currency of
+ * each account; brokerStops, the stops of the open positions moved at the
+ * broker within the loss left of the day (see DailyLimitSettings.broker_stops).
+ */
 export interface DailyLimitForm {
   enabled: boolean;
   maxLoss: string;
   maxGain: string;
+  brokerStops: boolean;
 }
 
-/** The form of the settings, the limits left blank when absent. */
+/** The form of the settings, the limits left blank when absent, the stops at the broker on unless off. */
 export function dailyLimitForm(settings: DailyLimitSettings | undefined): DailyLimitForm {
   return {
     enabled: settings?.enabled ?? false,
     maxLoss: settings?.max_loss != null ? String(settings.max_loss) : "",
     maxGain: settings?.max_gain != null ? String(settings.max_gain) : "",
+    brokerStops: settings?.broker_stops ?? true,
   };
 }
 
@@ -209,7 +216,7 @@ export function parseLimit(text: string): number | null {
 
 /** The settings of a form, without a currency: the one of each account. */
 export function dailyLimitSettings(form: DailyLimitForm): DailyLimitSettings {
-  const settings: DailyLimitSettings = { enabled: form.enabled };
+  const settings: DailyLimitSettings = { enabled: form.enabled, broker_stops: form.brokerStops };
   const loss = parseLimit(form.maxLoss);
   const gain = parseLimit(form.maxGain);
   if (loss !== null) settings.max_loss = loss;
@@ -236,4 +243,61 @@ export function dailyLimitErrors(
     errors.maxLoss = "Defina a perda, o ganho ou os dois.";
   }
   return errors;
+}
+
+/** A stop of the daily loss limits, its side in words: Compra or Venda. */
+export function stopSide(stop: DailyStopInfo): string {
+  return stop.side === "SELL" ? "Venda" : "Compra";
+}
+
+/** The limit a stop of the daily loss limits comes from: all the agents, or its agent. */
+export function stopScope(stop: DailyStopInfo): string {
+  return stop.scope ? `de ${stop.scope}` : "de todos os agentes";
+}
+
+/** The last move of a stop of the daily loss limits: a short state (the chip) and what goes with it. */
+export interface StopMove extends DailyLabel {
+  detail?: string;
+}
+
+/**
+ * The last move of a stop of the daily loss limits at the broker, in words:
+ * confirmed (at the level the broker took), sent and not answered yet,
+ * refused (the stop kept), unknown (read again, never sent again blindly) or
+ * not sent (why), through the agent or the bridge of a stopped one; none yet
+ * when the stop now fits in the limit.
+ */
+export function stopMoveLabel(stop: DailyStopInfo): StopMove {
+  const via = stop.via === "bridge" ? "pela bridge, com o agente parado" : "";
+  const joined = (...parts: (string | undefined)[]) =>
+    parts.filter((part) => part && part.trim() !== "").join(" · ") || undefined;
+  switch (stop.move) {
+    case "confirmed":
+      return {
+        text: `confirmado em ${formatPrice(stop.confirmed || stop.level)}`,
+        tone: "on",
+        detail: joined(via),
+      };
+    case "requested":
+      return { text: "enviado ao agente", tone: "info", detail: joined(stop.detail) };
+    case "rejected":
+      return {
+        text: "recusado",
+        tone: "error",
+        detail: joined(
+          `stop mantido em ${stop.previous ? formatPrice(stop.previous) : "nenhum"}`,
+          stop.detail,
+          via,
+        ),
+      };
+    case "unknown":
+      return {
+        text: "sem resposta",
+        tone: "warn",
+        detail: joined("o stop é relido, nunca reenviado às cegas", stop.detail, via),
+      };
+    case "skipped":
+      return { text: "não enviado", tone: "warn", detail: joined(stop.detail) };
+  }
+  return { text: "cabe no limite", tone: "off", detail: "o stop atual já cabe no limite" };
 }

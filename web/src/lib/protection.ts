@@ -17,7 +17,8 @@ export const unitLabel = "× ATR(14)";
 export const maxDistance = 50;
 
 /** A feature, in words. */
-export function featureLabel(feature: "breakeven" | "trailing" | string): string {
+export function featureLabel(feature: "breakeven" | "trailing" | "daily" | string): string {
+  if (feature === "daily") return "Limite diário";
   return feature === "trailing" ? "Trailing stop" : "Breakeven";
 }
 
@@ -78,16 +79,21 @@ export function moveLabel(move: ProtectionMove): ProtectionLabel {
   return { text: "sem resposta da corretora: relendo o stop", tone: "warn" };
 }
 
-/** The features of a position worth showing: the ones not off, or armed. */
+/**
+ * The features of a position worth showing: the ones not off, or armed; and
+ * the stop the daily loss limits ask of it, whenever they ask one.
+ */
 export function shownFeatures(
   protection: PositionProtection | undefined,
-): { name: "breakeven" | "trailing"; feature: ProtectionFeature }[] {
+): { name: "breakeven" | "trailing" | "daily"; feature: ProtectionFeature }[] {
   if (!protection) return [];
-  const features: { name: "breakeven" | "trailing"; feature: ProtectionFeature }[] = [
+  const features: { name: "breakeven" | "trailing" | "daily"; feature: ProtectionFeature }[] = [
     { name: "breakeven", feature: protection.breakeven },
     { name: "trailing", feature: protection.trailing },
   ];
-  return features.filter(({ feature }) => feature.state !== "off" || feature.armed);
+  const shown = features.filter(({ feature }) => feature.state !== "off" || feature.armed);
+  if (protection.daily) shown.push({ name: "daily", feature: protection.daily });
+  return shown;
 }
 
 /** The fields of the form of the protection, as typed. */

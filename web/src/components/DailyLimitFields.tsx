@@ -143,6 +143,22 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
           />
         </div>
       </div>
+      <div className="daily-stops-switch">
+        <Switch
+          checked={form.brokerStops}
+          onChange={(value) => set("brokerStops", value)}
+          label="Proteger com stops na corretora"
+          disabled={busy}
+        />
+        <p className="field-hint">
+          Com a perda máxima definida, a cada minuto o stop das posições abertas
+          {global ? " dos agentes" : " do agente"} é aproximado do preço para caber no que falta até
+          o limite (o limite mais o resultado do dia, menos os custos de saída), dividido entre as
+          posições pelo risco de cada uma. O stop só aperta e fica na corretora mesmo com a
+          aplicação fora do ar; slippage e gaps ainda podem passar do limite, e a zeragem continua
+          valendo.
+        </p>
+      </div>
       {preview && (
         <Alert tone="warn" title="Efeito imediato">
           <p>{preview.message}</p>

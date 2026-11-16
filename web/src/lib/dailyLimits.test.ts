@@ -13,6 +13,9 @@ import {
   limitsLabel,
   parseLimit,
   scopeResults,
+  stopMoveLabel,
+  stopScope,
+  stopSide,
   stripHeadline,
   stripTone,
   timeIn,
@@ -124,20 +127,24 @@ describe("the daily limits on the dashboard", () => {
 
 describe("the form of the daily limits", () => {
   it("goes from the settings to the form and back, a comma taken as the decimals", () => {
-    const settings = { enabled: true, max_loss: 150.5, max_gain: 300 };
+    const settings = { enabled: true, max_loss: 150.5, max_gain: 300, broker_stops: false };
     expect(dailyLimitSettings(dailyLimitForm(settings))).toEqual(settings);
+    expect(dailyLimitForm({ enabled: true }).brokerStops, "on while never set").toBe(true);
     expect(parseLimit("150,50")).toBe(150.5);
     expect(parseLimit("1.500,25")).toBe(1500.25);
     expect(parseLimit("")).toBeNull();
     expect(Number.isNaN(parseLimit("abc") as number)).toBe(true);
-    expect(dailyLimitSettings({ enabled: true, maxLoss: "40", maxGain: "" })).toEqual({
+    expect(
+      dailyLimitSettings({ enabled: true, maxLoss: "40", maxGain: "", brokerStops: true }),
+    ).toEqual({
       enabled: true,
       max_loss: 40,
+      broker_stops: true,
     });
   });
 
   it("refuses what the controller refuses", () => {
-    const form = { enabled: true, maxLoss: "150", maxGain: "" };
+    const form = { enabled: true, maxLoss: "150", maxGain: "", brokerStops: true };
     expect(dailyLimitErrors(form)).toEqual({});
     expect(dailyLimitErrors({ ...form, maxLoss: "" }).maxLoss).toBe(
       "Defina a perda, o ganho ou os dois.",
@@ -178,5 +185,53 @@ describe("the strip of the daily limits", () => {
   it("tells when a limit was reached in the zone of the limits", () => {
     expect(timeIn(Date.UTC(2026, 9, 29, 17, 32) / 1000, "America/Belem")).toBe("14:32");
     expect(timeIn(0, "America/Belem")).toBe("");
+  });
+});
+
+describe("the stops of the daily loss limits", () => {
+  const stop = {
+    agent: "trend",
+    pair: "XAUUSDm",
+    side: "BUY",
+    tickets: [10],
+    scope: "",
+    currency: "USD",
+    level: 4153,
+    headroom: 40,
+    share: 40,
+    updated_at: 0,
+  };
+  it("tells its side, its limit and its last move at the broker", () => {
+    expect(stopSide(stop)).toBe("Compra");
+    expect(stopSide({ ...stop, side: "SELL" })).toBe("Venda");
+    expect(stopScope(stop)).toBe("de todos os agentes");
+    expect(stopScope({ ...stop, scope: "trend" })).toBe("de trend");
+    expect(stopMoveLabel(stop)).toEqual({
+      text: "cabe no limite",
+      tone: "off",
+      detail: "o stop atual já cabe no limite",
+    });
+    const confirmed = stopMoveLabel({ ...stop, move: "confirmed", confirmed: 4153 });
+    expect(confirmed.tone).toBe("on");
+    expect(confirmed.detail).toBeUndefined();
+    expect(
+      stopMoveLabel({ ...stop, move: "confirmed", confirmed: 4153, via: "bridge" }).detail,
+    ).toBe("pela bridge, com o agente parado");
+    const refused = stopMoveLabel({
+      ...stop,
+      move: "rejected",
+      previous: 4100,
+      detail: "invalid stops",
+    });
+    expect(refused.text, "short in the chip").toBe("recusado");
+    expect(refused.tone).toBe("error");
+    expect(refused.detail).toContain("invalid stops");
+    expect(refused.detail).toContain("stop mantido em");
+    expect(stopMoveLabel({ ...stop, move: "unknown" }).tone).toBe("warn");
+    expect(stopMoveLabel({ ...stop, move: "skipped", detail: "nível de congelamento" })).toEqual({
+      text: "não enviado",
+      tone: "warn",
+      detail: "nível de congelamento",
+    });
   });
 });
