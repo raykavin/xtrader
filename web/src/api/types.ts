@@ -773,6 +773,10 @@ export const ProtectionBreakeven = "breakeven";
  */
 export const ProtectionTrailing = "trailing";
 /**
+ * The features of the protection of the positions.
+ */
+export const ProtectionDaily = "daily"; // the stop loss the daily loss limits ask, see DailyStop
+/**
  * ProtectionSettings are the protection of the open positions of an agent,
  * off unless enabled, each distance in Unit (see ProtectionUnitATR): the
  * breakeven and the trailing stop, applied by the agent on every price, and

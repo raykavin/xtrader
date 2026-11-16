@@ -357,6 +357,19 @@ type fakeProtector struct {
 	mu    sync.Mutex
 	state PositionProtection
 	arms  []SupervisionProtectRequest
+	daily []SupervisionDailyStopsRequest
+}
+
+func (p *fakeProtector) DailyStops(request SupervisionDailyStopsRequest) SupervisionDailyStopsResponse {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.daily = append(p.daily, request)
+	results := make([]SupervisionProtectResponse, 0, len(request.Stops))
+	for _, stop := range request.Stops {
+		results = append(results, SupervisionProtectResponse{Status: ProtectApplied, Previous: 98,
+			Requested: stop.Level, Confirmed: stop.Level})
+	}
+	return SupervisionDailyStopsResponse{Results: results}
 }
 
 func (p *fakeProtector) Protection(pair string) *PositionProtection {
@@ -422,6 +435,47 @@ func TestSupervision_Protect(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(body), &snapshot))
 	require.NotNil(t, snapshot.Protection, "on the dashboard")
 	require.Equal(t, 98.0, snapshot.Protection.StopLoss)
+}
+
+// The supervisor sets the stops of the daily loss limits on its channel only,
+// each stop with its pair, once, a level and a side; without the protection
+// the route is a 404.
+func TestSupervision_DailyStops(t *testing.T) {
+	controller := &fakeSupervised{status: order.StatusRunning, positions: map[string]float64{"BTCUSDT": 1}}
+	c, url := newSupervisedChart(t, controller)
+	stops := `{"stops":[{"pair":"BTCUSDT","side":"BUY","level":99.5,"reason":"limite de perda diária"}]}`
+
+	resp, _ := request(t, http.MethodPost, url+"/api/supervision/daily-stops", stops, supervisorHeaders...)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "without the protection")
+
+	protector := &fakeProtector{state: PositionProtection{Pair: "BTCUSDT", PositionRef: "mt5:1", Side: "BUY"}}
+	c.SetProtection(protector)
+	resp, _ = request(t, http.MethodPost, url+"/api/supervision/daily-stops", stops, ChannelHeader,
+		string(ChannelWeb), "Content-Type", "application/json")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "the dashboard never sets them")
+
+	resp, body := request(t, http.MethodPost, url+"/api/supervision/daily-stops", stops, supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var answer SupervisionDailyStopsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &answer))
+	require.Len(t, answer.Results, 1)
+	require.Equal(t, ProtectApplied, answer.Results[0].Status)
+	require.InDelta(t, 99.5, answer.Results[0].Confirmed, 1e-9)
+	require.Len(t, protector.daily, 1)
+	require.Equal(t, "BUY", protector.daily[0].Stops[0].Side)
+
+	resp, body = request(t, http.MethodPost, url+"/api/supervision/daily-stops", `{"stops":[]}`,
+		supervisorHeaders...)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body, "none: no stop of the limits")
+	for name, refused := range map[string]string{
+		"no pair":      `{"stops":[{"level":1}]}`,
+		"no level":     `{"stops":[{"pair":"BTCUSDT"}]}`,
+		"twice":        `{"stops":[{"pair":"BTCUSDT","level":1},{"pair":"BTCUSDT","level":2}]}`,
+		"another side": `{"stops":[{"pair":"BTCUSDT","level":1,"side":"LONG"}]}`,
+	} {
+		resp, _ := request(t, http.MethodPost, url+"/api/supervision/daily-stops", refused, supervisorHeaders...)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, name)
+	}
 }
 
 // Blocked with drain, the entries wait for the orders being sent to end before

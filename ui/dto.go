@@ -511,6 +511,7 @@ const (
 const (
 	ProtectionBreakeven = "breakeven"
 	ProtectionTrailing  = "trailing"
+	ProtectionDaily     = "daily" // the stop loss the daily loss limits ask, see DailyStop
 )
 
 // ProtectionSettings are the protection of the open positions of an agent,

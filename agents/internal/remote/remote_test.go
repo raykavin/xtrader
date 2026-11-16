@@ -390,7 +390,20 @@ type fakeProtection struct {
 	mu       sync.Mutex
 	settings *ui.ProtectionSettings
 	arms     []ui.ProtectionArm
+	daily    []ui.DailyStop
 	applied  int
+}
+
+func (p *fakeProtection) ApplyDailyStops(stops []ui.DailyStop) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.daily = stops
+}
+
+func (p *fakeProtection) dailyStops() []ui.DailyStop {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.daily
 }
 
 func (p *fakeProtection) Apply(settings *ui.ProtectionSettings, arms []ui.ProtectionArm) {
@@ -437,10 +450,17 @@ func TestAgent_Protect(t *testing.T) {
 		return len(arms) == 1 && arms[0] == arm
 	}, 5*time.Second, time.Millisecond, "the arms of the runtime, its prompt failing")
 
+	stop := ui.DailyStop{Pair: "XAUUSDm", Side: "BUY", Level: 4150, Reason: "limite de perda diária"}
+	f.setRuntime(agentapi.Runtime{Protection: agentapi.Protection{DailyStops: []ui.DailyStop{stop}}})
+	require.Eventually(t, func() bool {
+		daily := protection.dailyStops()
+		return len(daily) == 1 && daily[0] == stop
+	}, 5*time.Second, time.Millisecond, "the stops of the daily loss limits of the runtime")
+
 	f.setRuntime(agentapi.Runtime{})
 	require.Eventually(t, func() bool {
 		settings, arms, _ := protection.state()
-		return settings == nil && len(arms) == 0
+		return settings == nil && len(arms) == 0 && len(protection.dailyStops()) == 0
 	}, 5*time.Second, time.Millisecond, "off")
 	require.NoError(t, a.Close())
 }

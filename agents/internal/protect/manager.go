@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,7 @@ type Manager struct {
 	mu       sync.Mutex
 	settings *ui.ProtectionSettings
 	arms     map[string]map[string]ui.ProtectionArm // by position, by feature
+	daily    map[string]ui.DailyStop                // the stops of the daily loss limits, by pair, see ApplyDailyStops
 	pairs    map[string]*pairState
 	sync     bool // see Synchronous
 
@@ -104,7 +106,8 @@ type pairState struct {
 // and its run for the ones of the paper wallet (by their entry).
 func New(ctx context.Context, broker Broker, market Market, timeframe, refPrefix string) *Manager {
 	return &Manager{ctx: ctx, broker: broker, market: market, timeframe: timeframe, refPrefix: refPrefix,
-		now: time.Now, arms: make(map[string]map[string]ui.ProtectionArm), pairs: make(map[string]*pairState)}
+		now: time.Now, arms: make(map[string]map[string]ui.ProtectionArm), daily: make(map[string]ui.DailyStop),
+		pairs: make(map[string]*pairState)}
 }
 
 // Synchronous makes m protect on the clock of a backtest: now read from now
@@ -119,8 +122,8 @@ func (m *Manager) Synchronous(now func() time.Time) {
 }
 
 // Guarded reports whether the stop guard of the order controller is on: the
-// protection runs, or may be armed, see order.Controller.SetStopGuard. It
-// reads an atomic flag only.
+// protection runs, or may be armed, or the daily loss limits ask a stop loss,
+// see order.Controller.SetStopGuard. It reads an atomic flag only.
 func (m *Manager) Guarded(string) bool {
 	return m.guarded.Load()
 }
@@ -141,7 +144,35 @@ func (m *Manager) Apply(settings *ui.ProtectionSettings, arms []ui.ProtectionArm
 	for _, arm := range arms {
 		m.armLocked(arm)
 	}
-	m.guarded.Store(m.settings != nil && m.settings.Active() || len(arms) > 0)
+	m.guardLocked()
+}
+
+// ApplyDailyStops sets the stop losses the daily loss limits of the controller
+// ask of the open positions, all of them (none: no stop of the limits), see
+// ui.DailyStop: applied on the next prices, only tightening.
+func (m *Manager) ApplyDailyStops(stops []ui.DailyStop) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setDailyLocked(stops)
+}
+
+// setDailyLocked sets the stops of the daily loss limits. Must be called while
+// holding m.mu.
+func (m *Manager) setDailyLocked(stops []ui.DailyStop) {
+	m.daily = make(map[string]ui.DailyStop, len(stops))
+	for _, stop := range stops {
+		if stop.Pair != "" && stop.Level > 0 {
+			m.daily[stop.Pair] = stop
+		}
+	}
+	m.guardLocked()
+}
+
+// guardLocked sets the stop guard of the order controller: on while the
+// protection runs, an arm is in force or the daily loss limits ask a stop
+// loss. Must be called while holding m.mu.
+func (m *Manager) guardLocked() {
+	m.guarded.Store(m.settings != nil && m.settings.Active() || len(m.arms) > 0 || len(m.daily) > 0)
 }
 
 // armLocked adds arm. Must be called while holding m.mu.
@@ -289,7 +320,7 @@ type plan struct {
 // now, unless a move is in flight, was made less than minInterval ago, or
 // failed less than coolDown ago. Must be called while holding m.mu.
 func (m *Manager) evaluateLocked(pair string, ps *pairState) *plan {
-	if m.settings == nil && len(m.arms) == 0 {
+	if m.settings == nil && len(m.arms) == 0 && len(m.daily) == 0 {
 		ps.state = nil // off: the positions not even read
 		return nil
 	}
@@ -330,7 +361,8 @@ func (m *Manager) evaluateLocked(pair string, ps *pairState) *plan {
 		settings = *m.settings
 	}
 	arms := m.arms[ref]
-	if m.settings == nil && len(arms) == 0 {
+	daily, hasDaily := m.daily[pair]
+	if m.settings == nil && len(arms) == 0 && !hasDaily {
 		ps.state = nil
 		return nil
 	}
@@ -348,6 +380,9 @@ func (m *Manager) evaluateLocked(pair string, ps *pairState) *plan {
 	}
 	state.Breakeven = m.breakeven(settings.Breakeven, arms, state, tick, stops, consider)
 	state.Trailing = m.trailing(settings.Trailing, arms, state, tick, stops, consider)
+	if hasDaily {
+		state.Daily = dailyFeature(daily, state, tick, stops, consider)
+	}
 	ps.state = state
 
 	now := m.now()
@@ -375,6 +410,10 @@ func (ps *pairState) showMoves() {
 			ps.state.Breakeven.Last = &copied
 		case ui.ProtectionTrailing:
 			ps.state.Trailing.Last = &copied
+		case ui.ProtectionDaily:
+			if ps.state.Daily != nil {
+				ps.state.Daily.Last = &copied
+			}
 		}
 		if move.Status == ui.MoveConfirmed && move.Confirmed > 0 &&
 			(ps.state.StopLoss == 0 || sign(ps.side)*(move.Confirmed-ps.state.StopLoss) > 0) {
@@ -452,6 +491,42 @@ func (m *Manager) trailing(s ui.TrailingSettings, arms map[string]ui.ProtectionA
 	}
 	if state.StopLoss > 0 && sign(side)*(state.StopLoss-level) > 0 {
 		feature.Level = state.StopLoss // the stop loss is tighter already
+	}
+	return feature
+}
+
+// dailyFeature returns the state of the stop loss the daily loss limits ask
+// of the position of state, telling consider its level when it would tighten
+// the one now: refused on another side (another position than the one the
+// limits weighed); within the least distance of the broker from the price,
+// the nearest level the broker takes; past the price already, none (the
+// close of the limit sees to the position).
+func dailyFeature(stop ui.DailyStop, state *ui.PositionProtection, tick, stops float64,
+	consider func(string, float64)) *ui.ProtectionFeature {
+	side := model.SideType(state.Side)
+	feature := &ui.ProtectionFeature{State: ui.ProtectionActive, Enabled: true, Level: stop.Level,
+		Detail: stop.Reason}
+	if stop.Side != "" && stop.Side != state.Side {
+		feature.State = ui.ProtectionOff
+		feature.Detail = fmt.Sprintf("pedido para uma posição de %s: a posição aberta é de %s", stop.Side, state.Side)
+		return feature
+	}
+	level := stop.Level
+	if sign(side)*(state.Price-level) <= 0 {
+		feature.State = ui.ProtectionWaiting
+		feature.Detail = "o preço já passou do stop do limite diário: a zeragem do limite cuida da posição"
+		return feature
+	}
+	if !onLosingSide(side, level, state.Price, stops) {
+		// the nearest level the broker takes, a tick beyond its least distance
+		level = roundAway(side, state.Price-sign(side)*(math.Max(stops, 0)+tick), tick)
+		feature.Level = level
+		feature.Detail = strings.TrimSpace(feature.Detail + "; ajustado à distância mínima da corretora")
+	}
+	if onLosingSide(side, level, state.Price, stops) && tighter(side, level, state.StopLoss, tick) {
+		consider(ui.ProtectionDaily, level)
+	} else if state.StopLoss > 0 && sign(side)*(state.StopLoss-level) >= 0 {
+		feature.Level = state.StopLoss // the stop loss is as tight already
 	}
 	return feature
 }
@@ -678,4 +753,95 @@ func (m *Manager) Arm(request ui.SupervisionProtectRequest) ui.SupervisionProtec
 		response.Status = ui.ProtectFailed
 	}
 	return response
+}
+
+// DailyStops sets the stop losses the daily loss limits ask of the open
+// positions (see ApplyDailyStops) and applies each at once, the answer of the
+// broker awaited, see ui.SupervisionDailyStopsResponse: applied, the stop loss
+// confirmed (as tight already, the one it is at); failed or unknown, the stop
+// loss kept; armed, a move in flight or no price yet, applied on the next
+// prices; refused, without a position on its pair, on another side, or with
+// the price past its level.
+func (m *Manager) DailyStops(request ui.SupervisionDailyStopsRequest) ui.SupervisionDailyStopsResponse {
+	m.ApplyDailyStops(request.Stops)
+	results := make([]ui.SupervisionProtectResponse, 0, len(request.Stops))
+	for _, stop := range request.Stops {
+		results = append(results, m.applyDaily(stop))
+	}
+	return ui.SupervisionDailyStopsResponse{Results: results}
+}
+
+// applyDaily applies the stop of the daily loss limits stop at once, see
+// DailyStops.
+func (m *Manager) applyDaily(stop ui.DailyStop) ui.SupervisionProtectResponse {
+	m.mu.Lock()
+	position, leg, hasStop := m.broker.PositionStop(stop.Pair)
+	previous := 0.0
+	if hasStop {
+		previous = order.StopLevel(leg)
+	}
+	answer := func(status, detail string) ui.SupervisionProtectResponse {
+		return ui.SupervisionProtectResponse{Status: status, Previous: previous, Requested: stop.Level, Detail: detail}
+	}
+	switch {
+	case position.Quantity <= 0:
+		m.mu.Unlock()
+		return answer(ui.ProtectRefused, fmt.Sprintf("nenhuma posição aberta em %s", stop.Pair))
+	case stop.Side != "" && string(position.Side) != stop.Side:
+		m.mu.Unlock()
+		return answer(ui.ProtectRefused, fmt.Sprintf("a posição aberta em %s é de %s, não de %s", stop.Pair,
+			position.Side, stop.Side))
+	}
+	ps := m.pair(stop.Pair)
+	if ps.inflight {
+		m.mu.Unlock()
+		return answer(ui.ProtectArmed, "um envio está em andamento: o próximo preço aplica o stop")
+	}
+	ps.sentAt, ps.coolUntil = time.Time{}, time.Time{} // asked now: no wait
+	p := m.evaluateLocked(stop.Pair, ps)
+	priced := ps.last.Close > 0
+	var daily ui.ProtectionFeature
+	if ps.state != nil && ps.state.Daily != nil {
+		daily = *ps.state.Daily
+	}
+	m.mu.Unlock()
+
+	if p == nil {
+		switch {
+		case !priced:
+			return answer(ui.ProtectArmed, "aguardando o primeiro preço do ativo: o stop é aplicado nele")
+		case daily.State == ui.ProtectionWaiting || daily.State == ui.ProtectionOff:
+			return answer(ui.ProtectRefused, daily.Detail)
+		}
+		response := answer(ui.ProtectApplied, "o stop já estava tão protetor quanto o limite pede")
+		response.Confirmed = previous
+		return response
+	}
+	move := m.apply(*p)
+	response := ui.SupervisionProtectResponse{Previous: move.Previous, Requested: move.Requested,
+		Confirmed: move.Confirmed, Detail: move.Detail, Protection: m.Protection(stop.Pair)}
+	switch move.Status {
+	case ui.MoveConfirmed:
+		response.Status = ui.ProtectApplied
+		if p.feature != ui.ProtectionDaily {
+			response.Detail = strings.TrimSpace(fmt.Sprintf("o %s pediu um stop mais protetor, aplicado %s",
+				featureName(p.feature), response.Detail))
+		}
+	case ui.MoveUnknown:
+		response.Status = ui.ProtectUnknown
+	default:
+		response.Status = ui.ProtectFailed
+	}
+	return response
+}
+
+// featureName names a feature of the protection for the user.
+func featureName(feature string) string {
+	switch feature {
+	case ui.ProtectionBreakeven:
+		return "breakeven"
+	case ui.ProtectionTrailing:
+		return "trailing stop"
+	}
+	return "limite diário"
 }
