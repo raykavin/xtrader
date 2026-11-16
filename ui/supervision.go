@@ -46,6 +46,7 @@ type Protector interface {
 	Protection(pair string) *PositionProtection
 	Protections() []PositionProtection
 	Arm(request SupervisionProtectRequest) SupervisionProtectResponse
+	DailyStops(request SupervisionDailyStopsRequest) SupervisionDailyStopsResponse
 }
 
 // SetProtection shows the protection of the positions of the bot with them,
@@ -199,6 +200,36 @@ func (c *Chart) handleSupervisionProtect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, c.protector.Arm(request))
+}
+
+// handleSupervisionDailyStops sets the stop losses the daily loss limits of
+// the controller ask of the positions, applied at once, see
+// SupervisionDailyStopsRequest: 404 without the protection, 400 for a stop
+// without its pair or level (or the same pair twice), the answer of each
+// stop else.
+func (c *Chart) handleSupervisionDailyStops(w http.ResponseWriter, r *http.Request) {
+	if _, ok := c.requireSupervisor(w, r); !ok {
+		return
+	}
+	if c.protector == nil {
+		writeJSONError(w, http.StatusNotFound, "Este agente não faz a proteção das posições.")
+		return
+	}
+	var request SupervisionDailyStopsRequest
+	if !decodeSupervision(w, r, &request) {
+		return
+	}
+	seen := make(map[string]bool, len(request.Stops))
+	for _, stop := range request.Stops {
+		if strings.TrimSpace(stop.Pair) == "" || stop.Level <= 0 || seen[stop.Pair] ||
+			(stop.Side != "" && stop.Side != string(model.SideTypeBuy) && stop.Side != string(model.SideTypeSell)) {
+			writeJSONError(w, http.StatusBadRequest, "Cada stop do limite diário precisa de um ativo, uma vez, um "+
+				"nível acima de 0 e o lado BUY ou SELL.")
+			return
+		}
+		seen[stop.Pair] = true
+	}
+	writeJSON(w, c.protector.DailyStops(request))
 }
 
 // decodeSupervision decodes the payload of a request of the supervisor into v,

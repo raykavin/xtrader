@@ -274,6 +274,7 @@ func applyPairs(gate *agentapi.PairGate, entries agentapi.Entries) {
 // sets it, see agentapi.Protection and protect.Manager.
 type Protection interface {
 	Apply(settings *ui.ProtectionSettings, arms []ui.ProtectionArm)
+	ApplyDailyStops(stops []ui.DailyStop)
 }
 
 // Protect has the protection of the positions of the bot follow the one the
@@ -285,6 +286,7 @@ func (a *Agent) Protect(protection Protection) {
 	a.protection = protection
 	a.mu.Unlock()
 	protection.Apply(a.Config.ProtectionSettings, a.Config.ProtectionArms)
+	protection.ApplyDailyStops(a.Config.DailyStops)
 }
 
 // applyEntries applies entries to controller, an older revision ignored.
@@ -321,6 +323,7 @@ func (a *Agent) watch(ctx context.Context, apply func(agentapi.Runtime)) error {
 			a.exposure.Store(runtime.Entries.Exposure)
 			if protection != nil {
 				protection.Apply(runtime.ProtectionSettings, runtime.ProtectionArms)
+				protection.ApplyDailyStops(runtime.DailyStops)
 			}
 		}
 		if err == nil && changed && a.prompts != nil {
