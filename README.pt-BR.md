@@ -22,7 +22,7 @@ O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader
 ![Painel de um agente LLM: limite do dia, P/L das contas, sentimento do mercado, gráfico com a análise desenhada, calendário econômico e a última decisão do modelo](docs/images/painel-agente-llm.webp)
 
 > [!WARNING]
-> Trading automatizado envolve risco real de perda. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente e na conta MT5.
+> Trading automatizado envolve risco real de perda. O XTrader não é recomendação de investimento, e nenhuma estratégia, prompt ou agente dele foi comprovado como lucrativo. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente e na conta MT5. Leia o [Aviso de risco](#aviso-de-risco) antes de usar.
 
 ## Sumário
 
@@ -67,6 +67,7 @@ O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader
 - [Desenvolvimento](#desenvolvimento)
 - [API](#api)
 - [Segurança](#segurança)
+- [Aviso de risco](#aviso-de-risco)
 - [Licença](#licença)
 
 ## Telas
@@ -1346,6 +1347,8 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 
 ## Segurança
 
+Para relatar uma vulnerabilidade, veja o [SECURITY.md](SECURITY.md), nunca numa issue pública.
+
 - **Login:** senhas em bcrypt, sessão com cookie `HttpOnly` (e `Secure` atrás de proxy HTTPS) e proteção CSRF. Depois do login, só volta para uma página do próprio painel (`next` com caractere de controle, espaço, `\` ou outro site vai para `/`).
 - **Limite de tentativas de login:** é contado antes de conferir a senha, porque o bcrypt custa cerca de 250 ms de CPU do controller, que também roda os agentes:
   - **por endereço do cliente** (rígido): um login por vez; depois de uma falha, o próximo só 1 s depois; a partir da 5ª falha seguida, a espera dobra a cada falha (2 s, 4 s, 8 s… até 5 min). As falhas são esquecidas 1 h depois da última;
@@ -1383,6 +1386,18 @@ XTRADER_TEST_DATABASE_URL='postgres://postgres:<senha>@127.0.0.1:55432/postgres?
 - **Conta real:** exige **Permitir conta real** no agente e na conta MT5 (Configurações > Contas MT5), que a bridge aplica junto com **Somente leitura**.
 - **Portas publicadas no Docker:** só no loopback do host, `127.0.0.1:8082` (painel, para onde o ngrok do host tunela), `127.0.0.1:5900` (VNC, que só sobe com senha) e `127.0.0.1:5432` (PostgreSQL). O Docker publica as portas por fora do firewall do host (ufw), então uma porta em `0.0.0.0` ficaria aberta para a rede mesmo "fechada" no firewall. De outra máquina, use um túnel SSH, ex.: `ssh -N -L 5900:127.0.0.1:5900 <usuário>@<servidor>` para o VNC e `ssh -N -L 5433:127.0.0.1:5432 <usuário>@<servidor>` para o `psql -h 127.0.0.1 -p 5433` (detalhes em [deploy/docker/README.md](deploy/docker/README.md#acesso-de-outra-máquina)).
 - **Dependências:** o `go.mod` fixa o toolchain (`toolchain go1.25.14`), com as correções de segurança da biblioteca padrão, e a imagem compila com o Go 1.26.8. Para conferir as vulnerabilidades conhecidas: `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`.
+
+## Aviso de risco
+
+O XTrader é um software para estudar e automatizar operações. Usá-lo, em conta demo ou real, é uma decisão sua e de sua responsabilidade.
+
+- **Não é recomendação de investimento:** nada neste repositório (código, estratégias, prompts, seeds, parâmetros, capturas de tela ou documentação) é recomendação de compra ou venda de qualquer ativo, nem um serviço de gestão ou de sinais.
+- **Sem vantagem comprovada:** nenhuma estratégia, prompt ou agente que acompanha o projeto foi comprovado como lucrativo. Os seeds são pontos de partida para testar, não configurações para operar. Resultados de backtest, paper e conta demo não garantem resultados futuros: numa conta real, spread, comissões, swap, slippage, gaps, requotes e latência podem mudá-los.
+- **Modelos de linguagem:** as decisões de um agente LLM e as ações do XTrader AI podem estar erradas, ser inconsistentes ou partir de dados mal lidos, e cada consulta custa dinheiro no provedor.
+- **Proteções não são garantias:** os limites diários, os stops na corretora, a zeragem, o horário de operação, os limites de exposição e o XTrader AI reduzem o risco, mas não asseguram uma perda máxima. Um gap ou slippage pode fechar uma posição além do stop, e uma falha do controller, da bridge, do terminal MT5, da corretora ou da rede pode deixar posições abertas sem a proteção da aplicação.
+- **Alavancagem:** CFDs, forex, índices, metais e cripto operados com alavancagem podem perder dinheiro rapidamente. Nunca opere um dinheiro que você não pode perder.
+- **Sua responsabilidade:** antes de usar, confira os termos da sua corretora (operação automatizada, uso do terminal MT5) e a regulação do seu país; guarde as suas credenciais com segurança e acompanhe o que a aplicação faz numa conta real.
+- **Sem garantia:** como diz a [licença MIT](LICENSE), o software é fornecido "como está", sem garantia de nenhum tipo, e os autores e titulares dos direitos não respondem por nenhuma perda decorrente do seu uso.
 
 ## Licença
 
