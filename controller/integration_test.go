@@ -566,7 +566,8 @@ func TestSettingsAPI_CreateAnAgent(t *testing.T) {
 		Model: "openai gpt-5", PromptID: &prompt.ID,
 		Secrets:    ui.AgentSecretsPresent{LLMAPIKey: true, BridgeToken: true},
 		Protection: ui.ProtectionSettings{Unit: ui.ProtectionUnitATR},
-		DailyLimit: ui.DailyLimitSettings{BrokerStops: ptrTo(true)}}, // the stops at the broker on, never set
+		DailyLimit: ui.DailyLimitSettings{BrokerStops: ptrTo(true), // the stops at the broker on, never set
+			MinMarginPct: ptrTo(ui.DefaultMinMarginPct)}}, // the least margin by default
 		agentSettingsOf(t, body))
 	stored, err := c.store.AgentByName(ctx, "gold")
 	require.NoError(t, err)

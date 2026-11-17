@@ -2435,14 +2435,38 @@ type SupervisorCloseRequest struct {
 // losses of the open positions of its agents at the broker within the loss
 // left of the day (see DailyStop), only tightening them; nil when sent, kept
 // as it is (on, never set).
+//
+// MinMarginPct is the least margin of a loss limit for new entries, in percent
+// of MaxLoss (0 off, DefaultMinMarginPct never set): the loss left to the
+// limit below it (see MinMargin), the entries of its agents are blocked,
+// nothing closed, until the margin is back or the day is over; nil when sent,
+// kept as it is.
 type DailyLimitSettings struct {
-	Enabled     bool     `json:"enabled"`
-	Currency    string   `json:"currency,omitempty"`
-	MaxLoss     *float64 `json:"max_loss,omitempty"`
-	MaxGain     *float64 `json:"max_gain,omitempty"`
-	BrokerStops *bool    `json:"broker_stops,omitempty"`
-	UpdatedBy   string   `json:"updated_by,omitempty"`
-	UpdatedAt   int64    `json:"updated_at,omitempty"`
+	Enabled      bool     `json:"enabled"`
+	Currency     string   `json:"currency,omitempty"`
+	MaxLoss      *float64 `json:"max_loss,omitempty"`
+	MaxGain      *float64 `json:"max_gain,omitempty"`
+	BrokerStops  *bool    `json:"broker_stops,omitempty"`
+	MinMarginPct *float64 `json:"min_margin_pct,omitempty"`
+	UpdatedBy    string   `json:"updated_by,omitempty"`
+	UpdatedAt    int64    `json:"updated_at,omitempty"`
+}
+
+// DefaultMinMarginPct is the least margin of a loss limit for new entries never
+// set, in percent of its loss limit, see DailyLimitSettings.MinMarginPct.
+const DefaultMinMarginPct = 10.0
+
+// MinMargin returns the least margin of the loss limit of s for new entries,
+// in its currency: 0 without a loss limit enabled or with it off.
+func (s DailyLimitSettings) MinMargin() float64 {
+	if !s.Enabled || s.MaxLoss == nil {
+		return 0
+	}
+	pct := DefaultMinMarginPct
+	if s.MinMarginPct != nil {
+		pct = *s.MinMarginPct
+	}
+	return *s.MaxLoss * pct / 100
 }
 
 // StopsOn reports whether the loss limit of s, enabled, moves the stop losses
@@ -2474,6 +2498,7 @@ const (
 	DailyFree       = "free"
 	DailyBlocked    = "blocked"
 	DailyIncomplete = "incomplete"
+	DailyMargin     = "margin" // the margin left below its least: new entries blocked, nothing closed
 )
 
 // DailyGuardInfo is a daily guard tripped: Kind limit (Trigger loss or gain,

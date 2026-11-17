@@ -3013,6 +3013,11 @@ export interface SupervisorCloseRequest {
  * losses of the open positions of its agents at the broker within the loss
  * left of the day (see DailyStop), only tightening them; nil when sent, kept
  * as it is (on, never set).
+ * MinMarginPct is the least margin of a loss limit for new entries, in percent
+ * of MaxLoss (0 off, DefaultMinMarginPct never set): the loss left to the
+ * limit below it (see MinMargin), the entries of its agents are blocked,
+ * nothing closed, until the margin is back or the day is over; nil when sent,
+ * kept as it is.
  */
 export interface DailyLimitSettings {
   enabled: boolean;
@@ -3020,9 +3025,15 @@ export interface DailyLimitSettings {
   max_loss?: number /* float64 */;
   max_gain?: number /* float64 */;
   broker_stops?: boolean;
+  min_margin_pct?: number /* float64 */;
   updated_by?: string;
   updated_at?: number /* int64 */;
 }
+/**
+ * DefaultMinMarginPct is the least margin of a loss limit for new entries never
+ * set, in percent of its loss limit, see DailyLimitSettings.MinMarginPct.
+ */
+export const DefaultMinMarginPct = 10.0;
 /**
  * DailyResult is the result of the day of agents in Currency: Realized, the
  * exits of the day with their swap, commission and fee and the commission and
@@ -3066,6 +3077,13 @@ export const DailyBlocked = "blocked";
  * blocked until it is read again).
  */
 export const DailyIncomplete = "incomplete";
+/**
+ * The states of a scope of the daily limits: off (no limit), free (under its
+ * limits), blocked (a limit reached: its positions closed, its entries
+ * blocked until the next day) or incomplete (its result unknown: its entries
+ * blocked until it is read again).
+ */
+export const DailyMargin = "margin"; // the margin left below its least: new entries blocked, nothing closed
 /**
  * DailyGuardInfo is a daily guard tripped: Kind limit (Trigger loss or gain,
  * Result and Limit in Currency) or incomplete; how its positions were closed
