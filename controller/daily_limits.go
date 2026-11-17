@@ -63,6 +63,8 @@ type dailyLimiter struct {
 	carry     map[string]dailyCarry
 	breaches  map[string]int        // the reads in a row a scope reached a limit in
 	failures  map[string]int        // the reads in a row the result of a scope was unknown in
+	lowMargin map[string]int        // the reads in a row the margin of a scope was below its least in
+	okMargin  map[string]int        // the reads in a row it was at or above it in
 	held      map[int64]int         // the reads in a row the scope of a guard closed held a position in
 	flattenAt map[int64]time.Time   // the closes of the guards in progress, since when
 	triedAt   map[int64]time.Time   // the last close of each guard
@@ -88,6 +90,7 @@ func newDailyLimiter(s *Supervision) *dailyLimiter {
 	return &dailyLimiter{s: s, every: dailyLimitEvery, zone: llm.LocalZone(),
 		wake: make(chan struct{}, 1), owners: make(map[string]dailyOwner), carry: make(map[string]dailyCarry),
 		breaches: make(map[string]int), failures: make(map[string]int), held: make(map[int64]int),
+		lowMargin: make(map[string]int), okMargin: make(map[string]int),
 		flattenAt: make(map[int64]time.Time), triedAt: make(map[int64]time.Time), stopsInForce: true,
 		symbols: make(map[string]cachedSymbol)}
 }
@@ -393,6 +396,7 @@ func (l *dailyLimiter) evaluate(ctx context.Context) error {
 	if day != l.day {
 		l.day = day
 		l.breaches, l.failures = make(map[string]int), make(map[string]int)
+		l.lowMargin, l.okMargin = make(map[string]int), make(map[string]int)
 	}
 	l.mu.Unlock()
 	if len(released) > 0 {
@@ -400,7 +404,7 @@ func (l *dailyLimiter) evaluate(ctx context.Context) error {
 		l.publish(ctx, nil, false)
 	}
 
-	tripped, err := l.s.store.TrippedDailyGuards(ctx)
+	tripped, err := l.trippedGuards(ctx)
 	if err != nil {
 		return err
 	}
@@ -443,10 +447,12 @@ func (l *dailyLimiter) evaluate(ctx context.Context) error {
 		if result == nil {
 			continue
 		}
-		l.decide(ctx, m, scope, result, guardOf(scope.key, store.GuardLimit), guardOf(scope.key, store.GuardIncomplete))
+		l.decide(ctx, m, scope, result, guardOf(scope.key, store.GuardLimit), guardOf(scope.key, store.GuardIncomplete),
+			guardOf(scope.key, store.GuardMargin))
 	}
+	l.releaseMargins(ctx, m, tripped)
 	// the guards of a limit tripped: their scope flat, else closed again
-	if tripped, err = l.s.store.TrippedDailyGuards(ctx); err != nil {
+	if tripped, err = l.trippedGuards(ctx); err != nil {
 		return err
 	}
 	for _, g := range tripped {
@@ -478,7 +484,7 @@ func scopeKeyOf(g store.DailyGuard, agents []store.Agent) string {
 // dailyConfirmReads reads in a row, its limit guard tripped and its positions
 // closed.
 func (l *dailyLimiter) decide(ctx context.Context, m *dailyMeasure, scope dailyScope, result *ui.DailyResult,
-	limit, incomplete *store.DailyGuard) {
+	limit, incomplete, margin *store.DailyGuard) {
 	l.mu.Lock()
 	if !result.Complete {
 		l.failures[scope.key]++
@@ -522,6 +528,9 @@ func (l *dailyLimiter) decide(ctx context.Context, m *dailyMeasure, scope dailyS
 			l.publish(ctx, scope.names, false)
 		}
 	}
+	if limit == nil && trigger == "" {
+		l.decideMargin(ctx, m, scope, result, margin, metric)
+	}
 	l.mu.Lock()
 	if trigger == "" || limit != nil {
 		l.breaches[scope.key] = 0
@@ -552,6 +561,117 @@ func (l *dailyLimiter) decide(ctx context.Context, m *dailyMeasure, scope dailyS
 	log.Warnf("daily limits: %s", reason)
 	l.publish(ctx, scope.names, true)
 	l.flatten(ctx, guard, scope.names, metric)
+}
+
+// decideMargin trips or releases the guard of the margin of scope after its
+// result: the margin left to its loss limit (the limit plus the worse of the
+// realized and the result with the positions open, so that a profit still
+// open never lends margin) below its least for new entries (see
+// ui.DailyLimitSettings.MinMargin) in dailyConfirmReads reads in a row, its
+// entries blocked (the orders being sent waited for), nothing closed; at or
+// above it as long, released; its least off, released at once.
+func (l *dailyLimiter) decideMargin(ctx context.Context, m *dailyMeasure, scope dailyScope, result *ui.DailyResult,
+	guard *store.DailyGuard, metric map[string]any) {
+	least := scope.limits.MinMargin()
+	margin := 0.0
+	if scope.limits.MaxLoss != nil {
+		margin = *scope.limits.MaxLoss + math.Min(result.Realized, result.Total)
+	}
+	low := least > 0 && math.Round(margin*100) < math.Round(least*100)
+	l.mu.Lock()
+	if low {
+		l.lowMargin[scope.key]++
+		l.okMargin[scope.key] = 0
+	} else {
+		l.okMargin[scope.key]++
+		l.lowMargin[scope.key] = 0
+	}
+	lows, oks := l.lowMargin[scope.key], l.okMargin[scope.key]
+	l.mu.Unlock()
+	metric["margin"], metric["least_margin"] = margin, least
+	switch {
+	case low && guard == nil && lows >= dailyConfirmReads:
+		reason := fmt.Sprintf("Margem do limite diário de %s abaixo do mínimo: faltam %s para a perda máxima "+
+			"(mínimo %s); novas entradas bloqueadas, as posições abertas seguem com os stops",
+			scopeName(scope.key), money(math.Max(margin, 0), result.Currency), money(least, result.Currency))
+		_, newly, err := l.s.store.TripMarginGuard(ctx, store.MarginTrip{Day: m.day, AgentID: scope.agentID,
+			Margin: margin, Least: least, Result: result.Total, Currency: result.Currency, Reason: reason,
+			Metric: metric})
+		if err != nil {
+			log.Errorf("daily limits: %v", err)
+			return
+		}
+		if newly {
+			log.Warnf("daily limits: %s", reason)
+			l.publish(ctx, scope.names, true)
+		}
+	case guard != nil && (least <= 0 || !low && oks >= dailyConfirmReads):
+		reason := "margem do limite diário de volta acima do mínimo para novas entradas"
+		if least <= 0 {
+			reason = "margem mínima para novas entradas desligada"
+		}
+		l.releaseMargin(ctx, *guard, scope.names, reason, metric)
+	}
+}
+
+// releaseMargins releases the guards of the margin of today whose scope no
+// longer has a least margin: its loss limit off, or the limit of an agent
+// gone (eg: the agent in paper).
+func (l *dailyLimiter) releaseMargins(ctx context.Context, m *dailyMeasure, tripped []store.DailyGuard) {
+	active := make(map[string]dailyScope)
+	for _, scope := range m.scopes() {
+		if scope.limits.MinMargin() > 0 {
+			active[scope.key] = scope
+		}
+	}
+	for _, g := range tripped {
+		if g.Kind != store.GuardMargin || g.DayOf() != m.day {
+			continue
+		}
+		key := scopeKeyOf(g, m.agents)
+		if _, ok := active[key]; ok {
+			continue
+		}
+		var names []string
+		if key != "" {
+			names = []string{key}
+		}
+		l.releaseMargin(ctx, g, names, "limite de perda ou margem mínima desligados", nil)
+	}
+}
+
+// releaseMargin releases the guard g of a margin for reason, the entries of
+// its agents names (all of them when nil) published.
+func (l *dailyLimiter) releaseMargin(ctx context.Context, g store.DailyGuard, names []string, reason string,
+	metric any) {
+	ok, err := l.s.store.ReleaseMarginGuard(ctx, g.ID, store.DailyChange{Day: g.DayOf(), Via: store.ViaSystem,
+		By: "system", Reason: reason}, metric)
+	if err != nil {
+		log.Errorf("daily limits: %v", err)
+		return
+	}
+	if ok {
+		log.Infof("daily limits: the margin guard of %s released: %s", scopeName(scopeKeyOf(g, nil)), reason)
+		l.publish(ctx, names, false)
+	}
+}
+
+// trippedGuards returns the guards tripped: the ones of the limits
+// (daily_guards) and the ones of the margin (daily_margin_guards, of kind
+// store.GuardMargin, their IDs of their own table), weighed together.
+func (l *dailyLimiter) trippedGuards(ctx context.Context) ([]store.DailyGuard, error) {
+	guards, err := l.s.store.TrippedDailyGuards(ctx)
+	if err != nil {
+		return nil, err
+	}
+	margins, err := l.s.store.TrippedMarginGuards(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range margins {
+		guards = append(guards, g.Guard())
+	}
+	return guards, nil
 }
 
 // watchFlat closes again the positions of the scope of the guard g, tripped
@@ -717,8 +837,10 @@ func (l *dailyLimiter) setStatus(m *dailyMeasure, tripped []store.DailyGuard) {
 			switch {
 			case g.Kind == store.GuardLimit:
 				scope.State, scope.Guard = ui.DailyBlocked, &info
-			case scope.State != ui.DailyBlocked:
+			case g.Kind == store.GuardIncomplete && scope.State != ui.DailyBlocked:
 				scope.State, scope.Guard = ui.DailyIncomplete, &info
+			case g.Kind == store.GuardMargin && scope.State != ui.DailyBlocked && scope.State != ui.DailyIncomplete:
+				scope.State, scope.Guard = ui.DailyMargin, &info
 			}
 		}
 		return scope
@@ -798,6 +920,18 @@ func (l *dailyLimiter) preview(ctx context.Context, a *store.Agent,
 			scopeName(key), money(result.Total, result.Currency))
 	case limits.Enabled && !known:
 		preview.Message = "O resultado de hoje ainda não pôde ser lido: o limite vale assim que for lido."
+	}
+	if least := limits.MinMargin(); known && trigger == "" && least > 0 && limits.MaxLoss != nil {
+		if margin := *limits.MaxLoss + math.Min(result.Realized, result.Total); margin < least {
+			note := fmt.Sprintf("Faltam %s para a perda máxima, abaixo da margem mínima de %s: as novas entradas "+
+				"ficam bloqueadas, sem zerar as posições.", money(math.Max(margin, 0), result.Currency),
+				money(least, result.Currency))
+			if preview.Effect == ui.DailyEffectNone {
+				preview.Message = note
+			} else {
+				preview.Message += " " + note
+			}
+		}
 	}
 	return preview, guard, nil
 }

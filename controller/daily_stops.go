@@ -508,9 +508,12 @@ func (l *dailyLimiter) planStops(ctx context.Context, m *dailyMeasure, tripped [
 	error) {
 	plan := &dailyStopPlan{stops: make(map[string]store.DailyStop), changed: make(map[string]bool),
 		moves: make(map[string][]int)}
+	// a limit reached: its positions closed by the limit (the guards of the
+	// margin and of a result unknown leave the positions open, their stops kept)
 	trippedScope := func(key string) bool {
 		return slices.ContainsFunc(tripped, func(g store.DailyGuard) bool {
-			return g.DayOf() == m.day && (scopeKeyOf(g, m.agents) == key || g.AgentID == nil && g.Kind == store.GuardLimit)
+			return g.DayOf() == m.day && g.Kind == store.GuardLimit && (scopeKeyOf(g, m.agents) == key ||
+				g.AgentID == nil)
 		})
 	}
 	var scopes []dailyScope
