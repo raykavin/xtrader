@@ -24,8 +24,9 @@ func TestDailyLimits(t *testing.T) {
 	_, found, err := s.GlobalDailyLimit(ctx)
 	require.NoError(t, err)
 	require.False(t, found, "no limit while never set")
-	on := true
-	require.Equal(t, ui.DailyLimitSettings{BrokerStops: &on}, a.DailyLimitOf(), "the stops at the broker on")
+	on, margin := true, ui.DefaultMinMarginPct
+	require.Equal(t, ui.DailyLimitSettings{BrokerStops: &on, MinMarginPct: &margin}, a.DailyLimitOf(),
+		"the stops at the broker on, the least margin by default")
 
 	global := ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(150), MaxGain: amount(300)}
 	previous, next, err := s.SetGlobalDailyLimit(ctx, global, change)
@@ -251,4 +252,100 @@ func TestDailyLimits_BrokerStops(t *testing.T) {
 	// a loss limit only: the stops on with a loss limit enabled
 	require.False(t, ui.DailyLimitSettings{Enabled: true, MaxGain: amount(10)}.StopsOn(), "no loss limit")
 	require.False(t, ui.DailyLimitSettings{MaxLoss: amount(10)}.StopsOn(), "off")
+}
+
+// The least margin of a loss limit for new entries, of all the agents and of
+// an agent: 10% while never set, kept as it is when a change doesn't send it,
+// 0 turning it off, refused out of 0 to under 100; the margin in money by the
+// loss limit; the guard of the margin tripped and released as the others, its
+// trip recorded as an event of its own.
+func TestDailyLimits_MinMargin(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := llmAgent(t, s, "llm")
+	change := DailyChange{Day: "2026-11-17", Via: ViaSettings, By: "admin"}
+
+	global, _, err := s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.InDelta(t, 10, *global.Settings().MinMarginPct, 1e-9, "10% while never set")
+
+	_, next, err := s.SetGlobalDailyLimit(ctx, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(200),
+		MinMarginPct: amount(25)}, change)
+	require.NoError(t, err)
+	require.InDelta(t, 25, *next.Settings().MinMarginPct, 1e-9)
+	require.InDelta(t, 50, next.Settings().MinMargin(), 1e-9, "25% of 200")
+	_, _, err = s.SetGlobalDailyLimit(ctx, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(100)}, change)
+	require.NoError(t, err)
+	global, _, err = s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.InDelta(t, 25, *global.Settings().MinMarginPct, 1e-9, "kept")
+	require.InDelta(t, 25, global.Settings().MinMargin(), 1e-9, "following the loss limit")
+
+	zero := 0.0
+	_, _, err = s.SetAgentDailyLimit(ctx, a.ID, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(40),
+		MinMarginPct: &zero}, change)
+	require.NoError(t, err)
+	agent, err := s.AgentByName(ctx, "llm")
+	require.NoError(t, err)
+	require.Zero(t, agent.DailyLimitOf().MinMargin(), "0: off")
+	global, _, err = s.GlobalDailyLimit(ctx)
+	require.NoError(t, err)
+	require.InDelta(t, 25, *global.Settings().MinMarginPct, 1e-9, "all the agents untouched")
+
+	for _, refused := range []float64{-1, 100, 150} {
+		_, _, err = s.SetGlobalDailyLimit(ctx, ui.DailyLimitSettings{Enabled: true, MaxLoss: amount(100),
+			MinMarginPct: &refused}, change)
+		require.ErrorIs(t, err, ErrInvalid, "%v", refused)
+	}
+	require.Zero(t, ui.DailyLimitSettings{Enabled: true, MaxGain: amount(50)}.MinMargin(), "no loss limit")
+
+	// the guard of the margin, on its own table: tripped once, the entries
+	// blocked; released; tripped again; each recorded; ended with its day
+	guard, newly, err := s.TripMarginGuard(ctx, MarginTrip{Day: "2026-11-17", Margin: 0.01, Least: 10,
+		Result: -99.99, Currency: "BRL", Reason: "margem abaixo do mínimo", Metric: map[string]any{"total": -99.99}})
+	require.NoError(t, err)
+	require.True(t, newly)
+	require.Equal(t, GuardMargin, guard.Guard().Kind)
+	_, newly, err = s.TripMarginGuard(ctx, MarginTrip{Day: "2026-11-17", Least: 10, Reason: "de novo"})
+	require.NoError(t, err)
+	require.False(t, newly, "tripped already")
+	blocked, reason, revision, err := s.DailyEntries(ctx, a.ID)
+	require.NoError(t, err)
+	require.True(t, blocked)
+	require.Equal(t, "margem abaixo do mínimo", reason)
+	events, err := s.DailyLimitEvents(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, EventTripped, events[0].Kind)
+	require.Nil(t, events[0].GuardID)
+	require.Contains(t, string(events[0].Metric), `"guard": "margin"`)
+	require.Equal(t, events[0].ID, revision, "the entries of the agents at its revision")
+	tripped, err := s.TrippedMarginGuards(ctx)
+	require.NoError(t, err)
+	require.Len(t, tripped, 1)
+
+	ok, err := s.ReleaseMarginGuard(ctx, guard.ID, DailyChange{Day: "2026-11-17", Via: ViaSystem, By: "system",
+		Reason: "margem de volta"}, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	blocked, _, _, err = s.DailyEntries(ctx, a.ID)
+	require.NoError(t, err)
+	require.False(t, blocked)
+	ok, err = s.ReleaseMarginGuard(ctx, guard.ID, DailyChange{Day: "2026-11-17"}, nil)
+	require.NoError(t, err)
+	require.False(t, ok, "released already")
+
+	again, newly, err := s.TripMarginGuard(ctx, MarginTrip{Day: "2026-11-17", Least: 10, Currency: "BRL",
+		Reason: "de novo"})
+	require.NoError(t, err)
+	require.True(t, newly)
+	require.Equal(t, guard.ID, again.ID)
+	require.Equal(t, 2, again.Trips)
+
+	released, err := s.RolloverDailyGuards(ctx, "2026-11-18")
+	require.NoError(t, err)
+	require.Len(t, released, 1)
+	require.Equal(t, GuardMargin, released[0].Kind)
+	tripped, err = s.TrippedMarginGuards(ctx)
+	require.NoError(t, err)
+	require.Empty(t, tripped, "the day over")
 }

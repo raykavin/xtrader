@@ -21,6 +21,7 @@ const DailyLimitMax = 1e9
 const (
 	GuardLimit      = "limit"      // a limit of the day reached: positions closed, entries blocked
 	GuardIncomplete = "incomplete" // the result of the day unknown: entries blocked
+	GuardMargin     = "margin"     // a guard of the margin (daily_margin_guards, see MarginGuard): entries blocked, nothing closed
 )
 
 // The triggers of a daily guard of a limit.
@@ -76,6 +77,9 @@ type DailyLimit struct {
 	// Stops is whether its loss limit moves the stop losses at the broker, of
 	// daily_limit_stops (see DailyLimitStop): nil while never set, on
 	Stops *bool `gorm:"-" json:"broker_stops,omitempty"`
+	// Margin is the least margin of its loss limit for new entries, in percent,
+	// of daily_limit_margins (see DailyLimitMargin): nil while never set
+	Margin *float64 `gorm:"-" json:"min_margin_pct,omitempty"`
 }
 
 func (DailyLimit) TableName() string { return "daily_limit_settings" }
@@ -88,7 +92,7 @@ const NoCurrency = "XXX"
 // they apply in the one of each account.
 func (l DailyLimit) Settings() ui.DailyLimitSettings {
 	settings := ui.DailyLimitSettings{Enabled: l.Enabled, MaxLoss: l.MaxLoss, MaxGain: l.MaxGain,
-		BrokerStops: stopsOn(l.Stops), UpdatedBy: l.UpdatedBy}
+		BrokerStops: stopsOn(l.Stops), MinMarginPct: marginOf(l.Margin), UpdatedBy: l.UpdatedBy}
 	if !l.UpdatedAt.IsZero() {
 		settings.UpdatedAt = l.UpdatedAt.Unix()
 	}
@@ -130,7 +134,69 @@ func (a Agent) DailyLimitOf() ui.DailyLimitSettings {
 		stops = &a.DailyStops.Enabled
 	}
 	settings.BrokerStops = stopsOn(stops)
+	var margin *float64
+	if a.DailyMargin != nil {
+		margin = &a.DailyMargin.MinMarginPct
+	}
+	settings.MinMarginPct = marginOf(margin)
 	return settings
+}
+
+// DailyLimitMargin is the least margin of the loss limit of all the agents
+// (AgentID nil) or of an agent for new entries (daily_limit_margins), in
+// percent of the loss limit, see ui.DailyLimitSettings.MinMarginPct: a row
+// once changed, ui.DefaultMinMarginPct without one.
+type DailyLimitMargin struct {
+	ID           int64     `gorm:"primaryKey" json:"-"`
+	AgentID      *int64    `json:"agent_id,omitempty"`
+	MinMarginPct float64   `json:"min_margin_pct"`
+	UpdatedBy    string    `json:"updated_by"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (DailyLimitMargin) TableName() string { return "daily_limit_margins" }
+
+// marginOf returns the least margin as the dashboard takes it:
+// ui.DefaultMinMarginPct while never set.
+func marginOf(pct *float64) *float64 {
+	value := ui.DefaultMinMarginPct
+	if pct != nil {
+		value = *pct
+	}
+	return &value
+}
+
+// setDailyMargin sets the least margin of the loss limit of the agent of id
+// (all the agents for nil) to pct, by by, within the transaction of ctx.
+func (s *Store) setDailyMargin(ctx context.Context, id *int64, pct float64, by string) error {
+	query := s.conn(ctx).Model(&DailyLimitMargin{})
+	if id == nil {
+		query = query.Where("agent_id IS NULL")
+	} else {
+		query = query.Where("agent_id = ?", *id)
+	}
+	result := query.Updates(map[string]any{"min_margin_pct": pct, "updated_by": by, "updated_at": time.Now()})
+	if result.Error != nil || result.RowsAffected > 0 {
+		return result.Error
+	}
+	return s.conn(ctx).Create(&DailyLimitMargin{AgentID: id, MinMarginPct: pct, UpdatedBy: by,
+		UpdatedAt: time.Now()}).Error
+}
+
+// dailyMarginOf returns the least margin of the loss limit of the agent of id
+// (all the agents for nil), nil while never set.
+func (s *Store) dailyMarginOf(ctx context.Context, id *int64) (*float64, error) {
+	var rows []DailyLimitMargin
+	query := s.conn(ctx)
+	if id == nil {
+		query = query.Where("agent_id IS NULL")
+	} else {
+		query = query.Where("agent_id = ?", *id)
+	}
+	if err := query.Find(&rows).Error; err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return &rows[0].MinMarginPct, nil
 }
 
 // DailyLimitStop is the switch of the stops at the broker of the loss limit of
@@ -284,6 +350,9 @@ func validateDailyLimit(settings ui.DailyLimitSettings, global bool) error {
 	if settings.Enabled && settings.MaxLoss == nil && settings.MaxGain == nil {
 		return invalid("informe a perda máxima ou o ganho máximo para ligá-lo")
 	}
+	if pct := settings.MinMarginPct; pct != nil && (math.IsNaN(*pct) || *pct < 0 || *pct >= 100) {
+		return invalid("a margem mínima para novas entradas vai de 0 (desligada) a menos de 100% da perda máxima")
+	}
 	switch {
 	case global && settings.Currency != "":
 		return invalid("o limite de todos os agentes vale na moeda de cada conta: não informe uma moeda")
@@ -322,7 +391,10 @@ func (s *Store) GlobalDailyLimit(ctx context.Context) (DailyLimit, bool, error) 
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return limit, false, err
 	}
-	limit.Stops, err = s.dailyStopsOf(ctx, nil)
+	if limit.Stops, err = s.dailyStopsOf(ctx, nil); err != nil {
+		return limit, found, err
+	}
+	limit.Margin, err = s.dailyMarginOf(ctx, nil)
 	return limit, found, err
 }
 
@@ -344,10 +416,14 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 		if err != nil {
 			return err
 		}
+		margin, err := s.dailyMarginOf(ctx, nil)
+		if err != nil {
+			return err
+		}
 		var before any
 		if len(rows) > 0 {
 			previous = rows[0]
-			previous.Stops = stops
+			previous.Stops, previous.Margin = stops, margin
 			before = previous.Settings()
 		}
 		next = DailyLimit{ID: 1, Enabled: settings.Enabled, Currency: NoCurrency, MaxLoss: settings.MaxLoss,
@@ -356,12 +432,18 @@ func (s *Store) SetGlobalDailyLimit(ctx context.Context, settings ui.DailyLimitS
 			Create(&next).Error; err != nil {
 			return notFound(err, "o limite diário")
 		}
-		next.Stops = stops
+		next.Stops, next.Margin = stops, margin
 		if settings.BrokerStops != nil {
 			if err := s.setDailyStops(ctx, nil, *settings.BrokerStops, change.By); err != nil {
 				return err
 			}
 			next.Stops = settings.BrokerStops
+		}
+		if settings.MinMarginPct != nil {
+			if err := s.setDailyMargin(ctx, nil, *settings.MinMarginPct, change.By); err != nil {
+				return err
+			}
+			next.Margin = settings.MinMarginPct
 		}
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, Kind: EventLimitChanged, Via: change.Via,
 			RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason, Previous: jsonOf(before),
@@ -386,11 +468,15 @@ func (s *Store) SetAgentDailyLimit(ctx context.Context, id int64, settings ui.Da
 		if err != nil {
 			return err
 		}
+		margin, err := s.dailyMarginOf(ctx, &id)
+		if err != nil {
+			return err
+		}
 		var before any
 		if len(rows) > 0 {
 			previous = rows[0]
 			settings := previous.Settings()
-			settings.BrokerStops = stopsOn(stops)
+			settings.BrokerStops, settings.MinMarginPct = stopsOn(stops), marginOf(margin)
 			before = settings
 		}
 		next = AgentDailyLimit{AgentID: id, Enabled: settings.Enabled, MaxLoss: settings.MaxLoss,
@@ -405,8 +491,14 @@ func (s *Store) SetAgentDailyLimit(ctx context.Context, id int64, settings ui.Da
 			}
 			stops = settings.BrokerStops
 		}
+		if settings.MinMarginPct != nil {
+			if err := s.setDailyMargin(ctx, &id, *settings.MinMarginPct, change.By); err != nil {
+				return err
+			}
+			margin = settings.MinMarginPct
+		}
 		after := next.Settings()
-		after.BrokerStops = stopsOn(stops)
+		after.BrokerStops, after.MinMarginPct = stopsOn(stops), marginOf(margin)
 		return s.addDailyEvent(ctx, &DailyLimitEvent{Day: change.Day, AgentID: &id, Kind: EventLimitChanged,
 			Via: change.Via, RequestedBy: change.By, UserID: change.UserID, Reason: change.Reason,
 			Previous: jsonOf(before), Next: jsonOf(after)})
@@ -515,7 +607,9 @@ func (s *Store) RolloverDailyGuards(ctx context.Context, today string) ([]DailyG
 				return err
 			}
 		}
-		return nil
+		margins, err := s.rolloverMarginGuards(ctx, today)
+		released = append(released, margins...)
+		return err
 	})
 	return released, err
 }
@@ -575,7 +669,16 @@ func (s *Store) DailyEntries(ctx context.Context, id int64) (blocked bool, reaso
 		return false, "", 0, err
 	}
 	if len(guards) > 0 {
-		blocked, reason = true, guards[0].Reason
+		return true, guards[0].Reason, revision, nil
+	}
+	var margins []MarginGuard
+	err = s.conn(ctx).Where("state = ? AND (agent_id IS NULL OR agent_id = ?)", GuardTripped, id).
+		Order("agent_id NULLS FIRST, id").Find(&margins).Error
+	if err != nil {
+		return false, "", 0, err
+	}
+	if len(margins) > 0 {
+		blocked, reason = true, margins[0].Reason
 	}
 	return blocked, reason, revision, nil
 }
