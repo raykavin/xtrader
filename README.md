@@ -24,6 +24,9 @@ The controller also serves the **web dashboard**, the **Telegram bot** and **XTr
 > [!WARNING]
 > Automated trading carries a real risk of loss. XTrader is not investment advice, and no strategy, prompt or agent in it has been shown to be profitable. Validate any agent in a backtest and on a demo account before a real account. A real account is only accepted with the **Permitir conta real** (Allow real account) option turned on in the agent and in the MT5 account. Read the [Risk disclaimer](#risk-disclaimer) before using it.
 
+> [!NOTE]
+> English is not supported in the application yet: the web dashboard, the Telegram bot and the messages of the application are only in Brazilian Portuguese for now. English support is coming soon.
+
 ## Contents
 
 - [Screens](#screens)

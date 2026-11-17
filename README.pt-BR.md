@@ -24,6 +24,9 @@ O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader
 > [!WARNING]
 > Trading automatizado envolve risco real de perda. O XTrader não é recomendação de investimento, e nenhuma estratégia, prompt ou agente dele foi comprovado como lucrativo. Valide qualquer agente em backtest e em conta demo antes de uma conta real. Uma conta real só é aceita com a opção **Permitir conta real** ligada no agente e na conta MT5. Leia o [Aviso de risco](#aviso-de-risco) antes de usar.
 
+> [!NOTE]
+> A aplicação ainda não tem suporte ao inglês: por enquanto, o painel web, o bot do Telegram e as mensagens da aplicação estão só em português do Brasil. O suporte ao inglês virá em breve.
+
 ## Sumário
 
 - [Telas](#telas)
