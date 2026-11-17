@@ -4,14 +4,15 @@ interface Props {
   className?: string;
 }
 
-/** The foot of the pages: the logo of who made the dashboard, then the copyright. */
+/**
+ * The foot of the pages: the logo of who made the dashboard, then the
+ * copyright and the license of the code (see LICENSE).
+ */
 export function Footer({ className = "" }: Props) {
   return (
     <footer className={`footer ${className}`.trim()}>
       <img className="footer-logo" src={echos} alt="ECHOS - Soluções em Softwares Web" />
-      <span className="footer-copyright">
-        © 2026 ECHOS Tecnologia. Todos os direitos reservados.
-      </span>
+      <span className="footer-copyright">© 2026 ECHOS Tecnologia · Licença MIT</span>
     </footer>
   );
 }
