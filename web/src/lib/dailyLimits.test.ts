@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DailyLimitsStatus } from "../api/types";
+import type { DailyLimitsStatus, DailyScopeStatus } from "../api/types";
 import {
   blockNote,
   dailyLimitErrors,
@@ -11,6 +11,8 @@ import {
   guardedAgents,
   limitProgress,
   limitsLabel,
+  minMarginAmount,
+  minMarginOf,
   parseLimit,
   scopeResults,
   stopMoveLabel,
@@ -127,30 +129,98 @@ describe("the daily limits on the dashboard", () => {
 
 describe("the form of the daily limits", () => {
   it("goes from the settings to the form and back, a comma taken as the decimals", () => {
-    const settings = { enabled: true, max_loss: 150.5, max_gain: 300, broker_stops: false };
+    const settings = {
+      enabled: true,
+      max_loss: 150.5,
+      max_gain: 300,
+      broker_stops: false,
+      min_margin_pct: 12.5,
+    };
     expect(dailyLimitSettings(dailyLimitForm(settings))).toEqual(settings);
+    expect(dailyLimitForm(settings).minMarginPct, "a comma as the decimals").toBe("12,5");
     expect(dailyLimitForm({ enabled: true }).brokerStops, "on while never set").toBe(true);
+    expect(dailyLimitForm({ enabled: true }).minMarginPct, "10% while never set").toBe("10");
     expect(parseLimit("150,50")).toBe(150.5);
     expect(parseLimit("1.500,25")).toBe(1500.25);
     expect(parseLimit("")).toBeNull();
     expect(Number.isNaN(parseLimit("abc") as number)).toBe(true);
     expect(
-      dailyLimitSettings({ enabled: true, maxLoss: "40", maxGain: "", brokerStops: true }),
+      dailyLimitSettings({
+        enabled: true,
+        maxLoss: "40",
+        maxGain: "",
+        brokerStops: true,
+        minMarginPct: "",
+      }),
     ).toEqual({
       enabled: true,
       max_loss: 40,
       broker_stops: true,
+      min_margin_pct: 0,
     });
   });
 
   it("refuses what the controller refuses", () => {
-    const form = { enabled: true, maxLoss: "150", maxGain: "", brokerStops: true };
+    const form = {
+      enabled: true,
+      maxLoss: "150",
+      maxGain: "",
+      brokerStops: true,
+      minMarginPct: "10",
+    };
     expect(dailyLimitErrors(form)).toEqual({});
     expect(dailyLimitErrors({ ...form, maxLoss: "" }).maxLoss).toBe(
       "Defina a perda, o ganho ou os dois.",
     );
     expect(dailyLimitErrors({ ...form, maxLoss: "0" }).maxLoss).toBe("Use um valor acima de zero.");
     expect(dailyLimitErrors({ ...form, enabled: false, maxLoss: "" })).toEqual({});
+    expect(dailyLimitErrors({ ...form, minMarginPct: "100" }).minMarginPct).toBe(
+      "Use de 0 (desligada) a menos de 100% da perda máxima.",
+    );
+    expect(dailyLimitErrors({ ...form, minMarginPct: "abc" }).minMarginPct).toBeDefined();
+    expect(dailyLimitErrors({ ...form, minMarginPct: "0" })).toEqual({});
+  });
+
+  it("tells the least margin for new entries in money", () => {
+    const form = {
+      enabled: true,
+      maxLoss: "100",
+      maxGain: "",
+      brokerStops: true,
+      minMarginPct: "10",
+    };
+    expect(minMarginAmount(form)).toBe(10);
+    expect(minMarginAmount({ ...form, maxLoss: "" })).toBeNull();
+    expect(minMarginOf({ enabled: true, max_loss: 200 }), "10% while never set").toBe(20);
+    expect(minMarginOf({ enabled: true, max_loss: 200, min_margin_pct: 0 })).toBe(0);
+    expect(minMarginOf({ enabled: false, max_loss: 200 })).toBeNull();
+  });
+});
+
+describe("the margin of the daily limits", () => {
+  it("tells a scope whose margin is below its least: new entries blocked, nothing closed", () => {
+    const scope = {
+      state: "margin",
+      limits: { enabled: true, max_loss: 100 },
+      guard: {
+        id: 1,
+        kind: "margin",
+        result: -99.99,
+        limit: 10,
+        currency: "BRL",
+        reason: "margem do limite diário de todos os agentes abaixo do mínimo",
+        trips: 1,
+        tripped_at: 0,
+      },
+    } as DailyScopeStatus;
+    expect(dailyStateLabel(scope)).toEqual({ text: "Margem esgotada", tone: "warn" });
+    expect(stripTone(scope)).toBe("margin");
+    expect(stripHeadline(scope)).toBe("Margem mínima atingida: sem novas entradas");
+    expect(blockNote(scope, "America/Belem")).toBe(
+      "Margem do limite diário de todos os agentes abaixo do mínimo",
+    );
+    const status = { agents: [{ ...scope, agent: "orb" }] } as unknown as DailyLimitsStatus;
+    expect(Object.keys(guardedAgents(status)), "blocked by its own limit").toEqual(["orb"]);
   });
 });
 

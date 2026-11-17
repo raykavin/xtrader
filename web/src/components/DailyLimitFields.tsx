@@ -7,8 +7,10 @@ import {
   dailyLimitErrors,
   dailyLimitForm,
   dailyLimitSettings,
+  minMarginAmount,
   resultAmount,
 } from "../lib/dailyLimits";
+import { formatMoney } from "../lib/format";
 import { useCan } from "./AccessContext";
 import { Alert } from "./States";
 import { Switch } from "./Switch";
@@ -142,6 +144,37 @@ export function DailyLimitFields({ agent, unit, settings, onSaved }: Props) {
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
+      </div>
+      <div className="field daily-margin">
+        <label className="field-label" htmlFor={`${id}-minMarginPct`}>
+          Margem mínima para novas entradas
+        </label>
+        <div className="protection-input">
+          <input
+            id={`${id}-minMarginPct`}
+            className="input"
+            inputMode="decimal"
+            value={form.minMarginPct}
+            disabled={busy}
+            placeholder="0"
+            aria-describedby={`${id}-minMarginPct-hint`}
+            aria-invalid={errors.minMarginPct ? true : undefined}
+            onChange={(e) => set("minMarginPct", e.target.value)}
+          />
+          <span className="protection-unit">% da perda máx.</span>
+        </div>
+        <p id={`${id}-minMarginPct-hint`} className="field-hint">
+          {(() => {
+            const amount = minMarginAmount(form);
+            return amount !== null && amount > 0
+              ? `Hoje, ${formatMoney(amount)}${unit ? ` ${unit}` : ""}. `
+              : "";
+          })()}
+          Quando faltar menos que isso para a perda máxima (o pior entre o realizado e o resultado
+          com as posições abertas), as novas entradas ficam bloqueadas, sem zerar nada, até a margem
+          voltar ou o dia virar. 0 desliga.
+        </p>
+        {errors.minMarginPct && <p className="field-error">{errors.minMarginPct}</p>}
       </div>
       <div className="daily-stops-switch">
         <Switch

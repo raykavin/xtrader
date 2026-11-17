@@ -34,6 +34,8 @@ export function dailyStateLabel(scope: DailyScopeStatus | undefined): DailyLabel
       };
     case "incomplete":
       return { text: "Resultado incompleto", tone: "warn" };
+    case "margin":
+      return { text: "Margem esgotada", tone: "warn" };
     case "free":
       return { text: "Liberado", tone: "on" };
   }
@@ -42,9 +44,10 @@ export function dailyStateLabel(scope: DailyScopeStatus | undefined): DailyLabel
 
 /**
  * The tone of the strip of a scope on the panel: the limit reached, a gain
- * or a loss; its result unknown; under its limits; or no limit.
+ * or a loss; its result unknown; its margin below its least (new entries
+ * blocked, nothing closed); under its limits; or no limit.
  */
-export type StripTone = "gain" | "loss" | "incomplete" | "free" | "off";
+export type StripTone = "gain" | "loss" | "incomplete" | "margin" | "free" | "off";
 
 /** The tone of the strip of scope, see StripTone. */
 export function stripTone(scope: DailyScopeStatus | undefined): StripTone {
@@ -53,6 +56,8 @@ export function stripTone(scope: DailyScopeStatus | undefined): StripTone {
       return scope.guard?.trigger === "gain" ? "gain" : "loss";
     case "incomplete":
       return "incomplete";
+    case "margin":
+      return "margin";
     case "free":
       return "free";
   }
@@ -68,6 +73,8 @@ export function stripHeadline(scope: DailyScopeStatus | undefined): string {
       return "Perda diária atingida";
     case "incomplete":
       return "Resultado do dia incompleto";
+    case "margin":
+      return "Margem mínima atingida: sem novas entradas";
     case "free":
       return "Liberado";
   }
@@ -97,7 +104,7 @@ export function timeIn(unix: number | undefined, zone: string): string {
 export function blockNote(scope: DailyScopeStatus | undefined, zone: string): string {
   const guard = scope?.guard;
   if (!guard) return "";
-  if (scope.state === "incomplete") {
+  if (scope.state === "incomplete" || scope.state === "margin") {
     return guard.reason.charAt(0).toUpperCase() + guard.reason.slice(1);
   }
   if (scope.state !== "blocked") return "";
@@ -173,7 +180,10 @@ export function limitProgress(
 export function guardedAgents(status: DailyLimitsStatus | null): Record<string, DailyScopeStatus> {
   const guarded: Record<string, DailyScopeStatus> = {};
   for (const scope of status?.agents ?? []) {
-    if (scope.agent && (scope.state === "blocked" || scope.state === "incomplete")) {
+    if (
+      scope.agent &&
+      (scope.state === "blocked" || scope.state === "incomplete" || scope.state === "margin")
+    ) {
       guarded[scope.agent] = scope;
     }
   }
@@ -190,7 +200,12 @@ export interface DailyLimitForm {
   maxLoss: string;
   maxGain: string;
   brokerStops: boolean;
+  /** The least margin for new entries, in percent of the loss limit (0 off), see DailyLimitSettings.min_margin_pct. */
+  minMarginPct: string;
 }
+
+/** The least margin of a loss limit for new entries never set, in percent of the loss limit. */
+export const defaultMinMarginPct = 10;
 
 /** The form of the settings, the limits left blank when absent, the stops at the broker on unless off. */
 export function dailyLimitForm(settings: DailyLimitSettings | undefined): DailyLimitForm {
@@ -199,7 +214,25 @@ export function dailyLimitForm(settings: DailyLimitSettings | undefined): DailyL
     maxLoss: settings?.max_loss != null ? String(settings.max_loss) : "",
     maxGain: settings?.max_gain != null ? String(settings.max_gain) : "",
     brokerStops: settings?.broker_stops ?? true,
+    minMarginPct: String(settings?.min_margin_pct ?? defaultMinMarginPct).replace(".", ","),
   };
+}
+
+/**
+ * The least margin of a form in money, eg: 10 of a loss limit of 100 at 10%;
+ * null without a loss limit or a margin readable.
+ */
+export function minMarginAmount(form: DailyLimitForm): number | null {
+  const loss = parseLimit(form.maxLoss);
+  const pct = parseLimit(form.minMarginPct);
+  if (loss === null || pct === null || Number.isNaN(loss) || Number.isNaN(pct)) return null;
+  return (loss * pct) / 100;
+}
+
+/** The least margin of the settings in money, null without a loss limit enabled. */
+export function minMarginOf(settings: DailyLimitSettings): number | null {
+  if (!settings.enabled || settings.max_loss == null) return null;
+  return (settings.max_loss * (settings.min_margin_pct ?? defaultMinMarginPct)) / 100;
 }
 
 /** An amount typed, with a comma or a dot, null when blank; NaN when not a number. */
@@ -219,8 +252,10 @@ export function dailyLimitSettings(form: DailyLimitForm): DailyLimitSettings {
   const settings: DailyLimitSettings = { enabled: form.enabled, broker_stops: form.brokerStops };
   const loss = parseLimit(form.maxLoss);
   const gain = parseLimit(form.maxGain);
+  const margin = parseLimit(form.minMarginPct);
   if (loss !== null) settings.max_loss = loss;
   if (gain !== null) settings.max_gain = gain;
+  settings.min_margin_pct = margin ?? 0;
   return settings;
 }
 
@@ -239,6 +274,10 @@ export function dailyLimitErrors(
   const gain = parseLimit(form.maxGain);
   check("maxLoss", loss);
   check("maxGain", gain);
+  const margin = parseLimit(form.minMarginPct);
+  if (margin !== null && (Number.isNaN(margin) || margin >= 100)) {
+    errors.minMarginPct = "Use de 0 (desligada) a menos de 100% da perda máxima.";
+  }
   if (form.enabled && loss === null && gain === null) {
     errors.maxLoss = "Defina a perda, o ganho ou os dois.";
   }
