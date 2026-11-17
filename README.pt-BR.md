@@ -1,5 +1,7 @@
 # XTrader
 
+[English](README.md) | **Português**
+
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](web/package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)](web/package.json)
@@ -37,8 +39,8 @@ O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader
   - [Exposição por ativo](#exposição-por-ativo)
   - [Agentes por ativo](#agentes-por-ativo)
   - [Painel web](#painel-web)
-  - [Performance](#performance)
-  - [Backtesting](#backtesting)
+  - [Performance](#performance-1)
+  - [Backtesting](#backtesting-1)
   - [Persistência](#persistência)
 - [Arquitetura](#arquitetura)
 - [Estrutura do repositório](#estrutura-do-repositório)
@@ -52,11 +54,11 @@ O controller também serve o **painel web**, o **bot do Telegram** e o **XTrader
   - [Contas MT5](#contas-mt5)
   - [Agentes e parâmetros](#agentes-e-parâmetros)
   - [Redefinir os resultados](#redefinir-os-resultados)
-  - [Prompts](#prompts)
+  - [Prompts](#prompts-1)
     - [Limites diários](#limites-diários)
   - [Notícias](#notícias)
   - [Telegram](#telegram)
-  - [XTrader AI](#xtrader-ai)
+  - [XTrader AI](#xtrader-ai-1)
   - [Proteção de posições](#proteção-de-posições)
   - [Backtest e dados históricos](#backtest-e-dados-históricos)
   - [Agentes iniciais](#agentes-iniciais)
@@ -633,7 +635,7 @@ Quais agentes podem abrir posição em cada ativo, para todos os agentes, defini
 - **Como é aplicada:** o controller calcula, para cada agente, os ativos dele que as regras permitem, cruzados com os da janela do horário aberta (quando a janela limita os ativos), e manda a lista junto das entradas (`entries_pairs` em `agentapi.Entries`, com o motivo em `pairs_reason`). A estratégia (o filtro de entradas) e o agente LLM conferem a lista antes de cada entrada, como já faziam com os ativos da janela, e registram o motivo da recusa, ex.: `Agentes por ativo: XAUUSDm só para os agentes orb, trend`. Vale na hora, sem reiniciar.
 - **Nenhum ativo permitido:** um agente que não pode operar nenhum dos seus ativos fica com as entradas bloqueadas, com o motivo (`Nenhum ativo permitido. …`), e volta a operar quando uma regra o incluir.
 - **O que nunca é afetado:** as saídas, os stops, os alvos, as ordens de proteção e as posições já abertas.
-- **Onde vale:** nos agentes em live e em paper. No backtest, quando o lote marca **Respeitar os agentes por ativo de Configurações › Limites** (marcada por padrão; veja [Backtesting](#backtesting)).
+- **Onde vale:** nos agentes em live e em paper. No backtest, quando o lote marca **Respeitar os agentes por ativo de Configurações › Limites** (marcada por padrão; veja [Backtesting](#backtesting-1)).
 - **Renomear um agente** atualiza o nome dele nas regras.
 - **Onde fica:** em `asset_agents` (migração 48), um registro só, com as regras em `rules`, uma revisão que cresce a cada mudança (os agentes ficam com a mais nova) e quem mudou por último.
 
@@ -687,7 +689,7 @@ Quais agentes podem abrir posição em cada ativo, para todos os agentes, defini
   - **Limites:** o limite diário global, o horário de operação, a exposição por ativo, os agentes por ativo e os limites de cada agente.
   - **Notícias:** o calendário econômico e a janela de bloqueio de todos os agentes. Veja [Notícias](#notícias).
   - **Prompts:** editor com histórico de versões.
-  - **XTrader AI:** veja [XTrader AI](#xtrader-ai).
+  - **XTrader AI:** veja [XTrader AI](#xtrader-ai-o-supervisor-dos-agentes).
   - **Telegram:** liga e desliga o bot, token e IDs autorizados.
   - **Usuários e papéis:** os usuários do painel e as permissões por área (veja [Segurança](#segurança)).
   - **Layout:** a disposição dos cards do painel neste navegador e o botão **Restaurar layout padrão**.
@@ -805,10 +807,10 @@ A página **Backtesting** (na barra, ao lado de Performance; `/backtesting`) rod
 
 ```none
                        ┌──────────────── controller (cmd/controller) ────────────────┐
-navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)   Telegram (IDs autorizados)│
+navegador ── HTTPS ──► │ painel web (/api, sessão + CSRF)  Telegram (IDs autorizados)│
                        │ Manager: liga/desliga os agentes do banco, tokens por start │
                        │ API interna dos agentes (loopback, Bearer por agente)       │──► PostgreSQL
-                       └──────▲───────────────────────────────▲───────────────────────┘
+                       └──────▲───────────────────────────────▲──────────────────────┘
                               │ config, runtime, outbox        │ proxy da API de cada agente
                      ┌────────┴────────┐              ┌────────┴────────┐
                      │ agente llm      │  ...         │ agente trend    │ ──► bridge MT5 ──► terminal MT5
@@ -1207,7 +1209,7 @@ go run ./agents/trendagent -mode backtest -strategy matrend -pair XAUUSDm -timef
 
 O agente LLM também roda backtests, mas cada candle vira uma requisição paga ao modelo.
 
-Pelo painel, a aba [Backtesting](#backtesting) faz o mesmo para vários agentes de uma vez, com a configuração atual de cada um, os candles lidos da ponte, custos, validação fora da amostra e a comparação dos resultados. Os binários aceitam `-backtest-config <arquivo.json>` (o `agentapi.BacktestConfig` que o controller escreve: período, saldo, custos, símbolos, proteção, limites, tetos do LLM e o arquivo do relatório).
+Pelo painel, a aba [Backtesting](#backtesting-1) faz o mesmo para vários agentes de uma vez, com a configuração atual de cada um, os candles lidos da ponte, custos, validação fora da amostra e a comparação dos resultados. Os binários aceitam `-backtest-config <arquivo.json>` (o `agentapi.BacktestConfig` que o controller escreve: período, saldo, custos, símbolos, proteção, limites, tetos do LLM e o arquivo do relatório).
 
 ### Agentes iniciais
 
