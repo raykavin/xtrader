@@ -7,6 +7,7 @@ import {
   flattenLabel,
   globalUnit,
   guardedAgents,
+  minMarginOf,
   resultAmount,
   scopeResults,
   stripHeadline,
@@ -229,6 +230,7 @@ export function DailyGuardStrip({
   const flatten = flattenLabel(global.guard?.flatten_status);
   const headTone: DailyTone =
     tone === "gain" || tone === "free" ? "on" : tone === "loss" ? "error" : "warn";
+  const minMargin = minMarginOf(global.limits);
   const reached = tone === "gain" || tone === "loss";
   const at = timeIn(global.guard?.tripped_at, status.zone);
   const agents = guarded.length > 0 && (
@@ -292,6 +294,14 @@ export function DailyGuardStrip({
                   </dd>
                 </div>
               )}
+              {minMargin !== null && minMargin > 0 && (
+                <div title="Abaixo disso de margem até a perda máxima, sem novas entradas">
+                  <dt>Margem mín.</dt>
+                  <dd className="mono">
+                    {formatMoney(minMargin)} {unit}
+                  </dd>
+                </div>
+              )}
               {global.limits.max_gain != null && (
                 <div>
                   <dt>Ganho máx.</dt>
@@ -310,7 +320,7 @@ export function DailyGuardStrip({
           {at ? ` às ${at}` : ""}: entradas bloqueadas até 00:00 ({zoneLabel(status.zone)})
         </p>
       )}
-      {tone === "incomplete" && global.guard && (
+      {(tone === "incomplete" || tone === "margin") && global.guard && (
         <p className="daily-strip-note">
           {global.guard.reason.charAt(0).toUpperCase() + global.guard.reason.slice(1)}
         </p>
