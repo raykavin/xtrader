@@ -1,6 +1,10 @@
 # XTrader
 
-**English** | [Português](README.pt-BR.md)
+<p align="center">
+  <img src="docs/images/logo.svg" alt="XTrader logo"/>
+</p>
+
+[Quick start](#quick-start-with-docker) | [Releases](https://github.com/raykavin/xtrader/releases) | [Security policy](SECURITY.md) | [Português](README.pt-BR.md)
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](web/package.json)
